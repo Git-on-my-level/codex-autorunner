@@ -126,8 +126,12 @@ interface HubChannelEntry {
     agent?: string | null;
     status?: string | null;
     status_reason_code?: string | null;
+    resource_kind?: string | null;
+    resource_id?: string | null;
   } | null;
   repo_id?: string | null;
+  resource_kind?: string | null;
+  resource_id?: string | null;
   workspace_path?: string | null;
   active_thread_id?: string | null;
   channel_status?: string | null;
@@ -1443,6 +1447,8 @@ function channelSearchBlob(channel: HubChannelEntry): string {
     channel.display,
     channel.source,
     channel.repo_id,
+    channel.resource_kind,
+    channel.resource_id,
     channel.status_label || channel.channel_status,
     channel.workspace_path,
     JSON.stringify(channel.meta || {}),
@@ -1530,6 +1536,24 @@ function channelDisplayLabel(channel: HubChannelEntry): string {
   return channel.key;
 }
 
+function channelOwnerSummary(channel: HubChannelEntry): string {
+  const resourceKind = String(
+    channel.resource_kind || channel.provenance?.resource_kind || ""
+  )
+    .trim()
+    .toLowerCase();
+  const resourceId = String(
+    channel.resource_id || channel.provenance?.resource_id || ""
+  ).trim();
+  if (resourceKind === "agent_workspace" && resourceId) {
+    return `agent workspace ${resourceId}`;
+  }
+  if (typeof channel.repo_id === "string" && channel.repo_id.trim()) {
+    return `repo ${channel.repo_id.trim()}`;
+  }
+  return "owner unbound";
+}
+
 function channelMetaSummary(
   channel: HubChannelEntry,
   { includeRepo = true }: { includeRepo?: boolean } = {}
@@ -1561,11 +1585,7 @@ function channelMetaSummary(
     parts.push(diffPart);
   }
   if (includeRepo) {
-    if (typeof channel.repo_id === "string" && channel.repo_id.trim()) {
-      parts.push(`repo ${channel.repo_id.trim()}`);
-    } else {
-      parts.push("repo unbound");
-    }
+    parts.push(channelOwnerSummary(channel));
   }
   return parts.join(" · ");
 }
@@ -1619,6 +1639,29 @@ function channelsByRepoId(entries: HubChannelEntry[]): Map<string, HubChannelEnt
     });
   });
   return byRepo;
+}
+
+function channelsByAgentWorkspaceId(
+  entries: HubChannelEntry[]
+): Map<string, HubChannelEntry[]> {
+  const byWorkspace = new Map<string, HubChannelEntry[]>();
+  entries.forEach((entry) => {
+    const resourceKind = String(entry.resource_kind || "").trim().toLowerCase();
+    const resourceId = String(entry.resource_id || "").trim();
+    if (resourceKind !== "agent_workspace" || !resourceId) return;
+    if (!byWorkspace.has(resourceId)) {
+      byWorkspace.set(resourceId, []);
+    }
+    byWorkspace.get(resourceId)!.push(entry);
+  });
+  byWorkspace.forEach((workspaceEntries) => {
+    workspaceEntries.sort((a, b) => {
+      const seenDiff = channelSeenAtMs(b) - channelSeenAtMs(a);
+      if (seenDiff !== 0) return seenDiff;
+      return channelDisplayLabel(a).localeCompare(channelDisplayLabel(b));
+    });
+  });
+  return byWorkspace;
 }
 
 function buildRepoGroups(repos: HubRepo[]): {
@@ -2132,6 +2175,7 @@ function renderAgentWorkspaces(agentWorkspaces: HubAgentWorkspace[]): void {
     const bLabel = String(b.display_name || b.id);
     return aLabel.localeCompare(bLabel) || String(a.id).localeCompare(String(b.id));
   });
+  const workspaceChannels = channelsByAgentWorkspaceId(hubChannelEntries);
 
   ordered.forEach((workspace) => {
     const card = document.createElement("div");
@@ -2167,6 +2211,36 @@ function renderAgentWorkspaces(agentWorkspaces: HubAgentWorkspace[]): void {
       `destination ${destinationSummary}`,
     ].join(" · ");
     const pathSummary = escapeHtml(workspace.path);
+    const inlineChannels = workspaceChannels.get(workspace.id) || [];
+    const primaryChannel = inlineChannels[0] || null;
+    const infoSubline = primaryChannel
+      ? channelSummarySubline(primaryChannel, {
+          additionalCount: Math.max(0, inlineChannels.length - 1),
+        })
+      : `<div class="hub-repo-subline">
+          <span class="hub-repo-info-line">${escapeHtml(infoSummary)}</span>
+        </div>`;
+    const overflowChannelRows = inlineChannels
+      .slice(1)
+      .map((channel) => {
+        const label = channelDisplayLabel(channel);
+        const sourceBadge = channelSourceBadgeMarkup(channel);
+        return `
+          <div class="hub-chat-binding-row">
+            <div class="hub-chat-binding-main">
+              ${sourceBadge}
+              <span class="hub-chat-binding-label">${escapeHtml(label)}</span>
+            </div>
+            <div class="hub-chat-binding-meta muted small">${escapeHtml(
+              channelMetaSummary(channel, { includeRepo: false })
+            )}</div>
+          </div>
+        `;
+      })
+      .join("");
+    const inlineChannelBlock = overflowChannelRows
+      ? `<div class="hub-chat-binding-block">${overflowChannelRows}</div>`
+      : "";
 
     card.innerHTML = `
       <div class="hub-repo-row">
@@ -2182,12 +2256,11 @@ function renderAgentWorkspaces(agentWorkspaces: HubAgentWorkspace[]): void {
               ${missingBadge}
             </div>
           </div>
-          <div class="hub-repo-subline">
-            <span class="hub-repo-info-line">${escapeHtml(infoSummary)}</span>
-          </div>
+          ${infoSubline}
           <div class="hub-repo-subline">
             <span class="hub-chat-binding-key">${pathSummary}</span>
           </div>
+          ${inlineChannelBlock}
         </div>
         <div class="hub-repo-right">
           ${actions}

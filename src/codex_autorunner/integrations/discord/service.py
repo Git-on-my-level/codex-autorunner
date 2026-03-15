@@ -176,12 +176,13 @@ from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
 from ..telegram.helpers import _format_skills_list
 from .adapter import DiscordChatAdapter
 from .car_autocomplete import (
-    handle_command_autocomplete as handle_car_command_autocomplete,
-)
-from .car_autocomplete import (
+    agent_workspace_autocomplete_value,
     repo_autocomplete_value,
     resolve_workspace_from_token,
     workspace_autocomplete_value,
+)
+from .car_autocomplete import (
+    handle_command_autocomplete as handle_car_command_autocomplete,
 )
 from .car_command_dispatch import handle_car_command as dispatch_car_command
 from .collaboration_helpers import (
@@ -1722,6 +1723,8 @@ class DiscordBotService:
         workspace_root: Path,
         agent: str,
         repo_id: Optional[str],
+        resource_kind: Optional[str],
+        resource_id: Optional[str],
         pma_enabled: bool,
     ) -> tuple[bool, str]:
         mode = "pma" if pma_enabled else "repo"
@@ -1746,10 +1749,18 @@ class DiscordBotService:
                     current_thread.thread_target_id
                 )
             orchestration_service.archive_thread_target(current_thread.thread_target_id)
+        owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
+            workspace_root,
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
         replacement = orchestration_service.create_thread_target(
             agent,
             workspace_root,
-            repo_id=repo_id,
+            repo_id=normalized_repo_id,
+            resource_kind=owner_kind,
+            resource_id=owner_id,
             display_name=f"discord:{channel_id}",
         )
         orchestration_service.upsert_binding(
@@ -1757,7 +1768,9 @@ class DiscordBotService:
             surface_key=channel_id,
             thread_target_id=replacement.thread_target_id,
             agent_id=agent,
-            repo_id=repo_id,
+            repo_id=normalized_repo_id,
+            resource_kind=owner_kind,
+            resource_id=owner_id,
             mode=mode,
             metadata={"channel_id": channel_id, "pma_enabled": pma_enabled},
         )
@@ -1770,16 +1783,27 @@ class DiscordBotService:
         thread_target_id: str,
         agent: str,
         repo_id: Optional[str],
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+        workspace_root: Optional[Path] = None,
         pma_enabled: bool,
     ) -> Any:
         mode = "pma" if pma_enabled else "repo"
         orchestration_service = self._discord_thread_service()
+        owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
+            workspace_root or Path(self._config.root),
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
         return orchestration_service.upsert_binding(
             surface_kind="discord",
             surface_key=channel_id,
             thread_target_id=thread_target_id,
             agent_id=agent,
-            repo_id=repo_id,
+            repo_id=normalized_repo_id,
+            resource_kind=owner_kind,
+            resource_id=owner_id,
             mode=mode,
             metadata={"channel_id": channel_id, "pma_enabled": pma_enabled},
         )
@@ -1791,35 +1815,59 @@ class DiscordBotService:
         agent: str,
         current_thread_id: Optional[str],
         mode: str,
+        repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
         limit: int = DISCORD_SELECT_OPTION_MAX_OPTIONS,
     ) -> list[tuple[str, str]]:
         orchestration_service = self._discord_thread_service()
-        normalized_mode = mode.strip().lower()
-        mode_bindings = orchestration_service.list_bindings(
-            agent_id=agent,
-            surface_kind="discord",
-            include_disabled=True,
-            limit=max(limit * 8, limit),
+        owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
+            workspace_root,
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
         )
-        allowed_thread_ids = {
-            str(getattr(binding, "thread_target_id", "") or "").strip()
-            for binding in mode_bindings
-            if str(getattr(binding, "mode", "") or "").strip().lower()
-            == normalized_mode
-        }
         threads = orchestration_service.list_thread_targets(
             agent_id=agent,
+            repo_id=normalized_repo_id,
+            resource_kind=owner_kind,
+            resource_id=owner_id,
             limit=max(limit * 4, limit),
         )
         canonical_workspace = str(workspace_root.resolve())
         filtered: list[Any] = []
+        bound_modes_by_thread_id: dict[str, set[str]] = {}
+        for binding in orchestration_service.list_bindings(
+            agent_id=agent,
+            repo_id=normalized_repo_id,
+            resource_kind=owner_kind,
+            resource_id=owner_id,
+            surface_kind="discord",
+            limit=max(limit * 8, limit),
+        ):
+            binding_thread_id = str(
+                getattr(binding, "thread_target_id", "") or ""
+            ).strip()
+            binding_mode = str(getattr(binding, "mode", "") or "").strip()
+            if not binding_thread_id or not binding_mode:
+                continue
+            bound_modes_by_thread_id.setdefault(binding_thread_id, set()).add(
+                binding_mode
+            )
         for thread in threads:
             thread_id = str(getattr(thread, "thread_target_id", "") or "").strip()
-            if thread_id not in allowed_thread_ids:
+            if not thread_id:
                 continue
             if (
                 str(getattr(thread, "workspace_root", "") or "").strip()
                 != canonical_workspace
+            ):
+                continue
+            bound_modes = bound_modes_by_thread_id.get(thread_id)
+            if (
+                thread_id != current_thread_id
+                and bound_modes
+                and mode not in bound_modes
             ):
                 continue
             filtered.append(thread)
@@ -3517,16 +3565,18 @@ class DiscordBotService:
             )
             return
 
-        repos = self._list_manifest_repos()
-        if not repos:
+        candidates = self._list_bind_workspace_candidates()
+        if not candidates:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "No repos found in manifest. Use /car bind workspace:<workspace> to bind manually.",
+                "No workspaces found. Use /car bind workspace:<workspace> to bind manually.",
             )
             return
 
-        prompt, components = self._build_bind_page_prompt_and_components(repos, page=0)
+        prompt, components = self._build_bind_page_prompt_and_components(
+            candidates, page=0
+        )
         await self._respond_with_components(
             interaction_id,
             interaction_token,
@@ -3557,14 +3607,92 @@ class DiscordBotService:
         except Exception:
             return []
 
-    def _list_bind_workspace_candidates(self) -> list[tuple[Optional[str], str]]:
-        candidates: list[tuple[Optional[str], str]] = []
+    def _list_agent_workspaces(self) -> list[tuple[str, str, str]]:
+        supervisor = getattr(self, "_hub_supervisor", None)
+        if supervisor is None:
+            return []
+        try:
+            snapshots = supervisor.list_agent_workspaces()
+        except Exception:
+            return []
+        workspaces: list[tuple[str, str, str]] = []
+        for snapshot in snapshots:
+            workspace_id = str(getattr(snapshot, "id", "") or "").strip()
+            workspace_path = getattr(snapshot, "path", None)
+            if isinstance(workspace_path, str):
+                workspace_path = Path(workspace_path)
+            if not workspace_id or not isinstance(workspace_path, Path):
+                continue
+            display_name = str(
+                getattr(snapshot, "display_name", "") or workspace_id
+            ).strip()
+            workspaces.append(
+                (workspace_id, str(canonicalize_path(workspace_path)), display_name)
+            )
+        workspaces.sort(key=lambda item: (item[2].lower(), item[0]))
+        return workspaces
+
+    def _resource_owner_for_workspace(
+        self,
+        workspace_root: Path,
+        *,
+        repo_id: Optional[str] = None,
+        resource_kind: Optional[str] = None,
+        resource_id: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        normalized_repo_id = (
+            repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
+        )
+        normalized_resource_kind = (
+            resource_kind.strip()
+            if isinstance(resource_kind, str) and resource_kind.strip()
+            else None
+        )
+        normalized_resource_id = (
+            resource_id.strip()
+            if isinstance(resource_id, str) and resource_id.strip()
+            else None
+        )
+        if normalized_resource_kind == "repo" and normalized_resource_id:
+            return "repo", normalized_resource_id, normalized_resource_id
+        if normalized_resource_kind == "agent_workspace" and normalized_resource_id:
+            return "agent_workspace", normalized_resource_id, None
+        if normalized_repo_id:
+            return "repo", normalized_repo_id, normalized_repo_id
+
+        canonical_workspace = str(canonicalize_path(workspace_root))
+        for (
+            workspace_id,
+            workspace_path,
+            _display_name,
+        ) in self._list_agent_workspaces():
+            if workspace_path == canonical_workspace:
+                return "agent_workspace", workspace_id, None
+        for listed_repo_id, listed_path in self._list_manifest_repos():
+            if str(canonicalize_path(Path(listed_path))) == canonical_workspace:
+                return "repo", listed_repo_id, listed_repo_id
+        return None, None, None
+
+    def _list_bind_workspace_candidates(
+        self,
+    ) -> list[tuple[Optional[str], Optional[str], str]]:
+        candidates: list[tuple[Optional[str], Optional[str], str]] = []
         manifest_paths: set[str] = set()
 
         for repo_id, path in self._list_manifest_repos():
             normalized_path = str(canonicalize_path(Path(path)))
-            candidates.append((repo_id, normalized_path))
+            candidates.append(("repo", repo_id, normalized_path))
             manifest_paths.add(normalized_path)
+
+        for (
+            workspace_id,
+            workspace_path,
+            _display_name,
+        ) in self._list_agent_workspaces():
+            if workspace_path in manifest_paths:
+                continue
+            candidates.append(("agent_workspace", workspace_id, workspace_path))
+            manifest_paths.add(workspace_path)
 
         seen_paths: set[str] = set(manifest_paths)
         try:
@@ -3580,38 +3708,59 @@ class DiscordBotService:
                 if normalized_path in seen_paths:
                     continue
                 seen_paths.add(normalized_path)
-                candidates.append((None, normalized_path))
+                candidates.append((None, None, normalized_path))
         except Exception:
             pass
 
         return candidates
 
     @staticmethod
-    def _bind_candidate_value(repo_id: Optional[str], workspace_path: str) -> str:
-        if isinstance(repo_id, str) and repo_id:
-            return repo_autocomplete_value(repo_id)
+    def _bind_candidate_value(
+        resource_kind: Optional[str],
+        resource_id: Optional[str],
+        workspace_path: str,
+    ) -> str:
+        if resource_kind == "repo" and isinstance(resource_id, str) and resource_id:
+            return repo_autocomplete_value(resource_id)
+        if (
+            resource_kind == "agent_workspace"
+            and isinstance(resource_id, str)
+            and resource_id
+        ):
+            return agent_workspace_autocomplete_value(resource_id)
         return workspace_autocomplete_value(workspace_path)
 
     @staticmethod
-    def _bind_candidate_label(repo_id: Optional[str], workspace_path: str) -> str:
-        if isinstance(repo_id, str) and repo_id:
-            return repo_id
+    def _bind_candidate_label(
+        resource_kind: Optional[str],
+        resource_id: Optional[str],
+        workspace_path: str,
+    ) -> str:
+        if isinstance(resource_id, str) and resource_id:
+            return resource_id
         return Path(workspace_path).name or workspace_path
 
     def _build_bind_picker_items(
         self,
-        candidates: list[tuple[Optional[str], str]],
+        candidates: list[tuple[Optional[str], Optional[str], str]],
     ) -> list[tuple[str, str, Optional[str]]]:
         items: list[tuple[str, str, Optional[str]]] = []
-        for repo_id, workspace_path in candidates:
-            value = self._bind_candidate_value(repo_id, workspace_path)
-            label = self._bind_candidate_label(repo_id, workspace_path)
-            items.append((value, label, workspace_path))
+        for resource_kind, resource_id, workspace_path in candidates:
+            value = self._bind_candidate_value(
+                resource_kind, resource_id, workspace_path
+            )
+            label = self._bind_candidate_label(
+                resource_kind, resource_id, workspace_path
+            )
+            description = workspace_path
+            if resource_kind == "agent_workspace":
+                description = f"agent workspace · {workspace_path}"
+            items.append((value, label, description))
         return items
 
     def _build_bind_search_items(
         self,
-        candidates: list[tuple[Optional[str], str]],
+        candidates: list[tuple[Optional[str], Optional[str], str]],
     ) -> tuple[
         list[tuple[str, str]],
         dict[str, tuple[str, ...]],
@@ -3620,14 +3769,22 @@ class DiscordBotService:
         search_items: list[tuple[str, str]] = []
         exact_aliases: dict[str, tuple[str, ...]] = {}
         filter_aliases: dict[str, tuple[str, ...]] = {}
-        for repo_id, workspace_path in candidates:
-            value = self._bind_candidate_value(repo_id, workspace_path)
-            label = repo_id if isinstance(repo_id, str) and repo_id else workspace_path
+        for resource_kind, resource_id, workspace_path in candidates:
+            value = self._bind_candidate_value(
+                resource_kind, resource_id, workspace_path
+            )
+            label = (
+                resource_id
+                if isinstance(resource_id, str) and resource_id
+                else workspace_path
+            )
             search_items.append((value, label))
             exact_aliases[value] = (workspace_path,)
             alias_values = [workspace_path]
-            if isinstance(repo_id, str) and repo_id:
-                alias_values.append(repo_id)
+            if isinstance(resource_id, str) and resource_id:
+                alias_values.append(resource_id)
+            if isinstance(resource_kind, str) and resource_kind:
+                alias_values.append(resource_kind.replace("_", " "))
             basename = Path(workspace_path).name
             if basename:
                 alias_values.append(basename)
@@ -3667,17 +3824,17 @@ class DiscordBotService:
 
     def _build_bind_page_prompt_and_components(
         self,
-        repos: list[tuple[str, str]],
+        candidates: list[tuple[Optional[str], Optional[str], str]],
         *,
         page: int,
     ) -> tuple[str, list[dict[str, Any]]]:
         page_size = DISCORD_SELECT_OPTION_MAX_OPTIONS
-        total = len(repos)
+        total = len(candidates)
         total_pages = max(1, (total + page_size - 1) // page_size)
         bounded_page = max(0, min(page, total_pages - 1))
         start = bounded_page * page_size
         end = start + page_size
-        page_repos = repos[start:end]
+        page_candidates = candidates[start:end]
 
         prompt = "Select a workspace to bind:"
         if total > page_size:
@@ -3689,11 +3846,7 @@ class DiscordBotService:
             )
 
         components: list[dict[str, Any]] = [
-            build_bind_picker(
-                self._build_bind_picker_items(
-                    [(repo_id, path) for repo_id, path in page_repos]
-                )
-            )
+            build_bind_picker(self._build_bind_picker_items(page_candidates))
         ]
         if total_pages > 1:
             components.append(
@@ -3866,8 +4019,8 @@ class DiscordBotService:
     def _resolve_workspace_from_token(
         self,
         token: str,
-        candidates: list[tuple[Optional[str], str]],
-    ) -> Optional[tuple[Optional[str], str]]:
+        candidates: list[tuple[Optional[str], Optional[str], str]],
+    ) -> Optional[tuple[Optional[str], Optional[str], str]]:
         return resolve_workspace_from_token(token, candidates)
 
     def _normalize_agent(self, value: Any) -> str:
@@ -4055,7 +4208,11 @@ class DiscordBotService:
                 filtered_candidates = [
                     candidate
                     for candidate in candidates
-                    if self._bind_candidate_value(candidate[0], candidate[1])
+                    if self._bind_candidate_value(
+                        candidate[0],
+                        candidate[1],
+                        candidate[2],
+                    )
                     in filtered_values
                 ]
                 await self._respond_with_components(
@@ -4093,8 +4250,9 @@ class DiscordBotService:
                 interaction_token,
                 channel_id=channel_id,
                 guild_id=guild_id,
-                selected_repo_id=resolved_workspace[0],
-                workspace_path=resolved_workspace[1],
+                selected_resource_kind=resolved_workspace[0],
+                selected_resource_id=resolved_workspace[1],
+                workspace_path=resolved_workspace[2],
             )
             return
 
@@ -4116,7 +4274,8 @@ class DiscordBotService:
             interaction_token,
             channel_id=channel_id,
             guild_id=guild_id,
-            selected_repo_id=None,
+            selected_resource_kind=None,
+            selected_resource_id=None,
             workspace_path=str(workspace),
         )
 
@@ -5118,6 +5277,18 @@ class DiscordBotService:
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
             agent = self.DEFAULT_AGENT
+        resource_kind = (
+            str(binding.get("resource_kind")).strip()
+            if isinstance(binding.get("resource_kind"), str)
+            and str(binding.get("resource_kind")).strip()
+            else None
+        )
+        resource_id = (
+            str(binding.get("resource_id")).strip()
+            if isinstance(binding.get("resource_id"), str)
+            and str(binding.get("resource_id")).strip()
+            else None
+        )
 
         try:
             had_previous, _new_thread_id = await self._reset_discord_thread_binding(
@@ -5130,6 +5301,8 @@ class DiscordBotService:
                     and str(binding.get("repo_id")).strip()
                     else None
                 ),
+                resource_kind=resource_kind,
+                resource_id=resource_id,
                 pma_enabled=pma_enabled,
             )
         except Exception as exc:
@@ -5292,6 +5465,18 @@ class DiscordBotService:
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
             agent = self.DEFAULT_AGENT
+        resource_kind = (
+            str(binding.get("resource_kind")).strip()
+            if isinstance(binding.get("resource_kind"), str)
+            and str(binding.get("resource_kind")).strip()
+            else None
+        )
+        resource_id = (
+            str(binding.get("resource_id")).strip()
+            if isinstance(binding.get("resource_id"), str)
+            and str(binding.get("resource_id")).strip()
+            else None
+        )
 
         try:
             had_previous, _new_thread_id = await self._reset_discord_thread_binding(
@@ -5304,6 +5489,8 @@ class DiscordBotService:
                     and str(binding.get("repo_id")).strip()
                     else None
                 ),
+                resource_kind=resource_kind,
+                resource_id=resource_id,
                 pma_enabled=pma_enabled,
             )
         except Exception as exc:
@@ -5402,6 +5589,18 @@ class DiscordBotService:
             and str(binding.get("repo_id")).strip()
             else None
         )
+        resource_kind = (
+            str(binding.get("resource_kind")).strip()
+            if isinstance(binding.get("resource_kind"), str)
+            and str(binding.get("resource_kind")).strip()
+            else None
+        )
+        resource_id = (
+            str(binding.get("resource_id")).strip()
+            if isinstance(binding.get("resource_id"), str)
+            and str(binding.get("resource_id")).strip()
+            else None
+        )
         mode = "pma" if pma_enabled else "repo"
         orchestration_service, _current_binding, current_thread = (
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
@@ -5419,6 +5618,9 @@ class DiscordBotService:
                 agent=agent,
                 current_thread_id=current_thread_id,
                 mode=mode,
+                repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
             )
             if thread_items:
 
@@ -5512,6 +5714,9 @@ class DiscordBotService:
                 thread_target_id=thread_id,
                 agent=agent,
                 repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+                workspace_root=workspace_root,
                 pma_enabled=pma_enabled,
             )
             await self._store.clear_pending_compact_seed(channel_id=channel_id)
@@ -5525,6 +5730,9 @@ class DiscordBotService:
                 agent=agent,
                 current_thread_id=current_thread_id,
                 mode=mode,
+                repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
             )
             if thread_items:
                 header = (
@@ -9012,7 +9220,8 @@ class DiscordBotService:
         *,
         channel_id: str,
         guild_id: Optional[str],
-        selected_repo_id: Optional[str],
+        selected_resource_kind: Optional[str],
+        selected_resource_id: Optional[str],
         workspace_path: str,
     ) -> None:
         workspace = canonicalize_path(Path(workspace_path))
@@ -9028,12 +9237,21 @@ class DiscordBotService:
             channel_id=channel_id,
             guild_id=guild_id,
             workspace_path=str(workspace),
-            repo_id=selected_repo_id,
+            repo_id=(
+                selected_resource_id if selected_resource_kind == "repo" else None
+            ),
+            resource_kind=selected_resource_kind,
+            resource_id=selected_resource_id,
         )
         await self._store.clear_pending_compact_seed(channel_id=channel_id)
 
-        if selected_repo_id:
-            message = f"Bound this channel to: {selected_repo_id} ({workspace})"
+        if selected_resource_kind == "agent_workspace" and selected_resource_id:
+            message = (
+                f"Bound this channel to agent workspace: "
+                f"{selected_resource_id} ({workspace})"
+            )
+        elif selected_resource_id:
+            message = f"Bound this channel to: {selected_resource_id} ({workspace})"
         else:
             message = f"Bound this channel to workspace: {workspace}"
         await self._respond_ephemeral(
@@ -9077,8 +9295,9 @@ class DiscordBotService:
             interaction_token,
             channel_id=channel_id,
             guild_id=guild_id,
-            selected_repo_id=resolved_workspace[0],
-            workspace_path=resolved_workspace[1],
+            selected_resource_kind=resolved_workspace[0],
+            selected_resource_id=resolved_workspace[1],
+            workspace_path=resolved_workspace[2],
         )
 
     async def _handle_bind_page_component(
@@ -9105,18 +9324,17 @@ class DiscordBotService:
             )
             return
 
-        repos = self._list_manifest_repos()
-        if not repos:
+        candidates = self._list_bind_workspace_candidates()
+        if not candidates:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "No repos found in manifest.",
+                "No workspaces available to bind.",
             )
             return
 
         prompt, components = self._build_bind_page_prompt_and_components(
-            repos,
-            page=requested_page,
+            candidates, page=requested_page
         )
         await self._update_component_message(
             interaction_id=interaction_id,
@@ -9261,6 +9479,18 @@ class DiscordBotService:
         agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
         if agent not in self.VALID_AGENT_VALUES:
             agent = self.DEFAULT_AGENT
+        resource_kind = (
+            str(binding.get("resource_kind")).strip()
+            if isinstance(binding.get("resource_kind"), str)
+            and str(binding.get("resource_kind")).strip()
+            else None
+        )
+        resource_id = (
+            str(binding.get("resource_id")).strip()
+            if isinstance(binding.get("resource_id"), str)
+            and str(binding.get("resource_id")).strip()
+            else None
+        )
 
         try:
             had_previous, _new_thread_id = await self._reset_discord_thread_binding(
@@ -9273,6 +9503,8 @@ class DiscordBotService:
                     and str(binding.get("repo_id")).strip()
                     else None
                 ),
+                resource_kind=resource_kind,
+                resource_id=resource_id,
                 pma_enabled=pma_enabled,
             )
         except Exception as exc:
@@ -9925,6 +10157,18 @@ class DiscordBotService:
                     str(binding.get("repo_id")).strip()
                     if isinstance(binding.get("repo_id"), str)
                     and str(binding.get("repo_id")).strip()
+                    else None
+                ),
+                resource_kind=(
+                    str(binding.get("resource_kind")).strip()
+                    if isinstance(binding.get("resource_kind"), str)
+                    and str(binding.get("resource_kind")).strip()
+                    else None
+                ),
+                resource_id=(
+                    str(binding.get("resource_id")).strip()
+                    if isinstance(binding.get("resource_id"), str)
+                    and str(binding.get("resource_id")).strip()
                     else None
                 ),
                 pma_enabled=pma_enabled,

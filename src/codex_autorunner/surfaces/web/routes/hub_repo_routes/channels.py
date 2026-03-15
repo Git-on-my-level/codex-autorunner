@@ -238,6 +238,8 @@ class HubChannelService:
                 "guild_id",
                 "workspace_path",
                 "repo_id",
+                "resource_kind",
+                "resource_id",
                 "pma_enabled",
                 "agent",
                 "updated_at",
@@ -265,6 +267,20 @@ class HubChannelService:
                     "chat_id": channel_id.strip(),
                     "workspace_path": workspace_path,
                     "repo_id": repo_id,
+                    "resource_kind": (
+                        str(row["resource_kind"]).strip()
+                        if "resource_kind" in columns
+                        and isinstance(row["resource_kind"], str)
+                        and str(row["resource_kind"]).strip()
+                        else None
+                    ),
+                    "resource_id": (
+                        str(row["resource_id"]).strip()
+                        if "resource_id" in columns
+                        and isinstance(row["resource_id"], str)
+                        and str(row["resource_id"]).strip()
+                        else None
+                    ),
                     "pma_enabled": (
                         bool(row["pma_enabled"]) if "pma_enabled" in columns else False
                     ),
@@ -413,6 +429,14 @@ class HubChannelService:
                     if isinstance(pma_enabled_raw, bool)
                     else False
                 )
+                resource_kind = payload.get("resource_kind") or payload.get(
+                    "resourceKind"
+                )
+                if not isinstance(resource_kind, str) or not resource_kind.strip():
+                    resource_kind = None
+                resource_id = payload.get("resource_id") or payload.get("resourceId")
+                if not isinstance(resource_id, str) or not resource_id.strip():
+                    resource_id = None
                 agent = self._normalize_agent(payload.get("agent"))
                 key = (
                     f"telegram:{parsed_chat_id}"
@@ -431,6 +455,8 @@ class HubChannelService:
                         ),
                         "workspace_path": workspace_path,
                         "repo_id": repo_id,
+                        "resource_kind": resource_kind,
+                        "resource_id": resource_id,
                         "pma_enabled": pma_enabled,
                         "agent": agent,
                         "active_thread_id": active_thread_id,
@@ -1010,6 +1036,12 @@ class HubChannelService:
                     repo_id = binding.get("repo_id")
                     if isinstance(repo_id, str) and repo_id:
                         row["repo_id"] = repo_id
+                    resource_kind = binding.get("resource_kind")
+                    if isinstance(resource_kind, str) and resource_kind:
+                        row["resource_kind"] = resource_kind
+                    resource_id = binding.get("resource_id")
+                    if isinstance(resource_id, str) and resource_id:
+                        row["resource_id"] = resource_id
                     workspace_path = binding.get("workspace_path")
                     if isinstance(workspace_path, str) and workspace_path:
                         row["workspace_path"] = workspace_path
@@ -1027,6 +1059,8 @@ class HubChannelService:
                             "source": "pma_thread",
                             "platform": platform,
                             "agent": agent,
+                            "resource_kind": resource_kind,
+                            "resource_id": resource_id,
                         }
                         if isinstance(managed_thread_id, str) and managed_thread_id:
                             provenance = row.get("provenance")
@@ -1036,6 +1070,8 @@ class HubChannelService:
                         row["provenance"] = {
                             "source": source,
                             "platform": source,
+                            "resource_kind": resource_kind,
+                            "resource_id": resource_id,
                         }
                     active_thread_id: Optional[str] = None
                     if platform == "telegram" and not pma_enabled:

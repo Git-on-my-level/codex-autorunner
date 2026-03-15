@@ -1036,6 +1036,8 @@ def resolve_discord_thread_target(
     workspace_root: Path,
     agent: str,
     repo_id: Optional[str],
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
     mode: str,
     pma_enabled: bool,
 ) -> Any:
@@ -1061,18 +1063,39 @@ def resolve_discord_thread_target(
         or str(thread.workspace_root or "").strip() != canonical_workspace
         or str(thread.lifecycle_status or "").strip().lower() != "active"
     ):
+        owner_kind, owner_id, normalized_repo_id = (
+            service._resource_owner_for_workspace(
+                workspace_root,
+                repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+            )
+        )
         thread = orchestration_service.create_thread_target(
             agent,
             workspace_root,
-            repo_id=repo_id,
+            repo_id=normalized_repo_id,
+            resource_kind=owner_kind,
+            resource_id=owner_id,
             display_name=f"discord:{channel_id}",
+        )
+    else:
+        owner_kind, owner_id, normalized_repo_id = (
+            service._resource_owner_for_workspace(
+                workspace_root,
+                repo_id=repo_id,
+                resource_kind=resource_kind,
+                resource_id=resource_id,
+            )
         )
     orchestration_service.upsert_binding(
         surface_kind="discord",
         surface_key=channel_id,
         thread_target_id=thread.thread_target_id,
         agent_id=agent,
-        repo_id=repo_id,
+        repo_id=normalized_repo_id,
+        resource_kind=owner_kind,
+        resource_id=owner_id,
         mode=mode,
         metadata={"channel_id": channel_id, "pma_enabled": pma_enabled},
     )
@@ -1432,12 +1455,24 @@ async def _run_discord_orchestrated_turn_for_message(
     )
     binding = await service._store.get_binding(channel_id=channel_id)
     repo_id = binding.get("repo_id") if isinstance(binding, dict) else None
+    resource_kind = binding.get("resource_kind") if isinstance(binding, dict) else None
+    resource_id = binding.get("resource_id") if isinstance(binding, dict) else None
     orchestration_service, thread = resolve_discord_thread_target(
         service,
         channel_id=channel_id,
         workspace_root=workspace_root,
         agent=agent,
         repo_id=repo_id if isinstance(repo_id, str) and repo_id.strip() else None,
+        resource_kind=(
+            resource_kind.strip()
+            if isinstance(resource_kind, str) and resource_kind.strip()
+            else None
+        ),
+        resource_id=(
+            resource_id.strip()
+            if isinstance(resource_id, str) and resource_id.strip()
+            else None
+        ),
         mode=mode,
         pma_enabled=pma_enabled,
     )

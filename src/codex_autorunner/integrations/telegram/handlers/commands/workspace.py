@@ -532,6 +532,18 @@ class WorkspaceCommands(SharedHelpers):
                     if isinstance(updated.repo_id, str) and updated.repo_id.strip()
                     else None
                 ),
+                resource_kind=(
+                    updated.resource_kind.strip()
+                    if isinstance(updated.resource_kind, str)
+                    and updated.resource_kind.strip()
+                    else None
+                ),
+                resource_id=(
+                    updated.resource_id.strip()
+                    if isinstance(updated.resource_id, str)
+                    and updated.resource_id.strip()
+                    else None
+                ),
                 backend_thread_id=active_thread_id,
                 mode="repo",
                 pma_enabled=False,
@@ -725,17 +737,37 @@ class WorkspaceCommands(SharedHelpers):
         repo_ids = [repo.id for repo in manifest.repos if repo.enabled]
         return repo_ids
 
-    def _resolve_workspace(self, arg: str) -> Optional[tuple[str, Optional[str]]]:
+    def _resolve_workspace(
+        self, arg: str
+    ) -> Optional[tuple[str, Optional[str], Optional[str], Optional[str]]]:
         arg = (arg or "").strip()
         if not arg:
             return None
+        hub_supervisor = getattr(self, "_hub_supervisor", None)
+        if hub_supervisor is not None:
+            try:
+                for snapshot in hub_supervisor.list_agent_workspaces():
+                    workspace_id = str(getattr(snapshot, "id", "") or "").strip()
+                    workspace_path = getattr(snapshot, "path", None)
+                    if isinstance(workspace_path, str):
+                        workspace_path = Path(workspace_path)
+                    if workspace_id != arg or not isinstance(workspace_path, Path):
+                        continue
+                    return (
+                        str(canonicalize_path(workspace_path)),
+                        None,
+                        "agent_workspace",
+                        workspace_id,
+                    )
+            except Exception:
+                pass
         if self._manifest_path and self._hub_root:
             try:
                 manifest = load_manifest(self._manifest_path, self._hub_root)
                 repo = manifest.get(arg)
                 if repo:
                     workspace = canonicalize_path(self._hub_root / repo.path)
-                    return str(workspace), repo.id
+                    return str(workspace), repo.id, "repo", repo.id
             except Exception:
                 pass
         path = Path(arg)
@@ -747,7 +779,7 @@ class WorkspaceCommands(SharedHelpers):
             except Exception:
                 return None
         if path.exists():
-            return str(path), None
+            return str(path), None, None, None
         return None
 
     async def _require_thread_workspace(
@@ -894,22 +926,31 @@ class WorkspaceCommands(SharedHelpers):
             await self._answer_callback(callback, "Repo not found")
             await self._finalize_selection(key, callback, "Repo not found.")
             return
-        workspace_path, resolved_repo_id = resolved
+        workspace_path, resolved_repo_id, resource_kind, resource_id = resolved
         chat_id, thread_id = _split_topic_key(key)
         scope = self._topic_scope_id(resolved_repo_id, workspace_path)
         await self._router.set_topic_scope(chat_id, thread_id, scope)
+        resolved_workspace_id = (
+            resource_id
+            if resource_kind == "agent_workspace"
+            else self._workspace_id_for_path(workspace_path)
+        )
         await self._router.bind_topic(
             chat_id,
             thread_id,
             workspace_path,
             repo_id=resolved_repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            workspace_id=resolved_workspace_id,
             scope=scope,
         )
-        workspace_id = self._workspace_id_for_path(workspace_path)
 
         def apply_bind_updates(record: TelegramTopicRecord) -> None:
-            if workspace_id:
-                record.workspace_id = workspace_id
+            record.resource_kind = resource_kind
+            record.resource_id = resource_id
+            if resolved_workspace_id:
+                record.workspace_id = resolved_workspace_id
             # Mutual exclusion: Binding to a repo disables PMA mode.
             record.pma_enabled = False
 
@@ -939,21 +980,30 @@ class WorkspaceCommands(SharedHelpers):
                 reply_to=message.message_id,
             )
             return
-        workspace_path, repo_id = resolved
+        workspace_path, repo_id, resource_kind, resource_id = resolved
         scope = self._topic_scope_id(repo_id, workspace_path)
         await self._router.set_topic_scope(message.chat_id, message.thread_id, scope)
+        resolved_workspace_id = (
+            resource_id
+            if resource_kind == "agent_workspace"
+            else self._workspace_id_for_path(workspace_path)
+        )
         await self._router.bind_topic(
             message.chat_id,
             message.thread_id,
             workspace_path,
             repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            workspace_id=resolved_workspace_id,
             scope=scope,
         )
-        workspace_id = self._workspace_id_for_path(workspace_path)
 
         def apply_bind_updates(record: TelegramTopicRecord) -> None:
-            if workspace_id:
-                record.workspace_id = workspace_id
+            record.resource_kind = resource_kind
+            record.resource_id = resource_id
+            if resolved_workspace_id:
+                record.workspace_id = resolved_workspace_id
             # Mutual exclusion: Binding to a repo disables PMA mode.
             record.pma_enabled = False
 
@@ -1242,6 +1292,18 @@ class WorkspaceCommands(SharedHelpers):
                     if isinstance(record.repo_id, str) and record.repo_id.strip()
                     else None
                 ),
+                resource_kind=(
+                    record.resource_kind.strip()
+                    if isinstance(record.resource_kind, str)
+                    and record.resource_kind.strip()
+                    else None
+                ),
+                resource_id=(
+                    record.resource_id.strip()
+                    if isinstance(record.resource_id, str)
+                    and record.resource_id.strip()
+                    else None
+                ),
                 backend_thread_id=thread_id,
                 mode="repo",
                 pma_enabled=False,
@@ -1317,6 +1379,18 @@ class WorkspaceCommands(SharedHelpers):
                 repo_id=(
                     record.repo_id.strip()
                     if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                resource_kind=(
+                    record.resource_kind.strip()
+                    if isinstance(record.resource_kind, str)
+                    and record.resource_kind.strip()
+                    else None
+                ),
+                resource_id=(
+                    record.resource_id.strip()
+                    if isinstance(record.resource_id, str)
+                    and record.resource_id.strip()
                     else None
                 ),
                 backend_thread_id=thread_id,
@@ -1520,6 +1594,18 @@ class WorkspaceCommands(SharedHelpers):
                     if isinstance(record.repo_id, str) and record.repo_id.strip()
                     else None
                 ),
+                resource_kind=(
+                    record.resource_kind.strip()
+                    if isinstance(record.resource_kind, str)
+                    and record.resource_kind.strip()
+                    else None
+                ),
+                resource_id=(
+                    record.resource_id.strip()
+                    if isinstance(record.resource_id, str)
+                    and record.resource_id.strip()
+                    else None
+                ),
                 backend_thread_id=thread_id,
                 mode="repo",
                 pma_enabled=False,
@@ -1590,6 +1676,18 @@ class WorkspaceCommands(SharedHelpers):
                 repo_id=(
                     record.repo_id.strip()
                     if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                resource_kind=(
+                    record.resource_kind.strip()
+                    if isinstance(record.resource_kind, str)
+                    and record.resource_kind.strip()
+                    else None
+                ),
+                resource_id=(
+                    record.resource_id.strip()
+                    if isinstance(record.resource_id, str)
+                    and record.resource_id.strip()
                     else None
                 ),
                 backend_thread_id=thread_id,
@@ -2800,6 +2898,18 @@ class WorkspaceCommands(SharedHelpers):
                     updated_record.repo_id.strip()
                     if isinstance(updated_record.repo_id, str)
                     and updated_record.repo_id.strip()
+                    else None
+                ),
+                resource_kind=(
+                    updated_record.resource_kind.strip()
+                    if isinstance(updated_record.resource_kind, str)
+                    and updated_record.resource_kind.strip()
+                    else None
+                ),
+                resource_id=(
+                    updated_record.resource_id.strip()
+                    if isinstance(updated_record.resource_id, str)
+                    and updated_record.resource_id.strip()
                     else None
                 ),
                 backend_thread_id=thread_id,

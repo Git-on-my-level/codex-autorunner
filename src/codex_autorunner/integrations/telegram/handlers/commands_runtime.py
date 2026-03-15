@@ -1253,23 +1253,31 @@ class TelegramCommandHandlers(
             if enabled:
                 # Save previous binding before entering PMA mode.
                 record.pma_prev_repo_id = record.repo_id
+                record.pma_prev_resource_kind = record.resource_kind
+                record.pma_prev_resource_id = record.resource_id
                 record.pma_prev_workspace_path = record.workspace_path
                 record.pma_prev_workspace_id = record.workspace_id
                 record.pma_prev_active_thread_id = record.active_thread_id
                 # Mutual exclusion: PMA mode implies Hub context, so unbind specific repo.
                 record.workspace_path = None
                 record.repo_id = None
+                record.resource_kind = None
+                record.resource_id = None
                 record.workspace_id = None
                 record.active_thread_id = None
             else:
                 # Restore previous binding when exiting PMA mode.
                 if record.pma_prev_repo_id or record.pma_prev_workspace_path:
                     record.repo_id = record.pma_prev_repo_id
+                    record.resource_kind = record.pma_prev_resource_kind
+                    record.resource_id = record.pma_prev_resource_id
                     record.workspace_path = record.pma_prev_workspace_path
                     record.workspace_id = record.pma_prev_workspace_id
                     record.active_thread_id = record.pma_prev_active_thread_id
                     # Clear saved previous binding after restore.
                     record.pma_prev_repo_id = None
+                    record.pma_prev_resource_kind = None
+                    record.pma_prev_resource_id = None
                     record.pma_prev_workspace_path = None
                     record.pma_prev_workspace_id = None
                     record.pma_prev_active_thread_id = None
