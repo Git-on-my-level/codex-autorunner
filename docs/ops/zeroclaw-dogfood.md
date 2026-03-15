@@ -66,14 +66,25 @@ car hub agent-workspace remove zc-main --delete-files --path <hub_root>
 
 ## Install
 
-On macOS hosts with Homebrew:
+Install a stable ZeroClaw build that actually advertises
+`zeroclaw agent --session-state-file`.
+
+Do not assume `brew install zeroclaw` is sufficient. On the host from issue
+#966, Homebrew still provided `zeroclaw 0.2.0`, which was incompatible even
+though the raw CLI worked.
+
+As of March 15, 2026, the known-good stable example is the official
+`zeroclaw 0.3.1` release from the upstream project.
+
+After installing, validate the contract explicitly:
 
 ```bash
-brew install zeroclaw
+zeroclaw --version
+zeroclaw agent --help
 ```
 
 CAR's default config already resolves `agents.zeroclaw.binary: zeroclaw`, so no
-repo override is required when the Homebrew binary is on `PATH`.
+repo override is required when the installed binary is on `PATH`.
 
 ## Onboard
 
@@ -83,6 +94,14 @@ CI path.
 
 Before running live checks, confirm `zeroclaw config show` reports the
 provider/model you expect.
+
+CAR launches managed workspaces with both:
+
+- `ZEROCLAW_WORKSPACE=<managed workspace>/workspace`
+- `ZEROCLAW_CONFIG_DIR=$HOME/.zeroclaw`
+
+This keeps the durable CAR workspace separate from ZeroClaw's canonical
+provider/auth config.
 
 ## Host Validation
 

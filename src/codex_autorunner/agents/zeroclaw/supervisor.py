@@ -25,6 +25,7 @@ from ..managed_runtime import (
     RuntimePreflightResult,
     build_managed_workspace_launch_spec,
     preflight_managed_workspace_runtime,
+    zeroclaw_managed_workspace_env,
 )
 from ..types import TerminalTurnResult
 from .client import ZeroClawClient, split_zeroclaw_model
@@ -319,7 +320,10 @@ class ZeroClawSupervisor:
                 destination=destination,
                 repo_root=workspace_root,
                 command_workdir=runtime_workspace_root,
-                extra_env={"ZEROCLAW_WORKSPACE": str(runtime_workspace_root)},
+                extra_env=zeroclaw_managed_workspace_env(
+                    runtime_workspace_root,
+                    base_env=self._base_env,
+                ),
             )
             client_command = wrapped.command
             embed_workspace_env = False
