@@ -2,10 +2,9 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
-import os
+import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -229,40 +228,45 @@ def _collect_call_durations_from_pytest(
     if not nodeids:
         return {}
 
-    import pytest
-
-    class _DurationCollector:
-        def __init__(self) -> None:
-            self.durations: dict[str, float] = {}
-
-        def pytest_runtest_logreport(self, report) -> None:
-            if report.when != "call":
-                return
-            self.durations[report.nodeid] = float(report.duration)
-
-    collector = _DurationCollector()
-    stdout_buffer = io.StringIO()
-    stderr_buffer = io.StringIO()
-    old_cwd = Path.cwd()
-    try:
-        os.chdir(repo_root)
-        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(
-            stderr_buffer
-        ):
-            pytest.main(
+    durations: dict[str, float] = {}
+    for nodeid in nodeids:
+        with tempfile.TemporaryDirectory(prefix="fast-test-budget-") as temp_dir:
+            report_path = Path(temp_dir) / "report.xml"
+            completed = subprocess.run(
                 [
+                    sys.executable,
+                    "-m",
+                    "pytest",
                     "-q",
                     "-p",
                     "no:xdist",
                     "--rootdir",
                     str(repo_root),
-                    *nodeids,
+                    "-o",
+                    "junit_duration_report=call",
+                    "--junitxml",
+                    str(report_path),
+                    nodeid,
                 ],
-                plugins=[collector],
+                cwd=repo_root,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
             )
-    finally:
-        os.chdir(old_cwd)
-    return collector.durations
+            if completed.returncode not in (0, 1) or not report_path.exists():
+                continue
+            tree = ET.parse(report_path)
+            testcase = next(tree.iterfind(".//testcase"), None)
+            if testcase is None:
+                continue
+            normalized_nodeid = normalize_testcase_nodeid(testcase, repo_root=repo_root)
+            if normalized_nodeid != nodeid:
+                continue
+            durations[nodeid] = _parse_positive_float(
+                str(testcase.attrib.get("time") or "0"),
+                default=0.0,
+            )
+    return durations
 
 
 def verify_fast_test_budget_offenders(
