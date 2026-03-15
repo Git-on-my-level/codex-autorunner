@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -47,6 +49,22 @@ def _wrap_command_for_destination(**kwargs):
     )
 
     return wrap_command_for_destination(**kwargs)
+
+
+def _docker_destination_supplies_env(
+    destination: DockerDestination,
+    env_key: str,
+) -> bool:
+    explicit_value = str(destination.env.get(env_key) or "").strip()
+    if explicit_value:
+        return True
+    for pattern in destination.env_passthrough:
+        normalized = str(pattern or "").strip()
+        if not normalized or not fnmatch.fnmatchcase(env_key, normalized):
+            continue
+        if os.environ.get(env_key):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -315,15 +333,21 @@ class ZeroClawSupervisor:
         destination = self._resolve_destination(workspace_root)
         embed_workspace_env = True
         if isinstance(destination, DockerDestination):
+            docker_extra_env = zeroclaw_managed_workspace_env(
+                runtime_workspace_root,
+                base_env=self._base_env,
+            )
+            if _docker_destination_supplies_env(
+                destination,
+                "ZEROCLAW_CONFIG_DIR",
+            ):
+                docker_extra_env.pop("ZEROCLAW_CONFIG_DIR", None)
             wrapped = _wrap_command_for_destination(
                 command=self._command,
                 destination=destination,
                 repo_root=workspace_root,
                 command_workdir=runtime_workspace_root,
-                extra_env=zeroclaw_managed_workspace_env(
-                    runtime_workspace_root,
-                    base_env=self._base_env,
-                ),
+                extra_env=docker_extra_env,
             )
             client_command = wrapped.command
             embed_workspace_env = False

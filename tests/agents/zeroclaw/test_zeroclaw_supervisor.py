@@ -466,6 +466,91 @@ async def test_supervisor_wraps_workspace_launch_for_docker_destination(
 
 
 @pytest.mark.asyncio
+async def test_supervisor_preserves_explicit_docker_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
+        _FakeZeroClawClient,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_wrap_command_for_destination(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return type(
+            "Wrapped", (), {"command": ["docker", "exec", "zc-main", "zeroclaw"]}
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor._wrap_command_for_destination",
+        _fake_wrap_command_for_destination,
+    )
+
+    workspace_root = tmp_path / "runtimes" / "zeroclaw" / "zc-main"
+    supervisor = ZeroClawSupervisor(
+        ["zeroclaw"],
+        destination_resolver=lambda _root: DockerDestination(
+            image="ghcr.io/acme/zeroclaw:latest",
+            env={"ZEROCLAW_CONFIG_DIR": "/mounted/zeroclaw"},
+        ),
+    )
+
+    session_id = await supervisor.create_session(workspace_root)
+    await supervisor.start_turn(workspace_root, session_id, "hello")
+
+    runtime_workspace_root = workspace_root / "workspace"
+    assert captured["extra_env"] == {
+        "ZEROCLAW_WORKSPACE": str(runtime_workspace_root),
+    }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_preserves_passthrough_docker_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
+        _FakeZeroClawClient,
+    )
+    monkeypatch.setenv("ZEROCLAW_CONFIG_DIR", "/env/zeroclaw")
+
+    captured: dict[str, object] = {}
+
+    def _fake_wrap_command_for_destination(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return type(
+            "Wrapped", (), {"command": ["docker", "exec", "zc-main", "zeroclaw"]}
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor._wrap_command_for_destination",
+        _fake_wrap_command_for_destination,
+    )
+
+    workspace_root = tmp_path / "runtimes" / "zeroclaw" / "zc-main"
+    supervisor = ZeroClawSupervisor(
+        ["zeroclaw"],
+        destination_resolver=lambda _root: DockerDestination(
+            image="ghcr.io/acme/zeroclaw:latest",
+            env_passthrough=("ZEROCLAW_CONFIG_DIR",),
+        ),
+    )
+
+    session_id = await supervisor.create_session(workspace_root)
+    await supervisor.start_turn(workspace_root, session_id, "hello")
+
+    runtime_workspace_root = workspace_root / "workspace"
+    assert captured["extra_env"] == {
+        "ZEROCLAW_WORKSPACE": str(runtime_workspace_root),
+    }
+
+
+@pytest.mark.asyncio
 async def test_build_supervisor_from_hub_config_uses_agent_workspace_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
