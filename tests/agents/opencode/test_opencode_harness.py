@@ -152,3 +152,43 @@ async def test_opencode_harness_wait_for_turn_merges_cumulative_message_part_upd
     assert result.status == "ok"
     assert result.assistant_text == "Hello world"
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_ignores_user_message_part_updates() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.part.updated",
+                        data='{"sessionID":"session-1","properties":{"part":{"type":"text","messageID":"user-1","text":"user prompt"}}}',
+                    ),
+                    SSEEvent(
+                        event="message.updated",
+                        data='{"sessionID":"session-1","properties":{"info":{"id":"user-1","role":"user"}}}',
+                    ),
+                    SSEEvent(
+                        event="message.part.updated",
+                        data='{"sessionID":"session-1","properties":{"part":{"type":"text","messageID":"assistant-1","text":"assistant reply"}}}',
+                    ),
+                    SSEEvent(
+                        event="message.updated",
+                        data='{"sessionID":"session-1","properties":{"info":{"id":"assistant-1","role":"assistant"}}}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "assistant reply"
+    assert result.errors == []

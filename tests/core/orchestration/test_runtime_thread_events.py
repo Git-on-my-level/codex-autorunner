@@ -194,3 +194,99 @@ async def test_normalize_runtime_thread_raw_event_handles_opencode_message_part_
     assert isinstance(output[0], OutputDelta)
     assert output[0].content == "OK"
     assert state.best_assistant_text() == "OK"
+
+
+async def test_normalize_runtime_thread_raw_event_ignores_user_message_part_updates() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    pending = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "type": "text",
+                                "messageID": "user-1",
+                                "text": "user prompt",
+                            },
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    resolved = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.updated",
+                    "params": {
+                        "properties": {
+                            "info": {"id": "user-1", "role": "user"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert pending == []
+    assert resolved == []
+    assert state.best_assistant_text() == ""
+
+
+async def test_normalize_runtime_thread_raw_event_flushes_assistant_message_parts_after_role_update() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    pending = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "type": "text",
+                                "messageID": "assistant-1",
+                                "text": "assistant reply",
+                            },
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    resolved = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.updated",
+                    "params": {
+                        "properties": {
+                            "info": {"id": "assistant-1", "role": "assistant"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert pending == []
+    assert len(resolved) == 1
+    assert isinstance(resolved[0], OutputDelta)
+    assert resolved[0].content == "assistant reply"
+    assert state.best_assistant_text() == "assistant reply"

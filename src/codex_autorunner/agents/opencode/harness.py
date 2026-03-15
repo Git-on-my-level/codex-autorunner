@@ -98,6 +98,54 @@ def _extract_error_text(params: dict[str, Any]) -> Optional[str]:
     )
 
 
+def _extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
+    info = params.get("info")
+    if isinstance(info, dict):
+        return info
+    properties = params.get("properties")
+    if isinstance(properties, dict):
+        nested = properties.get("info")
+        if isinstance(nested, dict):
+            return nested
+    return {}
+
+
+def _extract_message_id(params: dict[str, Any]) -> Optional[str]:
+    info = _extract_message_info(params)
+    for key in ("id", "messageID", "messageId", "message_id"):
+        value = info.get(key)
+        if isinstance(value, str) and value:
+            return value
+    for key in ("messageID", "messageId", "message_id"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _extract_message_role(params: dict[str, Any]) -> Optional[str]:
+    info = _extract_message_info(params)
+    role = info.get("role")
+    if isinstance(role, str) and role:
+        return role
+    role = params.get("role")
+    if isinstance(role, str) and role:
+        return role
+    return None
+
+
+def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
+    properties = params.get("properties")
+    part = properties.get("part") if isinstance(properties, dict) else None
+    if not isinstance(part, dict):
+        return None
+    for key in ("messageID", "messageId", "message_id"):
+        value = part.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
 def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if isinstance(payload.get("message"), dict):
         message = payload["message"]
@@ -116,6 +164,10 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
     output_text = ""
     completed_message: Optional[str] = None
     errors: list[str] = []
+    message_roles: dict[str, str] = {}
+    pending_by_message: dict[str, str] = {}
+    pending_no_id = ""
+    message_roles_seen = False
 
     def _merge_stream(current: str, incoming: str) -> str:
         if not incoming:
@@ -132,6 +184,57 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
                 return f"{current}{incoming[overlap:]}"
         return f"{current}{incoming}"
 
+    def _append_part_text(message_id: Optional[str], text: str) -> None:
+        nonlocal output_text
+        nonlocal pending_no_id
+        if not text:
+            return
+        if message_id is None:
+            if not message_roles_seen:
+                output_text = _merge_stream(output_text, text)
+            else:
+                pending_no_id = _merge_stream(pending_no_id, text)
+            return
+        role = message_roles.get(message_id)
+        if role == "user":
+            return
+        if role == "assistant":
+            output_text = _merge_stream(output_text, text)
+            return
+        pending_by_message[message_id] = _merge_stream(
+            pending_by_message.get(message_id, ""),
+            text,
+        )
+
+    def _register_role(message_id: Optional[str], role: Optional[str]) -> None:
+        nonlocal output_text
+        nonlocal pending_no_id
+        nonlocal message_roles_seen
+        if not message_id or not role:
+            return
+        message_roles[message_id] = role
+        message_roles_seen = True
+        pending = pending_by_message.pop(message_id, "")
+        if role == "assistant":
+            if pending:
+                output_text = _merge_stream(output_text, pending)
+            if pending_no_id:
+                output_text = _merge_stream(output_text, pending_no_id)
+                pending_no_id = ""
+            return
+        if role == "user":
+            pending_no_id = ""
+
+    def _flush_fallback_pending() -> None:
+        nonlocal output_text
+        if pending_by_message:
+            for message_id, pending in list(pending_by_message.items()):
+                if message_roles.get(message_id) == "assistant":
+                    output_text = _merge_stream(output_text, pending)
+            pending_by_message.clear()
+        if pending_no_id and not message_roles_seen:
+            output_text = _merge_stream(output_text, pending_no_id)
+
     for payload in payloads:
         method, params = _unwrap_harness_payload(payload)
         method_lower = method.lower()
@@ -142,14 +245,21 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             "message.completed",
             "message.part.updated",
         }:
+            if method in {"message.updated", "message.completed"}:
+                _register_role(
+                    _extract_message_id(params),
+                    _extract_message_role(params),
+                )
             text = _extract_delta_text(params) or _extract_completed_text(params)
             if text:
                 if method == "message.delta":
                     output_text = _merge_stream(output_text, text)
                 elif method == "message.part.updated":
-                    output_text = _merge_stream(output_text, text)
+                    _append_part_text(_extract_part_message_id(params), text)
                 else:
-                    completed_message = text
+                    role = _extract_message_role(params)
+                    if role != "user":
+                        completed_message = text
             continue
 
         if method == "item/agentMessage/delta" or method == "turn/streamDelta":
@@ -177,6 +287,8 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             if error:
                 errors.append(error)
 
+    if not completed_message:
+        _flush_fallback_pending()
     assistant_text = (completed_message or output_text).strip()
     return assistant_text, errors
 

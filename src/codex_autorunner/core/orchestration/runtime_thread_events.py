@@ -49,6 +49,10 @@ class RuntimeThreadRunEventState:
     assistant_stream_text: str = ""
     assistant_message_text: str = ""
     token_usage: Optional[dict[str, Any]] = None
+    message_roles: dict[str, str] = field(default_factory=dict)
+    pending_stream_by_message: dict[str, str] = field(default_factory=dict)
+    pending_stream_no_id: str = ""
+    message_roles_seen: bool = False
 
     def note_stream_text(self, text: str) -> None:
         if isinstance(text, str) and text:
@@ -65,6 +69,83 @@ class RuntimeThreadRunEventState:
         if self.assistant_message_text.strip():
             return self.assistant_message_text
         return self.assistant_stream_text
+
+    def note_message_role(
+        self,
+        message_id: Optional[str],
+        role: Optional[str],
+    ) -> list[RunEvent]:
+        if not message_id or not role:
+            return []
+        self.message_roles[message_id] = role
+        self.message_roles_seen = True
+        if role == "user":
+            self.pending_stream_by_message.pop(message_id, None)
+            self.pending_stream_no_id = ""
+            return []
+        pending = self.pending_stream_by_message.pop(message_id, "")
+        events: list[RunEvent] = []
+        if pending:
+            self.note_stream_text(pending)
+            events.append(
+                OutputDelta(
+                    timestamp=now_iso(),
+                    content=pending,
+                    delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                )
+            )
+        if self.pending_stream_no_id:
+            pending_no_id = self.pending_stream_no_id
+            self.pending_stream_no_id = ""
+            self.note_stream_text(pending_no_id)
+            events.append(
+                OutputDelta(
+                    timestamp=now_iso(),
+                    content=pending_no_id,
+                    delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                )
+            )
+        return events
+
+    def note_message_part_text(
+        self,
+        message_id: Optional[str],
+        text: str,
+    ) -> list[RunEvent]:
+        if not isinstance(text, str) or not text:
+            return []
+        if message_id is None:
+            if not self.message_roles_seen:
+                self.note_stream_text(text)
+                return [
+                    OutputDelta(
+                        timestamp=now_iso(),
+                        content=text,
+                        delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                    )
+                ]
+            self.pending_stream_no_id = _merge_assistant_stream(
+                self.pending_stream_no_id,
+                text,
+            )
+            return []
+        role = self.message_roles.get(message_id)
+        if role == "user":
+            return []
+        if role == "assistant":
+            self.note_stream_text(text)
+            return [
+                OutputDelta(
+                    timestamp=now_iso(),
+                    content=text,
+                    delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+                )
+            ]
+        self.pending_stream_by_message[message_id] = _merge_assistant_stream(
+            self.pending_stream_by_message.get(message_id, ""),
+            text,
+        )
+        return []
 
 
 async def normalize_runtime_thread_raw_event(
@@ -185,7 +266,10 @@ def _normalize_message_event(
         return _assistant_stream_events(params, state)
 
     if method == "message.part.updated":
-        return _assistant_stream_events(params, state)
+        content = _extract_output_delta(params)
+        if not content:
+            return []
+        return state.note_message_part_text(_extract_part_message_id(params), content)
 
     if method in _APPROVAL_METHODS:
         request_id = _request_id_for_event(method, params)
@@ -246,11 +330,17 @@ def _normalize_message_event(
         ]
 
     if method in {"message.updated", "message.completed"}:
+        role_events = state.note_message_role(
+            _extract_message_id(params),
+            _extract_message_role(params),
+        )
         content = _extract_message_text(params)
         if not content:
-            return []
+            return role_events
+        if _extract_message_role(params) == "user":
+            return role_events
         state.note_message_text(content)
-        return [
+        return role_events + [
             OutputDelta(
                 timestamp=now_iso(),
                 content=content,
@@ -496,6 +586,49 @@ def _extract_message_text(params: dict[str, Any]) -> str:
         if isinstance(value, str) and value.strip():
             return value
     return ""
+
+
+def _extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
+    info = params.get("info")
+    if isinstance(info, dict):
+        return info
+    properties = _coerce_dict(params.get("properties"))
+    nested = properties.get("info")
+    return nested if isinstance(nested, dict) else {}
+
+
+def _extract_message_id(params: dict[str, Any]) -> Optional[str]:
+    info = _extract_message_info(params)
+    for key in ("id", "messageID", "messageId", "message_id"):
+        value = info.get(key)
+        if isinstance(value, str) and value:
+            return value
+    for key in ("messageID", "messageId", "message_id"):
+        value = params.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _extract_message_role(params: dict[str, Any]) -> Optional[str]:
+    info = _extract_message_info(params)
+    role = info.get("role")
+    if isinstance(role, str) and role:
+        return role
+    role = params.get("role")
+    if isinstance(role, str) and role:
+        return role
+    return None
+
+
+def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
+    properties = _coerce_dict(params.get("properties"))
+    part = _coerce_dict(properties.get("part"))
+    for key in ("messageID", "messageId", "message_id"):
+        value = part.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 __all__ = [
