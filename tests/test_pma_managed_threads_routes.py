@@ -85,7 +85,6 @@ def test_create_managed_thread_with_agent_workspace_owner(hub_env) -> None:
         resp = client.post(
             "/hub/pma/threads",
             json={
-                "agent": "codex",
                 "resource_kind": "agent_workspace",
                 "resource_id": workspace.id,
                 "name": "Workspace-owned thread",
@@ -94,27 +93,53 @@ def test_create_managed_thread_with_agent_workspace_owner(hub_env) -> None:
 
     assert resp.status_code == 200
     thread = resp.json()["thread"]
+    assert thread["agent"] == "zeroclaw"
     assert thread["repo_id"] is None
     assert thread["resource_kind"] == "agent_workspace"
     assert thread["resource_id"] == workspace.id
     assert thread["workspace_root"] == str(workspace.path.resolve())
 
 
-def test_create_managed_thread_rejects_agent_without_durable_threads(hub_env) -> None:
+def test_create_managed_thread_rejects_mismatched_agent_workspace_runtime(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "agent workspace runtime" in (resp.json().get("detail") or "").lower()
+
+
+def test_create_managed_thread_rejects_unknown_agent(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
         resp = client.post(
             "/hub/pma/threads",
             json={
-                "agent": "zeroclaw",
+                "agent": "bogus",
                 "repo_id": hub_env.repo_id,
-                "name": "ZeroClaw thread",
+                "name": "Invalid thread",
             },
         )
 
     assert resp.status_code == 422
-    assert "Input should be 'codex' or 'opencode'" in str(resp.json())
+    assert "codex" in str(resp.json())
+    assert "zeroclaw" in str(resp.json())
 
 
 def test_create_managed_thread_rejects_invalid_notify_on_without_side_effect(

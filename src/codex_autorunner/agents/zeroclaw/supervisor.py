@@ -50,8 +50,10 @@ class ZeroClawSessionMetadata:
                 f"ZeroClaw relaunch metadata for '{session_id}' is missing workspace_id"
             )
         try:
-            created_at = float(payload.get("created_at") or 0.0)
-            last_used_at = float(payload.get("last_used_at") or created_at)
+            created_at = _coerce_timestamp(payload.get("created_at"), default=0.0)
+            last_used_at = _coerce_timestamp(
+                payload.get("last_used_at"), default=created_at
+            )
         except (TypeError, ValueError) as exc:
             raise ZeroClawSupervisorError(
                 f"ZeroClaw relaunch metadata for '{session_id}' has invalid timestamps"
@@ -91,6 +93,16 @@ class ZeroClawSessionMetadata:
         if self.launch_model:
             payload["launch_model"] = self.launch_model
         return payload
+
+
+def _coerce_timestamp(value: object, *, default: float) -> float:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise TypeError("boolean timestamps are not supported")
+    if isinstance(value, (int, float, str)):
+        return float(value)
+    raise TypeError(f"unsupported timestamp type: {type(value).__name__}")
 
 
 @dataclass

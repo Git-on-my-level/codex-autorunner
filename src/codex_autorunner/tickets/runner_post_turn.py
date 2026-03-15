@@ -243,7 +243,7 @@ def process_commit_required(
     agent_committed_this_turn: Optional[bool],
     status_after_agent: Optional[str],
     max_commit_retries: int,
-) -> tuple[dict[str, Any], Optional[str], str, str, Optional[str]]:
+) -> tuple[dict[str, Any], str, Optional[str], str, Optional[str]]:
     """Process commit-required logic after successful turn."""
     commit_state = {}
     status = "continue"

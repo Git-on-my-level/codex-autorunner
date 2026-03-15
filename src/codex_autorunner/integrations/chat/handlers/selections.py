@@ -34,10 +34,10 @@ class ChatSelectionHandlers:
 
     @staticmethod
     def _selection_belongs_to_user(state: Any, user_id: str | None) -> bool:
-        expected = getattr(state, "requester_user_id", None)
+        expected: object = getattr(state, "requester_user_id", None)
         if expected is None:
             return True
-        return expected == user_id
+        return isinstance(expected, str) and expected == user_id
 
     def handle_pending_resume(self, context: ChatContext, text: str) -> bool:
         if not text.isdigit():

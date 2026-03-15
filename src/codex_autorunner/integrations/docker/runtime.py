@@ -380,16 +380,16 @@ def build_docker_container_spec(
         source_env=source_env,
     )
     merged_env = dict(sorted(passthrough.items()))
+    explicit_items: list[tuple[str, object]] = []
     if explicit_env is None:
-        explicit_items = ()
+        pass
     elif isinstance(explicit_env, Mapping):
-        explicit_items = explicit_env.items()
+        explicit_items.extend((key, value) for key, value in explicit_env.items())
     else:
         logger.warning(
             "Ignoring docker explicit env because value is not a mapping (got %s)",
             type(explicit_env).__name__,
         )
-        explicit_items = ()
     for key, value in explicit_items:
         if not isinstance(key, str) or not key.strip():
             continue

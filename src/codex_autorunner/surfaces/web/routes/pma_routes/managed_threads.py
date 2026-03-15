@@ -73,12 +73,12 @@ def _resolve_workspace_from_resource_owner(
     *,
     resource_kind: str,
     resource_id: str,
-) -> tuple[Path, Optional[str]]:
+) -> tuple[Path, Optional[str], Optional[str]]:
     supervisor = getattr(request.app.state, "hub_supervisor", None)
     if supervisor is None:
         raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
     if resource_kind == "repo":
-        return _resolve_workspace_from_repo_id(request, resource_id), resource_id
+        return _resolve_workspace_from_repo_id(request, resource_id), resource_id, None
     if resource_kind == "agent_workspace":
         for snapshot in supervisor.list_agent_workspaces():
             if getattr(snapshot, "id", None) != resource_id:
@@ -87,7 +87,13 @@ def _resolve_workspace_from_resource_owner(
             if isinstance(workspace_path, str):
                 workspace_path = Path(workspace_path)
             if isinstance(workspace_path, Path):
-                return workspace_path.absolute(), None
+                runtime = getattr(snapshot, "runtime", None)
+                normalized_runtime = (
+                    str(runtime).strip().lower()
+                    if isinstance(runtime, str) and runtime.strip()
+                    else None
+                )
+                return workspace_path.absolute(), None, normalized_runtime
         raise HTTPException(
             status_code=404,
             detail=f"Agent workspace not found: {resource_id}",
@@ -441,6 +447,7 @@ def build_managed_thread_crud_routes(
         request: Request, payload: PmaManagedThreadCreateRequest
     ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
+        agent_id = normalize_optional_text(payload.agent)
         repo_id = normalize_optional_text(payload.repo_id)
         resource_kind = normalize_optional_text(payload.resource_kind)
         resource_id = normalize_optional_text(payload.resource_id)
@@ -492,8 +499,11 @@ def build_managed_thread_crud_routes(
             )
 
         resolved_repo_id: Optional[str] = None
+        resolved_runtime: Optional[str] = None
         if owner_present:
-            resolved_workspace, resolved_repo_id = (
+            assert resource_kind is not None
+            assert resource_id is not None
+            resolved_workspace, resolved_repo_id, resolved_runtime = (
                 _resolve_workspace_from_resource_owner(
                     request,
                     resource_kind=resource_kind,
@@ -512,10 +522,36 @@ def build_managed_thread_crud_routes(
                 )
             resolved_workspace = _resolve_workspace_from_input(hub_root, workspace_root)
 
+        if resource_kind == "agent_workspace":
+            if resolved_runtime is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Agent workspace runtime is unavailable",
+                )
+            if agent_id is None:
+                agent_id = resolved_runtime
+            elif agent_id != resolved_runtime:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "agent must match the agent workspace runtime "
+                        f"('{resolved_runtime}')"
+                    ),
+                )
+
+        if agent_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "agent is required unless an agent workspace owner supplies "
+                    "the runtime"
+                ),
+            )
+
         service = build_managed_thread_orchestration_service(request)
         try:
             thread = service.create_thread_target(
-                payload.agent,
+                agent_id,
                 resolved_workspace,
                 repo_id=resolved_repo_id,
                 resource_kind=resource_kind,

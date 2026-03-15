@@ -6,8 +6,8 @@ import os
 import signal
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, AsyncIterator, Optional
 
 from ...core.config import find_nearest_hub_config_path, load_repo_config
@@ -27,7 +27,13 @@ from ...integrations.agents.build_agent_pool import build_agent_pool
 from .definition import build_ticket_flow_definition
 
 
-def build_ticket_flow_runtime_resources(repo_root: Path) -> SimpleNamespace:
+@dataclass
+class TicketFlowRuntimeResources:
+    controller: FlowController
+    agent_pool: Any
+
+
+def build_ticket_flow_runtime_resources(repo_root: Path) -> TicketFlowRuntimeResources:
     repo_root = repo_root.resolve()
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     artifacts_root = repo_root / ".codex-autorunner" / "flows"
@@ -49,7 +55,7 @@ def build_ticket_flow_runtime_resources(repo_root: Path) -> SimpleNamespace:
         durable=config.durable_writes,
     )
     controller.initialize()
-    return SimpleNamespace(controller=controller, agent_pool=agent_pool)
+    return TicketFlowRuntimeResources(controller=controller, agent_pool=agent_pool)
 
 
 def build_ticket_flow_controller(repo_root: Path) -> FlowController:
@@ -61,7 +67,7 @@ def build_ticket_flow_controller(repo_root: Path) -> FlowController:
 @asynccontextmanager
 async def ticket_flow_runtime_session(
     repo_root: Path,
-) -> AsyncIterator[SimpleNamespace]:
+) -> AsyncIterator[TicketFlowRuntimeResources]:
     resources = build_ticket_flow_runtime_resources(repo_root)
     try:
         yield resources

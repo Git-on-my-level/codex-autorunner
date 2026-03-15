@@ -12,7 +12,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
+from typing import Any, AsyncGenerator, Callable, Optional
 
 from ...core.config import RepoConfig
 from ...core.ports.agent_backend import AgentBackend
@@ -21,6 +21,7 @@ from ...core.ports.backend_orchestrator import (
 )
 from ...core.ports.run_event import RunEvent
 from ...core.state import RunnerState
+from ...core.types import NotificationHandler
 from ...integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_KEY,
     FILE_CHAT_OPENCODE_PREFIX,
@@ -30,7 +31,6 @@ from ...integrations.app_server.threads import (
 )
 from .wiring import AgentBackendFactory, BackendFactory
 
-NotificationHandler = Callable[[dict[str, Any]], Awaitable[None]]
 SessionIdGetter = Callable[[str], Optional[str]]
 SessionIdSetter = Callable[[str, str], None]
 

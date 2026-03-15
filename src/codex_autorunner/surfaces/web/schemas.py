@@ -263,7 +263,7 @@ class AppServerThreadArchiveRequest(Payload):
 
 
 class PmaManagedThreadCreateRequest(Payload):
-    agent: Literal["codex", "opencode"]
+    agent: Optional[Literal["codex", "opencode", "zeroclaw"]] = None
     repo_id: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("repo_id", "repoId")
     )

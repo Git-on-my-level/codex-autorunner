@@ -457,7 +457,14 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
         (
             "GET",
             "http://127.0.0.1:4321/hub/pma/threads",
-            {"agent": "codex", "status": "idle", "repo_id": "repo-1", "limit": 200},
+            {
+                "agent": "codex",
+                "status": "idle",
+                "repo_id": "repo-1",
+                "resource_kind": "repo",
+                "resource_id": "repo-1",
+                "limit": 200,
+            },
         ),
         (
             "GET",
@@ -641,6 +648,8 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             {
                 "agent": "codex",
                 "repo_id": "repo-1",
+                "resource_kind": "repo",
+                "resource_id": "repo-1",
                 "workspace_root": None,
                 "name": "CLI thread",
                 "backend_thread_id": "backend-thread-1",
@@ -658,6 +667,126 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             "POST",
             "http://127.0.0.1:4321/hub/pma/threads/thread-1/archive",
             None,
+        ),
+    ]
+
+
+def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, str, dict[str, object] | None, dict[str, object] | None]] = (
+        []
+    )
+
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env
+        calls.append((method, url, payload, params))
+        if method == "POST" and url.endswith("/hub/pma/threads"):
+            return {
+                "thread": {
+                    "managed_thread_id": "thread-zc-1",
+                    "agent": "zeroclaw",
+                    "resource_kind": "agent_workspace",
+                    "resource_id": "zc-main",
+                }
+            }
+        if method == "GET" and url.endswith("/hub/pma/threads"):
+            return {
+                "threads": [
+                    {
+                        "managed_thread_id": "thread-zc-1",
+                        "agent": "zeroclaw",
+                        "status": "idle",
+                        "status_reason": "thread_created",
+                        "resource_kind": "agent_workspace",
+                        "resource_id": "zc-main",
+                    }
+                ]
+            }
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    create_result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "spawn",
+            "--resource-kind",
+            "agent_workspace",
+            "--resource-id",
+            "zc-main",
+            "--name",
+            "ZeroClaw Main",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+    list_result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "list",
+            "--resource-kind",
+            "agent_workspace",
+            "--resource-id",
+            "zc-main",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert create_result.exit_code == 0
+    assert create_result.stdout.strip() == "thread-zc-1"
+    assert list_result.exit_code == 0
+    assert "thread-zc-1 agent=zeroclaw status=idle" in list_result.stdout
+    assert "owner=agent_workspace:zc-main" in list_result.stdout
+
+    assert calls == [
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads",
+            {
+                "agent": None,
+                "repo_id": None,
+                "resource_kind": "agent_workspace",
+                "resource_id": "zc-main",
+                "workspace_root": None,
+                "name": "ZeroClaw Main",
+                "backend_thread_id": None,
+                "notify_on": None,
+                "notify_lane": None,
+                "notify_once": True,
+            },
+            None,
+        ),
+        (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads",
+            None,
+            {
+                "resource_kind": "agent_workspace",
+                "resource_id": "zc-main",
+                "limit": 200,
+            },
         ),
     ]
 

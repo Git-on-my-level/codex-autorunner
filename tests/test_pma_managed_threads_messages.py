@@ -193,6 +193,8 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert metadata["managed_thread_id"] == managed_thread_id
     assert metadata["managed_turn_id"] == first_payload["managed_turn_id"]
     assert metadata["repo_id"] == hub_env.repo_id
+    assert metadata["resource_kind"] == "repo"
+    assert metadata["resource_id"] == hub_env.repo_id
     assert metadata["workspace_root"] == str(hub_env.repo_root.resolve())
     assert metadata["agent"] == "codex"
     assert metadata["backend_thread_id"] == "backend-thread-1"
@@ -767,6 +769,8 @@ def test_send_message_notifies_automation_on_completion(hub_env) -> None:
     transition = fake_store.transitions[0]
     assert transition["thread_id"] == managed_thread_id
     assert transition["repo_id"] == hub_env.repo_id
+    assert transition["resource_kind"] == "repo"
+    assert transition["resource_id"] == hub_env.repo_id
     assert transition["from_state"] == "running"
     assert transition["to_state"] == "completed"
     assert transition["reason"] == "managed_turn_completed"
@@ -830,11 +834,149 @@ def test_send_message_notifies_automation_on_failure(hub_env) -> None:
     transition = fake_store.transitions[0]
     assert transition["thread_id"] == managed_thread_id
     assert transition["repo_id"] == hub_env.repo_id
+    assert transition["resource_kind"] == "repo"
+    assert transition["resource_id"] == hub_env.repo_id
     assert transition["from_state"] == "running"
     assert transition["to_state"] == "failed"
     assert transition["reason"] == "Managed thread execution failed"
     assert isinstance(transition.get("timestamp"), str)
     assert str(transition.get("timestamp"))
+
+
+def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+
+    class FakeZeroClawSupervisor:
+        def __init__(self) -> None:
+            self.create_calls: list[tuple[Path, str | None]] = []
+            self.attach_calls: list[tuple[Path, str]] = []
+            self.turn_calls: list[dict[str, object]] = []
+
+        async def create_session(
+            self, workspace_root: Path, title: str | None = None
+        ) -> str:
+            self.create_calls.append((workspace_root, title))
+            return "zeroclaw-session-1"
+
+        async def attach_session(self, workspace_root: Path, session_id: str) -> str:
+            self.attach_calls.append((workspace_root, session_id))
+            return session_id
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            *,
+            model: str | None = None,
+        ) -> str:
+            self.turn_calls.append(
+                {
+                    "workspace_root": workspace_root,
+                    "conversation_id": conversation_id,
+                    "prompt": prompt,
+                    "model": model,
+                }
+            )
+            return f"zeroclaw-turn-{len(self.turn_calls)}"
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+            *,
+            timeout: float | None = None,
+        ):
+            _ = workspace_root, conversation_id, turn_id, timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "ok",
+                    "assistant_text": f"zeroclaw-output-{len(self.turn_calls)}",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def stream_turn_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield None
+
+    app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+                "name": "ZeroClaw thread",
+            },
+        )
+        assert create_resp.status_code == 200
+        created_thread = create_resp.json()["thread"]
+        assert created_thread["agent"] == "zeroclaw"
+        managed_thread_id = created_thread["managed_thread_id"]
+
+        first_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "first zeroclaw prompt"},
+        )
+        assert first_resp.status_code == 200
+        first_payload = first_resp.json()
+        assert first_payload["status"] == "ok"
+        assert first_payload["backend_thread_id"] == "zeroclaw-session-1"
+
+        second_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "second zeroclaw prompt"},
+        )
+        assert second_resp.status_code == 200
+        second_payload = second_resp.json()
+        assert second_payload["status"] == "ok"
+        assert second_payload["backend_thread_id"] == "zeroclaw-session-1"
+
+    fake_supervisor = app.state.zeroclaw_supervisor
+    assert fake_supervisor.create_calls == [
+        (workspace.path.resolve(), "ZeroClaw thread")
+    ]
+    assert fake_supervisor.attach_calls == [
+        (workspace.path.resolve(), "zeroclaw-session-1")
+    ]
+    assert len(fake_supervisor.turn_calls) == 2
+    assert fake_supervisor.turn_calls[0]["conversation_id"] == "zeroclaw-session-1"
+
+    store = PmaThreadStore(hub_env.hub_root)
+    thread = store.get_thread(managed_thread_id)
+    assert thread is not None
+    assert thread["agent"] == "zeroclaw"
+    assert thread["resource_kind"] == "agent_workspace"
+    assert thread["resource_id"] == workspace.id
+    assert thread["backend_thread_id"] == "zeroclaw-session-1"
+    assert thread["last_turn_id"] == second_payload["managed_turn_id"]
+
+    transcript = PmaTranscriptStore(hub_env.hub_root).read_transcript(
+        first_payload["managed_turn_id"]
+    )
+    assert transcript is not None
+    metadata = transcript["metadata"]
+    assert metadata["agent"] == "zeroclaw"
+    assert metadata.get("repo_id") is None
+    assert metadata["resource_kind"] == "agent_workspace"
+    assert metadata["resource_id"] == workspace.id
+    assert metadata["workspace_root"] == str(workspace.path.resolve())
+    assert metadata["backend_thread_id"] == "zeroclaw-session-1"
 
 
 def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None:
