@@ -128,6 +128,14 @@ class _FlowServiceKeyErrorStub:
         raise KeyError(run_id)
 
 
+class _FlowServiceValueErrorStub:
+    def archive_flow_run(
+        self, run_id: str, *, force: bool = False, delete_run: bool = True
+    ) -> dict[str, Any]:
+        _ = (run_id, force, delete_run)
+        raise ValueError("Can only archive completed/stopped/failed flows")
+
+
 def _config(root: Path) -> DiscordBotConfig:
     return DiscordBotConfig(
         root=root,
@@ -301,6 +309,42 @@ async def test_flow_archive_button_retires_stale_card_on_missing_run(
     assert run_id in edited["content"]
     assert "no longer exists" in edited["content"]
     assert edited["components"] == []
+
+
+@pytest.mark.anyio
+async def test_flow_archive_button_keeps_original_card_on_validation_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: _FlowServiceValueErrorStub(),
+    )
+
+    try:
+        await service._handle_flow_button(
+            "interaction-invalid",
+            "token-invalid",
+            workspace_root=workspace,
+            custom_id=f"flow:{run_id}:archive",
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+    finally:
+        await service._store.close()
+
+    assert rest.interaction_responses[0]["payload"]["type"] == 6
+    assert rest.edited_original_interaction_responses == []
+    assert len(rest.followup_messages) == 1
+    assert (
+        rest.followup_messages[0]["payload"]["content"]
+        == "Can only archive completed/stopped/failed flows"
+    )
 
 
 @pytest.mark.anyio

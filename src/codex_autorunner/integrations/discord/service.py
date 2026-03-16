@@ -9900,16 +9900,11 @@ class DiscordBotService:
                 )
                 return
             except ValueError as exc:
-                if deferred:
-                    updated = await self._edit_original_component_message(
-                        interaction_token=interaction_token,
-                        text=str(exc),
-                        components=[],
-                    )
-                    if updated:
-                        return
-                await self._respond_ephemeral(
-                    interaction_id, interaction_token, str(exc)
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=str(exc),
                 )
                 return
 
