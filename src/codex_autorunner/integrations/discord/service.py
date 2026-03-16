@@ -6762,6 +6762,66 @@ class DiscordBotService:
             )
         return components
 
+    @staticmethod
+    def _format_flow_status_response_text(
+        record: FlowRunRecord,
+        snapshot: dict[str, Any],
+    ) -> str:
+        worker = snapshot.get("worker_health")
+        worker_status = getattr(worker, "status", "unknown")
+        worker_pid = getattr(worker, "pid", None)
+        worker_text = (
+            f"{worker_status} (pid={worker_pid})"
+            if isinstance(worker_pid, int)
+            else str(worker_status)
+        )
+        last_event_seq = snapshot.get("last_event_seq")
+        last_event_at = snapshot.get("last_event_at")
+        current_ticket = snapshot.get("effective_current_ticket")
+        ticket_progress = snapshot.get("ticket_progress")
+        progress_label = None
+        if isinstance(ticket_progress, dict):
+            done = ticket_progress.get("done")
+            total = ticket_progress.get("total")
+            if isinstance(done, int) and isinstance(total, int) and total >= 0:
+                progress_label = f"{done}/{total}"
+        lines = [
+            f"Run: {record.id}",
+            f"Status: {record.status.value}",
+        ]
+        if progress_label:
+            lines.append(f"Tickets: {progress_label}")
+        duration_label = format_flow_duration(flow_run_duration_seconds(record))
+        if duration_label:
+            lines.append(f"Elapsed: {duration_label}")
+        freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
+        freshness_line = (
+            f"Freshness: {freshness_summary}" if freshness_summary else None
+        )
+        lines.extend(
+            [
+                f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
+                f"Worker: {worker_text}",
+                f"Current ticket: {current_ticket or '-'}",
+            ]
+        )
+        if freshness_line:
+            lines.append(freshness_line)
+        return "\n".join(lines)
+
+    def _build_flow_status_message(
+        self,
+        *,
+        record: FlowRunRecord,
+        runs: list[FlowRunRecord],
+        snapshot: dict[str, Any],
+        prefix: Optional[str] = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        response_text = self._format_flow_status_response_text(record, snapshot)
+        if isinstance(prefix, str) and prefix.strip():
+            response_text = f"{prefix.strip()}\n\n{response_text}"
+        return response_text, self._build_flow_status_components(record, runs)
+
     async def _handle_flow_status(
         self,
         interaction_id: str,
@@ -6878,47 +6938,11 @@ class DiscordBotService:
         finally:
             store.close()
 
-        worker = snapshot.get("worker_health")
-        worker_status = getattr(worker, "status", "unknown")
-        worker_pid = getattr(worker, "pid", None)
-        worker_text = (
-            f"{worker_status} (pid={worker_pid})"
-            if isinstance(worker_pid, int)
-            else str(worker_status)
+        response_text, status_buttons = self._build_flow_status_message(
+            record=record,
+            runs=runs,
+            snapshot=snapshot,
         )
-        last_event_seq = snapshot.get("last_event_seq")
-        last_event_at = snapshot.get("last_event_at")
-        current_ticket = snapshot.get("effective_current_ticket")
-        ticket_progress = snapshot.get("ticket_progress")
-        progress_label = None
-        if isinstance(ticket_progress, dict):
-            done = ticket_progress.get("done")
-            total = ticket_progress.get("total")
-            if isinstance(done, int) and isinstance(total, int) and total >= 0:
-                progress_label = f"{done}/{total}"
-        lines = [
-            f"Run: {record.id}",
-            f"Status: {record.status.value}",
-        ]
-        if progress_label:
-            lines.append(f"Tickets: {progress_label}")
-        duration_label = format_flow_duration(flow_run_duration_seconds(record))
-        if duration_label:
-            lines.append(f"Elapsed: {duration_label}")
-        freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
-        freshness_line = (
-            f"Freshness: {freshness_summary}" if freshness_summary else None
-        )
-        lines.extend(
-            [
-                f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
-                f"Worker: {worker_text}",
-                f"Current ticket: {current_ticket or '-'}",
-            ]
-        )
-        if freshness_line:
-            lines.append(freshness_line)
-        response_text = "\n".join(lines)
         run_mirror = self._flow_run_mirror(workspace_root)
         run_mirror.mirror_inbound(
             run_id=record.id,
@@ -6944,8 +6968,6 @@ class DiscordBotService:
             thread_id=guild_id,
             meta={"response_type": response_type},
         )
-
-        status_buttons = self._build_flow_status_components(record, runs)
         if status_buttons:
             if update_message:
                 await self._update_component_message(
@@ -7168,11 +7190,109 @@ class DiscordBotService:
                     active_or_paused.id,
                     is_terminal=active_or_paused.status.is_terminal(),
                 )
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"Reusing ticket_flow run {active_or_paused.id} ({active_or_paused.status.value}).",
+                try:
+                    store = self._open_flow_store(workspace_root)
+                except (sqlite3.Error, OSError, RuntimeError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.flow.store_open_failed",
+                        workspace_root=str(workspace_root),
+                        exc=exc,
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to open flow database: {exc}",
+                        user_message="Unable to access flow database. Please try again later.",
+                    ) from None
+                try:
+                    try:
+                        record = self._resolve_flow_run_by_id(
+                            store, run_id=active_or_paused.id
+                        )
+                        runs = store.list_flow_runs(flow_type="ticket_flow")
+                    except (sqlite3.Error, OSError) as exc:
+                        log_event(
+                            self._logger,
+                            logging.ERROR,
+                            "discord.flow.query_failed",
+                            exc=exc,
+                            run_id=active_or_paused.id,
+                        )
+                        raise DiscordTransientError(
+                            f"Failed to query flow run: {exc}",
+                            user_message="Unable to query flow database. Please try again later.",
+                        ) from None
+                    if record is None:
+                        await self._respond_ephemeral(
+                            interaction_id,
+                            interaction_token,
+                            (
+                                "Reusing ticket_flow run "
+                                f"{active_or_paused.id} ({active_or_paused.status.value})."
+                            ),
+                        )
+                        return
+                    try:
+                        record, _updated, locked = reconcile_flow_run(
+                            workspace_root, record, store
+                        )
+                        if locked:
+                            await self._respond_ephemeral(
+                                interaction_id,
+                                interaction_token,
+                                f"Run {record.id} is locked for reconcile; try again.",
+                            )
+                            return
+                    except (sqlite3.Error, OSError) as exc:
+                        log_event(
+                            self._logger,
+                            logging.ERROR,
+                            "discord.flow.reconcile_failed",
+                            exc=exc,
+                            run_id=record.id,
+                        )
+                        raise DiscordTransientError(
+                            f"Failed to reconcile flow run: {exc}",
+                            user_message="Unable to reconcile flow run. Please try again later.",
+                        ) from None
+                    try:
+                        snapshot = build_flow_status_snapshot(
+                            workspace_root, record, store
+                        )
+                    except (sqlite3.Error, OSError) as exc:
+                        log_event(
+                            self._logger,
+                            logging.ERROR,
+                            "discord.flow.snapshot_failed",
+                            exc=exc,
+                            run_id=record.id,
+                        )
+                        raise DiscordTransientError(
+                            f"Failed to build flow snapshot: {exc}",
+                            user_message="Unable to build flow snapshot. Please try again later.",
+                        ) from None
+                finally:
+                    store.close()
+                response_text, status_buttons = self._build_flow_status_message(
+                    record=record,
+                    runs=runs,
+                    snapshot=snapshot,
+                    prefix=(
+                        "Reusing ticket_flow run "
+                        f"{record.id} ({record.status.value})."
+                    ),
                 )
+                if status_buttons:
+                    await self._respond_with_components_public(
+                        interaction_id,
+                        interaction_token,
+                        response_text,
+                        status_buttons,
+                    )
+                else:
+                    await self._respond_public(
+                        interaction_id, interaction_token, response_text
+                    )
                 return
 
         metadata: dict[str, Any] = {"origin": "discord", "force_new": force_new}
@@ -7189,12 +7309,100 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.flow.store_open_failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            raise DiscordTransientError(
+                f"Failed to open flow database: {exc}",
+                user_message="Unable to access flow database. Please try again later.",
+            ) from None
+        try:
+            try:
+                record = self._resolve_flow_run_by_id(store, run_id=started.run_id)
+                runs = store.list_flow_runs(flow_type="ticket_flow")
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.query_failed",
+                    exc=exc,
+                    run_id=started.run_id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to query flow run: {exc}",
+                    user_message="Unable to query flow database. Please try again later.",
+                ) from None
+            if record is None:
+                prefix = "Started new" if force_new else "Started"
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    f"{prefix} ticket_flow run {started.run_id}.",
+                )
+                return
+            try:
+                record, _updated, locked = reconcile_flow_run(
+                    workspace_root, record, store
+                )
+                if locked:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        f"Run {record.id} is locked for reconcile; try again.",
+                    )
+                    return
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.reconcile_failed",
+                    exc=exc,
+                    run_id=record.id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to reconcile flow run: {exc}",
+                    user_message="Unable to reconcile flow run. Please try again later.",
+                ) from None
+            try:
+                snapshot = build_flow_status_snapshot(workspace_root, record, store)
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.snapshot_failed",
+                    exc=exc,
+                    run_id=record.id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to build flow snapshot: {exc}",
+                    user_message="Unable to build flow snapshot. Please try again later.",
+                ) from None
+        finally:
+            store.close()
+
         prefix = "Started new" if force_new else "Started"
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"{prefix} ticket_flow run {started.run_id}.",
+        response_text, status_buttons = self._build_flow_status_message(
+            record=record,
+            runs=runs,
+            snapshot=snapshot,
+            prefix=f"{prefix} ticket_flow run {record.id}.",
         )
+        if status_buttons:
+            await self._respond_with_components_public(
+                interaction_id,
+                interaction_token,
+                response_text,
+                status_buttons,
+            )
+        else:
+            await self._respond_public(interaction_id, interaction_token, response_text)
 
     async def _handle_flow_restart(
         self,

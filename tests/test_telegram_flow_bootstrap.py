@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,6 +45,7 @@ class _FlowServiceStub:
 class _FlowBootstrapHandler(FlowCommands):
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.markups: list[dict[str, object] | None] = []
         self.prompts: list[str] = []
         self.prompt_responses: list[str | None] = []
         self.seed_issue_refs: list[str] = []
@@ -59,8 +61,9 @@ class _FlowBootstrapHandler(FlowCommands):
         reply_markup: dict[str, object] | None = None,
         parse_mode: str | None = None,
     ) -> None:
-        _ = (thread_id, reply_to, reply_markup, parse_mode)
+        _ = (thread_id, reply_to, parse_mode)
         self.sent.append(text)
+        self.markups.append(reply_markup)
 
     async def _prompt_flow_text_input(
         self, _message: TelegramMessage, prompt_text: str
@@ -106,10 +109,44 @@ async def test_flow_bootstrap_skips_prompt_when_tickets_exist(
     (ticket_dir / "TICKET-001.md").write_text("ticket", encoding="utf-8")
 
     flow_service = _FlowServiceStub()
+
+    async def _start_flow_run(
+        _flow_target_id: str,
+        *,
+        input_data: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+        run_id: str | None = None,
+    ) -> object:
+        flow_service.start_calls.append(
+            {
+                "input_data": input_data or {},
+                "metadata": metadata or {},
+                "run_id": run_id,
+            }
+        )
+        store = FlowStore(repo_root / ".codex-autorunner" / "flows.db")
+        store.initialize()
+        store.create_flow_run("run-1", "ticket_flow", {})
+        store.update_flow_run_status("run-1", FlowRunStatus.RUNNING)
+        store.close()
+        return type("Run", (), {"run_id": "run-1"})()
+
+    flow_service.start_flow_run = _start_flow_run  # type: ignore[method-assign]
     monkeypatch.setattr(
         flows_module,
         "build_ticket_flow_orchestration_service",
         lambda *, workspace_root: flow_service,
+    )
+    monkeypatch.setattr(
+        flows_module,
+        "build_flow_status_snapshot",
+        lambda _root, _record, _store: {
+            "worker_health": SimpleNamespace(status="alive", pid=123, message=None),
+            "effective_current_ticket": None,
+            "last_event_seq": 1,
+            "last_event_at": "2026-03-16T03:25:44Z",
+            "freshness": {"summary": "fresh"},
+        },
     )
 
     handler = _FlowBootstrapHandler()
@@ -139,6 +176,10 @@ async def test_flow_bootstrap_skips_prompt_when_tickets_exist(
     assert inbound_records[-1]["kind"] == "command"
     assert outbound_records[-1]["event_type"] == "flow_bootstrap_started_notice"
     assert outbound_records[-1]["kind"] == "notice"
+    assert "Started ticket flow run `run-1`." in handler.sent[-1]
+    assert "Run: `run-1`" in handler.sent[-1]
+    assert "Status: running" in handler.sent[-1]
+    assert handler.markups[-1] is not None
 
 
 @pytest.mark.anyio
