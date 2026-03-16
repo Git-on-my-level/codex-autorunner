@@ -344,7 +344,7 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
 
 
 @pytest.mark.anyio
-async def test_flow_status_without_run_id_uses_latest_run_and_includes_picker(
+async def test_flow_status_without_run_id_uses_current_run_and_includes_picker(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
@@ -401,6 +401,61 @@ async def test_flow_status_without_run_id_uses_latest_run_and_includes_picker(
 
 
 @pytest.mark.anyio
+async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    newest_completed_run_id = str(uuid.uuid4())
+    older_stopped_run_id = str(uuid.uuid4())
+    _create_run(workspace, older_stopped_run_id, status=FlowRunStatus.STOPPED)
+    _create_run(workspace, newest_completed_run_id, status=FlowRunStatus.COMPLETED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]["data"]
+        content = payload["content"]
+        components = payload["components"]
+
+        assert "No current ticket_flow run." in content
+        assert "Run: " not in content
+        picker_rows = [
+            row
+            for row in components
+            if row["components"][0].get("custom_id") == "flow_runs_select"
+        ]
+        assert len(picker_rows) == 1
+        picker_options = picker_rows[0]["components"][0]["options"]
+        assert [option["value"] for option in picker_options] == [
+            newest_completed_run_id,
+            older_stopped_run_id,
+        ]
+        assert all(option.get("default") is False for option in picker_options)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> None:
     workspace = _workspace(tmp_path)
     completed_run_id = str(uuid.uuid4())
@@ -444,6 +499,51 @@ async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> No
         content = _latest_status_message(rest)["content"]
         assert "Status: completed" in content
         assert "Elapsed: 2h 30m" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_status_with_missing_explicit_run_id_reports_not_found(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    existing_run_id = str(uuid.uuid4())
+    missing_run_id = str(uuid.uuid4())
+    _create_run(workspace, existing_run_id, status=FlowRunStatus.COMPLETED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _flow_interaction(
+                name="status",
+                options=[{"type": 3, "name": "run_id", "value": missing_run_id}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert content == f"Ticket_flow run {missing_run_id} not found."
     finally:
         await store.close()
 

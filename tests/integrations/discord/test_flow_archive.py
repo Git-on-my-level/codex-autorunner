@@ -23,6 +23,8 @@ from codex_autorunner.integrations.discord.state import DiscordStateStore
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
+        self.followup_messages: list[dict[str, Any]] = []
+        self.edited_original_interaction_responses: list[dict[str, Any]] = []
 
     async def create_interaction_response(
         self,
@@ -38,6 +40,38 @@ class _FakeRest:
                 "payload": payload,
             }
         )
+
+    async def create_followup_message(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.followup_messages.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+        return payload
+
+    async def edit_original_interaction_response(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.edited_original_interaction_responses.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+        return payload
 
     async def create_channel_message(
         self, *, channel_id: str, payload: dict[str, Any]
@@ -84,6 +118,14 @@ class _FlowServiceStub:
             {"run_id": run_id, "force": force, "delete_run": delete_run}
         )
         return dict(self.summary)
+
+
+class _FlowServiceKeyErrorStub:
+    def archive_flow_run(
+        self, run_id: str, *, force: bool = False, delete_run: bool = True
+    ) -> dict[str, Any]:
+        _ = (force, delete_run)
+        raise KeyError(run_id)
 
 
 def _config(root: Path) -> DiscordBotConfig:
@@ -221,7 +263,44 @@ async def test_flow_archive_button_deletes_run_record_by_default(
     assert flow_service.archive_calls == [
         {"run_id": run_id, "force": False, "delete_run": True}
     ]
-    assert "Archived run" in rest.interaction_responses[0]["payload"]["data"]["content"]
+    assert rest.interaction_responses[0]["payload"]["type"] == 6
+    edited = rest.edited_original_interaction_responses[0]["payload"]
+    assert "Archived run" in edited["content"]
+    assert edited["components"] == []
+
+
+@pytest.mark.anyio
+async def test_flow_archive_button_retires_stale_card_on_missing_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: _FlowServiceKeyErrorStub(),
+    )
+
+    try:
+        await service._handle_flow_button(
+            "interaction-stale",
+            "token-stale",
+            workspace_root=workspace,
+            custom_id=f"flow:{run_id}:archive",
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+    finally:
+        await service._store.close()
+
+    assert rest.interaction_responses[0]["payload"]["type"] == 6
+    edited = rest.edited_original_interaction_responses[0]["payload"]
+    assert run_id in edited["content"]
+    assert "no longer exists" in edited["content"]
+    assert edited["components"] == []
 
 
 @pytest.mark.anyio

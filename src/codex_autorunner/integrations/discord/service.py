@@ -6735,7 +6735,29 @@ class DiscordBotService:
     ) -> Optional[FlowRunRecord]:
         if not records:
             return None
-        return select_authoritative_run_record(records)
+        live_records = [
+            record
+            for record in records
+            if not record.status.is_terminal()
+            and record.status != FlowRunStatus.SUPERSEDED
+        ]
+        if not live_records:
+            return None
+        return select_authoritative_run_record(live_records)
+
+    @staticmethod
+    def _build_historical_runs_picker(
+        runs: list[FlowRunRecord],
+    ) -> list[dict[str, Any]]:
+        if not runs:
+            return []
+        run_tuples = [(run.id, run.status.value) for run in runs]
+        return [
+            build_flow_runs_picker(
+                run_tuples,
+                placeholder="Select a historical run...",
+            )
+        ]
 
     @staticmethod
     def _build_flow_status_components(
@@ -6889,9 +6911,38 @@ class DiscordBotService:
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
                 record = self._select_default_status_run(runs)
+            explicit_run_requested = isinstance(run_id_opt, str) and bool(
+                run_id_opt.strip()
+            )
             if record is None:
+                if runs and not explicit_run_requested:
+                    content = (
+                        "No current ticket_flow run.\n\n"
+                        "Use the picker below to inspect historical runs."
+                    )
+                    components = self._build_historical_runs_picker(runs)
+                    if update_message:
+                        await self._update_component_message(
+                            interaction_id=interaction_id,
+                            interaction_token=interaction_token,
+                            text=content,
+                            components=components,
+                        )
+                    else:
+                        await self._respond_with_components_public(
+                            interaction_id,
+                            interaction_token,
+                            content,
+                            components,
+                        )
+                    return
+                message = (
+                    f"Ticket_flow run {run_id_opt.strip()} not found."
+                    if explicit_run_requested
+                    else "No ticket_flow runs found."
+                )
                 await self._respond_ephemeral(
-                    interaction_id, interaction_token, "No ticket_flow runs found."
+                    interaction_id, interaction_token, message
                 )
                 return
             try:
@@ -8576,6 +8627,27 @@ class DiscordBotService:
             return False
         return True
 
+    async def _defer_component_update(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> bool:
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={"type": 6},
+            )
+        except DiscordAPIError as exc:
+            self._logger.warning(
+                "Failed to defer component update: %s (interaction_id=%s)",
+                exc,
+                interaction_id,
+            )
+            return False
+        return True
+
     async def _send_or_respond_ephemeral(
         self,
         *,
@@ -8700,6 +8772,35 @@ class DiscordBotService:
                     exc,
                     interaction_id,
                 )
+
+    async def _edit_original_component_message(
+        self,
+        *,
+        interaction_token: str,
+        text: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> bool:
+        application_id = (self._config.application_id or "").strip()
+        if not application_id:
+            return False
+        max_len = max(int(self._config.max_message_length), 32)
+        payload: dict[str, Any] = {
+            "content": truncate_for_discord(text, max_len=max_len),
+            "components": components or [],
+        }
+        try:
+            await self._rest.edit_original_interaction_response(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                payload=payload,
+            )
+        except DiscordAPIError as exc:
+            self._logger.error(
+                "Failed to edit original interaction response: %s",
+                exc,
+            )
+            return False
+        return True
 
     async def _send_followup_ephemeral(
         self,
@@ -9770,27 +9871,68 @@ class DiscordBotService:
                 f"Stop requested for run {updated.run_id} ({updated.status}).",
             )
         elif action == "archive":
+            deferred = await self._defer_component_update(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
             try:
-                summary = flow_service.archive_flow_run(
+                summary = await asyncio.to_thread(
+                    flow_service.archive_flow_run,
                     run_id,
                     force=False,
                     delete_run=True,
                 )
-            except (KeyError, ValueError) as exc:
+            except KeyError:
+                stale_text = (
+                    f"Run {run_id} no longer exists. "
+                    "Use /car flow status or /car flow runs to inspect historical runs."
+                )
+                if deferred:
+                    updated = await self._edit_original_component_message(
+                        interaction_token=interaction_token,
+                        text=stale_text,
+                        components=[],
+                    )
+                    if updated:
+                        return
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, stale_text
+                )
+                return
+            except ValueError as exc:
+                if deferred:
+                    updated = await self._edit_original_component_message(
+                        interaction_token=interaction_token,
+                        text=str(exc),
+                        components=[],
+                    )
+                    if updated:
+                        return
                 await self._respond_ephemeral(
                     interaction_id, interaction_token, str(exc)
                 )
                 return
 
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    f"Archived run {summary['run_id']} "
-                    f"(tickets={summary['archived_tickets']}, "
-                    f"runs_archived={summary['archived_runs']}, "
-                    f"contextspace={summary['archived_contextspace']})."
-                ),
+            archived_text = (
+                f"Archived run {summary['run_id']} "
+                f"(tickets={summary['archived_tickets']}, "
+                f"runs_archived={summary['archived_runs']}, "
+                f"contextspace={summary['archived_contextspace']}).\n\n"
+                "Use /car flow status or /car flow runs to inspect historical runs."
+            )
+            if deferred:
+                updated = await self._edit_original_component_message(
+                    interaction_token=interaction_token,
+                    text=archived_text,
+                    components=[],
+                )
+                if updated:
+                    return
+            await self._update_component_message(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                text=archived_text,
+                components=[],
             )
         elif action == "restart":
             await self._handle_flow_restart(
