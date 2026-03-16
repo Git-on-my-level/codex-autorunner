@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -110,7 +110,7 @@ def _sanitize_managed_thread_result_error(detail: Any) -> str:
     return MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
 
 
-def _normalize_busy_policy(value: Any) -> str:
+def _normalize_busy_policy(value: Any) -> Literal["queue", "interrupt", "reject"]:
     normalized = normalize_optional_text(value)
     if normalized is None:
         return "queue"
@@ -120,7 +120,7 @@ def _normalize_busy_policy(value: Any) -> str:
             status_code=400,
             detail="busy_policy must be one of: queue, interrupt, reject",
         )
-    return busy_policy
+    return cast(Literal["queue", "interrupt", "reject"], busy_policy)
 
 
 async def notify_managed_thread_terminal_transition(
@@ -341,10 +341,9 @@ def build_managed_thread_runtime_routes(
         request: Request,
         payload: PmaManagedThreadMessageRequest,
     ) -> Any:
-        parsed = payload.model_dump(exclude_none=True)
-        busy_policy = _normalize_busy_policy(parsed.get("busy_policy"))
+        busy_policy = _normalize_busy_policy(payload.busy_policy)
 
-        message = (parsed.get("message") or "").strip()
+        message = (payload.message or "").strip()
         if not message:
             raise HTTPException(status_code=400, detail="message is required")
 
@@ -365,18 +364,16 @@ def build_managed_thread_runtime_routes(
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
 
-        notify_on = normalize_optional_text(parsed.get("notify_on"))
+        notify_on = normalize_optional_text(payload.notify_on)
         if notify_on and notify_on != "terminal":
             raise HTTPException(
                 status_code=400, detail="notify_on must be 'terminal' when provided"
             )
         notify_on = None if not notify_on else notify_on
 
-        notify_lane = normalize_optional_text(parsed.get("notify_lane"))
-        raw_notify_once = parsed.get("notify_once")
-        if raw_notify_once is not None:
-            notify_once = bool(raw_notify_once)
-        defer_execution = bool(parsed.get("defer_execution"))
+        notify_lane = normalize_optional_text(payload.notify_lane)
+        notify_once = bool(payload.notify_once)
+        defer_execution = bool(payload.defer_execution)
 
         if (thread.get("status") or "") == "archived":
             return JSONResponse(
@@ -397,8 +394,8 @@ def build_managed_thread_runtime_routes(
                     "error": "Managed thread is archived and read-only",
                 },
             )
-        model = normalize_optional_text(parsed.get("model")) or defaults.get("model")
-        reasoning = normalize_optional_text(parsed.get("reasoning")) or defaults.get(
+        model = normalize_optional_text(payload.model) or defaults.get("model")
+        reasoning = normalize_optional_text(payload.reasoning) or defaults.get(
             "reasoning"
         )
         stored_backend_id = normalize_optional_text(thread.get("backend_thread_id"))

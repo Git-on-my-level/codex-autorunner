@@ -9,18 +9,11 @@ from typing import Any, Callable, Dict, Optional
 from fastapi import Request
 
 from .....agents.registry import validate_agent_id
-from .....core.state import now_iso
+from .....core import drafts as draft_utils
 from .....core.usage import persist_opencode_usage_snapshot
 from .....core.utils import atomic_write
-from .targets import (
-    _hash_content,
-    _load_state,
-    _save_state,
-    _Target,
-    build_file_chat_prompt,
-    build_patch,
-    read_file,
-)
+from .draft_state import load_draft_snapshot, persist_draft, relative_to_repo
+from .targets import _Target, build_file_chat_prompt, read_file
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +53,22 @@ async def execute_file_chat(
     if supervisor is None and opencode is None:
         raise FileChatError("No agent supervisor available for file chat")
 
-    before = read_file(target.path)
-    base_hash = _hash_content(before)
-
-    prompt = build_file_chat_prompt(target=target, message=message, before=before)
+    (
+        state,
+        drafts,
+        live_before,
+        before,
+        base_content,
+        base_hash,
+        created_at,
+        draft_path,
+    ) = load_draft_snapshot(repo_root, target)
+    prompt = build_file_chat_prompt(
+        target=target,
+        message=message,
+        before=before,
+        editable_rel_path=relative_to_repo(repo_root, draft_path),
+    )
 
     from .runtime import get_or_create_interrupt_event
 
@@ -121,31 +126,28 @@ async def execute_file_chat(
     if result.get("status") != "ok":
         return result
 
-    after = read_file(target.path)
-
-    if after != before:
-        atomic_write(target.path, before)
+    live_after = read_file(target.path)
+    after = read_file(draft_path)
 
     agent_message = result.get("agent_message", "File updated")
     response_text = result.get("message", agent_message)
 
-    if after != before:
-        patch = build_patch(target.rel_path, before, after)
-        state = _load_state(repo_root)
-        drafts = (
-            state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
+    if live_after != live_before:
+        # Safety guard: draft editing should not touch the live file before apply.
+        atomic_write(target.path, live_before)
+
+    if after != base_content:
+        draft = persist_draft(
+            repo_root,
+            target,
+            state=state,
+            drafts=drafts,
+            content=after,
+            base_content=base_content,
+            base_hash=base_hash,
+            created_at=created_at,
+            agent_message=agent_message,
         )
-        drafts[target.state_key] = {
-            "content": after,
-            "patch": patch,
-            "agent_message": agent_message,
-            "created_at": now_iso(),
-            "base_hash": base_hash,
-            "target": target.target,
-            "rel_path": target.rel_path,
-        }
-        state["drafts"] = drafts
-        _save_state(repo_root, state)
         return {
             "status": "ok",
             "target": target.target,
@@ -153,10 +155,10 @@ async def execute_file_chat(
             "agent_message": agent_message,
             "message": response_text,
             "has_draft": True,
-            "patch": patch,
+            "patch": draft["patch"],
             "content": after,
             "base_hash": base_hash,
-            "created_at": drafts[target.state_key]["created_at"],
+            "created_at": draft["created_at"],
             "thread_id": result.get("thread_id"),
             "turn_id": result.get("turn_id"),
             **(
@@ -165,6 +167,8 @@ async def execute_file_chat(
                 else {}
             ),
         }
+
+    draft_utils.remove_draft(repo_root, target.state_key)
 
     return {
         "status": "ok",

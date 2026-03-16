@@ -35,45 +35,6 @@ class ContextspaceResponse(ResponseModel):
     spec: str
 
 
-class ContextspaceFileItem(ResponseModel):
-    name: str
-    path: str
-    is_pinned: bool = False
-    modified_at: Optional[str] = None
-
-
-class ContextspaceFileListResponse(ResponseModel):
-    files: List[ContextspaceFileItem]
-
-
-class ContextspaceNode(ResponseModel):
-    name: str
-    path: str
-    type: Literal["file", "folder"]
-    is_pinned: bool = False
-    modified_at: Optional[str] = None
-    size: Optional[int] = None
-    children: Optional[List["ContextspaceNode"]] = None
-
-
-ContextspaceNode.model_rebuild()
-
-
-class ContextspaceTreeResponse(ResponseModel):
-    tree: List[ContextspaceNode]
-
-
-class ContextspaceUploadedItem(ResponseModel):
-    filename: str
-    path: str
-    size: int
-
-
-class ContextspaceUploadResponse(ResponseModel):
-    status: str
-    uploaded: List[ContextspaceUploadedItem]
-
-
 class ArchiveSnapshotSummary(ResponseModel):
     snapshot_id: str
     worktree_repo_id: str
@@ -264,10 +225,9 @@ class AppServerThreadArchiveRequest(Payload):
 
 
 class PmaManagedThreadCreateRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     agent: Optional[Literal["codex", "opencode", "zeroclaw"]] = None
-    repo_id: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("repo_id", "repoId")
-    )
     resource_kind: Optional[Literal["repo", "agent_workspace"]] = Field(
         default=None, validation_alias=AliasChoices("resource_kind", "resourceKind")
     )
@@ -277,23 +237,15 @@ class PmaManagedThreadCreateRequest(Payload):
     workspace_root: Optional[str] = None
     name: Optional[str] = None
     backend_thread_id: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_repo_owner_alias(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        repo_id = data.get("repo_id", data.get("repoId"))
-        resource_kind = data.get("resource_kind", data.get("resourceKind"))
-        resource_id = data.get("resource_id", data.get("resourceId"))
-        if repo_id is None:
-            return data
-        normalized = dict(data)
-        if resource_kind is None:
-            normalized["resource_kind"] = "repo"
-        if resource_id is None:
-            normalized["resource_id"] = repo_id
-        return normalized
+    notify_on: Optional[Literal["terminal"]] = Field(
+        default=None, validation_alias=AliasChoices("notify_on", "notifyOn")
+    )
+    notify_lane: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("notify_lane", "notifyLane")
+    )
+    notify_once: bool = Field(
+        default=True, validation_alias=AliasChoices("notify_once", "notifyOnce")
+    )
 
 
 class SessionSettingsRequest(Payload):
@@ -694,6 +646,8 @@ class TicketBulkUpdateResponse(ResponseModel):
 
 
 class PmaManagedThreadMessageRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     message: str
     busy_policy: Optional[Literal["queue", "interrupt", "reject"]] = Field(
         default=None, validation_alias=AliasChoices("busy_policy", "busyPolicy")
@@ -702,13 +656,7 @@ class PmaManagedThreadMessageRequest(Payload):
     reasoning: Optional[str] = None
     defer_execution: bool = Field(
         default=False,
-        validation_alias=AliasChoices(
-            "defer_execution",
-            "deferExecution",
-            "background",
-            "async_mode",
-            "asyncMode",
-        ),
+        validation_alias=AliasChoices("defer_execution", "deferExecution"),
     )
     notify_on: Optional[Literal["terminal"]] = Field(
         default=None, validation_alias=AliasChoices("notify_on", "notifyOn")

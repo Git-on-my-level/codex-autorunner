@@ -460,7 +460,6 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
             {
                 "agent": "codex",
                 "status": "idle",
-                "repo_id": "repo-1",
                 "resource_kind": "repo",
                 "resource_id": "repo-1",
                 "limit": 200,
@@ -647,7 +646,6 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             "http://127.0.0.1:4321/hub/pma/threads",
             {
                 "agent": "codex",
-                "repo_id": "repo-1",
                 "resource_kind": "repo",
                 "resource_id": "repo-1",
                 "workspace_root": None,
@@ -766,7 +764,6 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
             "http://127.0.0.1:4321/hub/pma/threads",
             {
                 "agent": None,
-                "repo_id": None,
                 "resource_kind": "agent_workspace",
                 "resource_id": "zc-main",
                 "workspace_root": None,

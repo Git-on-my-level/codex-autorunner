@@ -335,7 +335,7 @@ def _normalize_resource_owner_options(
     resource_kind: Optional[str],
     resource_id: Optional[str],
     workspace_root: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
     normalized_repo_id = (
         repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
     )
@@ -404,7 +404,6 @@ def _normalize_resource_owner_options(
         normalized_resource_id = normalized_repo_id
 
     return (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         normalized_workspace_root,
@@ -998,7 +997,6 @@ def pma_thread_spawn(
     """Create a managed PMA thread."""
     normalized_agent = _normalize_agent_option(agent)
     (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         normalized_workspace_root,
@@ -1058,7 +1056,6 @@ def pma_thread_spawn(
             _build_pma_url(config, "/threads"),
             {
                 "agent": normalized_agent,
-                "repo_id": normalized_repo_id,
                 "resource_kind": normalized_resource_kind,
                 "resource_id": normalized_resource_id,
                 "workspace_root": normalized_workspace_root,
@@ -1106,7 +1103,6 @@ def pma_thread_list(
     """List managed PMA threads."""
     hub_root = _resolve_hub_path(path)
     (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         _normalized_workspace_root,
@@ -1120,7 +1116,6 @@ def pma_thread_list(
         for key, value in {
             "agent": agent,
             "status": status,
-            "repo_id": normalized_repo_id,
             "resource_kind": normalized_resource_kind,
             "resource_id": normalized_resource_id,
             "limit": limit,
@@ -2212,7 +2207,6 @@ def pma_binding_list(
     """List orchestration bindings for threads."""
     hub_root = _resolve_hub_path(path)
     (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         _normalized_workspace_root,
@@ -2225,7 +2219,6 @@ def pma_binding_list(
         key: value
         for key, value in {
             "agent": agent,
-            "repo_id": normalized_repo_id,
             "resource_kind": normalized_resource_kind,
             "resource_id": normalized_resource_id,
             "surface_kind": surface_kind,
@@ -2334,7 +2327,6 @@ def pma_binding_work(
     """List busy-work summaries (threads with running or queued work)."""
     hub_root = _resolve_hub_path(path)
     (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         _normalized_workspace_root,
@@ -2347,7 +2339,6 @@ def pma_binding_work(
         key: value
         for key, value in {
             "agent": agent,
-            "repo_id": normalized_repo_id,
             "resource_kind": normalized_resource_kind,
             "resource_id": normalized_resource_id,
             "limit": limit,

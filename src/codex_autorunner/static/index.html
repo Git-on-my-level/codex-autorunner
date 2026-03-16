@@ -505,10 +505,6 @@
             <span class="muted small" id="contextspace-status"></span>
           </div>
           <div class="contextspace-header-actions">
-            <input type="file" id="contextspace-upload-input" multiple hidden />
-            <button class="ghost sm" id="contextspace-upload" title="Upload to current folder">Upload</button>
-            <button class="ghost sm" id="contextspace-new-folder" title="Create folder">New Folder</button>
-            <button class="ghost sm" id="contextspace-new-file" title="Create markdown file">New File</button>
             <button class="ghost sm hidden" id="contextspace-generate-tickets" title="Generate tickets from spec">Generate
               tickets</button>
             <button class="ghost sm" id="contextspace-reload">Reload</button>
@@ -517,8 +513,6 @@
         </div>
         <div class="contextspace-path-row">
           <nav class="contextspace-breadcrumbs" id="contextspace-breadcrumbs"></nav>
-          <button class="ghost sm contextspace-download-all-btn" id="contextspace-download-all"
-            title="Download all as ZIP">⬇</button>
         </div>
         <div class="contextspace-grid">
           <aside class="contextspace-file-browser">
@@ -555,18 +549,7 @@
               </button>
               <div class="contextspace-mobile-actions">
                 <span class="muted small" id="contextspace-status-mobile"></span>
-                <div class="contextspace-mobile-menu">
-                  <button class="ghost sm icon-btn" id="contextspace-mobile-menu-toggle"
-                    title="Contextspace actions">⋯</button>
-                  <div class="contextspace-mobile-dropdown hidden" id="contextspace-mobile-dropdown">
-                    <button class="contextspace-mobile-item" id="contextspace-mobile-upload">Upload files</button>
-                    <button class="contextspace-mobile-item" id="contextspace-mobile-new-folder">New folder</button>
-                    <button class="contextspace-mobile-item" id="contextspace-mobile-new-file">New file</button>
-                    <button class="contextspace-mobile-item" id="contextspace-mobile-download">Download ZIP</button>
-                    <button class="contextspace-mobile-item hidden" id="contextspace-mobile-generate">Generate
-                      tickets</button>
-                  </div>
-                </div>
+                <button class="ghost sm hidden" id="contextspace-mobile-generate" title="Generate tickets">Generate</button>
                 <button class="ghost sm" id="contextspace-reload-mobile" title="Reload">↻</button>
                 <button class="primary sm" id="contextspace-save-mobile">Save</button>
               </div>
@@ -1266,47 +1249,6 @@
       </div>
       <div class="file-picker-body" id="file-picker-body">
         <!-- File list rendered here by JS -->
-      </div>
-    </div>
-  </div>
-  <!-- Contextspace Create Modal -->
-  <div class="modal-overlay" hidden="" id="contextspace-create-modal">
-    <div aria-describedby="workspace-create-body" aria-labelledby="contextspace-create-title" aria-modal="true"
-      class="modal-dialog workspace-create-dialog" role="dialog" tabindex="-1">
-      <div class="modal-header">
-        <span class="label" id="contextspace-create-title">Create</span>
-        <button class="file-picker-close" id="contextspace-create-close" aria-label="Close">&times;</button>
-      </div>
-      <div class="modal-body" id="workspace-create-body">
-        <div class="form-group">
-          <label class="muted small" for="contextspace-create-name">Name</label>
-          <input id="contextspace-create-name" placeholder="my-note.md" type="text" />
-          <span class="form-hint" id="contextspace-create-hint">Created under current folder</span>
-        </div>
-        <div class="form-group">
-          <label class="muted small" for="contextspace-create-path">Location</label>
-          <select id="contextspace-create-path"></select>
-        </div>
-      </div>
-      <div class="modal-actions workspace-create-actions">
-        <button class="ghost sm" id="contextspace-create-cancel">Cancel</button>
-        <button class="primary sm" id="contextspace-create-submit">Create</button>
-      </div>
-    </div>
-  </div>
-  <!-- Contextspace Confirm Modal -->
-  <div class="modal-overlay" hidden="" id="contextspace-confirm-modal">
-    <div aria-describedby="contextspace-confirm-body" aria-labelledby="contextspace-confirm-title" aria-modal="true"
-      class="modal-dialog contextspace-confirm-dialog" role="dialog" tabindex="-1">
-      <div class="modal-header">
-        <span class="label" id="contextspace-confirm-title">Confirm</span>
-      </div>
-      <div class="modal-body" id="contextspace-confirm-body">
-        <p id="contextspace-confirm-text"></p>
-      </div>
-      <div class="modal-actions contextspace-confirm-actions">
-        <button class="ghost sm" id="contextspace-confirm-cancel">Cancel</button>
-        <button class="primary sm" id="contextspace-confirm-yes">Confirm</button>
       </div>
     </div>
   </div>

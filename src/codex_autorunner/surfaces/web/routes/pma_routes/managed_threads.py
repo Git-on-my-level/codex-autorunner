@@ -127,6 +127,47 @@ def _normalize_notify_on(value: Any) -> Optional[str]:
     return notify_on
 
 
+def _normalize_resource_owner(
+    *,
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    normalized_resource_kind = normalize_optional_text(resource_kind)
+    normalized_resource_id = normalize_optional_text(resource_id)
+    if normalized_resource_id and normalized_resource_kind is None:
+        raise HTTPException(
+            status_code=400,
+            detail="resource_kind is required when resource_id is provided",
+        )
+    if normalized_resource_kind and normalized_resource_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="resource_id is required when resource_kind is provided",
+        )
+    if normalized_resource_kind not in {None, "repo", "agent_workspace"}:
+        raise HTTPException(
+            status_code=400,
+            detail="resource_kind must be one of: repo, agent_workspace",
+        )
+    normalized_repo_id = (
+        normalized_resource_id if normalized_resource_kind == "repo" else None
+    )
+    return normalized_resource_kind, normalized_resource_id, normalized_repo_id
+
+
+def _reject_legacy_repo_owner_alias(repo_id: Optional[str]) -> None:
+    normalized_repo_id = normalize_optional_text(repo_id)
+    if normalized_repo_id is None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            "repo_id is not supported here; use resource_kind=repo and "
+            "resource_id=<repo_id>"
+        ),
+    )
+
+
 def _build_operator_status_fields(
     *,
     normalized_status: Optional[str],
@@ -507,48 +548,14 @@ def build_managed_thread_crud_routes(
     ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
         agent_id = normalize_optional_text(payload.agent)
-        repo_id = normalize_optional_text(payload.repo_id)
-        resource_kind = normalize_optional_text(payload.resource_kind)
-        resource_id = normalize_optional_text(payload.resource_id)
+        resource_kind, resource_id, resolved_repo_id = _normalize_resource_owner(
+            resource_kind=payload.resource_kind,
+            resource_id=payload.resource_id,
+        )
         workspace_root = normalize_optional_text(payload.workspace_root)
-        raw_payload: dict[str, Any] = {}
-        try:
-            parsed = await request.json()
-            if isinstance(parsed, dict):
-                raw_payload = parsed
-        except Exception:
-            pass
-        notify_on = _normalize_notify_on(
-            raw_payload.get("notify_on") or raw_payload.get("notifyOn")
-        )
-        notify_lane = normalize_optional_text(
-            raw_payload.get("notify_lane") or raw_payload.get("notifyLane")
-        )
-        raw_notify_once = raw_payload.get("notify_once")
-        if raw_notify_once is None:
-            raw_notify_once = raw_payload.get("notifyOnce")
-        notify_once = bool(raw_notify_once) if raw_notify_once is not None else True
-
-        if resource_id and resource_kind is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_kind is required when resource_id is provided",
-            )
-        if resource_kind and resource_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_id is required when resource_kind is provided",
-            )
-        if repo_id and resource_kind not in {None, "repo"}:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id cannot be combined with a non-repo resource_kind",
-            )
-        if repo_id and resource_id and resource_id != repo_id:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id must match resource_id for repo-backed requests",
-            )
+        notify_on = _normalize_notify_on(payload.notify_on)
+        notify_lane = normalize_optional_text(payload.notify_lane)
+        notify_once = bool(payload.notify_once)
 
         owner_present = resource_kind is not None and resource_id is not None
         if owner_present == bool(workspace_root):
@@ -557,7 +564,6 @@ def build_managed_thread_crud_routes(
                 detail="Exactly one of resource owner or workspace_root is required",
             )
 
-        resolved_repo_id: Optional[str] = None
         resolved_runtime: Optional[str] = None
         if owner_present:
             assert resource_kind is not None
@@ -662,27 +668,15 @@ def build_managed_thread_crud_routes(
         ):
             normalized_lifecycle_status = normalized_status
             normalized_status = None
-        normalized_repo_id = normalize_optional_text(repo_id)
-        normalized_resource_kind = normalize_optional_text(resource_kind)
-        normalized_resource_id = normalize_optional_text(resource_id)
-        if normalized_resource_id and normalized_resource_kind is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_kind is required when resource_id is provided",
-            )
-        if normalized_resource_kind and normalized_resource_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_id is required when resource_kind is provided",
-            )
-        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id cannot be combined with a non-repo resource_kind",
-            )
-        if normalized_repo_id and normalized_resource_kind is None:
-            normalized_resource_kind = "repo"
-            normalized_resource_id = normalized_repo_id
+        _reject_legacy_repo_owner_alias(repo_id)
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_repo_id,
+        ) = _normalize_resource_owner(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
         service = build_managed_thread_orchestration_service(request)
         threads = service.list_thread_targets(
             agent_id=normalize_optional_text(agent),
@@ -868,27 +862,15 @@ def build_managed_thread_crud_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        normalized_repo_id = normalize_optional_text(repo_id)
-        normalized_resource_kind = normalize_optional_text(resource_kind)
-        normalized_resource_id = normalize_optional_text(resource_id)
-        if normalized_resource_id and normalized_resource_kind is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_kind is required when resource_id is provided",
-            )
-        if normalized_resource_kind and normalized_resource_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_id is required when resource_kind is provided",
-            )
-        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id cannot be combined with a non-repo resource_kind",
-            )
-        if normalized_repo_id and normalized_resource_kind is None:
-            normalized_resource_kind = "repo"
-            normalized_resource_id = normalized_repo_id
+        _reject_legacy_repo_owner_alias(repo_id)
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_repo_id,
+        ) = _normalize_resource_owner(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
         service = build_managed_thread_orchestration_service(request)
         bindings = service.list_bindings(
             agent_id=normalize_optional_text(agent),
@@ -948,27 +930,15 @@ def build_managed_thread_crud_routes(
         """List busy thread summaries for running or queued work only."""
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        normalized_repo_id = normalize_optional_text(repo_id)
-        normalized_resource_kind = normalize_optional_text(resource_kind)
-        normalized_resource_id = normalize_optional_text(resource_id)
-        if normalized_resource_id and normalized_resource_kind is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_kind is required when resource_id is provided",
-            )
-        if normalized_resource_kind and normalized_resource_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_id is required when resource_kind is provided",
-            )
-        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id cannot be combined with a non-repo resource_kind",
-            )
-        if normalized_repo_id and normalized_resource_kind is None:
-            normalized_resource_kind = "repo"
-            normalized_resource_id = normalized_repo_id
+        _reject_legacy_repo_owner_alias(repo_id)
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_repo_id,
+        ) = _normalize_resource_owner(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
         service = build_managed_thread_orchestration_service(request)
         summaries = service.list_active_work_summaries(
             agent_id=normalize_optional_text(agent),

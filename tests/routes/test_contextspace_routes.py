@@ -16,15 +16,11 @@ def _client_for_repo(repo_root: Path) -> TestClient:
     return TestClient(app)
 
 
-def test_contextspace_read_rejects_non_utf8(tmp_path: Path) -> None:
+def test_contextspace_rejects_invalid_doc_kind(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     client = _client_for_repo(repo_root)
 
-    contextspace_dir = repo_root / ".codex-autorunner" / "contextspace"
-    contextspace_dir.mkdir(parents=True, exist_ok=True)
-    (contextspace_dir / "binary.bin").write_bytes(b"\xf3\xff\x00\x01")
-
-    res = client.get("/api/contextspace/file", params={"path": "binary.bin"})
+    res = client.put("/api/contextspace/binary", json={"content": "nope"})
     assert res.status_code == 400
-    assert "utf-8" in res.json()["detail"].lower()
+    assert res.json()["detail"] == "invalid contextspace doc kind"

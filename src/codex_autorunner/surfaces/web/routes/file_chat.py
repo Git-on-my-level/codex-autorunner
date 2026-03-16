@@ -3,14 +3,13 @@ Unified file chat routes: AI-powered editing for tickets and contextspace docs.
 
 Targets:
 - ticket:{index} -> .codex-autorunner/tickets/TICKET-###.md
-- contextspace:{path} -> .codex-autorunner/contextspace/{path}
+- contextspace:{kind} -> .codex-autorunner/contextspace/{kind}.md
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import difflib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,20 +18,26 @@ from typing import Any, AsyncIterator, Callable, Dict, Optional, cast
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ....agents.registry import validate_agent_id
 from ....contextspace.paths import (
-    CONTEXTSPACE_DOC_KINDS,
     contextspace_doc_path,
-    normalize_contextspace_rel_path,
+    normalize_contextspace_doc_kind,
 )
 from ....core import drafts as draft_utils
-from ....core.context_awareness import CAR_AWARENESS_BLOCK, format_file_role_addendum
 from ....core.file_chat_keys import ticket_chat_scope, ticket_state_key
-from ....core.state import now_iso
 from ....core.usage import persist_opencode_usage_snapshot
-from ....core.utils import atomic_write, find_repo_root
+from ....core.utils import find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
 from .file_chat_routes import FileChatRoutesState, build_file_chat_runtime_routes
+from .file_chat_routes import targets as extracted_targets
+from .file_chat_routes.drafts import (
+    apply_file_patch as extracted_apply_file_patch,
+)
+from .file_chat_routes.drafts import (
+    discard_file_patch as extracted_discard_file_patch,
+)
+from .file_chat_routes.drafts import (
+    pending_file_patch as extracted_pending_file_patch,
+)
 from .file_chat_routes.execution import execute_file_chat as extracted_execute_file_chat
 from .shared import SSE_HEADERS
 
@@ -45,6 +50,11 @@ _EXTRACTED_FILE_CHAT_SEAMS = (
     build_file_chat_runtime_routes,
     extracted_execute_file_chat,
 )
+
+ExtractedTarget = extracted_targets._Target
+_build_file_chat_prompt = extracted_targets.build_file_chat_prompt
+_build_patch = extracted_targets.build_patch
+_read_file = extracted_targets.read_file
 
 
 class FileChatError(Exception):
@@ -96,6 +106,13 @@ def _ticket_path(repo_root: Path, index: int) -> Path:
     return repo_root / ".codex-autorunner" / "tickets" / f"TICKET-{index:03d}.md"
 
 
+def _parse_contextspace_kind(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if value.endswith(".md"):
+        value = value[:-3]
+    return normalize_contextspace_doc_kind(value)
+
+
 def _parse_target(repo_root: Path, raw: str) -> _Target:
     target = (raw or "").strip()
     if not target:
@@ -128,18 +145,12 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
         suffix_raw = target.split(":", 1)[1].strip()
         if not suffix_raw:
             raise HTTPException(status_code=400, detail="invalid contextspace target")
-
-        # Allow legacy kind-only targets (active_context/decisions/spec)
-        if suffix_raw.lower() in CONTEXTSPACE_DOC_KINDS:
-            path = contextspace_doc_path(repo_root, suffix_raw)
-            rel_suffix = f"{suffix_raw}.md"
-        else:
-            try:
-                path, rel_suffix = normalize_contextspace_rel_path(
-                    repo_root, suffix_raw
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            kind = _parse_contextspace_kind(suffix_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        path = contextspace_doc_path(repo_root, kind)
+        rel_suffix = f"{kind}.md"
 
         rel = (
             str(path.relative_to(repo_root))
@@ -157,65 +168,6 @@ def _parse_target(repo_root: Path, raw: str) -> _Target:
         )
 
     raise HTTPException(status_code=400, detail=f"invalid target: {target}")
-
-
-def _build_file_chat_prompt(*, target: _Target, message: str, before: str) -> str:
-    if target.kind == "ticket":
-        file_role_context = (
-            f"{format_file_role_addendum('ticket', target.rel_path)}\n"
-            "Edits here change what ticket flow agent will do; keep YAML "
-            "frontmatter valid."
-        )
-    elif target.kind == "contextspace":
-        file_role_context = (
-            f"{format_file_role_addendum('contextspace', target.rel_path)}\n"
-            "These docs act as shared memory across ticket turns."
-        )
-    else:
-        file_role_context = format_file_role_addendum("other", target.rel_path)
-
-    return (
-        f"{CAR_AWARENESS_BLOCK}\n\n"
-        "<file_role_context>\n"
-        f"{file_role_context}\n"
-        "</file_role_context>\n\n"
-        "You are editing a single file in Codex Autorunner.\n\n"
-        "<target>\n"
-        f"{target.target}\n"
-        "</target>\n\n"
-        "<path>\n"
-        f"{target.rel_path}\n"
-        "</path>\n\n"
-        "<instructions>\n"
-        "- This is a single-turn edit request. Don’t ask the user questions.\n"
-        "- You may read other files for context, but only modify the target file.\n"
-        "- If no changes are needed, explain why without editing the file.\n"
-        "- Respond with a short summary of what you did.\n"
-        "</instructions>\n\n"
-        "<user_request>\n"
-        f"{message}\n"
-        "</user_request>\n\n"
-        "<FILE_CONTENT>\n"
-        f"{before[:12000]}\n"
-        "</FILE_CONTENT>\n"
-    )
-
-
-def _read_file(path: Path) -> str:
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8")
-
-
-def _build_patch(rel_path: str, before: str, after: str) -> str:
-    diff = difflib.unified_diff(
-        before.splitlines(),
-        after.splitlines(),
-        fromfile=f"a/{rel_path}",
-        tofile=f"b/{rel_path}",
-        lineterm="",
-    )
-    return "\n".join(diff)
 
 
 def build_file_chat_routes() -> APIRouter:
@@ -497,142 +449,17 @@ def build_file_chat_routes() -> APIRouter:
         on_meta: Optional[Callable[[str, str, str], Any]] = None,
         on_usage: Optional[Callable[[Dict[str, Any]], Any]] = None,
     ) -> Dict[str, Any]:
-        supervisor = getattr(request.app.state, "app_server_supervisor", None)
-        threads = getattr(request.app.state, "app_server_threads", None)
-        opencode = getattr(request.app.state, "opencode_supervisor", None)
-        engine = getattr(request.app.state, "engine", None)
-        events = getattr(request.app.state, "app_server_events", None)
-        stall_timeout_seconds = None
-        try:
-            stall_timeout_seconds = (
-                engine.config.opencode.session_stall_timeout_seconds
-                if engine is not None
-                else None
-            )
-        except Exception:
-            stall_timeout_seconds = None
-        if supervisor is None and opencode is None:
-            raise FileChatError("No agent supervisor available for file chat")
-
-        before = _read_file(target.path)
-        base_hash = _hash_content(before)
-
-        prompt = _build_file_chat_prompt(target=target, message=message, before=before)
-
-        interrupt_event = await _get_or_create_interrupt_event(
-            request, target.state_key
+        return await extracted_execute_file_chat(
+            request,
+            repo_root,
+            cast(ExtractedTarget, target),
+            message,
+            agent=agent,
+            model=model,
+            reasoning=reasoning,
+            on_meta=on_meta,
+            on_usage=on_usage,
         )
-        if interrupt_event.is_set():
-            return {"status": "interrupted", "detail": "File chat interrupted"}
-
-        try:
-            agent_id = validate_agent_id(agent or "")
-        except ValueError:
-            agent_id = "codex"
-
-        thread_key = f"file_chat.{target.state_key}"
-        await _update_turn_state(request, target, status="running", agent=agent_id)
-
-        if agent_id == "opencode":
-            if opencode is None:
-                return {"status": "error", "detail": "OpenCode supervisor unavailable"}
-            result = await _execute_opencode(
-                opencode,
-                repo_root,
-                prompt,
-                interrupt_event,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=threads,
-                thread_key=thread_key,
-                stall_timeout_seconds=stall_timeout_seconds,
-                on_meta=on_meta,
-                on_usage=on_usage,
-            )
-        else:
-            if supervisor is None:
-                return {
-                    "status": "error",
-                    "detail": "App-server supervisor unavailable",
-                }
-            result = await _execute_app_server(
-                supervisor,
-                repo_root,
-                prompt,
-                interrupt_event,
-                agent_id=agent_id,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=threads,
-                thread_key=thread_key,
-                on_meta=on_meta,
-                events=events,
-            )
-
-        if result.get("status") != "ok":
-            return result
-
-        after = _read_file(target.path)
-
-        # Restore original content; store draft for apply/discard
-        if after != before:
-            atomic_write(target.path, before)
-
-        agent_message = result.get("agent_message", "File updated")
-        response_text = result.get("message", agent_message)
-
-        if after != before:
-            patch = _build_patch(target.rel_path, before, after)
-            state = _load_state(repo_root)
-            drafts = (
-                state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
-            )
-            drafts[target.state_key] = {
-                "content": after,
-                "patch": patch,
-                "agent_message": agent_message,
-                "created_at": now_iso(),
-                "base_hash": base_hash,
-                "target": target.target,
-                "rel_path": target.rel_path,
-            }
-            state["drafts"] = drafts
-            _save_state(repo_root, state)
-            return {
-                "status": "ok",
-                "target": target.target,
-                "agent": agent_id,
-                "agent_message": agent_message,
-                "message": response_text,
-                "has_draft": True,
-                "patch": patch,
-                "content": after,
-                "base_hash": base_hash,
-                "created_at": drafts[target.state_key]["created_at"],
-                "thread_id": result.get("thread_id"),
-                "turn_id": result.get("turn_id"),
-                **(
-                    {"raw_events": result.get("raw_events")}
-                    if result.get("raw_events")
-                    else {}
-                ),
-            }
-
-        return {
-            "status": "ok",
-            "target": target.target,
-            "agent": agent_id,
-            "agent_message": agent_message,
-            "message": response_text,
-            "has_draft": False,
-            "thread_id": result.get("thread_id"),
-            "turn_id": result.get("turn_id"),
-            **(
-                {"raw_events": result.get("raw_events")}
-                if result.get("raw_events")
-                else {}
-            ),
-        }
 
     async def _execute_app_server(
         supervisor: Any,
@@ -886,87 +713,17 @@ def build_file_chat_routes() -> APIRouter:
 
     @router.get("/file-chat/pending")
     async def pending_file_patch(request: Request, target: str):
-        repo_root = _resolve_repo_root(request)
-        resolved = _parse_target(repo_root, target)
-        state = _load_state(repo_root)
-        drafts = (
-            state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
-        )
-        draft = drafts.get(resolved.state_key)
-        if not draft:
-            raise HTTPException(status_code=404, detail="No pending patch")
-        current_content = _read_file(resolved.path)
-        current_hash = _hash_content(current_content)
-        return {
-            "status": "ok",
-            "target": resolved.target,
-            "patch": draft.get("patch", ""),
-            "content": draft.get("content", ""),
-            "agent_message": draft.get("agent_message", ""),
-            "created_at": draft.get("created_at", ""),
-            "base_hash": draft.get("base_hash", ""),
-            "current_hash": current_hash,
-            "is_stale": draft.get("base_hash") not in (None, "")
-            and draft.get("base_hash") != current_hash,
-        }
+        return await extracted_pending_file_patch(request, target)
 
     @router.post("/file-chat/apply")
     async def apply_file_patch(request: Request):
         body = await request.json()
-        repo_root = _resolve_repo_root(request)
-        resolved = _parse_target(repo_root, str(body.get("target") or ""))
-        force = bool(body.get("force", False))
-        state = _load_state(repo_root)
-        drafts = (
-            state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
-        )
-        draft = drafts.get(resolved.state_key)
-        if not draft:
-            raise HTTPException(status_code=404, detail="No pending patch")
-
-        current = _read_file(resolved.path)
-        if (
-            not force
-            and draft.get("base_hash")
-            and _hash_content(current) != draft["base_hash"]
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="File changed since draft created; reload before applying.",
-            )
-
-        content = draft.get("content", "")
-        resolved.path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(resolved.path, content)
-
-        drafts.pop(resolved.state_key, None)
-        state["drafts"] = drafts
-        _save_state(repo_root, state)
-
-        return {
-            "status": "ok",
-            "target": resolved.target,
-            "content": _read_file(resolved.path),
-            "agent_message": draft.get("agent_message", "Draft applied"),
-        }
+        return await extracted_apply_file_patch(request, body)
 
     @router.post("/file-chat/discard")
     async def discard_file_patch(request: Request):
         body = await request.json()
-        repo_root = _resolve_repo_root(request)
-        resolved = _parse_target(repo_root, str(body.get("target") or ""))
-        state = _load_state(repo_root)
-        drafts = (
-            state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
-        )
-        drafts.pop(resolved.state_key, None)
-        state["drafts"] = drafts
-        _save_state(repo_root, state)
-        return {
-            "status": "ok",
-            "target": resolved.target,
-            "content": _read_file(resolved.path),
-        }
+        return await extracted_discard_file_patch(request, body)
 
     @router.get("/file-chat/turns/{turn_id}/events")
     async def stream_file_chat_turn_events(
@@ -1083,58 +840,25 @@ def build_file_chat_routes() -> APIRouter:
             body = await request.json()
         except Exception:
             body = {}
-        repo_root = _resolve_repo_root(request)
-        target = _parse_target(repo_root, f"ticket:{int(index)}")
-        force = bool(body.get("force", False)) if isinstance(body, dict) else False
-        state = _load_state(repo_root)
-        drafts = (
-            state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
-        )
-        draft = drafts.get(target.state_key)
-        if not draft:
-            raise HTTPException(status_code=404, detail="No pending patch")
-
-        current = _read_file(target.path)
-        if (
-            not force
-            and draft.get("base_hash")
-            and _hash_content(current) != draft["base_hash"]
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="Ticket changed since draft created; reload before applying.",
-            )
-
-        content = draft.get("content", "")
-        target.path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(target.path, content)
-
-        drafts.pop(target.state_key, None)
-        state["drafts"] = drafts
-        _save_state(repo_root, state)
-
+        payload = dict(body) if isinstance(body, dict) else {}
+        payload["target"] = f"ticket:{int(index)}"
+        result = await extracted_apply_file_patch(request, payload)
         return {
             "status": "ok",
             "index": int(index),
-            "content": _read_file(target.path),
-            "agent_message": draft.get("agent_message", "Draft applied"),
+            "content": result.get("content", ""),
+            "agent_message": result.get("agent_message", "Draft applied"),
         }
 
     @router.post("/tickets/{index}/chat/discard")
     async def discard_ticket_patch(index: int, request: Request):
-        repo_root = _resolve_repo_root(request)
-        target = _parse_target(repo_root, f"ticket:{int(index)}")
-        state = _load_state(repo_root)
-        drafts = (
-            state.get("drafts", {}) if isinstance(state.get("drafts"), dict) else {}
+        result = await extracted_discard_file_patch(
+            request, {"target": f"ticket:{int(index)}"}
         )
-        drafts.pop(target.state_key, None)
-        state["drafts"] = drafts
-        _save_state(repo_root, state)
         return {
             "status": "ok",
             "index": int(index),
-            "content": _read_file(target.path),
+            "content": result.get("content", ""),
         }
 
     @router.post("/tickets/{index}/chat/interrupt")
