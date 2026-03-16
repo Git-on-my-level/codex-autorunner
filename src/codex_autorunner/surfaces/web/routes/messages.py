@@ -35,6 +35,7 @@ from ....core.flows.failure_diagnostics import (
 )
 from ....core.flows.models import FlowRunRecord, FlowRunStatus
 from ....core.flows.store import FlowStore
+from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.utils import find_repo_root
 from ....tickets.files import safe_relpath
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
@@ -54,20 +55,10 @@ def _flows_db_path(repo_root: Path) -> Path:
 
 
 def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Path:
-    """
-    Normalize workspace_root with sensible fallbacks.
-
-    - workspace_root defaults to the current repo_root.
-    """
-
-    raw_workspace = record_input.get("workspace_root")
-    workspace_root = Path(raw_workspace) if raw_workspace else repo_root
-    if not workspace_root.is_absolute():
-        workspace_root = (repo_root / workspace_root).resolve()
-    else:
-        workspace_root = workspace_root.resolve()
-
-    return workspace_root
+    try:
+        return resolve_ticket_flow_workspace_root(record_input, repo_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _timestamp(path: Path) -> Optional[str]:

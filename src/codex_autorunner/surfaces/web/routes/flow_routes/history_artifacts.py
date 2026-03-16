@@ -7,6 +7,8 @@ from typing import Any
 
 from fastapi import HTTPException
 
+from .....core.flows.workspace_root import resolve_ticket_flow_workspace_root
+
 _logger = logging.getLogger(__name__)
 
 
@@ -14,7 +16,10 @@ def resolve_outbox_for_record(repo_root: Path, record: Any) -> Any:
     from .....tickets.outbox import resolve_outbox_paths
 
     input_data = dict(getattr(record, "input_data", {}) or {})
-    workspace_root = Path(input_data.get("workspace_root") or repo_root)
+    try:
+        workspace_root = resolve_ticket_flow_workspace_root(input_data, repo_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return resolve_outbox_paths(workspace_root=workspace_root, run_id=record.id)
 
 

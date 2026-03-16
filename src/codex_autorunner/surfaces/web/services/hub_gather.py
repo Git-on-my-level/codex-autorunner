@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.freshness import (
     build_freshness_payload,
     iso_now,
@@ -30,7 +31,7 @@ from ..app_state import (
 
 def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[dict]:
     try:
-        workspace_root = Path(input_data.get("workspace_root") or repo_root)
+        workspace_root = resolve_ticket_flow_workspace_root(input_data, repo_root)
         outbox_paths = resolve_outbox_paths(
             workspace_root=workspace_root, run_id=run_id
         )

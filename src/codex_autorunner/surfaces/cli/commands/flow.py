@@ -502,7 +502,13 @@ def register_flow_commands(
     ) -> tuple[FlowController, AgentPool]:
         db_path, artifacts_root, _ = _ticket_flow_paths(engine)
         agent_pool = build_agent_pool(engine.config)
-        definition = build_ticket_flow_definition(agent_pool=agent_pool)
+        definition = build_ticket_flow_definition(
+            agent_pool=agent_pool,
+            auto_commit_default=engine.config.git_auto_commit,
+            include_previous_ticket_context_default=(
+                engine.config.ticket_flow.include_previous_ticket_context
+            ),
+        )
         definition.validate()
         controller = FlowController(
             definition=definition,
@@ -626,7 +632,13 @@ def register_flow_commands(
                     )
                 if flow_type == "ticket_flow":
                     agent_pool = build_agent_pool(engine.config)
-                    return build_ticket_flow_definition(agent_pool=agent_pool)
+                    return build_ticket_flow_definition(
+                        agent_pool=agent_pool,
+                        auto_commit_default=engine.config.git_auto_commit,
+                        include_previous_ticket_context_default=(
+                            engine.config.ticket_flow.include_previous_ticket_context
+                        ),
+                    )
                 raise_exit(
                     f"Unknown flow type for run {normalized_run_id}: {flow_type}"
                 )

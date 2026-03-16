@@ -11,6 +11,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from .....core.flows.workspace_root import resolve_ticket_flow_workspace_root
+
 if TYPE_CHECKING:
     from . import FlowRouteDependencies, FlowRoutesState
 
@@ -42,7 +44,10 @@ def _resolve_outbox_for_record(record: Any, repo_root: Path):
     from .....tickets.outbox import resolve_outbox_paths
 
     input_data = dict(getattr(record, "input_data", {}) or {})
-    workspace_root = Path(input_data.get("workspace_root") or repo_root)
+    try:
+        workspace_root = resolve_ticket_flow_workspace_root(input_data, repo_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return resolve_outbox_paths(workspace_root=workspace_root, run_id=record.id)
 
 
@@ -323,7 +328,10 @@ def build_status_history_routes(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         input_data = dict(record.input_data or {})
-        workspace_root = Path(input_data.get("workspace_root") or repo_root)
+        try:
+            workspace_root = resolve_ticket_flow_workspace_root(input_data, repo_root)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         from .....tickets.replies import resolve_reply_paths
 
         reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)

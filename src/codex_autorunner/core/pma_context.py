@@ -25,6 +25,7 @@ from .flows.models import (
 )
 from .flows.store import FlowStore
 from .flows.worker_process import check_worker_health, read_worker_crash_info
+from .flows.workspace_root import resolve_ticket_flow_workspace_root
 from .freshness import (
     build_freshness_payload,
     iso_now,
@@ -1898,20 +1899,11 @@ def _get_ticket_flow_summary(repo_path: Path) -> Optional[dict[str, Any]]:
 
 
 def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Path:
-    workspace_raw = record_input.get("workspace_root")
-    workspace_root = Path(workspace_raw) if workspace_raw else repo_root
-    if not workspace_root.is_absolute():
-        workspace_root = (repo_root / workspace_root).resolve()
-    else:
-        workspace_root = workspace_root.resolve()
-    resolved_repo = repo_root.resolve()
-    try:
-        workspace_root.relative_to(resolved_repo)
-    except ValueError as exc:
-        raise ValueError(
-            f"workspace_root escapes repo boundary: {workspace_root}"
-        ) from exc
-    return workspace_root
+    return resolve_ticket_flow_workspace_root(
+        record_input,
+        repo_root,
+        enforce_repo_boundary=True,
+    )
 
 
 def _latest_reply_history_seq(

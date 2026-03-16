@@ -53,6 +53,7 @@ from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.runtime import RuntimeContext
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
+from ....flows.ticket_flow.runtime_helpers import normalize_ticket_flow_input_data
 from ....integrations.agents.build_agent_pool import build_agent_pool
 from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets.bulk import bulk_clear_model_pin, bulk_set_agent
@@ -340,7 +341,13 @@ def _build_flow_definition(
             config=config,
         )
         agent_pool = build_agent_pool(engine.config)
-        definition = build_ticket_flow_definition(agent_pool=agent_pool)
+        definition = build_ticket_flow_definition(
+            agent_pool=agent_pool,
+            auto_commit_default=engine.config.git_auto_commit,
+            include_previous_ticket_context_default=(
+                engine.config.ticket_flow.include_previous_ticket_context
+            ),
+        )
     else:
         raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
 
@@ -646,9 +653,14 @@ async def _start_flow_via_controller(
     run_id: str,
 ) -> FlowRunRecord:
     controller = _get_flow_controller(repo_root, flow_type, state)
+    input_data = (
+        normalize_ticket_flow_input_data(repo_root, request.input_data)
+        if flow_type == "ticket_flow"
+        else dict(request.input_data or {})
+    )
     try:
         return await controller.start_flow(
-            input_data=request.input_data,
+            input_data=input_data,
             run_id=run_id,
             metadata=request.metadata,
         )
@@ -658,7 +670,7 @@ async def _start_flow_via_controller(
             retry_run_id = _normalize_run_id(uuid.uuid4())
             try:
                 return await controller.start_flow(
-                    input_data=request.input_data,
+                    input_data=input_data,
                     run_id=retry_run_id,
                     metadata=request.metadata,
                 )

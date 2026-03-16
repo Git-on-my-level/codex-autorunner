@@ -23,6 +23,7 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
+from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import RuntimeContext
@@ -244,19 +245,11 @@ def _save_hub_inbox_dismissals(
 
 
 def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Path:
-    workspace_raw = record_input.get("workspace_root")
-    workspace_root = Path(workspace_raw) if workspace_raw else repo_root
-    if not workspace_root.is_absolute():
-        workspace_root = (repo_root / workspace_root).resolve()
-    else:
-        workspace_root = workspace_root.resolve()
-    resolved_repo = repo_root.resolve()
-    if not (
-        workspace_root == resolved_repo
-        or str(workspace_root).startswith(str(resolved_repo) + os.sep)
-    ):
-        raise ValueError(f"workspace_root escapes repo boundary: {workspace_root}")
-    return workspace_root
+    return resolve_ticket_flow_workspace_root(
+        record_input,
+        repo_root,
+        enforce_repo_boundary=True,
+    )
 
 
 def _latest_reply_history_seq(

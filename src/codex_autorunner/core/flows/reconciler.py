@@ -20,6 +20,7 @@ from .worker_process import (
     read_worker_crash_info,
     write_worker_crash_info,
 )
+from .workspace_root import resolve_ticket_flow_workspace_root
 
 _logger = logging.getLogger(__name__)
 
@@ -106,16 +107,7 @@ def _latest_seq(history_dir: Path) -> int:
 
 def _resolve_workspace_root(repo_root: Path, record: FlowRunRecord) -> Path:
     input_data = record.input_data if isinstance(record.input_data, dict) else {}
-    raw_workspace = input_data.get("workspace_root")
-    if isinstance(raw_workspace, str) and raw_workspace.strip():
-        workspace_root = Path(raw_workspace)
-        if not workspace_root.is_absolute():
-            workspace_root = (repo_root / workspace_root).resolve()
-        else:
-            workspace_root = workspace_root.resolve()
-    else:
-        workspace_root = repo_root.resolve()
-    return workspace_root
+    return resolve_ticket_flow_workspace_root(input_data, repo_root)
 
 
 def _ensure_worker_crash_artifact(

@@ -5,17 +5,17 @@ from typing import Any, Dict, Optional
 
 from ...core.flows.definition import EmitEventFn, FlowDefinition, StepOutcome
 from ...core.flows.models import FlowEventType, FlowRunRecord
-from ...core.utils import RepoNotFoundError, find_repo_root
+from ...core.utils import find_repo_root
 from ...manifest import ManifestError, load_manifest
-from ...tickets import (
-    DEFAULT_MAX_TOTAL_TURNS,
-    AgentPool,
-    TicketRunConfig,
-    TicketRunner,
-)
+from ...tickets import DEFAULT_MAX_TOTAL_TURNS, AgentPool, TicketRunConfig, TicketRunner
 
 
-def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
+def build_ticket_flow_definition(
+    *,
+    agent_pool: AgentPool,
+    auto_commit_default: bool = False,
+    include_previous_ticket_context_default: bool = False,
+) -> FlowDefinition:
     """Build the single-step ticket runner flow.
 
     The flow is intentionally simple: each step executes at most one agent turn
@@ -39,15 +39,8 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         if raw_workspace:
             workspace_root = Path(raw_workspace)
             if not workspace_root.is_absolute():
-                try:
-                    repo_root = find_repo_root()
-                    workspace_root = (repo_root / workspace_root).resolve()
-                except RepoNotFoundError as err:
-                    raise ValueError(
-                        "workspace_root is relative but no repo root found"
-                    ) from err
-            else:
-                workspace_root = workspace_root.resolve()
+                raise ValueError("workspace_root must be absolute")
+            workspace_root = workspace_root.resolve()
             repo_root = find_repo_root(start=workspace_root)
         else:
             repo_root = find_repo_root()
@@ -57,17 +50,6 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
         max_total_turns = int(
             input_data.get("max_total_turns") or DEFAULT_MAX_TOTAL_TURNS
         )
-        max_lint_retries = int(input_data.get("max_lint_retries") or 3)
-        max_commit_retries = int(input_data.get("max_commit_retries") or 2)
-        max_network_retries = int(input_data.get("max_network_retries") or 5)
-        auto_commit = bool(
-            input_data.get("auto_commit") if "auto_commit" in input_data else True
-        )
-        include_previous_ticket_context = bool(
-            input_data.get("include_previous_ticket_context")
-            if "include_previous_ticket_context" in input_data
-            else False
-        )
 
         repo_id = _resolve_ticket_flow_repo_id(workspace_root)
         runner = TicketRunner(
@@ -76,11 +58,8 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
             config=TicketRunConfig(
                 ticket_dir=ticket_dir,
                 max_total_turns=max_total_turns,
-                max_lint_retries=max_lint_retries,
-                max_commit_retries=max_commit_retries,
-                max_network_retries=max_network_retries,
-                auto_commit=auto_commit,
-                include_previous_ticket_context=include_previous_ticket_context,
+                auto_commit=auto_commit_default,
+                include_previous_ticket_context=include_previous_ticket_context_default,
             ),
             agent_pool=agent_pool,
             repo_id=repo_id,
@@ -112,11 +91,6 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
             "properties": {
                 "workspace_root": {"type": "string"},
                 "max_total_turns": {"type": "integer"},
-                "max_lint_retries": {"type": "integer"},
-                "max_commit_retries": {"type": "integer"},
-                "max_network_retries": {"type": "integer"},
-                "auto_commit": {"type": "boolean"},
-                "include_previous_ticket_context": {"type": "boolean"},
             },
         },
         steps={"ticket_turn": _ticket_turn_step},

@@ -6,6 +6,7 @@ from pathlib import Path
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.flows.ticket_flow.runtime_helpers import (
     build_ticket_flow_controller,
+    normalize_ticket_flow_input_data,
 )
 
 
@@ -35,3 +36,28 @@ def test_build_ticket_flow_controller_smoke(tmp_path: Path) -> None:
         assert runs[0].id == run_id
     finally:
         controller.shutdown()
+
+
+def test_normalize_ticket_flow_input_data_canonicalizes_relative_workspace_root(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+
+    normalized = normalize_ticket_flow_input_data(
+        repo_root,
+        {"workspace_root": "workspace"},
+    )
+
+    assert normalized["workspace_root"] == str((repo_root / "workspace").resolve())
+
+
+def test_normalize_ticket_flow_input_data_defaults_to_repo_root(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True)
+
+    normalized = normalize_ticket_flow_input_data(repo_root, {})
+
+    assert normalized["workspace_root"] == str(repo_root.resolve())

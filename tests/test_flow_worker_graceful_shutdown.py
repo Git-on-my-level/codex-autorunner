@@ -54,6 +54,8 @@ body
     class _FakeConfig:
         durable_writes = False
         app_server = SimpleNamespace(command=["python"])
+        git_auto_commit = False
+        ticket_flow = SimpleNamespace(include_previous_ticket_context=False)
 
         def agent_serve_command(self, _agent: str) -> Optional[list[str]]:
             return None
