@@ -910,7 +910,7 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert f"repo_id={hub_env.repo_id}" in rendered
     assert "agent=codex" in rendered
     assert "status=idle" in rendered
-    assert "lifecycle=active" in rendered
+    assert "last_turn=-" in rendered
     assert "reason=thread_created" in rendered
     assert "freshness: status=" in rendered
 
@@ -1588,8 +1588,8 @@ class TestIssue975CharacterizationMixedPmaState:
         assert "thread-idle-1" in result
         assert "thread-completed-1" in result
         assert "status=idle" in result
-        assert "status=completed" in result
-        assert "lifecycle=active" in result
+        assert "status=reusable" in result
+        assert "last_turn=completed" in result
 
         assert "PMA File Inbox:" in result
         assert "ticket-pack.md" in result
@@ -1679,14 +1679,16 @@ class TestIssue975CharacterizationMixedPmaState:
 class TestIssue975CharacterizationManagedThreadPayload:
     """Characterization tests for managed-thread operator payload shape (issue #975).
 
-    These tests document the current baseline for managed-thread payloads:
-    - status field (normalized_status)
-    - lifecycle_status field
-    - status_terminal field
-    - How "completed lifecycle=active" appears in rendered output
+    These tests document the operator-facing status model:
+    - status field shows operator-facing state (idle, running, paused, reusable, attention_required, archived)
+    - lifecycle_status field contains machine-level lifecycle (active, archived)
+    - last_turn field shows the raw turn outcome (completed, failed, -)
+    - Reusable threads (completed + active) show as status=reusable with last_turn=completed
 
-    Later tickets will introduce operator-facing reusable-thread status labels;
-    these tests ensure the baseline payload shape is documented.
+    The operator-facing status derives from derive_managed_thread_operator_status:
+    - completed + active -> reusable
+    - failed + active -> attention_required
+    - idle/running/paused/archived -> same
     """
 
     def test_pma_thread_payload_includes_all_status_fields(self, hub_env) -> None:
@@ -1694,7 +1696,7 @@ class TestIssue975CharacterizationManagedThreadPayload:
 
         Note: The 'status' field contains lifecycle_status (e.g., 'active'),
         while 'normalized_status' contains the runtime status (e.g., 'idle').
-        This baseline documents the pre-issue-975 status model where:
+        This baseline documents the status model where:
         - status == lifecycle_status (machine-level lifecycle)
         - normalized_status == runtime status (operator-facing runtime state)
         """
@@ -1716,15 +1718,16 @@ class TestIssue975CharacterizationManagedThreadPayload:
     def test_completed_thread_shows_completed_normalized_status_with_active_lifecycle(
         self, hub_env
     ) -> None:
-        """Document the 'completed lifecycle=active' baseline rendering.
+        """Document the completed+active thread state.
 
         After a turn completes, normalized_status becomes 'completed' while
-        lifecycle_status remains 'active'. Note that status_terminal is True
-        for 'completed' status, which is one of the pre-issue-975 pain points:
-        operators see 'terminal=true' but the thread is actually reusable.
+        lifecycle_status remains 'active'. The rendered output shows this as
+        'status=reusable last_turn=completed' to indicate the thread is ready
+        for reuse.
 
-        The TERMINAL_STATUSES set includes COMPLETED, FAILED, and ARCHIVED.
-        Issue #975 aims to distinguish "reusable" from "truly terminal".
+        Note: status_terminal is True for 'completed' status at the storage level,
+        but the operator-facing status is 'reusable' which indicates the thread
+        can accept another turn.
         """
         store = PmaThreadStore(hub_env.hub_root)
         thread = store.create_thread(
@@ -1748,10 +1751,10 @@ class TestIssue975CharacterizationManagedThreadPayload:
         assert updated["normalized_status"] == "completed"
         assert updated["status_terminal"] is True
 
-    def test_hub_snapshot_renders_completed_lifecycle_active_format(
+    def test_hub_snapshot_renders_reusable_status_for_completed_threads(
         self, hub_env
     ) -> None:
-        """Document how 'completed lifecycle=active' appears in rendered snapshot."""
+        """Document that completed+active threads render as 'status=reusable last_turn=completed'."""
         from codex_autorunner.core.pma_context import _render_hub_snapshot
 
         store = PmaThreadStore(hub_env.hub_root)
@@ -1781,5 +1784,5 @@ class TestIssue975CharacterizationManagedThreadPayload:
         rendered = _render_hub_snapshot(snapshot)
 
         assert "PMA Managed Threads:" in rendered
-        assert "status=completed" in rendered
-        assert "lifecycle=active" in rendered
+        assert "status=reusable" in rendered
+        assert "last_turn=completed" in rendered

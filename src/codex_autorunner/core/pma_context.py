@@ -31,6 +31,7 @@ from .freshness import (
     summarize_section_freshness,
 )
 from .hub import HubSupervisor
+from .managed_thread_status import derive_managed_thread_operator_status
 from .pma_active_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     get_active_context_auto_prune_meta,
@@ -1309,9 +1310,15 @@ def _render_hub_snapshot(
                 max_field_chars=max_field_chars,
             )
             agent = _truncate(str(thread.get("agent") or ""), max_field_chars)
-            status = _truncate(str(thread.get("status") or ""), max_field_chars)
-            lifecycle_status = _truncate(
-                str(thread.get("lifecycle_status") or "-"),
+            raw_status = str(thread.get("status") or "")
+            lifecycle_status = str(thread.get("lifecycle_status") or "-")
+            operator_status = derive_managed_thread_operator_status(
+                normalized_status=raw_status,
+                lifecycle_status=lifecycle_status,
+            )
+            status_display = _truncate(operator_status, max_field_chars)
+            last_turn_outcome = _truncate(
+                raw_status if raw_status in {"completed", "failed"} else "-",
                 max_field_chars,
             )
             status_reason = _truncate(
@@ -1325,7 +1332,7 @@ def _render_hub_snapshot(
             )
             lines.append(
                 f"- {managed_thread_id} {owner_summary} agent={agent} "
-                f"status={status} lifecycle={lifecycle_status} "
+                f"status={status_display} last_turn={last_turn_outcome} "
                 f"reason={status_reason} name={name} last={preview}"
             )
             freshness_summary = _render_freshness_summary(
