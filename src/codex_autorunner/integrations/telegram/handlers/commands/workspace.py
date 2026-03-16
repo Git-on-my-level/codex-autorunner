@@ -15,7 +15,7 @@ from .....core.git_utils import GitError, reset_branch_from_origin_main
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
-from .....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
+from .....integrations.app_server.threads import pma_base_key
 from .....manifest import load_manifest
 from ....app_server.client import (
     CodexAppServerClient,
@@ -1027,7 +1027,7 @@ class WorkspaceCommands(SharedHelpers):
         if pma_enabled:
             registry = getattr(self, "_hub_thread_registry", None)
             agent = self._effective_agent(record)
-            pma_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+            pma_key = pma_base_key(agent)
             if registry:
                 registry.reset_thread(pma_key)
             await self._send_message(
@@ -1196,7 +1196,7 @@ class WorkspaceCommands(SharedHelpers):
         if pma_enabled:
             registry = getattr(self, "_hub_thread_registry", None)
             agent = self._effective_agent(record)
-            pma_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+            pma_key = pma_base_key(agent)
             if registry:
                 registry.reset_thread(pma_key)
             await self._send_message(

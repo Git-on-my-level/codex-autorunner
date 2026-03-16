@@ -62,9 +62,8 @@ from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
-    PMA_KEY,
-    PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
+    pma_base_key,
 )
 from .....integrations.chat.compaction import match_pending_compact_seed
 from .....integrations.github.context_injection import maybe_inject_github_context
@@ -3275,7 +3274,7 @@ class ExecutionCommands(SharedHelpers):
         in the common case (require_topics disabled).
         """
         agent = self._effective_agent(record)
-        base_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+        base_key = pma_base_key(agent)
 
         # PMA thread scoping: per-topic when require_topics is true
         require_topics = getattr(self._config, "require_topics", False)

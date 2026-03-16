@@ -88,10 +88,8 @@ from ...integrations.app_server.env import app_server_env, build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
-    FILE_CHAT_OPENCODE_PREFIX,
-    FILE_CHAT_PREFIX,
-    PMA_KEY,
-    PMA_OPENCODE_KEY,
+    file_chat_discord_key,
+    pma_base_key,
 )
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
@@ -1639,10 +1637,8 @@ class DiscordBotService:
         agent: str,
     ) -> str:
         if pma_enabled:
-            return PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
-        digest = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:12]
-        prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
-        return f"{prefix}discord.{channel_id}.{digest}"
+            return pma_base_key(agent)
+        return file_chat_discord_key(agent, channel_id, str(workspace_root))
 
     def _build_runner_state(
         self,

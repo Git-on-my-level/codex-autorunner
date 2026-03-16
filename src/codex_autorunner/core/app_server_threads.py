@@ -17,6 +17,9 @@ PMA_OPENCODE_KEY = _threads.PMA_OPENCODE_KEY
 FEATURE_KEYS = _threads.FEATURE_KEYS
 default_app_server_threads_path = _threads.default_app_server_threads_path
 normalize_feature_key = _threads.normalize_feature_key
+pma_base_key = _threads.pma_base_key
+pma_topic_scoped_key = _threads.pma_topic_scoped_key
+file_chat_discord_key = _threads.file_chat_discord_key
 AppServerThreadRegistry = _threads.AppServerThreadRegistry
 
 __all__ = [
@@ -33,5 +36,8 @@ __all__ = [
     "FEATURE_KEYS",
     "default_app_server_threads_path",
     "normalize_feature_key",
+    "pma_base_key",
+    "pma_topic_scoped_key",
+    "file_chat_discord_key",
     "AppServerThreadRegistry",
 ]

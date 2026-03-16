@@ -1,5 +1,29 @@
+"""
+AppServerThreadRegistry: Post-Cutover Thread Identity Cache
+
+This module provides the registry that backs thread identity lookups across
+managed-thread surfaces after the BackendOrchestrator removal.
+
+The registry is NOT an orphaned BackendOrchestrator artifact. It remains a
+valid runtime state store for:
+
+1. PMA lifecycle resets (/new, /reset commands in Telegram/Discord/Web)
+2. Telegram PMA thread identity (per-topic PMA isolation when require_topics)
+3. Hub/Web channel status reads (active thread lookups for status display)
+4. Discord file-chat thread lookups (channel-scoped conversations)
+
+The registry stores feature-key to thread-id mappings in a per-worktree JSON
+file under `.codex-autorunner/app_server_threads.json`. Keys are normalized
+to lowercase with `.` separators.
+
+Replacing this registry with PmaThreadStore or orchestration.sqlite3 requires
+a separate migration ticket with explicit state-migration rules. Do not treat
+it as dead code.
+"""
+
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -31,6 +55,68 @@ FEATURE_KEYS = {
     "autorunner",
     "autorunner.opencode",
 }
+
+
+def pma_base_key(agent: str) -> str:
+    """
+    Return the base PMA registry key for the given agent.
+
+    Args:
+        agent: Agent identifier ("opencode" or "codex"/other).
+
+    Returns:
+        PMA_OPENCODE_KEY if agent is "opencode", otherwise PMA_KEY.
+    """
+    if isinstance(agent, str) and agent.strip().lower() == "opencode":
+        return PMA_OPENCODE_KEY
+    return PMA_KEY
+
+
+def pma_topic_scoped_key(
+    agent: str, chat_id: int, thread_id: Optional[int], topic_key_fn=None
+) -> str:
+    """
+    Build a topic-scoped PMA registry key.
+
+    Used by Telegram PMA when require_topics is enabled to give each topic
+    its own isolated PMA conversation context.
+
+    Args:
+        agent: Agent identifier ("opencode" or "codex"/other).
+        chat_id: Telegram chat ID.
+        thread_id: Telegram thread/topic ID (None for root).
+        topic_key_fn: Optional function to build topic key (injected for testing).
+
+    Returns:
+        Topic-scoped key like "pma.{chat_id}:{thread}" or "pma.opencode.{chat_id}:{thread}".
+    """
+    base = pma_base_key(agent)
+    if topic_key_fn is None:
+        from ..telegram.state import topic_key as _default_topic_key
+
+        topic_key_fn = _default_topic_key
+    return f"{base}.{topic_key_fn(chat_id, thread_id)}"
+
+
+def file_chat_discord_key(agent: str, channel_id: str, workspace_path: str) -> str:
+    """
+    Build a Discord file-chat registry key.
+
+    Discord file-chat keys are scoped to channel and workspace to allow
+    multiple Discord channels to have independent file-chat threads per repo.
+
+    Args:
+        agent: Agent identifier ("opencode" or "codex"/other).
+        channel_id: Discord channel ID.
+        workspace_path: Absolute workspace path (hashed for key stability).
+
+    Returns:
+        Registry key like "file_chat.discord.{channel}.{digest}" or
+        "file_chat.opencode.discord.{channel}.{digest}".
+    """
+    prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
+    digest = hashlib.sha256(workspace_path.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}discord.{channel_id.strip()}.{digest}"
 
 
 def default_app_server_threads_path(repo_root: Path) -> Path:
