@@ -21,6 +21,12 @@ Verify that:
 Run the focused collaboration suite:
 
 ```bash
+make test-managed-thread-cutover
+```
+
+Or run the collaboration-specific subset:
+
+```bash
 ./.venv/bin/pytest \
   tests/integrations/chat/test_collaboration_policy.py \
   tests/test_telegram_trigger_mode.py \

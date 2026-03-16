@@ -6,6 +6,16 @@ Keep long-running repos from diverging between control surfaces (web, PMA, Teleg
 - **Pending turns.** Client turn IDs are persisted per ticket/workspace; refresh pages resume streams and clear pending state on completion so thinking UI stays aligned with backend turns.
 - **Checks.** Run `make check` (includes `pytest`) before opening PRs; the FileBox tests ensure inbox/outbox listings stay in sync across sources.
 
+## Managed-Thread Cutover Smoke
+
+Run this focused suite to verify managed-thread cutover integrity:
+
+```bash
+make test-managed-thread-cutover
+```
+
+This covers runtime-thread event contract, hub supervisor wiring, PMA lifecycle, Telegram/Discord routing, and unified error sanitization. Use this for quick regression checks after changes to managed-thread paths.
+
 ## Cross-Surface Chat Contract Checks
 
 Use this when you want explicit chat-platform contract/shape coverage beyond default `make check`.
