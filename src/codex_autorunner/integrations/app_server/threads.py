@@ -74,6 +74,44 @@ def pma_base_key(agent: str) -> str:
     return PMA_KEY
 
 
+def pma_prefix_for_agent(agent: Optional[str]) -> str:
+    """
+    Return the PMA registry key prefix for the given agent.
+
+    This prefix matches both the base key and any topic-scoped variants.
+
+    Args:
+        agent: Agent identifier ("opencode" or "codex"/other/None).
+
+    Returns:
+        PMA_OPENCODE_PREFIX if agent is "opencode", otherwise PMA_PREFIX.
+    """
+    if isinstance(agent, str) and agent.strip().lower() == "opencode":
+        return PMA_OPENCODE_PREFIX
+    return PMA_PREFIX
+
+
+def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
+    """
+    Return the list of PMA registry key prefixes to reset for a given agent.
+
+    When resetting PMA state, we need to clear:
+    - Global keys (pma, pma.opencode)
+    - Topic-scoped keys (pma.*, pma.opencode.*)
+
+    Args:
+        agent: Agent identifier ("opencode", "codex", "all", or None).
+
+    Returns:
+        List of prefixes to reset.
+    """
+    if agent == "opencode":
+        return [PMA_OPENCODE_PREFIX]
+    if agent == "codex":
+        return [PMA_PREFIX]
+    return [PMA_PREFIX, PMA_OPENCODE_PREFIX]
+
+
 def pma_topic_scoped_key(
     agent: str, chat_id: int, thread_id: Optional[int], topic_key_fn=None
 ) -> str:
@@ -220,6 +258,29 @@ class AppServerThreadRegistry:
             threads.pop(normalized, None)
             self._save_unlocked(threads)
             return True
+
+    def reset_threads_by_prefix(self, prefix: str) -> list[str]:
+        """
+        Reset all threads whose keys start with the given prefix.
+
+        Used by PMA lifecycle to clear both global and topic-scoped PMA keys.
+
+        Args:
+            prefix: Key prefix to match (e.g., "pma." or "pma.opencode.")
+
+        Returns:
+            List of keys that were cleared.
+        """
+        cleared_keys = []
+        with file_lock(self._lock_path()):
+            threads = self._load_unlocked()
+            keys_to_remove = [k for k in threads if k.startswith(prefix)]
+            for key in keys_to_remove:
+                threads.pop(key, None)
+                cleared_keys.append(key)
+            if cleared_keys:
+                self._save_unlocked(threads)
+        return cleared_keys
 
     def reset_all(self) -> None:
         with file_lock(self._lock_path()):

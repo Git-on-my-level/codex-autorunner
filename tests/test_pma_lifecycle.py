@@ -200,3 +200,81 @@ async def test_events_log_has_lock_file_path(temp_hub_root: Path) -> None:
     assert lock_path.parent.exists()
     events_log = temp_hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
     assert events_log.exists()
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_router_new_clears_scoped_keys(temp_hub_root: Path) -> None:
+    """Test that /new clears both global and topic-scoped PMA keys."""
+    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+
+    registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
+    registry = AppServerThreadRegistry(registry_path)
+
+    registry.set_thread_id("pma", "global-thread-id")
+    registry.set_thread_id("pma.-1001.42", "topic-42-thread-id")
+    registry.set_thread_id("pma.-1001.99", "topic-99-thread-id")
+
+    router = PmaLifecycleRouter(temp_hub_root)
+    result = await router.new(agent="codex")
+
+    assert result.status == "ok"
+    assert "pma" in result.details.get("cleared_threads", [])
+    assert "pma.-1001.42" in result.details.get("cleared_threads", [])
+    assert "pma.-1001.99" in result.details.get("cleared_threads", [])
+
+    assert registry.get_thread_id("pma") is None
+    assert registry.get_thread_id("pma.-1001.42") is None
+    assert registry.get_thread_id("pma.-1001.99") is None
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_router_reset_clears_scoped_keys(temp_hub_root: Path) -> None:
+    """Test that /reset clears both global and topic-scoped PMA keys."""
+    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+
+    registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
+    registry = AppServerThreadRegistry(registry_path)
+
+    registry.set_thread_id("pma.opencode", "global-opencode-id")
+    registry.set_thread_id("pma.opencode.-1001.42", "topic-opencode-42-id")
+
+    router = PmaLifecycleRouter(temp_hub_root)
+    result = await router.reset(agent="opencode")
+
+    assert result.status == "ok"
+    assert "pma.opencode" in result.details.get("cleared_threads", [])
+    assert "pma.opencode.-1001.42" in result.details.get("cleared_threads", [])
+
+    assert registry.get_thread_id("pma.opencode") is None
+    assert registry.get_thread_id("pma.opencode.-1001.42") is None
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_router_reset_all_clears_both_agent_scoped_keys(
+    temp_hub_root: Path,
+) -> None:
+    """Test that /reset with agent='all' clears scoped keys for both agents."""
+    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+
+    registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
+    registry = AppServerThreadRegistry(registry_path)
+
+    registry.set_thread_id("pma", "global-codex-id")
+    registry.set_thread_id("pma.-1001.1", "topic-codex-1-id")
+    registry.set_thread_id("pma.opencode", "global-opencode-id")
+    registry.set_thread_id("pma.opencode.-1001.2", "topic-opencode-2-id")
+
+    router = PmaLifecycleRouter(temp_hub_root)
+    result = await router.reset(agent="all")
+
+    assert result.status == "ok"
+    cleared = result.details.get("cleared_threads", [])
+    assert "pma" in cleared
+    assert "pma.-1001.1" in cleared
+    assert "pma.opencode" in cleared
+    assert "pma.opencode.-1001.2" in cleared
+
+    assert registry.get_thread_id("pma") is None
+    assert registry.get_thread_id("pma.-1001.1") is None
+    assert registry.get_thread_id("pma.opencode") is None
+    assert registry.get_thread_id("pma.opencode.-1001.2") is None

@@ -8,10 +8,14 @@ from codex_autorunner.core.app_server_threads import (
     FILE_CHAT_PREFIX,
     PMA_KEY,
     PMA_OPENCODE_KEY,
+    PMA_OPENCODE_PREFIX,
+    PMA_PREFIX,
     AppServerThreadRegistry,
     file_chat_discord_key,
     normalize_feature_key,
     pma_base_key,
+    pma_prefix_for_agent,
+    pma_prefixes_for_reset,
     pma_topic_scoped_key,
 )
 
@@ -318,3 +322,80 @@ class TestFileChatDiscordKeyHelper:
     def test_strips_channel_id_whitespace(self) -> None:
         key = file_chat_discord_key("codex", "  123456  ", "/workspace/repo")
         assert "123456" in key
+
+
+class TestResetThreadsByPrefix:
+    def test_clears_keys_matching_prefix(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+
+        registry.set_thread_id("pma", "global-thread")
+        registry.set_thread_id("pma.-1001.42", "topic-42-thread")
+        registry.set_thread_id("pma.-1001.99", "topic-99-thread")
+        registry.set_thread_id("file_chat", "file-chat-thread")
+
+        cleared = registry.reset_threads_by_prefix(PMA_PREFIX)
+
+        assert "pma" not in cleared
+        assert "pma.-1001.42" in cleared
+        assert "pma.-1001.99" in cleared
+        assert registry.get_thread_id("pma") == "global-thread"
+        assert registry.get_thread_id("pma.-1001.42") is None
+        assert registry.get_thread_id("pma.-1001.99") is None
+        assert registry.get_thread_id("file_chat") == "file-chat-thread"
+
+    def test_clears_opencode_scoped_keys(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+
+        registry.set_thread_id("pma.opencode", "global-opencode")
+        registry.set_thread_id("pma.opencode.-1001.42", "topic-opencode-42")
+        registry.set_thread_id("pma", "global-codex")
+
+        cleared = registry.reset_threads_by_prefix(PMA_OPENCODE_PREFIX)
+
+        assert "pma.opencode" not in cleared
+        assert "pma.opencode.-1001.42" in cleared
+        assert "pma" not in cleared
+        assert registry.get_thread_id("pma.opencode") == "global-opencode"
+        assert registry.get_thread_id("pma.opencode.-1001.42") is None
+        assert registry.get_thread_id("pma") == "global-codex"
+
+    def test_returns_empty_list_when_no_matches(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+
+        registry.set_thread_id("pma", "global-thread")
+        cleared = registry.reset_threads_by_prefix("file_chat.")
+
+        assert cleared == []
+        assert registry.get_thread_id("pma") == "global-thread"
+
+
+class TestPmaPrefixForAgent:
+    def test_returns_opencode_prefix_for_opencode(self) -> None:
+        assert pma_prefix_for_agent("opencode") == PMA_OPENCODE_PREFIX
+        assert pma_prefix_for_agent("OpenCode") == PMA_OPENCODE_PREFIX
+        assert pma_prefix_for_agent("  OPENCODE  ") == PMA_OPENCODE_PREFIX
+
+    def test_returns_codex_prefix_for_other_agents(self) -> None:
+        assert pma_prefix_for_agent("codex") == PMA_PREFIX
+        assert pma_prefix_for_agent("codex-alt") == PMA_PREFIX
+        assert pma_prefix_for_agent("") == PMA_PREFIX
+        assert pma_prefix_for_agent(None) == PMA_PREFIX
+
+
+class TestPmaPrefixesForReset:
+    def test_returns_opencode_prefix_for_opencode_agent(self) -> None:
+        result = pma_prefixes_for_reset("opencode")
+        assert result == [PMA_OPENCODE_PREFIX]
+
+    def test_returns_codex_prefix_for_codex_agent(self) -> None:
+        result = pma_prefixes_for_reset("codex")
+        assert result == [PMA_PREFIX]
+
+    def test_returns_both_prefixes_for_all_or_none(self) -> None:
+        for agent in (None, "all", ""):
+            result = pma_prefixes_for_reset(agent)
+            assert PMA_PREFIX in result
+            assert PMA_OPENCODE_PREFIX in result

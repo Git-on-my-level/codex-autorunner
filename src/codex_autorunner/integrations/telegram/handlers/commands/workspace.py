@@ -15,7 +15,6 @@ from .....core.git_utils import GitError, reset_branch_from_origin_main
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
-from .....integrations.app_server.threads import pma_base_key
 from .....manifest import load_manifest
 from ....app_server import is_missing_thread_error
 from ....app_server.client import CodexAppServerClient
@@ -1014,10 +1013,10 @@ class WorkspaceCommands(SharedHelpers):
         pma_enabled = bool(record and record.pma_enabled)
         if pma_enabled:
             registry = getattr(self, "_hub_thread_registry", None)
-            agent = self._effective_agent(record)
-            pma_key = pma_base_key(agent)
-            if registry:
-                registry.reset_thread(pma_key)
+            if registry and hasattr(self, "_pma_registry_key"):
+                pma_key = self._pma_registry_key(record, message)
+                if pma_key:
+                    registry.reset_thread(pma_key)
             await self._send_message(
                 message.chat_id,
                 "PMA thread reset. Send a message to start a fresh PMA turn.",
@@ -1183,10 +1182,10 @@ class WorkspaceCommands(SharedHelpers):
         pma_enabled = bool(record and record.pma_enabled)
         if pma_enabled:
             registry = getattr(self, "_hub_thread_registry", None)
-            agent = self._effective_agent(record)
-            pma_key = pma_base_key(agent)
-            if registry:
-                registry.reset_thread(pma_key)
+            if registry and hasattr(self, "_pma_registry_key"):
+                pma_key = self._pma_registry_key(record, message)
+                if pma_key:
+                    registry.reset_thread(pma_key)
             await self._send_message(
                 message.chat_id,
                 "PMA session reset. Send a message to start a fresh PMA turn.",
