@@ -155,19 +155,6 @@ def _normalize_resource_owner(
     return normalized_resource_kind, normalized_resource_id, normalized_repo_id
 
 
-def _reject_legacy_repo_owner_alias(repo_id: Optional[str]) -> None:
-    normalized_repo_id = normalize_optional_text(repo_id)
-    if normalized_repo_id is None:
-        return
-    raise HTTPException(
-        status_code=400,
-        detail=(
-            "repo_id is not supported here; use resource_kind=repo and "
-            "resource_id=<repo_id>"
-        ),
-    )
-
-
 def _build_operator_status_fields(
     *,
     normalized_status: Optional[str],
@@ -653,7 +640,6 @@ def build_managed_thread_crud_routes(
         agent: Optional[str] = None,
         status: Optional[str] = None,
         lifecycle_status: Optional[str] = None,
-        repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 200,
@@ -668,7 +654,6 @@ def build_managed_thread_crud_routes(
         ):
             normalized_lifecycle_status = normalized_status
             normalized_status = None
-        _reject_legacy_repo_owner_alias(repo_id)
         (
             normalized_resource_kind,
             normalized_resource_id,
@@ -853,7 +838,6 @@ def build_managed_thread_crud_routes(
     def list_bindings(
         request: Request,
         agent: Optional[str] = None,
-        repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
         surface_kind: Optional[str] = None,
@@ -862,7 +846,6 @@ def build_managed_thread_crud_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        _reject_legacy_repo_owner_alias(repo_id)
         (
             normalized_resource_kind,
             normalized_resource_id,
@@ -922,7 +905,6 @@ def build_managed_thread_crud_routes(
     def list_active_work_summaries(
         request: Request,
         agent: Optional[str] = None,
-        repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 200,
@@ -930,7 +912,6 @@ def build_managed_thread_crud_routes(
         """List busy thread summaries for running or queued work only."""
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        _reject_legacy_repo_owner_alias(repo_id)
         (
             normalized_resource_kind,
             normalized_resource_id,

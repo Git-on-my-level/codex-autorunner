@@ -4,6 +4,9 @@ from pathlib import Path
 
 from codex_autorunner.core.utils import atomic_write
 from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
+from codex_autorunner.surfaces.web.routes.file_chat_routes import (
+    targets as file_targets,
+)
 
 
 def test_file_chat_prompt_has_car_and_file_content(tmp_path: Path) -> None:
@@ -37,18 +40,18 @@ def test_ticket_target_chat_scope_changes_with_instance_token(
     ticket_path.write_text("---\nagent: codex\ndone: false\n---\n", encoding="utf-8")
 
     monkeypatch.setattr(
-        file_chat_routes, "ticket_state_key", lambda idx, path: f"ticket_{idx:03d}_v1"
+        file_targets, "ticket_state_key", lambda idx, path: f"ticket_{idx:03d}_v1"
     )
     monkeypatch.setattr(
-        file_chat_routes, "ticket_chat_scope", lambda idx, path: f"ticket:{idx}:v1"
+        file_targets, "ticket_chat_scope", lambda idx, path: f"ticket:{idx}:v1"
     )
     first = file_chat_routes._parse_target(repo_root, "ticket:1")
 
     monkeypatch.setattr(
-        file_chat_routes, "ticket_state_key", lambda idx, path: f"ticket_{idx:03d}_v2"
+        file_targets, "ticket_state_key", lambda idx, path: f"ticket_{idx:03d}_v2"
     )
     monkeypatch.setattr(
-        file_chat_routes, "ticket_chat_scope", lambda idx, path: f"ticket:{idx}:v2"
+        file_targets, "ticket_chat_scope", lambda idx, path: f"ticket:{idx}:v2"
     )
     second = file_chat_routes._parse_target(repo_root, "ticket:1")
 

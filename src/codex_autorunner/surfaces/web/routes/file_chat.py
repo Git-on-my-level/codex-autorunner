@@ -11,23 +11,19 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Optional, cast
+from typing import Any, AsyncIterator, Callable, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ....contextspace.paths import (
-    contextspace_doc_path,
-    normalize_contextspace_doc_kind,
-)
 from ....core import drafts as draft_utils
-from ....core.file_chat_keys import ticket_chat_scope, ticket_state_key
 from ....core.usage import persist_opencode_usage_snapshot
-from ....core.utils import find_repo_root
 from ....integrations.app_server.event_buffer import format_sse
-from .file_chat_routes import FileChatRoutesState, build_file_chat_runtime_routes
+from .file_chat_routes import (
+    FileChatRoutesState as _ExtractedFileChatRoutesState,
+)
+from .file_chat_routes import build_file_chat_runtime_routes
 from .file_chat_routes import targets as extracted_targets
 from .file_chat_routes.drafts import (
     apply_file_patch as extracted_apply_file_patch,
@@ -39,11 +35,19 @@ from .file_chat_routes.drafts import (
     pending_file_patch as extracted_pending_file_patch,
 )
 from .file_chat_routes.execution import execute_file_chat as extracted_execute_file_chat
+from .file_chat_routes.runtime import active_for_client as _active_for_client
+from .file_chat_routes.runtime import begin_turn_state as _begin_turn_state
+from .file_chat_routes.runtime import clear_interrupt_event as _clear_interrupt_event
+from .file_chat_routes.runtime import finalize_turn_state as _finalize_turn_state
+from .file_chat_routes.runtime import get_state as _get_state
+from .file_chat_routes.runtime import last_for_client as _last_for_client
+from .file_chat_routes.runtime import update_turn_state as _update_turn_state
 from .shared import SSE_HEADERS
 
 FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
 FILE_CHAT_TIMEOUT_SECONDS = 180
 logger = logging.getLogger(__name__)
+FileChatRoutesState = _ExtractedFileChatRoutesState
 
 # Keep the staged extraction seam visible while this module remains the composition owner.
 _EXTRACTED_FILE_CHAT_SEAMS = (
@@ -54,22 +58,13 @@ _EXTRACTED_FILE_CHAT_SEAMS = (
 ExtractedTarget = extracted_targets._Target
 _build_file_chat_prompt = extracted_targets.build_file_chat_prompt
 _build_patch = extracted_targets.build_patch
+_parse_target = extracted_targets.parse_target
 _read_file = extracted_targets.read_file
+_resolve_repo_root = extracted_targets.resolve_repo_root
 
 
 class FileChatError(Exception):
     """Base error for file chat failures."""
-
-
-@dataclass(frozen=True)
-class _Target:
-    target: str
-    kind: str  # "ticket" | "contextspace"
-    id: str  # "001" | "spec"
-    chat_scope: str
-    path: Path
-    rel_path: str
-    state_key: str
 
 
 def _state_path(repo_root: Path) -> Path:
@@ -88,174 +83,8 @@ def _hash_content(content: str) -> str:
     return draft_utils.hash_content(content)
 
 
-def _resolve_repo_root(request: Optional[Request] = None) -> Path:
-    if request is not None:
-        engine = getattr(request.app.state, "engine", None)
-        repo_root = getattr(engine, "repo_root", None)
-        if isinstance(repo_root, Path):
-            return repo_root
-        if isinstance(repo_root, str):
-            try:
-                return Path(repo_root)
-            except Exception:
-                pass
-    return find_repo_root()
-
-
-def _ticket_path(repo_root: Path, index: int) -> Path:
-    return repo_root / ".codex-autorunner" / "tickets" / f"TICKET-{index:03d}.md"
-
-
-def _parse_contextspace_kind(raw: str) -> str:
-    value = (raw or "").strip().lower()
-    if value.endswith(".md"):
-        value = value[:-3]
-    return normalize_contextspace_doc_kind(value)
-
-
-def _parse_target(repo_root: Path, raw: str) -> _Target:
-    target = (raw or "").strip()
-    if not target:
-        raise HTTPException(status_code=400, detail="target is required")
-
-    if target.lower().startswith("ticket:"):
-        suffix = target.split(":", 1)[1].strip()
-        if not suffix.isdigit():
-            raise HTTPException(status_code=400, detail="invalid ticket target")
-        idx = int(suffix)
-        if idx <= 0:
-            raise HTTPException(status_code=400, detail="invalid ticket target")
-        path = _ticket_path(repo_root, idx)
-        rel = (
-            str(path.relative_to(repo_root))
-            if path.is_relative_to(repo_root)
-            else str(path)
-        )
-        return _Target(
-            target=f"ticket:{idx}",
-            kind="ticket",
-            id=f"{idx:03d}",
-            chat_scope=ticket_chat_scope(idx, path),
-            path=path,
-            rel_path=rel,
-            state_key=ticket_state_key(idx, path),
-        )
-
-    if target.lower().startswith("contextspace:"):
-        suffix_raw = target.split(":", 1)[1].strip()
-        if not suffix_raw:
-            raise HTTPException(status_code=400, detail="invalid contextspace target")
-        try:
-            kind = _parse_contextspace_kind(suffix_raw)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        path = contextspace_doc_path(repo_root, kind)
-        rel_suffix = f"{kind}.md"
-
-        rel = (
-            str(path.relative_to(repo_root))
-            if path.is_relative_to(repo_root)
-            else str(path)
-        )
-        return _Target(
-            target=f"contextspace:{rel_suffix}",
-            kind="contextspace",
-            id=rel_suffix,
-            chat_scope=f"contextspace:{rel_suffix}",
-            path=path,
-            rel_path=rel,
-            state_key=f"contextspace_{rel_suffix.replace('/', '_')}",
-        )
-
-    raise HTTPException(status_code=400, detail=f"invalid target: {target}")
-
-
 def build_file_chat_routes() -> APIRouter:
     router = APIRouter(prefix="/api", tags=["file-chat"])
-    state = FileChatRoutesState()
-
-    def _get_state(request: Request) -> FileChatRoutesState:
-        if not hasattr(request.app.state, "file_chat_routes_state"):
-            request.app.state.file_chat_routes_state = state
-        return cast(FileChatRoutesState, request.app.state.file_chat_routes_state)
-
-    async def _get_or_create_interrupt_event(
-        request: Request, key: str
-    ) -> asyncio.Event:
-        s = _get_state(request)
-        async with s.chat_lock:
-            if key not in s.active_chats:
-                s.active_chats[key] = asyncio.Event()
-            return s.active_chats[key]
-
-    async def _clear_interrupt_event(request: Request, key: str) -> None:
-        s = _get_state(request)
-        async with s.chat_lock:
-            s.active_chats.pop(key, None)
-
-    async def _begin_turn_state(
-        request: Request, target: _Target, client_turn_id: Optional[str]
-    ) -> None:
-        s = _get_state(request)
-        async with s.turn_lock:
-            state: Dict[str, Any] = {
-                "client_turn_id": client_turn_id or "",
-                "target": target.target,
-                "status": "starting",
-                "agent": None,
-                "thread_id": None,
-                "turn_id": None,
-            }
-            s.current_by_target[target.state_key] = state
-            if client_turn_id:
-                s.current_by_client[client_turn_id] = state
-
-    async def _update_turn_state(
-        request: Request, target: _Target, **updates: Any
-    ) -> None:
-        s = _get_state(request)
-        async with s.turn_lock:
-            state = s.current_by_target.get(target.state_key)
-            if not state:
-                return
-            for key, value in updates.items():
-                if value is None:
-                    continue
-                state[key] = value
-            cid = state.get("client_turn_id") or ""
-            if cid:
-                s.current_by_client[cid] = state
-
-    async def _finalize_turn_state(
-        request: Request, target: _Target, result: Dict[str, Any]
-    ) -> None:
-        s = _get_state(request)
-        async with s.turn_lock:
-            state = s.current_by_target.pop(target.state_key, None)
-            cid = ""
-            if state:
-                cid = state.get("client_turn_id", "") or ""
-            if cid:
-                s.current_by_client.pop(cid, None)
-                s.last_by_client[cid] = dict(result or {})
-
-    async def _active_for_client(
-        request: Request, client_turn_id: Optional[str]
-    ) -> Dict[str, Any]:
-        if not client_turn_id:
-            return {}
-        s = _get_state(request)
-        async with s.turn_lock:
-            return dict(s.current_by_client.get(client_turn_id, {}))
-
-    async def _last_for_client(
-        request: Request, client_turn_id: Optional[str]
-    ) -> Dict[str, Any]:
-        if not client_turn_id:
-            return {}
-        s = _get_state(request)
-        async with s.turn_lock:
-            return dict(s.last_by_client.get(client_turn_id, {}))
 
     @router.get("/file-chat/active")
     async def file_chat_active(
@@ -357,7 +186,7 @@ def build_file_chat_routes() -> APIRouter:
     async def _stream_file_chat(
         request: Request,
         repo_root: Path,
-        target: _Target,
+        target: ExtractedTarget,
         message: str,
         *,
         agent: str = "codex",
@@ -440,7 +269,7 @@ def build_file_chat_routes() -> APIRouter:
     async def _execute_file_chat(
         request: Request,
         repo_root: Path,
-        target: _Target,
+        target: ExtractedTarget,
         message: str,
         *,
         agent: str = "codex",
@@ -452,7 +281,7 @@ def build_file_chat_routes() -> APIRouter:
         return await extracted_execute_file_chat(
             request,
             repo_root,
-            cast(ExtractedTarget, target),
+            target,
             message,
             agent=agent,
             model=model,

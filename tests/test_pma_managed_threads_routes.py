@@ -320,16 +320,6 @@ def test_list_managed_threads_returns_created_thread(hub_env) -> None:
     assert any(thread["managed_thread_id"] == created_id for thread in threads)
 
 
-def test_list_managed_threads_rejects_legacy_repo_owner_alias(hub_env) -> None:
-    app = create_hub_app(hub_env.hub_root)
-
-    with TestClient(app) as client:
-        resp = client.get("/hub/pma/threads", params={"repo_id": hub_env.repo_id})
-
-    assert resp.status_code == 400
-    assert "resource_kind=repo" in (resp.json().get("detail") or "")
-
-
 def test_list_managed_threads_supports_normalized_status_filter(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
