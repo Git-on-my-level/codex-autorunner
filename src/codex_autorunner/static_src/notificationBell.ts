@@ -10,6 +10,14 @@ interface FreshnessPayload {
   status?: string | null;
 }
 
+interface SupersessionPayload {
+  status?: "primary" | "non_primary" | "superseded" | null;
+  is_primary?: boolean | null;
+  superseded?: boolean | null;
+  superseded_by?: string | null;
+  reason?: string | null;
+}
+
 interface HubMessageItem {
   repo_id: string;
   repo_display_name?: string;
@@ -34,6 +42,7 @@ interface HubMessageItem {
     recommendation_stale_reason?: string | null;
     freshness?: FreshnessPayload | null;
   } | null;
+  supersession?: SupersessionPayload | null;
   message?: {
     mode?: string;
     title?: string | null;
@@ -82,6 +91,14 @@ function itemBody(item: HubMessageItem): string {
   return payload.body || item.run_state?.blocking_reason || "";
 }
 
+function isSuperseded(item: HubMessageItem): boolean {
+  return item.supersession?.superseded === true;
+}
+
+function isPrimary(item: HubMessageItem): boolean {
+  return item.supersession?.is_primary === true;
+}
+
 function formatFreshnessAge(ageSeconds: number | null | undefined): string {
   if (typeof ageSeconds !== "number" || !Number.isFinite(ageSeconds) || ageSeconds < 0) {
     return "";
@@ -109,7 +126,9 @@ function renderList(items: HubMessageItem[]): void {
     listEl.innerHTML = '<div class="muted">No dispatches</div>';
     return;
   }
-  const html = items
+  const actionableItems = items.filter((item) => !isSuperseded(item));
+  const supersededItems = items.filter(isSuperseded);
+  const html = actionableItems
     .map((item) => {
       const title = itemTitle(item);
       const excerpt = itemBody(item).slice(0, 180);
@@ -134,11 +153,11 @@ function renderList(items: HubMessageItem[]): void {
           ? recommendedAction
             ? `Suggestion: ${recommendedAction}`
             : "Suggestion only"
-        : recommendedAction
-        ? `Next: ${recommendedAction}`
-        : item.next_action === "reply_and_resume"
-          ? "Next: Reply + resume run"
-          : "";
+          : recommendedAction
+          ? `Next: ${recommendedAction}`
+          : item.next_action === "reply_and_resume"
+            ? "Next: Reply + resume run"
+            : "";
       const freshnessLine = snapshotIsStale
         ? `Snapshot stale${freshnessDetail(snapshotFreshness) ? `: ${freshnessDetail(snapshotFreshness)}` : ""}`
         : "";
@@ -149,8 +168,9 @@ function renderList(items: HubMessageItem[]): void {
         : stateLabel === "paused"
           ? "pill-warn"
           : "pill-caution";
+      const primaryIndicator = isPrimary(item) ? "primary-item" : "";
       return `
-        <div class="notification-item">
+        <div class="notification-item ${primaryIndicator}">
           <div class="notification-item-header">
             <span class="notification-repo">${escapeHtml(repoLabel)} <span class="muted">(${item.run_id.slice(0, 8)}${seq})</span></span>
             <span class="pill pill-small ${stateClass}">${escapeHtml(stateLabel)}</span>
@@ -168,7 +188,32 @@ function renderList(items: HubMessageItem[]): void {
       `;
     })
     .join("");
-  listEl.innerHTML = html;
+  const supersededHtml = supersededItems.length
+    ? supersededItems
+        .map((item) => {
+          const title = itemTitle(item);
+          const repoLabel = item.repo_display_name || item.repo_id;
+          const seq = item.seq ? `#${item.seq}` : "";
+          const supersededBy = item.supersession?.superseded_by || "newer item";
+          const supersededReason = item.supersession?.reason || "Superseded by newer action";
+          return `
+            <div class="notification-item superseded-item muted">
+              <div class="notification-item-header">
+                <span class="notification-repo">${escapeHtml(repoLabel)} <span class="muted">(${item.run_id.slice(0, 8)}${seq})</span></span>
+                <span class="pill pill-small pill-muted">superseded</span>
+              </div>
+              <div class="notification-title">${escapeHtml(title)}</div>
+              <div class="notification-next small">Replaced by: ${escapeHtml(supersededBy)}</div>
+              <div class="notification-next small">${escapeHtml(supersededReason)}</div>
+            </div>
+          `;
+        })
+        .join("")
+    : "";
+  const supersededSection = supersededItems.length
+    ? `<div class="notification-superseded-section"><div class="notification-section-label muted small">Superseded items</div>${supersededHtml}</div>`
+    : "";
+  listEl.innerHTML = html + supersededSection;
 }
 
 async function fetchNotifications(): Promise<HubMessageItem[]> {
@@ -180,7 +225,8 @@ async function refreshNotifications(options: { silent?: boolean; render?: boolea
   const { silent = true, render = false } = options;
   try {
     const items = await fetchNotifications();
-    setBadges(items.length);
+    const actionableItems = items.filter((item) => !isSuperseded(item));
+    setBadges(actionableItems.length);
     if (modalOpen || render) {
       renderList(items);
     }
