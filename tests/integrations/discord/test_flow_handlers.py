@@ -644,8 +644,13 @@ async def test_flow_start_reuses_active_or_paused_run(
     try:
         await service.run_forever()
         assert flow_service.ensure_calls == [(paused_run_id, False)]
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        payload = rest.interaction_responses[0]["payload"]["data"]
+        content = payload["content"]
         assert f"Reusing ticket_flow run {paused_run_id} (paused)." in content
+        assert f"Run: {paused_run_id}" in content
+        assert "Status: paused" in content
+        assert "components" in payload
+        assert "flags" not in payload
     finally:
         await store.close()
 
@@ -656,6 +661,7 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
 ) -> None:
     workspace = _workspace(tmp_path)
     failed_run_id = str(uuid.uuid4())
+    new_run_id = str(uuid.uuid4())
     _create_run(workspace, failed_run_id, status=FlowRunStatus.FAILED)
 
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -668,6 +674,25 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
     )
 
     flow_service = _FlowServiceStub()
+
+    async def _start_flow_run(
+        _flow_target_id: str,
+        *,
+        input_data: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        run_id: str | None = None,
+    ) -> SimpleNamespace:
+        flow_service.start_calls.append(
+            {
+                "input_data": input_data or {},
+                "metadata": metadata or {},
+                "run_id": run_id,
+            }
+        )
+        _create_run(workspace, new_run_id, status=FlowRunStatus.RUNNING)
+        return SimpleNamespace(run_id=new_run_id, status="running")
+
+    flow_service.start_flow_run = _start_flow_run  # type: ignore[method-assign]
     monkeypatch.setattr(
         "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
         lambda *, workspace_root: flow_service,
@@ -696,8 +721,13 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
         assert len(flow_service.start_calls) == 1
         assert flow_service.start_calls[0]["metadata"]["force_new"] is True
         assert flow_service.start_calls[0]["metadata"]["origin"] == "discord"
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
-        assert "Started new ticket_flow run run-new." in content
+        payload = rest.interaction_responses[0]["payload"]["data"]
+        content = payload["content"]
+        assert f"Started new ticket_flow run {new_run_id}." in content
+        assert f"Run: {new_run_id}" in content
+        assert "Status:" in content
+        assert "components" in payload
+        assert "flags" not in payload
     finally:
         await store.close()
 

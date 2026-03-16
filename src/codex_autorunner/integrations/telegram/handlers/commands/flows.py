@@ -1031,6 +1031,20 @@ class FlowCommands(SharedHelpers):
         )
         return "\n".join(lines), keyboard
 
+    def _build_flow_start_card(
+        self,
+        repo_root: Path,
+        record: Optional[object],
+        store: Optional[FlowStore],
+        *,
+        prefix: str,
+    ) -> tuple[str, Optional[dict[str, object]]]:
+        prefix = prefix.strip()
+        if record is None:
+            return prefix, None
+        status_text, keyboard = self._build_flow_status_card(repo_root, record, store)
+        return f"{prefix}\n\n{status_text}", keyboard
+
     async def _send_flow_help_block(self, message: TelegramMessage) -> None:
         await self._send_message(
             message.chat_id,
@@ -1362,12 +1376,40 @@ class FlowCommands(SharedHelpers):
             self._ticket_flow_orchestration_service(repo_root).ensure_flow_run_worker(
                 active_run.id
             )
-            outbound_text = f"Reusing ticket flow run {_code(active_run.id)} ({active_run.status.value})."
+            store = _load_flow_store(repo_root)
+            try:
+                store.initialize()
+                record = store.get_flow_run(active_run.id)
+                if record is not None:
+                    record, _updated, locked = reconcile_flow_run(
+                        repo_root, record, store
+                    )
+                    if locked:
+                        await self._send_message(
+                            message.chat_id,
+                            f"Run {_code(record.id)} is locked for reconcile; try again.",
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            parse_mode="Markdown",
+                        )
+                        return
+                outbound_text, keyboard = self._build_flow_start_card(
+                    repo_root,
+                    record,
+                    store,
+                    prefix=(
+                        f"Reusing ticket flow run {_code(active_run.id)} "
+                        f"({active_run.status.value})."
+                    ),
+                )
+            finally:
+                store.close()
             await self._send_message(
                 message.chat_id,
                 outbound_text,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
+                reply_markup=keyboard,
                 parse_mode="Markdown",
             )
             run_mirror.mirror_outbound(
@@ -1498,12 +1540,35 @@ You are the first ticket in a new ticket_flow run.
         if not issue_exists and not tickets_exist:
             await self._send_flow_issue_hint(message, repo_root)
 
-        outbound_text = f"Started ticket flow run {_code(flow_record.run_id)}."
+        store = _load_flow_store(repo_root)
+        try:
+            store.initialize()
+            record = store.get_flow_run(flow_record.run_id)
+            if record is not None:
+                record, _updated, locked = reconcile_flow_run(repo_root, record, store)
+                if locked:
+                    await self._send_message(
+                        message.chat_id,
+                        f"Run {_code(record.id)} is locked for reconcile; try again.",
+                        thread_id=message.thread_id,
+                        reply_to=message.message_id,
+                        parse_mode="Markdown",
+                    )
+                    return
+            outbound_text, keyboard = self._build_flow_start_card(
+                repo_root,
+                record,
+                store,
+                prefix=f"Started ticket flow run {_code(flow_record.run_id)}.",
+            )
+        finally:
+            store.close()
         await self._send_message(
             message.chat_id,
             outbound_text,
             thread_id=message.thread_id,
             reply_to=message.message_id,
+            reply_markup=keyboard,
             parse_mode="Markdown",
         )
         run_mirror.mirror_outbound(
