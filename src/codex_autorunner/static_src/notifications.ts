@@ -184,14 +184,18 @@ function getItemsForRoot(rootKey: string): NormalizedNotification[] {
 function renderDropdown(root: NotificationRoot): void {
   if (!root) return;
   const items = getItemsForRoot(root.key);
-  const actionableItems = items.filter((item) => !item.isSuperseded);
-  const supersededItems = items.filter((item) => item.isSuperseded);
+  const actionableItems = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => !item.isSuperseded);
+  const supersededItems = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.isSuperseded);
   if (!items.length) {
     root.dropdown.innerHTML = '<div class="notifications-empty muted small">No pending dispatches</div>';
     return;
   }
   const actionableHtml = actionableItems
-    .map((item, index) => {
+    .map(({ item, index }) => {
       const pill = item.pillLabel || (item.isHandoff ? "handoff" : "paused");
       const primaryClass = item.isPrimary ? "notifications-item-primary" : "";
       return `
@@ -205,10 +209,9 @@ function renderDropdown(root: NotificationRoot): void {
     .join("");
   const supersededHtml = supersededItems.length
     ? supersededItems
-        .map((item, index) => {
-          const originalIndex = actionableItems.length + index;
+        .map(({ item, index }) => {
           return `
-            <button class="notifications-item notifications-item-superseded muted" type="button" data-index="${originalIndex}" title="${escapeHtml(item.supersededReason || "Superseded by newer action")}">
+            <button class="notifications-item notifications-item-superseded muted" type="button" data-index="${index}" title="${escapeHtml(item.supersededReason || "Superseded by newer action")}">
               <span class="notifications-item-repo">${escapeHtml(item.repoDisplay || "PMA")}</span>
               <span class="notifications-item-title">${escapeHtml(item.title)}</span>
               <span class="pill pill-small pill-muted notifications-item-pill">superseded</span>

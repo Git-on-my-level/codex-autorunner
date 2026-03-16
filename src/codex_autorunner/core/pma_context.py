@@ -309,27 +309,21 @@ def _build_prompt_bundle_digest(sections: Mapping[str, Mapping[str, Any]]) -> st
     return _digest_text(raw)
 
 
-def _load_pma_prompt_state(hub_root: Path) -> dict[str, Any]:
-    path = default_pma_prompt_state_path(hub_root)
-    lock_path = _prompt_state_lock_path(path)
-    with file_lock(lock_path):
-        if not path.exists():
-            return _default_pma_prompt_state()
-        try:
-            raw = path.read_text(encoding="utf-8")
-            data = json.loads(raw)
-        except Exception as exc:
-            _logger.warning("Could not read PMA prompt state: %s", exc)
-            return _default_pma_prompt_state()
-        return data if isinstance(data, dict) else _default_pma_prompt_state()
+def _read_pma_prompt_state_unlocked(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return _default_pma_prompt_state()
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception as exc:
+        _logger.warning("Could not read PMA prompt state: %s", exc)
+        return _default_pma_prompt_state()
+    return data if isinstance(data, dict) else _default_pma_prompt_state()
 
 
-def _save_pma_prompt_state(hub_root: Path, state: Mapping[str, Any]) -> None:
-    path = default_pma_prompt_state_path(hub_root)
-    lock_path = _prompt_state_lock_path(path)
-    with file_lock(lock_path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
+def _write_pma_prompt_state_unlocked(path: Path, state: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
 
 
 def _validate_prompt_session_record(record: Any) -> bool:
@@ -369,6 +363,60 @@ def _trim_prompt_sessions(sessions: Mapping[str, Any]) -> dict[str, Any]:
 
     trimmed = sorted(items, key=_sort_key)[-PMA_PROMPT_STATE_MAX_SESSIONS:]
     return {key: dict(value) for key, value in trimmed}
+
+
+def _merge_prompt_session_state(
+    hub_root: Path,
+    *,
+    prompt_state_key: str,
+    sections: Mapping[str, Mapping[str, str]],
+    force_full_context: bool,
+) -> tuple[bool, str, Optional[Mapping[str, Any]], Optional[str]]:
+    path = default_pma_prompt_state_path(hub_root)
+    lock_path = _prompt_state_lock_path(path)
+    use_delta = False
+    delta_reason = "first_turn"
+    prior_sections: Optional[Mapping[str, Any]] = None
+    prior_updated_at: Optional[str] = None
+
+    with file_lock(lock_path):
+        state = _read_pma_prompt_state_unlocked(path)
+        sessions = state.get("sessions")
+        if isinstance(sessions, Mapping):
+            prior_record = sessions.get(prompt_state_key)
+            if _validate_prompt_session_record(prior_record):
+                validated_record = cast(Mapping[str, Any], prior_record)
+                prior_sections = cast(
+                    Optional[Mapping[str, Any]], validated_record.get("sections")
+                )
+                prior_updated_at = cast(
+                    Optional[str], validated_record.get("updated_at")
+                )
+                if force_full_context:
+                    delta_reason = "explicit_refresh"
+                else:
+                    use_delta = True
+                    delta_reason = "cached_context"
+            elif prior_record is not None:
+                delta_reason = "digest_mismatch"
+
+        updated_sessions = dict(sessions) if isinstance(sessions, Mapping) else {}
+        timestamp = now_iso()
+        updated_sessions[prompt_state_key] = {
+            "version": PMA_PROMPT_STATE_VERSION,
+            "updated_at": timestamp,
+            "bundle_digest": _build_prompt_bundle_digest(sections),
+            "sections": {
+                name: {"digest": str(payload.get("digest") or "")}
+                for name, payload in sections.items()
+            },
+        }
+        state["version"] = PMA_PROMPT_STATE_VERSION
+        state["updated_at"] = timestamp
+        state["sessions"] = _trim_prompt_sessions(updated_sessions)
+        _write_pma_prompt_state_unlocked(path, state)
+
+    return use_delta, delta_reason, prior_sections, prior_updated_at
 
 
 def _truncate(text: Optional[str], limit: int) -> str:
@@ -1802,42 +1850,17 @@ def format_pma_prompt(
     prior_updated_at: Optional[str] = None
 
     if hub_root is not None and prompt_state_key:
-        state = _load_pma_prompt_state(hub_root)
-        sessions = state.get("sessions")
-        if isinstance(sessions, Mapping):
-            prior_record = sessions.get(prompt_state_key)
-            if _validate_prompt_session_record(prior_record):
-                validated_record = cast(Mapping[str, Any], prior_record)
-                prior_sections = cast(
-                    Mapping[str, Any], validated_record.get("sections")
-                )
-                prior_updated_at = cast(
-                    Optional[str], validated_record.get("updated_at")
-                )
-                if force_full_context:
-                    delta_reason = "explicit_refresh"
-                else:
-                    use_delta = True
-                    delta_reason = "cached_context"
-            elif prior_record is not None:
-                delta_reason = "digest_mismatch"
-            else:
-                delta_reason = "first_turn"
-
-        updated_sessions = dict(sessions) if isinstance(sessions, Mapping) else {}
-        updated_sessions[prompt_state_key] = {
-            "version": PMA_PROMPT_STATE_VERSION,
-            "updated_at": now_iso(),
-            "bundle_digest": _build_prompt_bundle_digest(sections),
-            "sections": {
-                name: {"digest": str(payload.get("digest") or "")}
-                for name, payload in sections.items()
-            },
-        }
-        state["version"] = PMA_PROMPT_STATE_VERSION
-        state["updated_at"] = now_iso()
-        state["sessions"] = _trim_prompt_sessions(updated_sessions)
-        _save_pma_prompt_state(hub_root, state)
+        (
+            use_delta,
+            delta_reason,
+            prior_sections,
+            prior_updated_at,
+        ) = _merge_prompt_session_state(
+            hub_root,
+            prompt_state_key=prompt_state_key,
+            sections=sections,
+            force_full_context=force_full_context,
+        )
 
     prompt = f"{base_prompt}\n\n"
     prompt += format_pma_discoverability_preamble(hub_root=None)
