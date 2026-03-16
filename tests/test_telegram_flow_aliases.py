@@ -50,15 +50,22 @@ class _FlowStartRestartAliasHandler(FlowCommands):
     def __init__(self, repo_root: Path) -> None:
         self._store = _TopicStoreStub(repo_root)
         self.bootstrap_calls: list[list[str]] = []
+        self.bootstrap_repo_ids: list[str | None] = []
         self.restart_calls: list[list[str]] = []
 
     async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
         return "topic"
 
     async def _handle_flow_bootstrap(
-        self, _message: TelegramMessage, _repo_root: Path, argv: list[str]
+        self,
+        _message: TelegramMessage,
+        _repo_root: Path,
+        argv: list[str],
+        *,
+        repo_id: str | None = None,
     ) -> None:
         self.bootstrap_calls.append(argv)
+        self.bootstrap_repo_ids.append(repo_id)
 
     async def _handle_flow_restart(
         self, _message: TelegramMessage, _repo_root: Path, argv: list[str]
@@ -115,7 +122,26 @@ async def test_flow_start_alias_routes_to_bootstrap(tmp_path: Path) -> None:
     handler = _FlowStartRestartAliasHandler(tmp_path)
     await handler._handle_flow(_message("/flow start --force-new"), "start --force-new")
     assert handler.bootstrap_calls == [["--force-new"]]
+    assert handler.bootstrap_repo_ids == [None]
     assert handler.restart_calls == []
+
+
+@pytest.mark.anyio
+async def test_flow_start_alias_preserves_explicit_repo_id(tmp_path: Path) -> None:
+    handler = _FlowStartRestartAliasHandler(tmp_path)
+
+    def _resolve_workspace(key: str) -> tuple[str, str] | None:
+        if key == "repo-1":
+            return str(tmp_path), "repo-1"
+        return None
+
+    handler._resolve_workspace = _resolve_workspace  # type: ignore[method-assign]
+    await handler._handle_flow(
+        _message("/flow repo-1 start --force-new"), "repo-1 start --force-new"
+    )
+
+    assert handler.bootstrap_calls == [["--force-new"]]
+    assert handler.bootstrap_repo_ids == ["repo-1"]
 
 
 @pytest.mark.anyio

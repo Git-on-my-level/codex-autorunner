@@ -507,7 +507,12 @@ class FlowCommands(SharedHelpers):
                 )
                 return
             if action in {"start", "bootstrap"}:
-                await self._handle_flow_bootstrap(message, repo_root, rest_argv)
+                await self._handle_flow_bootstrap(
+                    message,
+                    repo_root,
+                    rest_argv,
+                    repo_id=target_repo_id,
+                )
                 return
             if action == "restart":
                 await self._handle_flow_restart(message, repo_root, rest_argv)
@@ -1038,11 +1043,14 @@ class FlowCommands(SharedHelpers):
         store: Optional[FlowStore],
         *,
         prefix: str,
+        repo_id: Optional[str] = None,
     ) -> tuple[str, Optional[dict[str, object]]]:
         prefix = prefix.strip()
         if record is None:
             return prefix, None
-        status_text, keyboard = self._build_flow_status_card(repo_root, record, store)
+        status_text, keyboard = self._build_flow_status_card(
+            repo_root, record, store, repo_id=repo_id
+        )
         return f"{prefix}\n\n{status_text}", keyboard
 
     async def _send_flow_help_block(self, message: TelegramMessage) -> None:
@@ -1336,7 +1344,12 @@ class FlowCommands(SharedHelpers):
         )
 
     async def _handle_flow_bootstrap(
-        self, message: TelegramMessage, repo_root: Path, argv: list[str]
+        self,
+        message: TelegramMessage,
+        repo_root: Path,
+        argv: list[str],
+        *,
+        repo_id: Optional[str] = None,
     ) -> None:
         force_new = self._has_flag(argv, "--force-new") or self._has_flag(
             argv, "--force"
@@ -1401,6 +1414,7 @@ class FlowCommands(SharedHelpers):
                         f"Reusing ticket flow run {_code(active_run.id)} "
                         f"({active_run.status.value})."
                     ),
+                    repo_id=repo_id,
                 )
             finally:
                 store.close()
@@ -1560,6 +1574,7 @@ You are the first ticket in a new ticket_flow run.
                 record,
                 store,
                 prefix=f"Started ticket flow run {_code(flow_record.run_id)}.",
+                repo_id=repo_id,
             )
         finally:
             store.close()
