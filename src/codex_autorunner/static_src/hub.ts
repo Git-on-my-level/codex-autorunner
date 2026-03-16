@@ -318,6 +318,7 @@ let hubUsageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let hubUsageIndex: Record<string, HubUsageRepo> = {};
 let hubUsageUnmatched: HubUsageData["unmatched"] | null = null;
 let hubChannelEntries: HubChannelEntry[] = [];
+let hubOpenPanel: HubOpenPanel = loadHubOpenPanel();
 
 function saveSessionCache<T>(key: string, value: T): void {
   try {
@@ -2653,6 +2654,7 @@ function initHubRepoListControls(): void {
 }
 
 function applyHubPanelState(openPanel: HubOpenPanel): void {
+  hubOpenPanel = openPanel;
   const reposOpen = openPanel === "repos";
   const agentsOpen = openPanel === "agents";
   hubRepoPanelEl?.classList.toggle("hub-panel-collapsed", !reposOpen);
@@ -2668,14 +2670,13 @@ function applyHubPanelState(openPanel: HubOpenPanel): void {
 }
 
 function toggleHubPanel(panel: Exclude<HubOpenPanel, "none">): void {
-  const current = loadHubOpenPanel();
-  const next: HubOpenPanel = current === panel ? "none" : panel;
+  const next: HubOpenPanel = hubOpenPanel === panel ? "none" : panel;
   saveHubOpenPanel(next);
   applyHubPanelState(next);
 }
 
 function initHubPanelControls(): void {
-  applyHubPanelState(loadHubOpenPanel());
+  applyHubPanelState(hubOpenPanel);
   hubRepoPanelToggleEl?.addEventListener("click", () => {
     toggleHubPanel("repos");
   });
@@ -3477,6 +3478,7 @@ export const __hubTest = {
   renderRepos,
   renderAgentWorkspaces,
   applyHubPanelState,
+  toggleHubPanel,
   setHubChannelEntries(entries: HubChannelEntry[]): void {
     hubChannelEntries = Array.isArray(entries) ? [...entries] : [];
   },

@@ -240,6 +240,36 @@ test("hub panel state collapses repositories and agents independently with one e
   assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), true);
 });
 
+test("hub panel toggles keep working when localStorage is unavailable", () => {
+  const originalGetItem = globalThis.localStorage.getItem.bind(globalThis.localStorage);
+  const originalSetItem = globalThis.localStorage.setItem.bind(globalThis.localStorage);
+  globalThis.localStorage.getItem = () => {
+    throw new Error("blocked");
+  };
+  globalThis.localStorage.setItem = () => {
+    throw new Error("blocked");
+  };
+
+  try {
+    const repoPanel = document.getElementById("hub-repo-panel");
+    const agentPanel = document.getElementById("hub-agent-panel");
+
+    __hubTest.applyHubPanelState("none");
+    __hubTest.toggleHubPanel("agents");
+    assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
+    assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
+
+    __hubTest.toggleHubPanel("agents");
+    assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), true);
+
+    __hubTest.toggleHubPanel("repos");
+    assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), false);
+  } finally {
+    globalThis.localStorage.getItem = originalGetItem;
+    globalThis.localStorage.setItem = originalSetItem;
+  }
+});
+
 test("agent workspace cards render runtime, managed path, and lifecycle actions", () => {
   __hubTest.renderAgentWorkspaces([
     {

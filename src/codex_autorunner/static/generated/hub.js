@@ -68,6 +68,7 @@ let hubUsageSummaryRetryTimer = null;
 let hubUsageIndex = {};
 let hubUsageUnmatched = null;
 let hubChannelEntries = [];
+let hubOpenPanel = loadHubOpenPanel();
 function saveSessionCache(key, value) {
     try {
         const payload = { at: Date.now(), value };
@@ -2092,6 +2093,7 @@ function initHubRepoListControls() {
     }
 }
 function applyHubPanelState(openPanel) {
+    hubOpenPanel = openPanel;
     const reposOpen = openPanel === "repos";
     const agentsOpen = openPanel === "agents";
     hubRepoPanelEl?.classList.toggle("hub-panel-collapsed", !reposOpen);
@@ -2106,13 +2108,12 @@ function applyHubPanelState(openPanel) {
     }
 }
 function toggleHubPanel(panel) {
-    const current = loadHubOpenPanel();
-    const next = current === panel ? "none" : panel;
+    const next = hubOpenPanel === panel ? "none" : panel;
     saveHubOpenPanel(next);
     applyHubPanelState(next);
 }
 function initHubPanelControls() {
-    applyHubPanelState(loadHubOpenPanel());
+    applyHubPanelState(hubOpenPanel);
     hubRepoPanelToggleEl?.addEventListener("click", () => {
         toggleHubPanel("repos");
     });
@@ -2817,6 +2818,7 @@ export const __hubTest = {
     renderRepos,
     renderAgentWorkspaces,
     applyHubPanelState,
+    toggleHubPanel,
     setHubChannelEntries(entries) {
         hubChannelEntries = Array.isArray(entries) ? [...entries] : [];
     },
