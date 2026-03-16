@@ -111,7 +111,6 @@ const ticketListRefresh = createSmartRefresh({
             return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime, errors, diff].join("|");
         });
         return [
-            payload.ticket_dir ?? "",
             payload.activeTicket ?? "",
             payload.flowStatus ?? "",
             pieces.join(";"),
@@ -121,14 +120,12 @@ const ticketListRefresh = createSmartRefresh({
         const { tickets } = els();
         preserveScroll(tickets, () => {
             renderTickets({
-                ticket_dir: payload.ticket_dir,
                 tickets: payload.tickets,
             });
         }, { restoreOnNextFrame: true });
     },
     onSkip: (payload) => {
         ticketListCache = {
-            ticket_dir: payload.ticket_dir,
             tickets: payload.tickets,
         };
         updateScrollFade();
@@ -918,7 +915,7 @@ function renderTickets(data) {
     clearTicketDragState();
     const { tickets, dir } = els();
     if (dir)
-        dir.textContent = data?.ticket_dir || "–";
+        dir.textContent = ".codex-autorunner/tickets";
     if (!tickets)
         return;
     tickets.innerHTML = "";
@@ -1385,7 +1382,6 @@ async function loadTicketFiles(ctx) {
         await ticketListRefresh.refresh(async () => {
             const data = (await api("/api/flows/ticket_flow/tickets"));
             return {
-                ticket_dir: data.ticket_dir,
                 tickets: data.tickets,
                 lint_errors: data.lint_errors,
                 activeTicket: currentActiveTicket,

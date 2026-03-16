@@ -170,7 +170,6 @@ async def test_oversize_ticket_body_is_truncated(tmp_path: Path) -> None:
 
     config = TicketRunConfig(
         ticket_dir=Path(".codex-autorunner/tickets"),
-        runs_dir=Path(".codex-autorunner/runs"),
         prompt_max_bytes=1024,  # Small budget to force truncation
         auto_commit=False,
     )
@@ -207,7 +206,6 @@ async def test_oversize_agent_output_is_truncated(tmp_path: Path) -> None:
 
     config = TicketRunConfig(
         ticket_dir=Path(".codex-autorunner/tickets"),
-        runs_dir=Path(".codex-autorunner/runs"),
         prompt_max_bytes=2048,
         auto_commit=False,
     )
@@ -253,7 +251,6 @@ async def test_truncation_order_is_deterministic(tmp_path: Path) -> None:
 
     config = TicketRunConfig(
         ticket_dir=Path(".codex-autorunner/tickets"),
-        runs_dir=Path(".codex-autorunner/runs"),
         prompt_max_bytes=2048,
         auto_commit=False,
     )
@@ -296,7 +293,6 @@ async def test_ticket_frontmatter_preserved_on_truncation(tmp_path: Path) -> Non
 
     config = TicketRunConfig(
         ticket_dir=Path(".codex-autorunner/tickets"),
-        runs_dir=Path(".codex-autorunner/runs"),
         prompt_max_bytes=5000,  # Larger budget to fit header + ticket frontmatter
         auto_commit=False,
     )

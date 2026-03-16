@@ -104,9 +104,7 @@ def _latest_seq(history_dir: Path) -> int:
     return latest
 
 
-def _resolve_workspace_and_runs_dir(
-    repo_root: Path, record: FlowRunRecord
-) -> tuple[Path, Path]:
+def _resolve_workspace_root(repo_root: Path, record: FlowRunRecord) -> Path:
     input_data = record.input_data if isinstance(record.input_data, dict) else {}
     raw_workspace = input_data.get("workspace_root")
     if isinstance(raw_workspace, str) and raw_workspace.strip():
@@ -117,13 +115,7 @@ def _resolve_workspace_and_runs_dir(
             workspace_root = workspace_root.resolve()
     else:
         workspace_root = repo_root.resolve()
-    raw_runs_dir = input_data.get("runs_dir")
-    runs_dir = (
-        Path(raw_runs_dir)
-        if isinstance(raw_runs_dir, str) and raw_runs_dir.strip()
-        else Path(".codex-autorunner/runs")
-    )
-    return workspace_root, runs_dir
+    return workspace_root
 
 
 def _ensure_worker_crash_artifact(
@@ -266,13 +258,9 @@ def _ensure_crash_dispatch(
 ) -> None:
     if record.flow_type != "ticket_flow":
         return
-    workspace_root, runs_dir = _resolve_workspace_and_runs_dir(repo_root, record)
-    outbox_paths = resolve_outbox_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
-    )
-    reply_paths = resolve_reply_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
-    )
+    workspace_root = _resolve_workspace_root(repo_root, record)
+    outbox_paths = resolve_outbox_paths(workspace_root=workspace_root, run_id=record.id)
+    reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=record.id)
     ensure_outbox_dirs(outbox_paths)
     reply_paths.reply_history_dir.mkdir(parents=True, exist_ok=True)
     latest_dispatch = _latest_seq(outbox_paths.dispatch_history_dir)

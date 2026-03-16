@@ -290,7 +290,6 @@ def test_ticket_runner_workspace_doc_injection(hub_env, repo: Path):
     # Initialize runner
     config = TicketRunConfig(
         ticket_dir=".codex-autorunner/tickets",
-        runs_dir=".codex-autorunner/runs",
     )
     runner = TicketRunner(
         workspace_root=repo,
@@ -356,7 +355,6 @@ def test_ticket_runner_workspace_doc_injection_missing(hub_env, repo: Path):
     # Initialize runner
     config = TicketRunConfig(
         ticket_dir=".codex-autorunner/tickets",
-        runs_dir=".codex-autorunner/runs",
     )
     runner = TicketRunner(
         workspace_root=repo,

@@ -15,12 +15,7 @@ def resolve_outbox_for_record(repo_root: Path, record: Any) -> Any:
 
     input_data = dict(getattr(record, "input_data", {}) or {})
     workspace_root = Path(input_data.get("workspace_root") or repo_root)
-    runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
-    return resolve_outbox_paths(
-        workspace_root=workspace_root,
-        runs_dir=runs_dir,
-        run_id=record.id,
-    )
+    return resolve_outbox_paths(workspace_root=workspace_root, run_id=record.id)
 
 
 def get_diff_stats_by_dispatch_seq(

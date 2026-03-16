@@ -1129,10 +1129,7 @@ You are the first ticket in a new ticket_flow run.
                     "diff_stats": _merge_ticket_diff_stats(diff_refs, diff_by_ref),
                 }
             )
-        return {
-            "ticket_dir": safe_relpath(ticket_dir, repo_root),
-            "tickets": tickets,
-        }
+        return {"tickets": tickets}
 
     @router.get("/ticket_flow/tickets/{index}", response_model=TicketResponse)
     async def get_ticket(index: int):

@@ -43,12 +43,7 @@ def _resolve_outbox_for_record(record: Any, repo_root: Path):
 
     input_data = dict(getattr(record, "input_data", {}) or {})
     workspace_root = Path(input_data.get("workspace_root") or repo_root)
-    runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
-    return resolve_outbox_paths(
-        workspace_root=workspace_root,
-        runs_dir=runs_dir,
-        run_id=record.id,
-    )
+    return resolve_outbox_paths(workspace_root=workspace_root, run_id=record.id)
 
 
 def build_status_history_routes(
@@ -329,12 +324,9 @@ def build_status_history_routes(
 
         input_data = dict(record.input_data or {})
         workspace_root = Path(input_data.get("workspace_root") or repo_root)
-        runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
         from .....tickets.replies import resolve_reply_paths
 
-        reply_paths = resolve_reply_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-        )
+        reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
         target = reply_paths.reply_history_dir / seq / filename
         if not target.exists() or not target.is_file():
             raise HTTPException(status_code=404, detail="File not found")

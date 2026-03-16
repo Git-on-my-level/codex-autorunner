@@ -223,15 +223,8 @@ def archive_flow_run_artifacts(
                 "Can only archive completed/stopped/failed runs (use --force for paused/stopping)."
             )
 
-        runs_dir_raw = record.input_data.get("runs_dir")
-        runs_dir = (
-            Path(runs_dir_raw)
-            if isinstance(runs_dir_raw, str) and runs_dir_raw
-            else Path(".codex-autorunner/runs")
-        )
         run_paths = resolve_outbox_paths(
             workspace_root=repo_root,
-            runs_dir=runs_dir,
             run_id=record.id,
         )
         run_dir = run_paths.run_dir

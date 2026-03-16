@@ -31,9 +31,8 @@ from ..app_state import (
 def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[dict]:
     try:
         workspace_root = Path(input_data.get("workspace_root") or repo_root)
-        runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
         outbox_paths = resolve_outbox_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
+            workspace_root=workspace_root, run_id=run_id
         )
         history_dir = outbox_paths.dispatch_history_dir
         if not history_dir.exists() or not history_dir.is_dir():

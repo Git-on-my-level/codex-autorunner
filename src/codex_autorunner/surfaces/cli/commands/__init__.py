@@ -11,7 +11,6 @@ from .templates import register_templates_commands
 from .utils import (
     apply_agent_override,  # noqa: F401
     normalize_ticket_suffix,  # noqa: F401
-    resolve_ticket_dir,  # noqa: F401
     ticket_filename,  # noqa: F401
 )
 from .worktree import register_worktree_commands
@@ -30,6 +29,5 @@ __all__ = [
     "register_worktree_commands",
     "apply_agent_override",
     "normalize_ticket_suffix",
-    "resolve_ticket_dir",
     "ticket_filename",
 ]

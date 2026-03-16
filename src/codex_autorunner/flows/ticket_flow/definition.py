@@ -53,13 +53,7 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
             repo_root = find_repo_root()
             workspace_root = repo_root
 
-        ticket_dir = Path(input_data.get("ticket_dir") or ".codex-autorunner/tickets")
-        if not ticket_dir.is_absolute():
-            ticket_dir = (workspace_root / ticket_dir).resolve()
-
-        runs_dir = Path(input_data.get("runs_dir") or ".codex-autorunner/runs")
-        if not runs_dir.is_absolute():
-            runs_dir = (workspace_root / runs_dir).resolve()
+        ticket_dir = (workspace_root / ".codex-autorunner" / "tickets").resolve()
         max_total_turns = int(
             input_data.get("max_total_turns") or DEFAULT_MAX_TOTAL_TURNS
         )
@@ -81,7 +75,6 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
             run_id=str(record.id),
             config=TicketRunConfig(
                 ticket_dir=ticket_dir,
-                runs_dir=runs_dir,
                 max_total_turns=max_total_turns,
                 max_lint_retries=max_lint_retries,
                 max_commit_retries=max_commit_retries,
@@ -118,8 +111,6 @@ def build_ticket_flow_definition(*, agent_pool: AgentPool) -> FlowDefinition:
             "type": "object",
             "properties": {
                 "workspace_root": {"type": "string"},
-                "ticket_dir": {"type": "string"},
-                "runs_dir": {"type": "string"},
                 "max_total_turns": {"type": "integer"},
                 "max_lint_retries": {"type": "integer"},
                 "max_commit_retries": {"type": "integer"},

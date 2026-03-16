@@ -422,9 +422,6 @@ class TemplateFetchResponse(ResponseModel):
 
 class TemplateApplyRequest(Payload):
     template: str
-    ticket_dir: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("ticket_dir", "ticketDir")
-    )
     at: Optional[int] = None
     next_index: bool = Field(
         default=True, validation_alias=AliasChoices("next_index", "nextIndex")

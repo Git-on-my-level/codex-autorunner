@@ -8171,15 +8171,8 @@ class DiscordBotService:
         record: FlowRunRecord,
         text: str,
     ) -> Path:
-        runs_dir_raw = record.input_data.get("runs_dir")
-        runs_dir = (
-            Path(runs_dir_raw)
-            if isinstance(runs_dir_raw, str) and runs_dir_raw
-            else Path(".codex-autorunner/runs")
-        )
         run_paths = resolve_outbox_paths(
             workspace_root=workspace_root,
-            runs_dir=runs_dir,
             run_id=record.id,
         )
         try:

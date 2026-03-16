@@ -41,10 +41,7 @@ def _build_force_attestation(
 
 def _resolve_run_paths(record: FlowRunRecord, repo_root: Path):
     workspace_root = Path(record.input_data.get("workspace_root") or repo_root)
-    runs_dir = Path(record.input_data.get("runs_dir") or ".codex-autorunner/runs")
-    return resolve_outbox_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
-    )
+    return resolve_outbox_paths(workspace_root=workspace_root, run_id=record.id)
 
 
 def _flow_timestamp(record: FlowRunRecord) -> Optional[datetime]:

@@ -79,13 +79,9 @@ async def _write_reply(repo_root: Path, run_id: str, reply_body: str) -> bool:
     from ..tickets.replies import ensure_reply_dirs, resolve_reply_paths
 
     try:
-        config = load_repo_config(repo_root)
-        runs_dir = Path(config.raw.get("runs_dir") or ".codex-autorunner/runs")
         workspace_root = repo_root
 
-        reply_paths = resolve_reply_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-        )
+        reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
         ensure_reply_dirs(reply_paths)
 
         reply_history_dir = reply_paths.reply_history_dir

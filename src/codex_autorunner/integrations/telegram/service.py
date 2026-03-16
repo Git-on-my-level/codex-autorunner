@@ -1070,15 +1070,8 @@ class TelegramBotService(
         files: Optional[list[tuple[str, bytes]]] = None,
     ) -> tuple[bool, str]:
         try:
-            input_data = dict(run_record.input_data or {})
-            runs_dir_raw = input_data.get("runs_dir")
-            runs_dir = (
-                Path(runs_dir_raw)
-                if isinstance(runs_dir_raw, str) and runs_dir_raw
-                else Path(".codex-autorunner/runs")
-            )
             reply_paths = resolve_reply_paths(
-                workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
+                workspace_root=workspace_root, run_id=run_id
             )
             ensure_reply_dirs(reply_paths)
 

@@ -43,7 +43,6 @@ async def test_runner_clears_stale_pause_and_runs(tmp_path: Path) -> None:
         run_id="run-1",
         config=TicketRunConfig(
             ticket_dir=Path(".codex-autorunner/tickets"),
-            runs_dir=Path(".codex-autorunner/runs"),
             auto_commit=False,
         ),
         agent_pool=FakeAgentPool(ticket_path),

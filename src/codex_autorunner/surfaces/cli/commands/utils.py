@@ -339,14 +339,6 @@ def build_server_url(
     return f"http://{config.server_host}:{config.server_port}{base_path}{path}"
 
 
-def resolve_ticket_dir(repo_root: Path, ticket_dir: Optional[Path]) -> Path:
-    if ticket_dir is None:
-        return repo_root / ".codex-autorunner" / "tickets"
-    if ticket_dir.is_absolute():
-        return ticket_dir
-    return repo_root / ticket_dir
-
-
 def collect_ticket_indices(ticket_dir: Path) -> list[int]:
     from ....tickets.lint import parse_ticket_index
 

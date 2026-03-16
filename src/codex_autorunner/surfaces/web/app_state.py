@@ -243,9 +243,7 @@ def _save_hub_inbox_dismissals(
     atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def _resolve_workspace_and_runs(
-    record_input: dict[str, Any], repo_root: Path
-) -> tuple[Path, Path]:
+def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Path:
     workspace_raw = record_input.get("workspace_root")
     workspace_root = Path(workspace_raw) if workspace_raw else repo_root
     if not workspace_root.is_absolute():
@@ -258,21 +256,15 @@ def _resolve_workspace_and_runs(
         or str(workspace_root).startswith(str(resolved_repo) + os.sep)
     ):
         raise ValueError(f"workspace_root escapes repo boundary: {workspace_root}")
-    runs_raw = record_input.get("runs_dir") or ".codex-autorunner/runs"
-    runs_dir = Path(runs_raw)
-    if not runs_dir.is_absolute():
-        runs_dir = (workspace_root / runs_dir).resolve()
-    return workspace_root, runs_dir
+    return workspace_root
 
 
 def _latest_reply_history_seq(
     repo_root: Path, run_id: str, record_input: dict[str, Any]
 ) -> int:
-    workspace_root, runs_dir = _resolve_workspace_and_runs(record_input, repo_root)
+    workspace_root = _resolve_workspace_root(record_input, repo_root)
 
-    reply_paths = resolve_reply_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-    )
+    reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
     history_dir = reply_paths.reply_history_dir
     if not history_dir.exists() or not history_dir.is_dir():
         return 0

@@ -158,7 +158,7 @@ class TicketRunner:
 
     This runner is intentionally small and file-backed:
     - Tickets are markdown files under `config.ticket_dir`.
-    - User messages + optional attachments are written to an outbox under `config.runs_dir`.
+    - User messages + optional attachments are written under `.codex-autorunner/runs/<run_id>/`.
     - The orchestrator is stateless aside from the `state` dict passed into step().
     """
 
@@ -217,12 +217,9 @@ class TicketRunner:
             )
 
         ticket_dir = self._workspace_root / self._config.ticket_dir
-        runs_dir = self._config.runs_dir
-
         # Ensure outbox dirs exist.
         outbox_paths = resolve_outbox_paths(
             workspace_root=self._workspace_root,
-            runs_dir=runs_dir,
             run_id=self._run_id,
         )
         ensure_outbox_dirs(outbox_paths)
@@ -230,7 +227,6 @@ class TicketRunner:
         # Ensure reply inbox dirs exist (human -> agent messages).
         reply_paths = resolve_reply_paths(
             workspace_root=self._workspace_root,
-            runs_dir=runs_dir,
             run_id=self._run_id,
         )
         ensure_reply_dirs(reply_paths)

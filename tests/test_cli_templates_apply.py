@@ -258,9 +258,7 @@ def test_templates_apply_without_provenance_no_metadata(
     assert frontmatter["done"] is False
 
 
-def test_template_apply_alias_with_out_writes_to_requested_directory(
-    hub_env, tmp_path: Path
-) -> None:
+def test_template_apply_rejects_removed_out_alias(hub_env, tmp_path: Path) -> None:
     repo_path = tmp_path / "templates_repo"
     branch = _init_repo(repo_path)
     content = "---\nagent: codex\ndone: false\n---\n\n# Template\nHello\n"
@@ -279,7 +277,6 @@ def test_template_apply_alias_with_out_writes_to_requested_directory(
         ],
     )
 
-    out_dir = hub_env.repo_root / ".codex-autorunner" / "tickets-out"
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -290,12 +287,27 @@ def test_template_apply_alias_with_out_writes_to_requested_directory(
             "--repo",
             str(hub_env.repo_root),
             "--out",
-            str(out_dir),
+            str(hub_env.repo_root / ".codex-autorunner" / "tickets-out"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option: --out" in result.output
+
+    created_path = hub_env.repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
+    assert not created_path.exists()
+    result = runner.invoke(
+        app,
+        [
+            "template",
+            "apply",
+            "local:tickets/TICKET-REVIEW.md",
+            "--repo",
+            str(hub_env.repo_root),
         ],
     )
 
     assert result.exit_code == 0
-    created_path = out_dir / "TICKET-001.md"
     assert created_path.exists()
     frontmatter, _body = parse_markdown_frontmatter(
         created_path.read_text(encoding="utf-8")

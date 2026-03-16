@@ -27,7 +27,6 @@ def test_ticket_flow_prompt_boundaries(tmp_path: Path) -> None:
         run_id="run-1",
         config=TicketRunConfig(
             ticket_dir=Path(".codex-autorunner/tickets"),
-            runs_dir=Path(".codex-autorunner/runs"),
             auto_commit=False,
         ),
         agent_pool=MagicMock(),

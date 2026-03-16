@@ -145,7 +145,6 @@ function diffStatsSignature(
 }
 
 type TicketListPayload = {
-  ticket_dir?: string;
   tickets?: TicketFile[];
   lint_errors?: string[];
   activeTicket?: string | null;
@@ -181,7 +180,7 @@ let dispatchHistoryRunId: string | null = null;
 let eventSourceRetryAttempt = 0;
 let eventSourceRetryTimerId: ReturnType<typeof setTimeout> | null = null;
 const lastSeenSeqByRun: Record<string, number> = {};
-let ticketListCache: { ticket_dir?: string; tickets?: TicketFile[] } | null = null;
+let ticketListCache: { tickets?: TicketFile[] } | null = null;
 let ticketFlowLoaded = false;
 let loadTicketFlowRequestId = 0;
 
@@ -218,7 +217,6 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
       return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime, errors, diff].join("|");
     });
     return [
-      payload.ticket_dir ?? "",
       payload.activeTicket ?? "",
       payload.flowStatus ?? "",
       pieces.join(";"),
@@ -230,7 +228,6 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
       tickets,
       () => {
         renderTickets({
-          ticket_dir: payload.ticket_dir,
           tickets: payload.tickets,
         });
       },
@@ -239,7 +236,6 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
   },
   onSkip: (payload) => {
     ticketListCache = {
-      ticket_dir: payload.ticket_dir,
       tickets: payload.tickets,
     };
     updateScrollFade();
@@ -1143,11 +1139,11 @@ function truncate(text: string, max = 100): string {
   return `${text.slice(0, max).trim()}…`;
 }
 
-function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint_errors?: string[] } | null): void {
+function renderTickets(data: { tickets?: TicketFile[]; lint_errors?: string[] } | null): void {
   ticketListCache = data;
   clearTicketDragState();
   const { tickets, dir } = els();
-  if (dir) dir.textContent = data?.ticket_dir || "–";
+  if (dir) dir.textContent = ".codex-autorunner/tickets";
   if (!tickets) return;
   tickets.innerHTML = "";
 
@@ -1663,12 +1659,10 @@ async function loadTicketFiles(ctx?: RefreshContext): Promise<void> {
     await ticketListRefresh.refresh(
       async () => {
         const data = (await api("/api/flows/ticket_flow/tickets")) as {
-          ticket_dir?: string;
           tickets?: TicketFile[];
           lint_errors?: string[];
         };
         return {
-          ticket_dir: data.ticket_dir,
           tickets: data.tickets,
           lint_errors: data.lint_errors,
           activeTicket: currentActiveTicket,

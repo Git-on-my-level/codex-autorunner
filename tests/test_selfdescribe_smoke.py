@@ -3,7 +3,7 @@
 This test validates:
 - car describe --json parses correctly
 - Template listing works
-- Template can be applied to a temp directory
+- Template can be applied to the repo ticket queue
 - Context injection works in ticket frontmatter
 """
 
@@ -145,8 +145,9 @@ def test_selfdescribe_smoke(hub_env, tmp_path: Path):
     except Exception as e:
         add_check("templates list works", False, str(e))
 
-    temp_ticket_dir = tmp_path / "smoke_tickets"
-    temp_ticket_dir.mkdir(exist_ok=True)
+    ticket_dir = repo / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    before_paths = set(ticket_dir.glob("TICKET-*.md"))
     template_ref = discovered_template_ref or "blessed:snippets/ticket_skeleton.md@main"
 
     try:
@@ -156,15 +157,16 @@ def test_selfdescribe_smoke(hub_env, tmp_path: Path):
                 "templates",
                 "apply",
                 template_ref,
-                "--ticket-dir",
-                str(temp_ticket_dir),
                 "--next",
                 "--repo",
                 str(repo),
             ],
         )
         if result.exit_code == 0:
-            ticket_files = list(temp_ticket_dir.glob("TICKET-*.md"))
+            ticket_files = sorted(
+                set(ticket_dir.glob("TICKET-*.md")) - before_paths,
+                key=lambda path: path.name,
+            )
             add_check(
                 "template apply works",
                 len(ticket_files) > 0,

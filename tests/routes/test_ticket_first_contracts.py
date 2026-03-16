@@ -43,7 +43,6 @@ def test_ticket_list_endpoint_returns_empty_list_when_no_tickets(tmp_path, monke
         assert resp.status_code == 200
         payload = resp.json()
         assert payload["tickets"] == []
-        assert payload["ticket_dir"].endswith(".codex-autorunner/tickets")
 
 
 def test_repo_health_is_ok_when_tickets_dir_exists(tmp_path):

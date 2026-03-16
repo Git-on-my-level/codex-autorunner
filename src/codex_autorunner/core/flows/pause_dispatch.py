@@ -141,18 +141,9 @@ def list_unseen_ticket_flow_dispatches(
         if latest is None:
             return []
 
-    runs_dir_raw = latest.input_data.get("runs_dir")
-    runs_dir = (
-        Path(runs_dir_raw)
-        if isinstance(runs_dir_raw, str) and runs_dir_raw
-        else Path(".codex-autorunner/runs")
-    )
-
     from ...tickets.outbox import parse_dispatch, resolve_outbox_paths
 
-    paths = resolve_outbox_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
-    )
+    paths = resolve_outbox_paths(workspace_root=workspace_root, run_id=latest.id)
     seq_dirs = list(reversed(_iter_dispatch_history_dirs(paths.dispatch_history_dir)))
 
     last_seen_seq: Optional[int] = None
@@ -247,18 +238,9 @@ def load_latest_paused_ticket_flow_dispatch(
             return None
         latest = runs[0]
 
-    runs_dir_raw = latest.input_data.get("runs_dir")
-    runs_dir = (
-        Path(runs_dir_raw)
-        if isinstance(runs_dir_raw, str) and runs_dir_raw
-        else Path(".codex-autorunner/runs")
-    )
-
     from ...tickets.outbox import resolve_outbox_paths
 
-    paths = resolve_outbox_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=latest.id
-    )
+    paths = resolve_outbox_paths(workspace_root=workspace_root, run_id=latest.id)
     history_dir = paths.dispatch_history_dir
     seq_dirs = _iter_dispatch_history_dirs(history_dir)
     if not seq_dirs:

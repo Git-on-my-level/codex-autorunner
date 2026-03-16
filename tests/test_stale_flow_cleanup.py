@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.pma_context import _gather_inbox
@@ -11,6 +12,7 @@ from codex_autorunner.surfaces.cli.cli import _stale_terminal_runs
 
 
 def _create_flow_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
+    seed_hub_files(repo_root, force=True)
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with FlowStore(db_path) as store:
@@ -20,7 +22,6 @@ def _create_flow_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> Non
             "ticket_flow",
             input_data={
                 "workspace_root": str(repo_root),
-                "runs_dir": ".codex-autorunner/runs",
             },
             state={},
             metadata={},
