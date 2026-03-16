@@ -1537,7 +1537,7 @@ def test_pma_files_invalid_box(hub_env) -> None:
     assert resp.status_code == 400
 
 
-def test_pma_files_list_includes_legacy_sources(hub_env) -> None:
+def test_pma_files_list_ignores_legacy_sources(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -1562,13 +1562,21 @@ def test_pma_files_list_includes_legacy_sources(hub_env) -> None:
     resp = client.get("/hub/pma/files")
     assert resp.status_code == 200
     payload = resp.json()
-    entries = {item["name"]: item for item in payload["inbox"]}
-    assert entries["primary.txt"]["source"] == "filebox"
-    assert entries["legacy-pma.txt"]["source"] == "pma"
-    assert entries["legacy-telegram.txt"]["source"] == "telegram"
+    assert payload["inbox"] == [
+        {
+            "box": "inbox",
+            "item_type": "pma_file",
+            "modified_at": payload["inbox"][0]["modified_at"],
+            "name": "primary.txt",
+            "next_action": "process_uploaded_file",
+            "size": 7,
+            "source": "filebox",
+            "url": payload["inbox"][0]["url"],
+        }
+    ]
 
 
-def test_pma_files_download_resolves_legacy_path(hub_env) -> None:
+def test_pma_files_download_rejects_legacy_path(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -1579,8 +1587,7 @@ def test_pma_files_download_resolves_legacy_path(hub_env) -> None:
     (legacy_pma / "legacy.txt").write_bytes(b"legacy")
 
     resp = client.get("/hub/pma/files/inbox/legacy.txt")
-    assert resp.status_code == 200
-    assert resp.content == b"legacy"
+    assert resp.status_code == 404
 
 
 def test_pma_files_outbox(hub_env) -> None:
@@ -1640,7 +1647,7 @@ def test_pma_files_delete_removes_only_resolved_file(hub_env) -> None:
     assert (legacy_telegram / "shared.txt").exists()
 
 
-def test_pma_files_bulk_delete_removes_all_visible_entries(hub_env) -> None:
+def test_pma_files_bulk_delete_removes_only_canonical_entries(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -1668,11 +1675,11 @@ def test_pma_files_bulk_delete_removes_all_visible_entries(hub_env) -> None:
     assert resp.json() == {"status": "ok"}
     assert (client.get("/hub/pma/files").json()["outbox"]) == []
     assert not (filebox.outbox_dir(hub_env.hub_root) / "a.txt").exists()
-    assert not (legacy_pma / "b.txt").exists()
-    assert not (legacy_telegram_pending / "c.txt").exists()
+    assert (legacy_pma / "b.txt").exists()
+    assert (legacy_telegram_pending / "c.txt").exists()
 
 
-def test_pma_files_bulk_delete_preserves_hidden_legacy_duplicate(hub_env) -> None:
+def test_pma_files_bulk_delete_leaves_legacy_duplicates_hidden(hub_env) -> None:
     seed_hub_files(hub_env.hub_root, force=True)
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -1690,8 +1697,7 @@ def test_pma_files_bulk_delete_preserves_hidden_legacy_duplicate(hub_env) -> Non
     assert not (filebox.outbox_dir(hub_env.hub_root) / "shared.txt").exists()
     assert (legacy_pma / "shared.txt").exists()
     payload = client.get("/hub/pma/files").json()
-    assert payload["outbox"][0]["name"] == "shared.txt"
-    assert payload["outbox"][0]["source"] == "pma"
+    assert payload["outbox"] == []
 
 
 def test_pma_files_list_waits_for_bulk_delete_to_finish(hub_env, monkeypatch) -> None:

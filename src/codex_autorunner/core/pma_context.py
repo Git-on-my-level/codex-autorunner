@@ -486,7 +486,7 @@ def _snapshot_pma_files(
     pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
     pma_files_detail: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
     try:
-        filebox = list_filebox(hub_root, include_legacy=True)
+        filebox = list_filebox(hub_root)
         for box in ("inbox", "outbox"):
             entries = filebox.get(box) or []
             names = sorted([e.name for e in entries])
@@ -1658,8 +1658,7 @@ def format_pma_discoverability_preamble(
         "Automation quickstart: `/hub/pma/subscriptions` (event triggers) and `/hub/pma/timers` (one-shot/watchdog).\n"
         'Automation recipes: `.codex-autorunner/pma/docs/ABOUT_CAR.md` -> "PMA automation wake-ups".\n'
         "To send a file to the user, write it to `.codex-autorunner/filebox/outbox/`.\n"
-        "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n"
-        "Note: Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` redirect to filebox.\n\n"
+        "User uploaded files are in `.codex-autorunner/filebox/inbox/`.\n\n"
     )
 
     resolved_docs = pma_docs

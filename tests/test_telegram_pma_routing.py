@@ -188,8 +188,8 @@ async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
     prompt_path = hub_root / ".codex-autorunner" / "pma" / "prompt.md"
     prompt_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_path.write_text("PMA system prompt", encoding="utf-8")
-    inbox_dir = prompt_path.parent / "inbox"
-    outbox_dir = prompt_path.parent / "outbox"
+    inbox_dir = hub_root / ".codex-autorunner" / "filebox" / "inbox"
+    outbox_dir = hub_root / ".codex-autorunner" / "filebox" / "outbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     outbox_dir.mkdir(parents=True, exist_ok=True)
     (inbox_dir / "input.txt").write_text("inbox", encoding="utf-8")

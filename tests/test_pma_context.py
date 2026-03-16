@@ -1104,8 +1104,6 @@ def test_format_pma_prompt_includes_filebox_paths(tmp_path: Path) -> None:
 
     assert ".codex-autorunner/filebox/outbox/" in result
     assert ".codex-autorunner/filebox/inbox/" in result
-    assert "Legacy paths" in result
-    assert ".codex-autorunner/pma/inbox/" in result
 
 
 def test_render_hub_snapshot_includes_all_next_action_types(tmp_path: Path) -> None:

@@ -184,9 +184,7 @@ def build_history_files_docs_router(
         hub_root = request.app.state.config.root
         result: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
         async with await _get_pma_lock():
-            listing = await asyncio.to_thread(
-                filebox.list_filebox, hub_root, include_legacy=True
-            )
+            listing = await asyncio.to_thread(filebox.list_filebox, hub_root)
         for box in ("inbox", "outbox"):
             entries = listing.get(box, [])
             result[box] = [
@@ -316,9 +314,7 @@ def build_history_files_docs_router(
         hub_root = request.app.state.config.root
         deleted_files: list[str] = []
         async with await _get_pma_lock():
-            entries = await asyncio.to_thread(
-                filebox.list_filebox, hub_root, include_legacy=True
-            )
+            entries = await asyncio.to_thread(filebox.list_filebox, hub_root)
             for entry in entries.get(box, []):
                 try:
                     await asyncio.to_thread(entry.path.unlink)

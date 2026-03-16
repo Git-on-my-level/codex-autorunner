@@ -491,7 +491,6 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 
 - User uploads arrive in `.codex-autorunner/filebox/inbox/`.
 - Send user-facing files by writing to `.codex-autorunner/filebox/outbox/`.
-- Legacy `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` paths redirect to filebox.
 
 ## PMA dispatches (user attention)
 
