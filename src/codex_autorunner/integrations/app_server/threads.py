@@ -259,7 +259,9 @@ class AppServerThreadRegistry:
             self._save_unlocked(threads)
             return True
 
-    def reset_threads_by_prefix(self, prefix: str) -> list[str]:
+    def reset_threads_by_prefix(
+        self, prefix: str, *, exclude_prefixes: tuple[str, ...] = ()
+    ) -> list[str]:
         """
         Reset all threads whose keys start with the given prefix.
 
@@ -267,6 +269,9 @@ class AppServerThreadRegistry:
 
         Args:
             prefix: Key prefix to match (e.g., "pma." or "pma.opencode.")
+            exclude_prefixes: Optional prefixes to skip even if they start with
+                ``prefix``. Used to keep nested families like ``pma.opencode.``
+                from being cleared by the broader ``pma.`` reset path.
 
         Returns:
             List of keys that were cleared.
@@ -274,7 +279,15 @@ class AppServerThreadRegistry:
         cleared_keys = []
         with file_lock(self._lock_path()):
             threads = self._load_unlocked()
-            keys_to_remove = [k for k in threads if k.startswith(prefix)]
+            keys_to_remove = [
+                key
+                for key in threads
+                if key.startswith(prefix)
+                and not any(
+                    key == excluded.rstrip(".") or key.startswith(excluded)
+                    for excluded in exclude_prefixes
+                )
+            ]
             for key in keys_to_remove:
                 threads.pop(key, None)
                 cleared_keys.append(key)

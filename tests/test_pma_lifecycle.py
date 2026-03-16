@@ -278,3 +278,34 @@ async def test_lifecycle_router_reset_all_clears_both_agent_scoped_keys(
     assert registry.get_thread_id("pma.-1001.1") is None
     assert registry.get_thread_id("pma.opencode") is None
     assert registry.get_thread_id("pma.opencode.-1001.2") is None
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_router_codex_reset_preserves_opencode_scoped_keys(
+    temp_hub_root: Path,
+) -> None:
+    """Codex PMA reset must not clear active opencode topic mappings."""
+    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+
+    registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
+    registry = AppServerThreadRegistry(registry_path)
+
+    registry.set_thread_id("pma", "global-codex-id")
+    registry.set_thread_id("pma.-1001.1", "topic-codex-1-id")
+    registry.set_thread_id("pma.opencode", "global-opencode-id")
+    registry.set_thread_id("pma.opencode.-1001.2", "topic-opencode-2-id")
+
+    router = PmaLifecycleRouter(temp_hub_root)
+    result = await router.reset(agent="codex")
+
+    assert result.status == "ok"
+    cleared = result.details.get("cleared_threads", [])
+    assert "pma" in cleared
+    assert "pma.-1001.1" in cleared
+    assert "pma.opencode" not in cleared
+    assert "pma.opencode.-1001.2" not in cleared
+
+    assert registry.get_thread_id("pma") is None
+    assert registry.get_thread_id("pma.-1001.1") is None
+    assert registry.get_thread_id("pma.opencode") == "global-opencode-id"
+    assert registry.get_thread_id("pma.opencode.-1001.2") == "topic-opencode-2-id"

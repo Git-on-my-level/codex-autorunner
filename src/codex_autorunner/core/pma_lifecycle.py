@@ -115,7 +115,17 @@ class PmaLifecycleRouter:
             cleared_keys = []
             prefixes = pma_prefixes_for_reset(agent)
             for prefix in prefixes:
-                cleared_keys.extend(registry.reset_threads_by_prefix(prefix))
+                exclude_prefixes = (
+                    (pma_prefixes_for_reset("opencode")[0],)
+                    if prefix == pma_prefixes_for_reset("codex")[0]
+                    and agent not in ("all", None, "")
+                    else ()
+                )
+                cleared_keys.extend(
+                    registry.reset_threads_by_prefix(
+                        prefix, exclude_prefixes=exclude_prefixes
+                    )
+                )
                 base_key = prefix.rstrip(".")
                 if registry.reset_thread(base_key):
                     cleared_keys.append(base_key)
@@ -224,7 +234,17 @@ class PmaLifecycleRouter:
             cleared_keys = []
             prefixes = pma_prefixes_for_reset(agent)
             for prefix in prefixes:
-                cleared_keys.extend(registry.reset_threads_by_prefix(prefix))
+                exclude_prefixes = (
+                    (pma_prefixes_for_reset("opencode")[0],)
+                    if prefix == pma_prefixes_for_reset("codex")[0]
+                    and agent not in ("all", None, "")
+                    else ()
+                )
+                cleared_keys.extend(
+                    registry.reset_threads_by_prefix(
+                        prefix, exclude_prefixes=exclude_prefixes
+                    )
+                )
                 base_key = prefix.rstrip(".")
                 if registry.reset_thread(base_key):
                     cleared_keys.append(base_key)

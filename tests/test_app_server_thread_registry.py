@@ -361,6 +361,22 @@ class TestResetThreadsByPrefix:
         assert registry.get_thread_id("pma.opencode.-1001.42") is None
         assert registry.get_thread_id("pma") == "global-codex"
 
+    def test_can_exclude_nested_prefix_families(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+
+        registry.set_thread_id("pma.-1001.42", "topic-codex-42")
+        registry.set_thread_id("pma.opencode.-1001.42", "topic-opencode-42")
+
+        cleared = registry.reset_threads_by_prefix(
+            PMA_PREFIX, exclude_prefixes=(PMA_OPENCODE_PREFIX,)
+        )
+
+        assert "pma.-1001.42" in cleared
+        assert "pma.opencode.-1001.42" not in cleared
+        assert registry.get_thread_id("pma.-1001.42") is None
+        assert registry.get_thread_id("pma.opencode.-1001.42") == "topic-opencode-42"
+
     def test_returns_empty_list_when_no_matches(self, tmp_path: Path) -> None:
         path = tmp_path / "app_server_threads.json"
         registry = AppServerThreadRegistry(path)
