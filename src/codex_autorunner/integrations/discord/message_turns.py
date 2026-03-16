@@ -399,7 +399,10 @@ async def handle_message_event(
             return DiscordMessageTurnResult(final_message="")
 
         if not pma_enabled:
-            prompt_text, injected = maybe_inject_car_awareness(prompt_text)
+            prompt_text, injected = maybe_inject_car_awareness(
+                prompt_text,
+                declared_profile="car_ambient",
+            )
             if injected:
                 log_event_fn(
                     service._logger,

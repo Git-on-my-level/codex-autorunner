@@ -8,6 +8,10 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from .....agents.registry import get_registered_agents
+from .....core.car_context import (
+    default_managed_thread_context_profile,
+    normalize_car_context_profile,
+)
 from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
@@ -166,6 +170,15 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
     payload["accepts_messages"] = lifecycle_status == "active"
     payload["resource_kind"] = normalize_optional_text(thread.get("resource_kind"))
     payload["resource_id"] = normalize_optional_text(thread.get("resource_id"))
+    metadata = thread.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    payload["context_profile"] = normalize_car_context_profile(
+        metadata.get("context_profile"),
+        default=default_managed_thread_context_profile(
+            resource_kind=payload["resource_kind"]
+        ),
+    )
     payload.update(
         _build_operator_status_fields(
             normalized_status=payload["normalized_status"],
@@ -195,6 +208,12 @@ def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
         "last_turn_id": thread.last_execution_id,
         "last_message_preview": thread.last_message_preview,
         "compact_seed": thread.compact_seed,
+        "context_profile": normalize_car_context_profile(
+            thread.context_profile,
+            default=default_managed_thread_context_profile(
+                resource_kind=thread.resource_kind
+            ),
+        ),
         "accepts_messages": thread.lifecycle_status == "active",
     }
     payload.update(
@@ -608,6 +627,12 @@ def build_managed_thread_crud_routes(
                     "the runtime"
                 ),
             )
+        context_profile = normalize_car_context_profile(
+            payload.context_profile,
+            default=default_managed_thread_context_profile(resource_kind=resource_kind),
+        )
+        if context_profile is None:
+            raise HTTPException(status_code=400, detail="context_profile is invalid")
 
         service = build_managed_thread_orchestration_service(request)
         try:
@@ -619,6 +644,7 @@ def build_managed_thread_crud_routes(
                 resource_id=resource_id,
                 display_name=normalize_optional_text(payload.name),
                 backend_thread_id=normalize_optional_text(payload.backend_thread_id),
+                metadata={"context_profile": context_profile},
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

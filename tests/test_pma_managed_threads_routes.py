@@ -52,6 +52,7 @@ def test_create_managed_thread_with_repo_id(hub_env) -> None:
     assert thread["lifecycle_status"] == "active"
     assert thread["status_reason"] == "thread_created"
     assert thread["status_terminal"] is False
+    assert thread["context_profile"] == "car_ambient"
     assert thread["managed_thread_id"]
 
 
@@ -77,6 +78,7 @@ def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     assert thread["resource_id"] is None
     assert thread["workspace_root"] == str((hub_env.hub_root / rel_workspace).resolve())
     assert thread["name"] == "Workspace thread"
+    assert thread["context_profile"] == "car_ambient"
 
 
 def test_create_managed_thread_with_agent_workspace_owner(
@@ -113,6 +115,24 @@ def test_create_managed_thread_with_agent_workspace_owner(
     assert thread["resource_kind"] == "agent_workspace"
     assert thread["resource_id"] == workspace.id
     assert thread["workspace_root"] == str(workspace.path.resolve())
+    assert thread["context_profile"] == "none"
+
+
+def test_create_managed_thread_accepts_explicit_context_profile(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "repo_id": hub_env.repo_id,
+                "context_profile": "car_core",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["thread"]["context_profile"] == "car_core"
 
 
 def test_create_managed_thread_rejects_mismatched_agent_workspace_runtime(
@@ -561,6 +581,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             resource_id=None,
             display_name=None,
             backend_thread_id=None,
+            metadata=None,
         ):
             self.calls.append(
                 (
@@ -573,6 +594,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                         "resource_id": resource_id,
                         "display_name": display_name,
                         "backend_thread_id": backend_thread_id,
+                        "metadata": metadata,
                     },
                 )
             )
@@ -725,6 +747,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 "resource_id": hub_env.repo_id,
                 "display_name": "Orchestrated thread",
                 "backend_thread_id": "backend-thread-1",
+                "metadata": {"context_profile": "car_ambient"},
             },
         ),
         (

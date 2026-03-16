@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Mapping, Optional
 
+from ..car_context import CarContextProfile, normalize_car_context_profile
+
 TargetCapability = Literal[
     "durable_threads",
     "message_turns",
@@ -118,6 +120,7 @@ class ThreadTarget:
     last_execution_id: Optional[str] = None
     last_message_preview: Optional[str] = None
     compact_seed: Optional[str] = None
+    context_profile: Optional[CarContextProfile] = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTarget":
@@ -162,6 +165,14 @@ class ThreadTarget:
                 data.get("last_message_preview")
             ),
             compact_seed=_normalize_optional_text(data.get("compact_seed")),
+            context_profile=normalize_car_context_profile(
+                data.get("context_profile")
+                or (
+                    data.get("metadata", {}).get("context_profile")
+                    if isinstance(data.get("metadata"), dict)
+                    else None
+                )
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -181,6 +192,7 @@ class MessageRequest:
     reasoning: Optional[str] = None
     approval_mode: Optional[str] = None
     input_items: Optional[list[dict[str, Any]]] = None
+    context_profile: Optional[CarContextProfile] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

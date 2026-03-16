@@ -9,10 +9,12 @@ from codex_autorunner.agents.managed_runtime import (
     RuntimeLaunchSpec,
     build_managed_workspace_launch_spec,
     preflight_managed_workspace_runtime,
+    sync_managed_workspace_compat_files,
 )
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.agents.zeroclaw.supervisor import ZeroClawSupervisor
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.car_context import build_car_context_bundle
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerDestination
 
@@ -115,6 +117,39 @@ def _relaunch_path(workspace_root: Path, session_id: str) -> Path:
 
 def _session_state_path(workspace_root: Path, session_id: str) -> Path:
     return workspace_root / "threads" / session_id / "session-state.json"
+
+
+def test_sync_managed_workspace_compat_files_writes_agents_md_for_core(
+    tmp_path: Path,
+) -> None:
+    runtime_workspace_root = tmp_path / "workspace"
+
+    sync_managed_workspace_compat_files(
+        "zeroclaw",
+        runtime_workspace_root=runtime_workspace_root,
+        bundle=build_car_context_bundle("car_core"),
+    )
+
+    agents_path = runtime_workspace_root / "AGENTS.md"
+    assert agents_path.exists()
+    assert "Codex Autorunner (CAR)" in agents_path.read_text(encoding="utf-8")
+
+
+def test_sync_managed_workspace_compat_files_removes_agents_md_for_none(
+    tmp_path: Path,
+) -> None:
+    runtime_workspace_root = tmp_path / "workspace"
+    runtime_workspace_root.mkdir(parents=True, exist_ok=True)
+    agents_path = runtime_workspace_root / "AGENTS.md"
+    agents_path.write_text("stale", encoding="utf-8")
+
+    sync_managed_workspace_compat_files(
+        "zeroclaw",
+        runtime_workspace_root=runtime_workspace_root,
+        bundle=build_car_context_bundle("none"),
+    )
+
+    assert not agents_path.exists()
 
 
 def _patch_launch_spec_builder(monkeypatch: pytest.MonkeyPatch) -> None:

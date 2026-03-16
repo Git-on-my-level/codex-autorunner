@@ -730,7 +730,7 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
         assert captured
         assert captured[0]["workspace_root"] == workspace.resolve()
         assert "ship it" in captured[0]["prompt_text"]
-        assert CAR_AWARENESS_BLOCK in captured[0]["prompt_text"]
+        assert CAR_AWARENESS_BLOCK not in captured[0]["prompt_text"]
         assert captured[0]["agent"] == "codex"
         assert captured[0]["session_key"].startswith(
             f"{FILE_CHAT_PREFIX}discord.channel-1."
@@ -1242,7 +1242,7 @@ async def test_message_create_non_pma_injects_prompt_context_hints(
     try:
         await service.run_forever()
         assert captured_prompts
-        assert CAR_AWARENESS_BLOCK in captured_prompts[0]
+        assert CAR_AWARENESS_BLOCK not in captured_prompts[0]
         assert PROMPT_WRITING_HINT in captured_prompts[0]
         assert "please write a prompt for triage" in captured_prompts[0]
     finally:
@@ -1328,7 +1328,7 @@ async def test_message_create_non_pma_uses_raw_message_for_github_link_source(
         await service.run_forever()
         assert captured_link_source == [user_text]
         assert captured_prompt
-        assert CAR_AWARENESS_BLOCK in captured_prompt[0]
+        assert CAR_AWARENESS_BLOCK not in captured_prompt[0]
         assert PROMPT_WRITING_HINT in captured_prompt[0]
     finally:
         await store.close()
@@ -1515,6 +1515,74 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
         items = captured_input_items[0] or []
         assert items and items[0].get("type") == "text"
         assert any(item.get("type") == "localImage" for item in items[1:])
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_injects_car_context_for_car_trigger(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create("resume ticket flow in .codex-autorunner/"),
+            )
+        ]
+    )
+    captured_prompts: list[str] = []
+
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        self: DiscordBotService,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        assert CAR_AWARENESS_BLOCK in captured_prompts[0]
     finally:
         await store.close()
 

@@ -233,6 +233,38 @@ def test_service_supports_agent_workspace_thread_targets(tmp_path: Path) -> None
     assert [thread.thread_target_id for thread in listed] == [created.thread_target_id]
 
 
+def test_service_persists_thread_context_profile(tmp_path: Path) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    created = service.create_thread_target(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        context_profile="car_core",
+    )
+
+    assert created.context_profile == "car_core"
+
+
+def test_service_preserves_thread_context_profile_from_metadata(tmp_path: Path) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    created = service.create_thread_target(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        metadata={"context_profile": "car_core"},
+    )
+
+    assert created.context_profile == "car_core"
+
+
 def test_create_thread_target_supports_durable_zeroclaw_agent_workspace(
     tmp_path: Path,
 ) -> None:

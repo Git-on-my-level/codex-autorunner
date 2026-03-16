@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Mapping, Optional, Protocol, Sequence
 
-from ..core.utils import subprocess_env
+from ..core.car_context import CarContextBundle, render_runtime_compat_agents_md
+from ..core.utils import atomic_write, subprocess_env
 
 RuntimePreflightStatus = Literal["ready", "missing_binary", "incompatible", "deferred"]
 RuntimeLaunchMode = Literal["session_state_file", "workspace_only"]
@@ -16,6 +17,7 @@ _PROBE_TIMEOUT_SECONDS = 10
 _ZEROCLAW_WORKSPACE_ENV = "ZEROCLAW_WORKSPACE"
 _ZEROCLAW_CONFIG_DIR_ENV = "ZEROCLAW_CONFIG_DIR"
 _ZEROCLAW_CONFIG_DIRNAME = ".zeroclaw"
+_COMPAT_AGENTS_FILENAME = "AGENTS.md"
 
 
 @dataclass(frozen=True)
@@ -305,6 +307,27 @@ def known_agent_workspace_runtime_ids() -> tuple[str, ...]:
     return (ZEROCLAW_RUNTIME_ID,)
 
 
+def sync_managed_workspace_compat_files(
+    runtime_id: str,
+    *,
+    runtime_workspace_root: Path,
+    bundle: CarContextBundle,
+) -> None:
+    normalized_runtime = str(runtime_id or "").strip().lower()
+    if normalized_runtime != ZEROCLAW_RUNTIME_ID:
+        return
+    runtime_workspace_root.mkdir(parents=True, exist_ok=True)
+    agents_path = runtime_workspace_root / _COMPAT_AGENTS_FILENAME
+    rendered = render_runtime_compat_agents_md(bundle)
+    if rendered:
+        atomic_write(agents_path, rendered)
+        return
+    try:
+        agents_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def preflight_agent_workspace_runtime(
     *,
     config,
@@ -377,5 +400,6 @@ __all__ = [
     "preflight_agent_workspace_runtime",
     "preflight_managed_workspace_runtime",
     "probe_agent_workspace_runtime",
+    "sync_managed_workspace_compat_files",
     "zeroclaw_managed_workspace_env",
 ]

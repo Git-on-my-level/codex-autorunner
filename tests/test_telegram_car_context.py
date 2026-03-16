@@ -46,17 +46,27 @@ class _ContextExecutionStub(ExecutionCommands):
         return self._files_topic_dir(workspace_path, topic_key) / "outbox" / "pending"
 
 
-def test_telegram_car_context_always_injected() -> None:
+def test_telegram_car_context_not_injected_for_plain_repo_turn() -> None:
     handler = ExecutionCommands()
     prompt, injected = handler._maybe_inject_car_context(
         "fix failing tests in src/foo.py"
+    )
+
+    assert injected is False
+    assert prompt == "fix failing tests in src/foo.py"
+
+
+def test_telegram_car_context_injected_for_car_trigger() -> None:
+    handler = ExecutionCommands()
+    prompt, injected = handler._maybe_inject_car_context(
+        "please update .codex-autorunner/tickets/TICKET-001.md"
     )
 
     assert injected is True
     assert "<injected context>" in prompt
     assert "</injected context>" in prompt
     assert ".codex-autorunner/ABOUT_CAR.md" in prompt
-    assert "fix failing tests in src/foo.py" in prompt
+    assert ".codex-autorunner/tickets/TICKET-001.md" in prompt
 
 
 @pytest.mark.anyio

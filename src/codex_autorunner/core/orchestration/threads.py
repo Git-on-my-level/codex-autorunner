@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from ..car_context import CarContextProfile
+
 
 @dataclass(frozen=True)
 class SurfaceThreadMessageRequest:
@@ -15,6 +17,7 @@ class SurfaceThreadMessageRequest:
     agent_id: Optional[str] = None
     pma_enabled: bool = False
     input_items: Optional[list[dict[str, Any]]] = None
+    context_profile: Optional[CarContextProfile] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

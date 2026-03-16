@@ -16,6 +16,8 @@ from pydantic import (
     model_validator,
 )
 
+from ...core.car_context import CarContextProfile
+
 
 class Payload(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
@@ -277,6 +279,10 @@ class PmaManagedThreadCreateRequest(Payload):
     workspace_root: Optional[str] = None
     name: Optional[str] = None
     backend_thread_id: Optional[str] = None
+    context_profile: Optional[CarContextProfile] = Field(
+        default=None,
+        validation_alias=AliasChoices("context_profile", "contextProfile"),
+    )
 
     @model_validator(mode="before")
     @classmethod

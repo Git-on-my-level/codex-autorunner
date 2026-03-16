@@ -27,6 +27,27 @@ def test_file_chat_prompt_has_car_and_file_content(tmp_path: Path) -> None:
     assert "</file_role_context>" in prompt
 
 
+def test_generic_file_chat_prompt_skips_car_context_without_trigger() -> None:
+    target = file_chat_routes._Target(
+        target="file:README.md",
+        kind="other",
+        id="README.md",
+        chat_scope="file:README.md",
+        path=Path("/tmp/README.md"),
+        rel_path="README.md",
+        state_key="file_README.md",
+    )
+
+    prompt = file_chat_routes._build_file_chat_prompt(
+        target=target,
+        message="tighten the prose",
+        before="# Title\n",
+    )
+
+    assert "<injected context>" not in prompt
+    assert "<FILE_CONTENT>" in prompt
+
+
 def test_ticket_target_chat_scope_changes_with_instance_token(
     tmp_path: Path, monkeypatch
 ) -> None:
