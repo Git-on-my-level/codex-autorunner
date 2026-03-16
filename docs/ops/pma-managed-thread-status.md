@@ -98,3 +98,58 @@ Managed-thread delivery is queue-first by default.
   explicitly want it.
 - `/hub/pma/threads/{id}/status` and `car pma thread status` expose both the
   active turn and any queued turns behind it.
+
+## PMA Prompt Context And Deltas
+
+PMA prompt assembly uses a delta-oriented context model to reduce token overhead
+on repeated turns within the same managed thread.
+
+### When PMA Sends Full Context
+
+Full context (AGENTS.md, active_context.md, context_log.md tail, and hub snapshot)
+is injected when:
+
+- **First turn**: No prior prompt state exists for the session key.
+- **Digest mismatch**: The persisted bundle digest does not match the current
+  section digests (indicates corruption or external modification).
+- **Explicit refresh**: `force_full_context=True` is passed to the prompt builder
+  (e.g., operator requests a refresh or recovery action).
+
+In these cases, the prompt includes `<pma_workspace_docs>` and `<hub_snapshot>`
+blocks with full content.
+
+### When PMA Sends Deltas
+
+On subsequent turns, when:
+
+1. A `prompt_state_key` is provided (typically the managed_thread_id or session ID)
+2. A valid prior state exists in `.codex-autorunner/pma/prompt_state.json`
+3. The bundle digest validates correctly
+
+The prompt builder switches to delta mode:
+
+- Unchanged sections are referenced by digest via `<what_changed_since_last_turn>`
+  with `status=unchanged`.
+- Changed sections (e.g., active_context.md) are re-injected inline.
+- The full hub snapshot is replaced with `<hub_snapshot_ref>` referencing the
+  cached digest.
+- The `<current_actionable_state>` block always includes the current action queue
+  and any pending operator items.
+
+### Active Context Compaction
+
+`active_context.md` is expected to remain actionable and concise. When it exceeds
+the configured line budget (`active_context_max_lines`, default 200), it is
+automatically pruned:
+
+- The full content is appended to `context_log.md` under a timestamped snapshot header.
+- `active_context.md` is reset to the template content with an auto-prune marker.
+
+Older reconciled notes, completed work, and historical context should migrate to
+`context_log.md` rather than accumulating in `active_context.md`.
+
+### Context Log
+
+`context_log.md` is an append-only history of auto-pruned snapshots and manual
+archival. PMA prompts include only the tail (default last 120 lines) to keep
+token usage bounded while preserving recent context continuity.

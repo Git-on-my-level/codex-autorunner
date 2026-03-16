@@ -1394,6 +1394,114 @@ class TestIssue975DeltaPmaPromptAssembly:
         assert "<hub_snapshot>" in result
         assert "reason='digest_mismatch'" in result
 
+    def test_format_pma_prompt_without_state_key_always_full_context(
+        self, tmp_path: Path
+    ) -> None:
+        """Without prompt_state_key, every turn sends full context (no delta mode)."""
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+
+        result1 = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+        )
+        result2 = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+        )
+
+        assert "<pma_workspace_docs>" in result1
+        assert "<pma_workspace_docs>" in result2
+        assert "<hub_snapshot>" in result1
+        assert "<hub_snapshot>" in result2
+        assert "<what_changed_since_last_turn" not in result1
+        assert "<what_changed_since_last_turn" not in result2
+
+    def test_format_pma_prompt_delta_header_includes_all_sections(
+        self, tmp_path: Path
+    ) -> None:
+        """Delta header lists all four sections with status and digest."""
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        _ = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-header-sections",
+        )
+        result = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-header-sections",
+        )
+
+        assert "section=AGENTS_MD status=unchanged" in result
+        assert "section=ACTIVE_CONTEXT_MD status=unchanged" in result
+        assert "section=CONTEXT_LOG_TAIL_MD status=unchanged" in result
+        assert "section=HUB_SNAPSHOT status=unchanged" in result
+        assert "digest=" in result
+        assert "state_key='pma.test-header-sections'" in result
+
+    def test_format_pma_prompt_compacted_context_stays_within_budget(
+        self, tmp_path: Path
+    ) -> None:
+        """Auto-pruned active_context stays within budget across multiple prunes."""
+        seed_hub_files(tmp_path, force=True)
+
+        active_context_path = (
+            tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+        )
+        context_log_path = (
+            tmp_path / ".codex-autorunner" / "pma" / "docs" / "context_log.md"
+        )
+
+        _write_hub_config(
+            tmp_path,
+            {
+                "mode": "hub",
+                "pma": {
+                    "docs_max_chars": 12000,
+                    "active_context_max_lines": 20,
+                    "context_log_tail_lines": 50,
+                },
+            },
+        )
+
+        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+
+        for turn_num in range(3):
+            long_content = "\n".join(f"Turn {turn_num} line {idx}" for idx in range(30))
+            active_context_path.write_text(long_content, encoding="utf-8")
+
+            format_pma_prompt(
+                "Base prompt",
+                snapshot,
+                f"Turn {turn_num}",
+                hub_root=tmp_path,
+                prompt_state_key=f"pma.test-multi-prune-{turn_num}",
+            )
+
+            pruned_content = active_context_path.read_text(encoding="utf-8")
+            line_count = len(pruned_content.splitlines())
+            assert (
+                line_count <= 25
+            ), f"Turn {turn_num}: active_context exceeded budget ({line_count} lines)"
+
+        log_content = context_log_path.read_text(encoding="utf-8")
+        assert "## Snapshot:" in log_content
+        assert "Turn 0 line" in log_content
+        assert "Turn 1 line" in log_content
+        assert "Turn 2 line" in log_content
+
 
 class TestIssue975CharacterizationMixedPmaState:
     """Characterization tests for mixed PMA state snapshots (issue #975).
