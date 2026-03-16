@@ -27,6 +27,7 @@ from .....core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from .....core.pma_context import format_pma_discoverability_preamble
 from .....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -83,6 +84,7 @@ def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
 def _compose_execution_prompt(
     *,
     agent: Any,
+    hub_root: Path,
     stored_backend_id: Optional[str],
     compact_seed: Optional[str],
     message: str,
@@ -98,6 +100,7 @@ def _compose_execution_prompt(
     if str(agent or "").strip().lower() == "zeroclaw":
         return execution_message
 
+    preamble = format_pma_discoverability_preamble(hub_root=hub_root)
     user_message = "<user_message>\n" f"{execution_message}\n" "</user_message>\n"
     bundle = build_car_context_bundle(
         context_profile,
@@ -105,8 +108,8 @@ def _compose_execution_prompt(
     )
     car_context = render_injected_car_context(bundle)
     if not car_context:
-        return user_message
-    return f"{car_context}\n\n{user_message}"
+        return f"{preamble}{user_message}"
+    return f"{preamble}{car_context}\n\n{user_message}"
 
 
 def _sanitize_managed_thread_result_error(detail: Any) -> str:
@@ -424,6 +427,7 @@ def build_managed_thread_runtime_routes(
         )
         execution_prompt = _compose_execution_prompt(
             agent=thread.get("agent"),
+            hub_root=hub_root,
             stored_backend_id=stored_backend_id,
             compact_seed=compact_seed,
             message=message,

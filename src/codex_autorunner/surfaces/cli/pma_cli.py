@@ -1042,18 +1042,17 @@ def pma_thread_spawn(
             err=True,
         )
         raise typer.Exit(code=1) from None
-    normalized_context_profile = normalize_car_context_profile(
-        context_profile,
-        default=default_managed_thread_context_profile(
-            resource_kind=normalized_resource_kind
-        ),
-    )
-    if normalized_context_profile is None:
+    normalized_context_profile = normalize_car_context_profile(context_profile)
+    if context_profile is not None and normalized_context_profile is None:
         typer.echo(
             "--context-profile must be one of: car_core, car_ambient, none",
             err=True,
         )
         raise typer.Exit(code=1) from None
+    if normalized_context_profile is None:
+        normalized_context_profile = default_managed_thread_context_profile(
+            resource_kind=normalized_resource_kind
+        )
 
     hub_root = _resolve_hub_path(path)
     try:

@@ -793,6 +793,43 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
     ]
 
 
+def test_pma_cli_thread_spawn_rejects_invalid_context_profile(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "spawn",
+            "--agent",
+            "codex",
+            "--repo",
+            "repo-1",
+            "--context-profile",
+            "car-ambent",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--context-profile must be one of: car_core, car_ambient, none" in (
+        result.stdout
+    )
+
+
 def test_pma_cli_binding_work_empty_state_uses_busy_copy(
     monkeypatch, tmp_path: Path
 ) -> None:

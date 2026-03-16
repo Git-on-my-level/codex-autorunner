@@ -11,6 +11,7 @@ from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
+from codex_autorunner.core.pma_context import format_pma_discoverability_preamble
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runtime
@@ -141,6 +142,11 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     assert (
         captured["request"]
         .metadata["runtime_prompt"]
+        .startswith(format_pma_discoverability_preamble(hub_root=hub_env.hub_root))
+    )
+    assert (
+        captured["request"]
+        .metadata["runtime_prompt"]
         .endswith("hello from route\n</user_message>\n")
     )
     assert fake_service.record_calls[0]["status"] == "ok"
@@ -246,6 +252,11 @@ def test_managed_thread_message_route_honors_explicit_core_context_profile(
 
     assert response.status_code == 200
     assert captured["request"].context_profile == "car_core"
+    assert (
+        captured["request"]
+        .metadata["runtime_prompt"]
+        .startswith(format_pma_discoverability_preamble(hub_root=hub_env.hub_root))
+    )
     assert "<injected context>" in captured["request"].metadata["runtime_prompt"]
 
 
