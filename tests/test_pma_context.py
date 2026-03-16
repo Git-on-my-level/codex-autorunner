@@ -623,6 +623,63 @@ def test_build_hub_snapshot_includes_automation_summary(hub_env) -> None:
     assert "subscriptions_active=" in rendered
 
 
+def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> None:
+    run_id = "12121212-3434-5656-7878-909090909090"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+    inbox_dir = hub_env.hub_root / ".codex-autorunner" / "filebox" / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    (inbox_dir / "ticket-pack.md").write_text("ticket payload\n", encoding="utf-8")
+
+    thread_store = PmaThreadStore(hub_env.hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="snapshot-action-queue-thread",
+    )
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        supervisor.get_pma_automation_store().enqueue_wakeup(
+            source="lifecycle_subscription",
+            repo_id=hub_env.repo_id,
+            run_id=run_id,
+            reason="flow_paused",
+            timestamp="2026-03-16T12:30:00Z",
+            idempotency_key="snapshot-action-queue",
+        )
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    queue = snapshot.get("action_queue") or []
+    assert queue
+    assert queue[0]["queue_source"] == "ticket_flow_inbox"
+    assert queue[0]["supersession"]["status"] == "primary"
+
+    thread_item = next(
+        item
+        for item in queue
+        if item.get("managed_thread_id") == thread["managed_thread_id"]
+    )
+    assert thread_item["queue_source"] == "managed_thread_followup"
+    assert thread_item["supersession"]["status"] == "superseded"
+    assert thread_item["supersession"]["superseded_by"] == queue[0]["action_queue_id"]
+
+    wakeup_item = next(
+        item for item in queue if item.get("item_type") == "automation_wakeup"
+    )
+    assert wakeup_item["supersession"]["status"] == "superseded"
+    assert wakeup_item["supersession"]["superseded_by"] == queue[0]["action_queue_id"]
+
+    file_item = next(item for item in queue if item.get("item_type") == "pma_file")
+    assert file_item["supersession"]["status"] == "non_primary"
+
+
 def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
@@ -1457,9 +1514,21 @@ class TestIssue975CharacterizationMixedPmaState:
                 }
             ]
 
+        from codex_autorunner.core.pma_context import build_pma_action_queue
+
+        action_queue = build_pma_action_queue(
+            inbox=inbox,
+            pma_threads=pma_threads,
+            pma_files_detail=pma_files_detail,
+            automation={},
+            generated_at="2026-03-16T12:00:00Z",
+            stale_threshold_seconds=3600,
+        )
+
         return {
             "generated_at": "2026-03-16T12:00:00Z",
             "inbox": inbox,
+            "action_queue": action_queue,
             "repos": [],
             "pma_threads": pma_threads,
             "pma_files": {"inbox": ["ticket-pack.md"], "outbox": []},
@@ -1483,6 +1552,14 @@ class TestIssue975CharacterizationMixedPmaState:
                             if (item.get("canonical_state_v1") or {})
                             .get("freshness", {})
                             .get("is_stale", False)
+                        ),
+                    },
+                    "action_queue": {
+                        "entity_count": len(action_queue),
+                        "stale_count": sum(
+                            1
+                            for item in action_queue
+                            if (item.get("freshness") or {}).get("is_stale", False)
                         ),
                     },
                     "pma_threads": {"entity_count": len(pma_threads), "stale_count": 0},
@@ -1547,6 +1624,56 @@ class TestIssue975CharacterizationMixedPmaState:
         assert "Run Dispatches (paused runs needing attention):" in result
         assert "PMA Managed Threads:" in result
         assert "PMA File Inbox:" in result
+
+    def test_mixed_snapshot_action_queue_marks_primary_and_superseded_items(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot()
+
+        queue = snapshot.get("action_queue") or []
+        assert queue
+
+        primary = queue[0]
+        assert primary["queue_source"] == "ticket_flow_inbox"
+        assert primary["item_type"] == "run_dispatch"
+        assert primary["recommended_action"] == "reply_and_resume"
+        assert primary["supersession"]["status"] == "primary"
+        assert primary["supersession"]["is_primary"] is True
+
+        failed_run = next(
+            item for item in queue if item.get("run_id") == "run-failed-1"
+        )
+        assert failed_run["supersession"]["status"] == "superseded"
+        assert failed_run["supersession"]["superseded_by"] == primary["action_queue_id"]
+
+        thread_item = next(
+            item for item in queue if item.get("managed_thread_id") == "thread-idle-1"
+        )
+        assert thread_item["queue_source"] == "managed_thread_followup"
+        assert thread_item["supersession"]["status"] == "superseded"
+        assert (
+            thread_item["supersession"]["superseded_by"] == primary["action_queue_id"]
+        )
+
+        file_item = next(item for item in queue if item.get("item_type") == "pma_file")
+        assert file_item["queue_source"] == "pma_file_inbox"
+        assert file_item["supersession"]["status"] == "non_primary"
+
+    def test_mixed_snapshot_rendered_includes_action_queue_section(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot()
+
+        result = _render_hub_snapshot(snapshot)
+
+        assert "PMA Action Queue:" in result
+        assert "source=ticket_flow_inbox" in result
+        assert "status=primary" in result
+        assert "status=superseded" in result
 
 
 class TestIssue975CharacterizationManagedThreadPayload:

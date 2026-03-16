@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import shlex
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, TypedDict, cast
 
@@ -54,6 +55,13 @@ PMA_MAX_PMA_FILES = 50
 PMA_MAX_LIFECYCLE_EVENTS = 20
 PMA_MAX_PMA_THREADS = 20
 PMA_MAX_AUTOMATION_ITEMS = 10
+
+PMA_ACTION_QUEUE_PRECEDENCE: dict[str, tuple[int, str]] = {
+    "ticket_flow_inbox": (10, "ticket_flow_inbox"),
+    "managed_thread_followup": (20, "managed_thread_followup"),
+    "pma_file_inbox": (30, "pma_file_inbox"),
+    "automation_wakeup": (40, "automation_wakeup"),
+}
 
 # Keep this short and stable; see ticket TICKET-001 for rationale.
 PMA_FASTPATH = """<pma_fastpath>
@@ -429,6 +437,379 @@ def _extract_entry_freshness(entry: Mapping[str, Any]) -> Optional[Mapping[str, 
     return None
 
 
+def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_sort_value(value: Any) -> float:
+    parsed = _parse_iso_timestamp(value)
+    if parsed is None:
+        return 0.0
+    return parsed.timestamp()
+
+
+def _queue_precedence(source: str) -> tuple[int, str]:
+    return PMA_ACTION_QUEUE_PRECEDENCE.get(source, (999, source or "unknown"))
+
+
+def _queue_supersession_payload(
+    *,
+    status: str,
+    is_primary: bool,
+    superseded: bool,
+    superseded_by: Optional[str],
+    reason: Optional[str],
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "is_primary": is_primary,
+        "superseded": superseded,
+        "superseded_by": superseded_by,
+        "reason": reason,
+    }
+
+
+def _build_ticket_flow_queue_items(
+    inbox: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank, label = _queue_precedence("ticket_flow_inbox")
+    for entry in inbox:
+        if not isinstance(entry, dict):
+            continue
+        copied = dict(entry)
+        repo_id = str(copied.get("repo_id") or "").strip()
+        run_id = str(copied.get("run_id") or "").strip()
+        seq = copied.get("seq")
+        queue_id = f"ticket_flow_inbox:{repo_id or '-'}:{run_id or '-'}:{seq or 0}"
+        recommended_detail = (
+            str((copied.get("run_state") or {}).get("recommended_action") or "").strip()
+            or None
+        )
+        next_action = (
+            str(copied.get("next_action") or "").strip() or "inspect_and_resume"
+        )
+        freshness = _extract_entry_freshness(copied)
+        copied.update(
+            {
+                "action_queue_id": queue_id,
+                "queue_source": "ticket_flow_inbox",
+                "precedence": {"rank": rank, "label": label},
+                "why_selected": (
+                    "Newest authoritative ticket-flow run requires operator attention"
+                    if copied.get("dispatch_actionable") is False
+                    else "Newest authoritative ticket-flow run has an unanswered dispatch"
+                ),
+                "recommended_action": next_action,
+                "recommended_detail": recommended_detail,
+                "freshness": (
+                    dict(freshness) if isinstance(freshness, Mapping) else None
+                ),
+                "scope": {
+                    "kind": "run",
+                    "key": f"run:{run_id}" if run_id else f"repo:{repo_id}",
+                },
+                "sort_timestamp": _timestamp_sort_value(
+                    (freshness or {}).get("basis_at")
+                    if isinstance(freshness, Mapping)
+                    else copied.get("run_created_at")
+                ),
+            }
+        )
+        items.append(copied)
+    return items
+
+
+def _thread_followup_next_action(status: str) -> tuple[str, str]:
+    normalized = status.strip().lower()
+    if normalized == "failed":
+        return (
+            "inspect_managed_thread_failure",
+            "Managed thread failed and needs inspection before reuse",
+        )
+    if normalized == "paused":
+        return (
+            "resume_managed_thread",
+            "Managed thread is paused and can be resumed",
+        )
+    if normalized == "completed":
+        return (
+            "resume_managed_thread",
+            "Managed thread completed its last turn and is reusable",
+        )
+    return (
+        "resume_managed_thread",
+        "Managed thread is idle and ready for another turn",
+    )
+
+
+def _build_thread_queue_items(
+    pma_threads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank, label = _queue_precedence("managed_thread_followup")
+    for entry in pma_threads:
+        if not isinstance(entry, dict):
+            continue
+        status = str(entry.get("status") or "").strip().lower()
+        if status in {"", "running", "archived"}:
+            continue
+        repo_id = str(entry.get("repo_id") or "").strip()
+        managed_thread_id = str(entry.get("managed_thread_id") or "").strip()
+        next_action, why_selected = _thread_followup_next_action(status)
+        freshness = _extract_entry_freshness(entry)
+        scope_key = (
+            f"thread:{managed_thread_id}"
+            if managed_thread_id
+            else (
+                f"resource:{entry.get('resource_kind')}:{entry.get('resource_id')}"
+                if entry.get("resource_kind") and entry.get("resource_id")
+                else f"repo:{repo_id}"
+            )
+        )
+        items.append(
+            {
+                "item_type": "managed_thread_followup",
+                "managed_thread_id": managed_thread_id,
+                "repo_id": repo_id or None,
+                "agent": entry.get("agent"),
+                "resource_kind": entry.get("resource_kind"),
+                "resource_id": entry.get("resource_id"),
+                "workspace_root": entry.get("workspace_root"),
+                "name": entry.get("name"),
+                "status": entry.get("status"),
+                "lifecycle_status": entry.get("lifecycle_status"),
+                "status_reason": entry.get("status_reason"),
+                "status_terminal": entry.get("status_terminal"),
+                "last_turn_id": entry.get("last_turn_id"),
+                "last_message_preview": entry.get("last_message_preview"),
+                "updated_at": entry.get("updated_at"),
+                "open_url": (
+                    f"/hub/pma/threads/{managed_thread_id}"
+                    if managed_thread_id
+                    else None
+                ),
+                "action_queue_id": f"managed_thread_followup:{managed_thread_id or '-'}",
+                "queue_source": "managed_thread_followup",
+                "precedence": {"rank": rank, "label": label},
+                "why_selected": why_selected,
+                "recommended_action": next_action,
+                "recommended_detail": (
+                    f'car pma thread send --id {managed_thread_id} --message "..." --watch'
+                    if managed_thread_id and next_action == "resume_managed_thread"
+                    else (
+                        f"car pma thread status --id {managed_thread_id}"
+                        if managed_thread_id
+                        else None
+                    )
+                ),
+                "freshness": (
+                    dict(freshness) if isinstance(freshness, Mapping) else None
+                ),
+                "scope": {
+                    "kind": "thread" if managed_thread_id else "resource",
+                    "key": scope_key,
+                },
+                "sort_timestamp": _timestamp_sort_value(
+                    (freshness or {}).get("basis_at")
+                    if isinstance(freshness, Mapping)
+                    else entry.get("updated_at")
+                ),
+            }
+        )
+    return items
+
+
+def _build_file_queue_items(
+    pma_files_detail: Mapping[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank, label = _queue_precedence("pma_file_inbox")
+    for entry in pma_files_detail.get("inbox") or []:
+        if not isinstance(entry, dict):
+            continue
+        freshness = _extract_entry_freshness(entry)
+        name = str(entry.get("name") or "").strip()
+        copied = dict(entry)
+        copied.update(
+            {
+                "action_queue_id": f"pma_file_inbox:{name or '-'}",
+                "queue_source": "pma_file_inbox",
+                "precedence": {"rank": rank, "label": label},
+                "why_selected": "Uploaded file is waiting in the PMA inbox",
+                "recommended_action": "process_uploaded_file",
+                "recommended_detail": (
+                    "Inspect `.codex-autorunner/filebox/inbox/` and route the upload"
+                ),
+                "freshness": (
+                    dict(freshness) if isinstance(freshness, Mapping) else None
+                ),
+                "scope": {"kind": "filebox", "key": f"filebox:inbox:{name or '-'}"},
+                "sort_timestamp": _timestamp_sort_value(
+                    (freshness or {}).get("basis_at")
+                    if isinstance(freshness, Mapping)
+                    else entry.get("modified_at")
+                ),
+            }
+        )
+        items.append(copied)
+    return items
+
+
+def _build_automation_queue_items(
+    automation: Mapping[str, Any],
+    *,
+    generated_at: str,
+    stale_threshold_seconds: int,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank, label = _queue_precedence("automation_wakeup")
+    wakeups = (automation.get("wakeups") or {}).get("pending_sample") or []
+    for entry in wakeups:
+        if not isinstance(entry, dict):
+            continue
+        repo_id = str(entry.get("repo_id") or "").strip()
+        thread_id = str(entry.get("thread_id") or "").strip()
+        wakeup_id = str(entry.get("wakeup_id") or "").strip()
+        basis_at = entry.get("timestamp")
+        freshness = build_freshness_payload(
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            candidates=[("automation_wakeup", basis_at)],
+        )
+        scope_key = (
+            f"wakeup:{wakeup_id}"
+            if wakeup_id
+            else (f"thread:{thread_id}" if thread_id else f"repo:{repo_id}")
+        )
+        items.append(
+            {
+                "item_type": "automation_wakeup",
+                "wakeup_id": wakeup_id or None,
+                "source": entry.get("source"),
+                "event_type": entry.get("event_type"),
+                "subscription_id": entry.get("subscription_id"),
+                "timer_id": entry.get("timer_id"),
+                "repo_id": repo_id or None,
+                "run_id": entry.get("run_id"),
+                "thread_id": thread_id or None,
+                "lane_id": entry.get("lane_id"),
+                "from_state": entry.get("from_state"),
+                "to_state": entry.get("to_state"),
+                "reason": entry.get("reason"),
+                "timestamp": basis_at,
+                "action_queue_id": f"automation_wakeup:{wakeup_id or scope_key}",
+                "queue_source": "automation_wakeup",
+                "precedence": {"rank": rank, "label": label},
+                "why_selected": "Pending automation wakeup signals follow-up work",
+                "recommended_action": "handle_automation_wakeup",
+                "recommended_detail": (
+                    f"Continue lane {entry.get('lane_id')}"
+                    if entry.get("lane_id")
+                    else "Inspect the pending PMA automation wakeup"
+                ),
+                "freshness": freshness,
+                "scope": {
+                    "kind": "wakeup",
+                    "key": scope_key,
+                },
+                "sort_timestamp": _timestamp_sort_value(basis_at),
+            }
+        )
+    return items
+
+
+def build_pma_action_queue(
+    *,
+    inbox: list[dict[str, Any]],
+    pma_threads: list[dict[str, Any]],
+    pma_files_detail: Mapping[str, list[dict[str, Any]]],
+    automation: Mapping[str, Any],
+    generated_at: Optional[str] = None,
+    stale_threshold_seconds: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    """Build one operator-facing queue across inbox, threads, files, and wakeups."""
+
+    resolved_generated_at = generated_at or iso_now()
+    resolved_stale_threshold = resolve_stale_threshold_seconds(stale_threshold_seconds)
+    items = [
+        *_build_ticket_flow_queue_items(inbox),
+        *_build_thread_queue_items(pma_threads),
+        *_build_file_queue_items(pma_files_detail),
+        *_build_automation_queue_items(
+            automation,
+            generated_at=resolved_generated_at,
+            stale_threshold_seconds=resolved_stale_threshold,
+        ),
+    ]
+
+    items = sorted(
+        items,
+        key=lambda item: (
+            int(((item.get("precedence") or {}).get("rank") or 999)),
+            -float(item.get("sort_timestamp") or 0.0),
+            str(item.get("action_queue_id") or ""),
+        ),
+    )
+
+    winning_scope: dict[str, dict[str, Any]] = {}
+    winning_repo_blocker: dict[str, dict[str, Any]] = {}
+    primary_queue_id = str(items[0].get("action_queue_id") or "") if items else None
+    for index, item in enumerate(items, start=1):
+        scope = item.get("scope") or {}
+        scope_key = str(scope.get("key") or "")
+        queue_id = str(item.get("action_queue_id") or "")
+        repo_key = str(item.get("repo_id") or "").strip()
+        repo_blocker = winning_repo_blocker.get(repo_key) if repo_key else None
+        scope_winner = winning_scope.get(scope_key) if scope_key else None
+        winner = repo_blocker or scope_winner
+        if winner is not None:
+            item["supersession"] = _queue_supersession_payload(
+                status="superseded",
+                is_primary=False,
+                superseded=True,
+                superseded_by=str(winner.get("action_queue_id") or "") or None,
+                reason=(
+                    "A higher-precedence action already covers the same operator scope"
+                ),
+            )
+        else:
+            if scope_key:
+                winning_scope[scope_key] = item
+            is_primary = bool(primary_queue_id and queue_id == primary_queue_id)
+            item["supersession"] = _queue_supersession_payload(
+                status="primary" if is_primary else "non_primary",
+                is_primary=is_primary,
+                superseded=False,
+                superseded_by=None,
+                reason=(
+                    "Highest-priority actionable item in the queue"
+                    if is_primary
+                    else "Actionable, but lower priority than the current primary item"
+                ),
+            )
+        if (
+            str(item.get("queue_source") or "") == "ticket_flow_inbox"
+            and repo_key
+            and repo_key not in winning_repo_blocker
+        ):
+            winning_repo_blocker[repo_key] = item
+        item["queue_rank"] = index
+        item.pop("sort_timestamp", None)
+    return items
+
+
 def _build_snapshot_freshness_summary(
     *,
     generated_at: str,
@@ -436,6 +817,7 @@ def _build_snapshot_freshness_summary(
     repos: list[dict[str, Any]],
     agent_workspaces: list[dict[str, Any]],
     inbox: list[dict[str, Any]],
+    action_queue: list[dict[str, Any]],
     pma_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
@@ -457,6 +839,12 @@ def _build_snapshot_freshness_summary(
             ),
             "inbox": summarize_section_freshness(
                 inbox,
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                extractor=_extract_entry_freshness,
+            ),
+            "action_queue": summarize_section_freshness(
+                action_queue,
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
                 extractor=_extract_entry_freshness,
@@ -625,6 +1013,83 @@ def _render_hub_snapshot(
                 )
         lines.append("")
 
+    action_queue = snapshot.get("action_queue") or []
+    if action_queue:
+        lines.append("PMA Action Queue:")
+        for item in list(action_queue)[: max(0, max_messages)]:
+            queue_id = _truncate(
+                str(item.get("action_queue_id") or ""), max_field_chars
+            )
+            source = _truncate(str(item.get("queue_source") or ""), max_field_chars)
+            queue_rank = _truncate(str(item.get("queue_rank") or ""), max_field_chars)
+            item_type = _truncate(str(item.get("item_type") or ""), max_field_chars)
+            repo_id = _truncate(str(item.get("repo_id") or ""), max_field_chars)
+            run_id = _truncate(str(item.get("run_id") or ""), max_field_chars)
+            managed_thread_id = _truncate(
+                str(item.get("managed_thread_id") or item.get("thread_id") or ""),
+                max_field_chars,
+            )
+            file_name = _truncate(str(item.get("name") or ""), max_field_chars)
+            recommended_action = _truncate(
+                str(item.get("recommended_action") or ""), max_field_chars
+            )
+            precedence = item.get("precedence") or {}
+            precedence_rank = _truncate(
+                str(precedence.get("rank") or ""), max_field_chars
+            )
+            precedence_label = _truncate(
+                str(precedence.get("label") or ""), max_field_chars
+            )
+            supersession = item.get("supersession") or {}
+            supersession_status = _truncate(
+                str(supersession.get("status") or ""), max_field_chars
+            )
+            superseded_by = _truncate(
+                str(supersession.get("superseded_by") or ""), max_field_chars
+            )
+            lines.append(
+                f"- rank={queue_rank} source={source} precedence={precedence_rank}:{precedence_label} "
+                f"status={supersession_status} item_type={item_type} id={queue_id}"
+                + (f" repo_id={repo_id}" if repo_id else "")
+                + (f" run_id={run_id}" if run_id else "")
+                + (
+                    f" managed_thread_id={managed_thread_id}"
+                    if managed_thread_id
+                    else ""
+                )
+                + (f" file={file_name}" if file_name else "")
+                + (
+                    f" recommended_action={recommended_action}"
+                    if recommended_action
+                    else ""
+                )
+            )
+            why_selected = item.get("why_selected")
+            if why_selected:
+                lines.append(
+                    f"  why_selected: {_truncate(str(why_selected), max_text_chars)}"
+                )
+            recommended_detail = item.get("recommended_detail")
+            if recommended_detail:
+                lines.append(
+                    "  recommended_detail: "
+                    f"{_truncate(str(recommended_detail), max_text_chars)}"
+                )
+            if superseded_by:
+                lines.append(f"  superseded_by: {superseded_by}")
+            supersession_reason = supersession.get("reason")
+            if supersession_reason:
+                lines.append(
+                    "  supersession_reason: "
+                    f"{_truncate(str(supersession_reason), max_text_chars)}"
+                )
+            freshness_summary = _render_freshness_summary(
+                _extract_entry_freshness(item), max_field_chars=max_field_chars
+            )
+            if freshness_summary:
+                lines.append(f"  freshness: {freshness_summary}")
+        lines.append("")
+
     inbox = snapshot.get("inbox") or []
     if inbox:
         lines.append("Run Dispatches (paused runs needing attention):")
@@ -685,10 +1150,11 @@ def _render_hub_snapshot(
                 lines.append(
                     f"  blocking_reason: {_truncate(str(blocking_reason), max_text_chars)}"
                 )
-            recommended_action = run_state.get("recommended_action")
-            if recommended_action:
+            run_recommended_action = run_state.get("recommended_action")
+            if run_recommended_action:
                 lines.append(
-                    f"  recommended_action: {_truncate(str(recommended_action), max_text_chars)}"
+                    "  recommended_action: "
+                    f"{_truncate(str(run_recommended_action), max_text_chars)}"
                 )
             freshness_summary = _render_freshness_summary(
                 _extract_entry_freshness(item), max_field_chars=max_field_chars
@@ -1855,6 +2321,7 @@ async def build_hub_snapshot(
             "repos": [],
             "agent_workspaces": [],
             "inbox": [],
+            "action_queue": [],
             "templates": {"enabled": False, "repos": []},
             "lifecycle_events": [],
             "pma_files_detail": {"inbox": [], "outbox": []},
@@ -1874,6 +2341,7 @@ async def build_hub_snapshot(
                 repos=[],
                 agent_workspaces=[],
                 inbox=[],
+                action_queue=[],
                 pma_threads=[],
                 pma_files_detail={"inbox": [], "outbox": []},
             ),
@@ -2005,12 +2473,22 @@ async def build_hub_snapshot(
                     candidates=[("file_modified_at", entry.get("modified_at"))],
                 )
 
+    action_queue = build_pma_action_queue(
+        inbox=inbox,
+        pma_threads=pma_threads,
+        pma_files_detail=pma_files_detail,
+        automation=automation,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
+
     freshness = _build_snapshot_freshness_summary(
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
         repos=repos,
         agent_workspaces=agent_workspaces,
         inbox=inbox,
+        action_queue=action_queue,
         pma_threads=pma_threads,
         pma_files_detail=pma_files_detail,
     )
@@ -2020,6 +2498,7 @@ async def build_hub_snapshot(
         "repos": repos,
         "agent_workspaces": agent_workspaces,
         "inbox": inbox,
+        "action_queue": action_queue,
         "templates": templates,
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,

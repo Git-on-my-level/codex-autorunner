@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
+from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web import app as web_app_module
@@ -721,3 +723,49 @@ class TestIssue975CharacterizationHubMessageFreshness:
             assert item["next_action"] == "diagnose_or_restart"
             assert item["resolution_state"] == "terminal_attention"
             assert "dismiss" in (item.get("resolvable_actions") or [])
+
+    def test_hub_messages_item_carries_shared_action_queue_metadata(
+        self, hub_env, monkeypatch
+    ) -> None:
+        run_id = "1k1k1k1k-1k1k-1k1k-1k1k-1k1k1k1k1k1k"
+        _seed_paused_run(hub_env.repo_root, run_id)
+        _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+        inbox_dir = hub_env.hub_root / ".codex-autorunner" / "filebox" / "inbox"
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        (inbox_dir / "ticket-pack.md").write_text("ticket payload\n", encoding="utf-8")
+
+        PmaThreadStore(hub_env.hub_root).create_thread(
+            "codex",
+            hub_env.repo_root,
+            repo_id=hub_env.repo_id,
+            name="queue-metadata-thread",
+        )
+
+        supervisor = HubSupervisor.from_path(hub_env.hub_root)
+        try:
+            supervisor.get_pma_automation_store().enqueue_wakeup(
+                source="lifecycle_subscription",
+                repo_id=hub_env.repo_id,
+                run_id=run_id,
+                reason="flow_paused",
+                timestamp="2026-03-16T12:30:00Z",
+                idempotency_key="hub-message-queue-metadata",
+            )
+        finally:
+            supervisor.shutdown()
+
+        app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+        with TestClient(app) as client:
+            res = client.get("/hub/messages")
+            assert res.status_code == 200
+            items = res.json()["items"]
+            assert len(items) == 1
+
+            item = items[0]
+            assert item["queue_source"] == "ticket_flow_inbox"
+            assert item["action_queue_id"].startswith("ticket_flow_inbox:")
+            assert item["precedence"]["rank"] == 10
+            assert item["recommended_action"] == "reply_and_resume"
+            assert item["supersession"]["status"] == "primary"
+            assert item["supersession"]["is_primary"] is True

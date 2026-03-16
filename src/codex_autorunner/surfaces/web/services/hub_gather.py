@@ -3,18 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from ....core.config import load_repo_config
-from ....core.flows.failure_diagnostics import (
-    format_failure_summary,
-    get_failure_payload,
+from ....core.freshness import (
+    build_freshness_payload,
+    iso_now,
+    resolve_stale_threshold_seconds,
 )
-from ....core.flows.models import FlowRunStatus
-from ....core.flows.store import FlowStore
-from ....core.freshness import resolve_stale_threshold_seconds
-from ....core.pma_context import build_ticket_flow_run_state
-from ....core.ticket_flow_projection import (
-    build_canonical_state_v1,
-    select_authoritative_run_record,
+from ....core.pma_context import (
+    PMA_MAX_TEXT,
+    _gather_inbox,
+    _snapshot_pma_automation,
+    _snapshot_pma_files,
+    _snapshot_pma_threads,
+    build_pma_action_queue,
 )
 from ....tickets.files import safe_relpath
 from ....tickets.models import Dispatch
@@ -22,7 +22,6 @@ from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..app_state import (
     HubAppContext,
     _find_message_resolution,
-    _latest_reply_history_seq,
     _load_hub_inbox_dismissals,
     _message_resolution_state,
     _message_resolvable_actions,
@@ -137,212 +136,88 @@ def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[
 
 
 def gather_hub_messages(context: HubAppContext, *, limit: int = 100) -> list[dict]:
-    messages: list[dict] = []
     pma_config = getattr(getattr(context, "config", None), "pma", None)
     stale_threshold_seconds = resolve_stale_threshold_seconds(
         getattr(pma_config, "freshness_stale_threshold_seconds", None)
     )
+    max_text_chars = (
+        pma_config.max_text_chars
+        if pma_config and getattr(pma_config, "max_text_chars", 0) > 0
+        else PMA_MAX_TEXT
+    )
+    generated_at = iso_now()
+    inbox = _gather_inbox(
+        context.supervisor,
+        max_text_chars=max_text_chars,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
+
+    hub_root = getattr(getattr(context, "config", None), "root", None)
+    pma_files_detail: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
+    pma_threads: list[dict[str, Any]] = []
+    automation = _snapshot_pma_automation(context.supervisor)
+    if isinstance(hub_root, Path):
+        _, pma_files_detail = _snapshot_pma_files(hub_root)
+        pma_threads = _snapshot_pma_threads(hub_root)
+        for thread in pma_threads:
+            thread["freshness"] = build_freshness_payload(
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                candidates=[("thread_updated_at", thread.get("updated_at"))],
+            )
+        for box in ("inbox", "outbox"):
+            for entry in pma_files_detail.get(box) or []:
+                entry["freshness"] = build_freshness_payload(
+                    generated_at=generated_at,
+                    stale_threshold_seconds=stale_threshold_seconds,
+                    candidates=[("file_modified_at", entry.get("modified_at"))],
+                )
+
+    action_queue = build_pma_action_queue(
+        inbox=inbox,
+        pma_threads=pma_threads,
+        pma_files_detail=pma_files_detail,
+        automation=automation,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
+
+    messages: list[dict] = []
     try:
         snapshots = context.supervisor.list_repos()
     except Exception:
         return []
-
-    for snap in snapshots:
-        if not (snap.initialized and snap.exists_on_disk):
+    repo_roots = {snap.id: snap.path for snap in snapshots}
+    for item in action_queue:
+        if str(item.get("queue_source") or "") != "ticket_flow_inbox":
             continue
-        dismissals = _load_hub_inbox_dismissals(snap.path)
-        repo_root = snap.path
-        db_path = repo_root / ".codex-autorunner" / "flows.db"
-        if not db_path.exists():
+        repo_id = str(item.get("repo_id") or "").strip()
+        run_id = str(item.get("run_id") or "").strip()
+        if not repo_id or not run_id:
             continue
-        try:
-            config = load_repo_config(repo_root)
-            with FlowStore(db_path, durable=config.durable_writes) as store:
-                active_statuses = [
-                    FlowRunStatus.PAUSED,
-                    FlowRunStatus.RUNNING,
-                    FlowRunStatus.FAILED,
-                    FlowRunStatus.STOPPED,
-                ]
-                all_runs = store.list_flow_runs(flow_type="ticket_flow")
-                authoritative_record = select_authoritative_run_record(
-                    all_runs,
-                    preferred_run_id=(
-                        str(snap.last_run_id) if snap.last_run_id is not None else None
-                    ),
-                )
-                if authoritative_record is None:
-                    continue
-                newest_run_id = str(authoritative_record.id)
-
-                for record in [authoritative_record]:
-                    if record.status not in active_statuses:
-                        continue
-                    record_input = dict(record.input_data or {})
-                    latest = latest_dispatch(repo_root, str(record.id), record_input)
-                    seq = int(latest.get("seq") or 0) if isinstance(latest, dict) else 0
-                    latest_reply_seq = _latest_reply_history_seq(
-                        repo_root, str(record.id), record_input
-                    )
-                    dispatch_mode = None
-                    if latest and latest.get("dispatch"):
-                        dispatch_mode = latest["dispatch"].get("mode")
-                    has_pending_dispatch = bool(
-                        latest
-                        and latest.get("dispatch")
-                        and seq > 0
-                        and latest_reply_seq < seq
-                        and dispatch_mode != "turn_summary"
-                    )
-
-                    dispatch_state_reason = None
-                    if (
-                        record.status == FlowRunStatus.PAUSED
-                        and not has_pending_dispatch
-                    ):
-                        if dispatch_mode == "turn_summary":
-                            dispatch_state_reason = (
-                                "Run is paused with an informational turn summary"
-                            )
-                        elif latest and latest.get("errors"):
-                            dispatch_state_reason = (
-                                "Paused run has unreadable dispatch metadata"
-                            )
-                        elif seq > 0 and latest_reply_seq >= seq:
-                            dispatch_state_reason = (
-                                "Latest dispatch already replied; run is still paused"
-                            )
-                        else:
-                            dispatch_state_reason = (
-                                "Run is paused without an actionable dispatch"
-                            )
-                    elif record.status == FlowRunStatus.FAILED:
-                        dispatch_state_reason = record.error_message or "Run failed"
-                    elif record.status == FlowRunStatus.STOPPED:
-                        dispatch_state_reason = "Run was stopped"
-
-                    run_state = build_ticket_flow_run_state(
-                        repo_root=repo_root,
-                        repo_id=snap.id,
-                        record=record,
-                        store=store,
-                        has_pending_dispatch=has_pending_dispatch,
-                        dispatch_state_reason=dispatch_state_reason,
-                    )
-
-                    is_terminal_failed = record.status in (
-                        FlowRunStatus.FAILED,
-                        FlowRunStatus.STOPPED,
-                    )
-                    if (
-                        not run_state.get("attention_required")
-                        and not is_terminal_failed
-                    ):
-                        if has_pending_dispatch:
-                            pass
-                        else:
-                            continue
-
-                    failure_payload = get_failure_payload(record)
-                    failure_summary = (
-                        format_failure_summary(failure_payload)
-                        if failure_payload
-                        else None
-                    )
-                    base_item = {
-                        "repo_id": snap.id,
-                        "repo_display_name": snap.display_name,
-                        "repo_path": str(snap.path),
-                        "run_id": record.id,
-                        "run_created_at": record.created_at,
-                        "status": record.status.value,
-                        "failure": failure_payload,
-                        "failure_summary": failure_summary,
-                        "open_url": f"/repos/{snap.id}/?tab=inbox&run_id={record.id}",
-                        "run_state": run_state,
-                        "canonical_state_v1": build_canonical_state_v1(
-                            repo_root=repo_root,
-                            repo_id=snap.id,
-                            run_state=run_state,
-                            record=record,
-                            store=store,
-                            preferred_run_id=newest_run_id,
-                            stale_threshold_seconds=stale_threshold_seconds,
-                        ),
-                    }
-                    if has_pending_dispatch:
-                        latest_dict = latest if latest else {}
-                        item_payload: dict[str, Any] = {
-                            **base_item,
-                            "item_type": "run_dispatch",
-                            "next_action": "reply_and_resume",
-                            "seq": latest_dict["seq"],
-                            "dispatch": latest_dict["dispatch"],
-                            "message": latest_dict["dispatch"],
-                            "files": latest_dict.get("files") or [],
-                            "dispatch_actionable": True,
-                        }
-                    else:
-                        fallback_dispatch = latest.get("dispatch") if latest else None
-                        item_type = "run_state_attention"
-                        next_action = "inspect_and_resume"
-                        if record.status == FlowRunStatus.FAILED:
-                            item_type = "run_failed"
-                            next_action = "diagnose_or_restart"
-                        elif record.status == FlowRunStatus.STOPPED:
-                            item_type = "run_stopped"
-                            next_action = "diagnose_or_restart"
-                        item_payload = {
-                            **base_item,
-                            "item_type": item_type,
-                            "next_action": next_action,
-                            "seq": seq if seq > 0 else None,
-                            "dispatch": fallback_dispatch,
-                            "message": fallback_dispatch
-                            or {
-                                "title": "Run requires attention",
-                                "body": dispatch_state_reason or "",
-                            },
-                            "files": latest.get("files") if latest else [],
-                            "reason": dispatch_state_reason,
-                            "available_actions": run_state.get(
-                                "recommended_actions", []
-                            ),
-                            "dispatch_actionable": False,
-                        }
-
-                    item_type = str(item_payload.get("item_type") or "run_dispatch")
-                    item_seq_raw = item_payload.get("seq")
-                    item_seq = (
-                        int(item_seq_raw)
-                        if isinstance(item_seq_raw, int)
-                        else (
-                            int(item_seq_raw)
-                            if isinstance(item_seq_raw, str)
-                            and item_seq_raw.isdigit()
-                            and int(item_seq_raw) > 0
-                            else None
-                        )
-                    )
-                    if _find_message_resolution(
-                        dismissals,
-                        run_id=str(record.id),
-                        item_type=item_type,
-                        seq=item_seq,
-                    ):
-                        continue
-
-                    item_payload["resolution_state"] = _message_resolution_state(
-                        item_type
-                    )
-                    item_payload["resolvable_actions"] = _message_resolvable_actions(
-                        item_type
-                    )
-                    messages.append(item_payload)
-        except Exception:
+        repo_root_raw = item.get("repo_path")
+        repo_root = Path(repo_root_raw) if isinstance(repo_root_raw, str) else None
+        if repo_root is None or not repo_root.exists():
+            repo_root = repo_roots.get(repo_id)
+        if repo_root is None:
             continue
+        dismissals = _load_hub_inbox_dismissals(repo_root)
+        item_type = str(item.get("item_type") or "run_dispatch")
+        seq_raw = item.get("seq")
+        item_seq = seq_raw if isinstance(seq_raw, int) and seq_raw > 0 else None
+        if _find_message_resolution(
+            dismissals,
+            run_id=run_id,
+            item_type=item_type,
+            seq=item_seq,
+        ):
+            continue
+        copied = dict(item)
+        copied["resolution_state"] = _message_resolution_state(item_type)
+        copied["resolvable_actions"] = _message_resolvable_actions(item_type)
+        messages.append(copied)
 
-    messages.sort(key=lambda m: m.get("run_created_at") or "", reverse=True)
+    messages.sort(key=lambda m: int(m.get("queue_rank") or 0))
     if limit and limit > 0:
         return messages[: int(limit)]
     return messages
