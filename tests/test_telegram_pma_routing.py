@@ -3704,6 +3704,58 @@ async def test_pma_targets_subcommand_uses_usage_text(tmp_path: Path) -> None:
     assert handler.sent[-1] == "Usage:\n/pma [on|off|status]"
 
 
+@pytest.mark.anyio
+async def test_require_topics_uses_scoped_pma_registry_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from codex_autorunner.core.app_server_threads import pma_topic_scoped_key
+
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    hub_root = tmp_path
+    registry = AppServerThreadRegistry(hub_root / "threads.json")
+    handler = _PMAHandler(record, _PMAClientStub(), hub_root, registry)
+    handler._config = SimpleNamespace(
+        root=hub_root,
+        concurrency=SimpleNamespace(max_parallel_turns=1, per_topic_queue=False),
+        agent_turn_timeout_seconds={"codex": None, "opencode": None},
+        require_topics=True,
+    )
+    handler._pma_registry_key(record, None)
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="test",
+        date=None,
+        is_topic_message=True,
+    )
+
+    pma_key = handler._pma_registry_key(record, message)
+    assert pma_key == "pma.-1001:101"
+
+    registry.set_thread_id(pma_key, "test-thread-id")
+    assert registry.get_thread_id(pma_key) == "test-thread-id"
+
+    def mock_topic_key(chat_id: int, thread_id: Optional[int]) -> str:
+        return f"{chat_id}:{thread_id or 'root'}"
+
+    expected_key = pma_topic_scoped_key(
+        agent="codex",
+        chat_id=-1001,
+        thread_id=101,
+        topic_key_fn=mock_topic_key,
+    )
+    assert pma_key == expected_key
+
+
 class _HelpHandlersStub:
     async def _noop(self, *args: object, **kwargs: object) -> None:
         return None

@@ -96,6 +96,21 @@ class TestFeatureKeyNormalization:
         with pytest.raises(ValueError, match="invalid feature key"):
             normalize_feature_key("unknown.key")
 
+    def test_accepts_pma_topic_scoped_keys(self) -> None:
+        assert normalize_feature_key("pma.-1001234567890:42") == "pma.-1001234567890.42"
+        assert normalize_feature_key("pma.123:root") == "pma.123.root"
+        assert (
+            normalize_feature_key("PMA.OPENCODE.-1001234567890:42")
+            == "pma.opencode.-1001234567890.42"
+        )
+        assert (
+            normalize_feature_key("pma.opencode.topic-abc") == "pma.opencode.topic-abc"
+        )
+
+    def test_rejects_bare_pma_prefix(self) -> None:
+        with pytest.raises(ValueError, match="invalid feature key"):
+            normalize_feature_key("pma.")
+
 
 class TestRegistryPersistence:
     def test_set_and_get_thread_id(self, tmp_path: Path) -> None:
@@ -149,6 +164,86 @@ class TestRegistryThreadValidation:
         registry = AppServerThreadRegistry(path)
         with pytest.raises(ValueError, match="thread id is required"):
             registry.set_thread_id("pma", "")
+
+
+class TestScopedPmaKeys:
+    def test_set_and_get_topic_scoped_pma_key(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+
+        scoped_key = "pma.-1001234567890:42"
+        registry.set_thread_id(scoped_key, "thread-scoped-1")
+        assert registry.get_thread_id(scoped_key) == "thread-scoped-1"
+
+    def test_set_and_get_topic_scoped_pma_opencode_key(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+
+        scoped_key = "pma.opencode.123:root"
+        registry.set_thread_id(scoped_key, "thread-scoped-2")
+        assert registry.get_thread_id(scoped_key) == "thread-scoped-2"
+
+    def test_persistence_round_trip_scoped_pma_keys(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry1 = AppServerThreadRegistry(path)
+        registry1.set_thread_id("pma", "thread-global")
+        registry1.set_thread_id("pma.-1001:42", "thread-topic-42")
+        registry1.set_thread_id("pma.opencode.-1002:99", "thread-topic-99")
+
+        registry2 = AppServerThreadRegistry(path)
+        assert registry2.get_thread_id("pma") == "thread-global"
+        assert registry2.get_thread_id("pma.-1001:42") == "thread-topic-42"
+        assert registry2.get_thread_id("pma.opencode.-1002:99") == "thread-topic-99"
+
+    def test_reset_thread_removes_scoped_pma_key(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        scoped_key = "pma.-1001234567890:42"
+        registry.set_thread_id(scoped_key, "thread-scoped")
+
+        assert registry.reset_thread(scoped_key) is True
+        assert registry.get_thread_id(scoped_key) is None
+        assert registry.reset_thread(scoped_key) is False
+
+    def test_scoped_pma_keys_coexist_with_global_keys(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+
+        registry.set_thread_id("pma", "global-thread")
+        registry.set_thread_id("pma.-1001:42", "topic-42-thread")
+        registry.set_thread_id("pma.-1001:99", "topic-99-thread")
+
+        assert registry.get_thread_id("pma") == "global-thread"
+        assert registry.get_thread_id("pma.-1001:42") == "topic-42-thread"
+        assert registry.get_thread_id("pma.-1001:99") == "topic-99-thread"
+
+    def test_reset_global_pma_preserves_scoped_keys(self, tmp_path: Path) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+
+        registry.set_thread_id("pma", "global-thread")
+        registry.set_thread_id("pma.-1001:42", "topic-42-thread")
+
+        registry.reset_thread("pma")
+
+        assert registry.get_thread_id("pma") is None
+        assert registry.get_thread_id("pma.-1001:42") == "topic-42-thread"
+
+    def test_pma_topic_scoped_key_matches_registry_key(self, tmp_path: Path) -> None:
+        def mock_topic_key(chat_id: int, thread_id: "int | None") -> str:
+            return f"{chat_id}:{thread_id or 'root'}"
+
+        built_key = pma_topic_scoped_key(
+            agent="opencode",
+            chat_id=-1001234567890,
+            thread_id=42,
+            topic_key_fn=mock_topic_key,
+        )
+
+        registry = AppServerThreadRegistry(tmp_path / "threads.json")
+        registry.set_thread_id(built_key, "test-thread")
+
+        assert registry.get_thread_id(built_key) == "test-thread"
 
 
 class TestPmaBaseKeyHelper:

@@ -43,6 +43,8 @@ FILE_CHAT_PREFIX = "file_chat."
 FILE_CHAT_OPENCODE_PREFIX = "file_chat.opencode."
 PMA_KEY = "pma"
 PMA_OPENCODE_KEY = "pma.opencode"
+PMA_PREFIX = "pma."
+PMA_OPENCODE_PREFIX = "pma.opencode."
 
 LOGGER = logging.getLogger("codex_autorunner.app_server")
 
@@ -134,6 +136,10 @@ def normalize_feature_key(raw: str) -> str:
         return key
     # Allow per-target file chat threads (e.g. file_chat.ticket.1, file_chat.workspace.spec).
     for prefix in (FILE_CHAT_PREFIX, FILE_CHAT_OPENCODE_PREFIX):
+        if key.startswith(prefix) and len(key) > len(prefix):
+            return key
+    # Allow per-topic PMA threads (e.g. pma.-1001234567890:42, pma.opencode.123:root).
+    for prefix in (PMA_PREFIX, PMA_OPENCODE_PREFIX):
         if key.startswith(prefix) and len(key) > len(prefix):
             return key
     raise ValueError(f"invalid feature key: {raw}")
