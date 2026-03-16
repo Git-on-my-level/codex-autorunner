@@ -43,8 +43,6 @@ from .....core.orchestration.runtime_thread_events import (
     terminal_run_event_from_outcome,
 )
 from .....core.orchestration.runtime_threads import (
-    RUNTIME_THREAD_INTERRUPTED_ERROR,
-    RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
     await_runtime_thread_outcome,
@@ -66,6 +64,9 @@ from .....integrations.app_server.threads import (
     pma_base_key,
 )
 from .....integrations.chat.compaction import match_pending_compact_seed
+from .....integrations.chat.runtime_thread_errors import (
+    sanitize_runtime_thread_error as _sanitize_runtime_thread_result_error,
+)
 from .....integrations.github.context_injection import maybe_inject_github_context
 from ....app_server.client import (
     CodexAppServerClient,
@@ -209,25 +210,6 @@ def _format_download_failure_response(kind: str, detail: Optional[str]) -> str:
     if detail:
         return f"{base} Reason: {detail}"
     return base
-
-
-def _sanitize_runtime_thread_result_error(
-    detail: Any,
-    *,
-    public_error: str,
-    timeout_error: str,
-    interrupted_error: str,
-) -> str:
-    sanitized = str(detail or "").strip()
-    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, timeout_error}:
-        return timeout_error
-    if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, interrupted_error}:
-        return interrupted_error
-    if sanitized in {timeout_error, interrupted_error}:
-        return sanitized
-    if not sanitized or sanitized in {public_error, "Runtime thread failed"}:
-        return public_error
-    return format_public_error(sanitized)
 
 
 def _build_managed_thread_input_items(

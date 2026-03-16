@@ -16,6 +16,10 @@ from codex_autorunner.core.app_server_threads import (
     PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
 )
+from codex_autorunner.core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_INTERRUPTED_ERROR,
+    RUNTIME_THREAD_TIMEOUT_ERROR,
+)
 from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
@@ -71,9 +75,7 @@ class _RouterStub:
         return self._record
 
 
-def test_sanitize_runtime_thread_result_error_formats_unknown_failures_for_public_output() -> (
-    None
-):
+def test_sanitize_runtime_thread_result_error_preserves_sanitized_detail() -> None:
     assert (
         execution_commands_module._sanitize_runtime_thread_result_error(
             "backend exploded with private detail",
@@ -82,6 +84,32 @@ def test_sanitize_runtime_thread_result_error_formats_unknown_failures_for_publi
             interrupted_error="Telegram PMA turn interrupted",
         )
         == "backend exploded with private detail"
+    )
+
+
+def test_sanitize_runtime_thread_result_error_maps_timeout_to_surface_timeout() -> None:
+    assert (
+        execution_commands_module._sanitize_runtime_thread_result_error(
+            RUNTIME_THREAD_TIMEOUT_ERROR,
+            public_error="Telegram PMA turn failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+        )
+        == "Telegram PMA turn timed out"
+    )
+
+
+def test_sanitize_runtime_thread_result_error_maps_interrupted_to_surface_interrupted() -> (
+    None
+):
+    assert (
+        execution_commands_module._sanitize_runtime_thread_result_error(
+            RUNTIME_THREAD_INTERRUPTED_ERROR,
+            public_error="Telegram PMA turn failed",
+            timeout_error="Telegram PMA turn timed out",
+            interrupted_error="Telegram PMA turn interrupted",
+        )
+        == "Telegram PMA turn interrupted"
     )
 
 

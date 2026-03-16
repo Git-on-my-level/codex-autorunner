@@ -29,8 +29,6 @@ from ...core.orchestration.runtime_thread_events import (
     terminal_run_event_from_outcome,
 )
 from ...core.orchestration.runtime_threads import (
-    RUNTIME_THREAD_INTERRUPTED_ERROR,
-    RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
     await_runtime_thread_outcome,
@@ -62,6 +60,9 @@ from ...integrations.chat.collaboration_policy import CollaborationEvaluationRes
 from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
 from ...integrations.chat.models import ChatMessageEvent
+from ...integrations.chat.runtime_thread_errors import (
+    sanitize_runtime_thread_error as _sanitize_runtime_thread_result_error,
+)
 from ..chat.managed_thread_progress import (
     ProgressRuntimeState,
     apply_run_event_to_progress_tracker,
@@ -600,23 +601,6 @@ async def run_agent_turn_for_message(
         min_edit_interval_seconds=min_edit_interval_seconds,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
     )
-
-
-def _sanitize_runtime_thread_result_error(
-    detail: Any,
-    *,
-    public_error: str,
-    timeout_error: str,
-    interrupted_error: str,
-) -> str:
-    sanitized = str(detail or "").strip()
-    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, timeout_error}:
-        return timeout_error
-    if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, interrupted_error}:
-        return interrupted_error
-    if sanitized in {timeout_error, interrupted_error}:
-        return sanitized
-    return public_error
 
 
 def _note_runtime_event_state(

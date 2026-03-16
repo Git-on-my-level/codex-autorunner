@@ -183,12 +183,58 @@ class _FakeRest:
         return commands
 
 
-def test_sanitize_runtime_thread_result_error_returns_public_error_for_unknown_failures() -> (
+def test_sanitize_runtime_thread_result_error_preserves_sanitized_detail() -> None:
+    assert (
+        discord_message_turns_module._sanitize_runtime_thread_result_error(
+            "backend exploded with private detail",
+            public_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+        )
+        == "backend exploded with private detail"
+    )
+
+
+def test_sanitize_runtime_thread_result_error_maps_timeout_to_surface_timeout() -> None:
+    from codex_autorunner.core.orchestration.runtime_threads import (
+        RUNTIME_THREAD_TIMEOUT_ERROR,
+    )
+
+    assert (
+        discord_message_turns_module._sanitize_runtime_thread_result_error(
+            RUNTIME_THREAD_TIMEOUT_ERROR,
+            public_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+        )
+        == "Discord PMA turn timed out"
+    )
+
+
+def test_sanitize_runtime_thread_result_error_maps_interrupted_to_surface_interrupted() -> (
+    None
+):
+    from codex_autorunner.core.orchestration.runtime_threads import (
+        RUNTIME_THREAD_INTERRUPTED_ERROR,
+    )
+
+    assert (
+        discord_message_turns_module._sanitize_runtime_thread_result_error(
+            RUNTIME_THREAD_INTERRUPTED_ERROR,
+            public_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+        )
+        == "Discord PMA turn interrupted"
+    )
+
+
+def test_sanitize_runtime_thread_result_error_returns_public_error_for_empty_detail() -> (
     None
 ):
     assert (
         discord_message_turns_module._sanitize_runtime_thread_result_error(
-            "backend exploded with private detail",
+            "",
             public_error="Discord PMA turn failed",
             timeout_error="Discord PMA turn timed out",
             interrupted_error="Discord PMA turn interrupted",
