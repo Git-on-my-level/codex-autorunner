@@ -73,6 +73,32 @@ def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
     )
 
 
+def _compose_execution_prompt(
+    *,
+    agent: Any,
+    hub_root,
+    stored_backend_id: Optional[str],
+    compact_seed: Optional[str],
+    message: str,
+) -> str:
+    execution_message = message
+    if not stored_backend_id and compact_seed:
+        execution_message = _compose_compacted_prompt(compact_seed, message)
+
+    # ZeroClaw persists user turns into durable session history via
+    # `--session-state-file`, so PMA bootstrap/docs must not be wrapped into
+    # the conversational turn payload.
+    if str(agent or "").strip().lower() == "zeroclaw":
+        return execution_message
+
+    return (
+        f"{format_pma_discoverability_preamble(hub_root=hub_root)}"
+        "<user_message>\n"
+        f"{execution_message}\n"
+        "</user_message>\n"
+    )
+
+
 def _sanitize_managed_thread_result_error(detail: Any) -> str:
     sanitized = normalize_optional_text(detail)
     if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, "PMA chat timed out"}:
@@ -377,14 +403,12 @@ def build_managed_thread_runtime_routes(
         )
         stored_backend_id = normalize_optional_text(thread.get("backend_thread_id"))
         compact_seed = normalize_optional_text(thread.get("compact_seed"))
-        execution_message = message
-        if not stored_backend_id and compact_seed:
-            execution_message = _compose_compacted_prompt(compact_seed, message)
-        execution_prompt = (
-            f"{format_pma_discoverability_preamble(hub_root=hub_root)}"
-            "<user_message>\n"
-            f"{execution_message}\n"
-            "</user_message>\n"
+        execution_prompt = _compose_execution_prompt(
+            agent=thread.get("agent"),
+            hub_root=hub_root,
+            stored_backend_id=stored_backend_id,
+            compact_seed=compact_seed,
+            message=message,
         )
         service = _build_managed_thread_orchestration_service(
             request,

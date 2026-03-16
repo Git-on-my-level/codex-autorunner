@@ -958,6 +958,14 @@ def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> No
     ]
     assert len(fake_supervisor.turn_calls) == 2
     assert fake_supervisor.turn_calls[0]["conversation_id"] == "zeroclaw-session-1"
+    first_prompt = str(fake_supervisor.turn_calls[0]["prompt"])
+    second_prompt = str(fake_supervisor.turn_calls[1]["prompt"])
+    assert first_prompt == "first zeroclaw prompt"
+    assert second_prompt == "second zeroclaw prompt"
+    assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in first_prompt
+    assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in second_prompt
+    assert "<pma_workspace_docs>" not in first_prompt
+    assert "<user_message>" not in first_prompt
 
     store = PmaThreadStore(hub_env.hub_root)
     thread = store.get_thread(managed_thread_id)
@@ -979,6 +987,112 @@ def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> No
     assert metadata["resource_id"] == workspace.id
     assert metadata["workspace_root"] == str(workspace.path.resolve())
     assert metadata["backend_thread_id"] == "zeroclaw-session-1"
+
+
+def test_zeroclaw_managed_threads_keep_compaction_seed_without_pma_discoverability(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+
+    class FakeZeroClawSupervisor:
+        def __init__(self) -> None:
+            self.turn_calls: list[dict[str, object]] = []
+
+        async def create_session(
+            self, workspace_root: Path, title: str | None = None
+        ) -> str:
+            _ = workspace_root, title
+            return "zeroclaw-session-1"
+
+        async def attach_session(self, workspace_root: Path, session_id: str) -> str:
+            _ = workspace_root
+            return session_id
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            *,
+            model: str | None = None,
+        ) -> str:
+            self.turn_calls.append(
+                {
+                    "workspace_root": workspace_root,
+                    "conversation_id": conversation_id,
+                    "prompt": prompt,
+                    "model": model,
+                }
+            )
+            return f"zeroclaw-turn-{len(self.turn_calls)}"
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+            *,
+            timeout: float | None = None,
+        ):
+            _ = workspace_root, conversation_id, turn_id, timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "ok",
+                    "assistant_text": f"zeroclaw-output-{len(self.turn_calls)}",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def stream_turn_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield None
+
+    app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+                "name": "ZeroClaw thread",
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        compact_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/compact",
+            json={"summary": "summary seed"},
+        )
+        assert compact_resp.status_code == 200
+
+        first_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "first zeroclaw prompt"},
+        )
+        assert first_resp.status_code == 200
+        assert first_resp.json()["status"] == "ok"
+
+    first_prompt = str(app.state.zeroclaw_supervisor.turn_calls[0]["prompt"])
+    assert "Context summary (from compaction):" in first_prompt
+    assert "summary seed" in first_prompt
+    assert "User message:\nfirst zeroclaw prompt" in first_prompt
+    assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in first_prompt
+    assert "<pma_workspace_docs>" not in first_prompt
+    assert "<user_message>" not in first_prompt
 
 
 @pytest.mark.anyio
