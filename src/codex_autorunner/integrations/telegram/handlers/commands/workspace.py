@@ -17,10 +17,8 @@ from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
 from .....integrations.app_server.threads import pma_base_key
 from .....manifest import load_manifest
-from ....app_server.client import (
-    CodexAppServerClient,
-    CodexAppServerResponseError,
-)
+from ....app_server import is_missing_thread_error
+from ....app_server.client import CodexAppServerClient
 from ....chat.agents import (
     build_agent_switch_state,
     chat_agent_supports_effort,
@@ -116,16 +114,6 @@ class ResumeThreadData:
 
 
 class WorkspaceCommands(SharedHelpers):
-    def _is_missing_thread_error(self, exc: Exception) -> bool:
-        if not isinstance(exc, CodexAppServerResponseError):
-            return False
-        message = str(exc).lower()
-        missing_markers = (
-            "thread not found",
-            "no rollout found for thread id",
-        )
-        return any(marker in message for marker in missing_markers)
-
     def _resolve_workspace_path(
         self,
         record: Optional["TelegramTopicRecord"],
@@ -321,7 +309,7 @@ class WorkspaceCommands(SharedHelpers):
         try:
             result = await client.thread_resume(thread_id)
         except Exception as exc:
-            if self._is_missing_thread_error(exc):
+            if is_missing_thread_error(exc):
                 log_event(
                     self._logger,
                     logging.INFO,
@@ -2579,7 +2567,7 @@ class WorkspaceCommands(SharedHelpers):
         try:
             result = await client.thread_resume(thread_id)
         except Exception as exc:
-            if self._is_missing_thread_error(exc):
+            if is_missing_thread_error(exc):
                 log_event(
                     self._logger,
                     logging.INFO,

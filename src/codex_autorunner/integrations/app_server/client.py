@@ -118,6 +118,19 @@ class CodexAppServerProtocolError(CodexAppServerError, PermanentError):
         super().__init__(message, user_message="App-server protocol error. Check logs.")
 
 
+_MISSING_THREAD_MARKERS = (
+    "thread not found",
+    "no rollout found for thread id",
+)
+
+
+def is_missing_thread_error(exc: Exception) -> bool:
+    if not isinstance(exc, CodexAppServerResponseError):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _MISSING_THREAD_MARKERS)
+
+
 @dataclass
 class TurnResult:
     turn_id: str
