@@ -4,14 +4,27 @@ import { JSDOM } from "jsdom";
 
 const dom = new JSDOM(
   `<!doctype html><html><body>
-    <section id="hub-repo-panel" class="hub-repo-panel">
-      <button id="hub-repo-panel-toggle" aria-controls="hub-repo-list" aria-expanded="true"></button>
-      <div id="hub-repo-list"></div>
-    </section>
-    <section id="hub-agent-panel" class="hub-repo-panel hub-agent-panel">
-      <button id="hub-agent-panel-toggle" aria-controls="hub-agent-workspace-list" aria-expanded="false"></button>
-      <div id="hub-agent-workspace-list"></div>
-    </section>
+    <div id="hub-shell">
+      <section id="hub-repo-panel" class="hub-repo-panel">
+        <div class="hub-panel-header">
+          <div class="hub-panel-header-main">
+            <button id="hub-repo-panel-summary" aria-controls="hub-repo-list" aria-expanded="true"></button>
+            <span id="hub-repo-panel-state"></span>
+            <div class="hub-repo-controls"></div>
+          </div>
+        </div>
+        <div id="hub-repo-list"></div>
+      </section>
+      <section id="hub-agent-panel" class="hub-repo-panel hub-agent-panel">
+        <div class="hub-panel-header">
+          <div class="hub-panel-header-main">
+            <button id="hub-agent-panel-summary" aria-controls="hub-agent-workspace-list" aria-expanded="false"></button>
+            <span id="hub-agent-panel-state"></span>
+          </div>
+        </div>
+        <div id="hub-agent-workspace-list"></div>
+      </section>
+    </div>
     <div id="hub-last-scan"></div>
     <div id="pma-last-scan"></div>
     <div id="hub-count-total"></div>
@@ -24,6 +37,16 @@ const dom = new JSDOM(
     <input id="hub-repo-search" value="" />
     <select id="hub-flow-filter"></select>
     <select id="hub-sort-order"></select>
+    <button id="hub-new-agent" type="button"></button>
+    <div id="create-agent-workspace-modal" class="modal-overlay" hidden>
+      <div class="modal-dialog" role="dialog">
+        <input id="create-agent-workspace-id" />
+        <input id="create-agent-workspace-runtime" />
+        <input id="create-agent-workspace-name" />
+        <button id="create-agent-workspace-cancel" type="button"></button>
+        <button id="create-agent-workspace-submit" type="button"></button>
+      </div>
+    </div>
   </body></html>`,
   { url: "http://localhost/hub/" }
 );
@@ -227,17 +250,13 @@ test("hub panel state collapses repositories and agents independently with one e
 
   const repoPanel = document.getElementById("hub-repo-panel");
   const agentPanel = document.getElementById("hub-agent-panel");
-  const repoToggle = document.getElementById("hub-repo-panel-toggle");
-  const agentToggle = document.getElementById("hub-agent-panel-toggle");
+  const repoToggle = document.getElementById("hub-repo-panel-summary");
+  const agentToggle = document.getElementById("hub-agent-panel-summary");
 
   assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
   assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
   assert.equal(repoToggle?.getAttribute("aria-expanded"), "false");
   assert.equal(agentToggle?.getAttribute("aria-expanded"), "true");
-
-  __hubTest.applyHubPanelState("none");
-  assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
-  assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), true);
 });
 
 test("hub panel toggles keep working when localStorage is unavailable", () => {
@@ -254,13 +273,13 @@ test("hub panel toggles keep working when localStorage is unavailable", () => {
     const repoPanel = document.getElementById("hub-repo-panel");
     const agentPanel = document.getElementById("hub-agent-panel");
 
-    __hubTest.applyHubPanelState("none");
+    __hubTest.applyHubPanelState("repos");
     __hubTest.toggleHubPanel("agents");
     assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
     assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
 
     __hubTest.toggleHubPanel("agents");
-    assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), true);
+    assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
 
     __hubTest.toggleHubPanel("repos");
     assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), false);
@@ -296,4 +315,24 @@ test("agent workspace cards render runtime, managed path, and lifecycle actions"
   assert.match(text, /Remove/);
   assert.match(text, /Delete/);
   assert.match(text, /zc-main/);
+});
+
+test("hub interaction harness expands agents and opens the agent modal", () => {
+  const agentPanel = document.getElementById("hub-agent-panel");
+  const repoPanel = document.getElementById("hub-repo-panel");
+  const agentSummary = document.getElementById("hub-agent-panel-summary");
+  const newAgentBtn = document.getElementById("hub-new-agent");
+  const agentModal = document.getElementById("create-agent-workspace-modal");
+
+  agentModal.hidden = true;
+  __hubTest.applyHubPanelState("repos");
+  __hubTest.initInteractionHarness();
+
+  agentSummary.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
+  assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
+
+  newAgentBtn.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
+  assert.equal(agentModal?.hidden, false);
 });

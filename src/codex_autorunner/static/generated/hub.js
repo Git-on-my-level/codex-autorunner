@@ -58,8 +58,11 @@ const hubFlowFilterEl = document.getElementById("hub-flow-filter");
 const hubSortOrderEl = document.getElementById("hub-sort-order");
 const hubRepoPanelEl = document.getElementById("hub-repo-panel");
 const hubAgentPanelEl = document.getElementById("hub-agent-panel");
-const hubRepoPanelToggleEl = document.getElementById("hub-repo-panel-toggle");
-const hubAgentPanelToggleEl = document.getElementById("hub-agent-panel-toggle");
+const hubShellEl = document.getElementById("hub-shell");
+const hubRepoPanelSummaryEl = document.getElementById("hub-repo-panel-summary");
+const hubAgentPanelSummaryEl = document.getElementById("hub-agent-panel-summary");
+const hubRepoPanelStateEl = document.getElementById("hub-repo-panel-state");
+const hubAgentPanelStateEl = document.getElementById("hub-agent-panel-state");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const HUB_PANEL_PREFS_KEY = `car:hub-open-panel:${HUB_BASE || "/"}`;
 const HUB_JOB_POLL_INTERVAL_MS = 1200;
@@ -113,7 +116,7 @@ function saveHubOpenPanel(value) {
 function loadHubOpenPanel() {
     try {
         const raw = localStorage.getItem(HUB_PANEL_PREFS_KEY);
-        if (raw === "repos" || raw === "agents" || raw === "none") {
+        if (raw === "repos" || raw === "agents") {
             return raw;
         }
     }
@@ -2096,28 +2099,36 @@ function applyHubPanelState(openPanel) {
     hubOpenPanel = openPanel;
     const reposOpen = openPanel === "repos";
     const agentsOpen = openPanel === "agents";
+    hubShellEl?.setAttribute("data-hub-open-panel", openPanel);
+    hubRepoPanelEl?.classList.toggle("hub-panel-expanded", reposOpen);
     hubRepoPanelEl?.classList.toggle("hub-panel-collapsed", !reposOpen);
+    hubAgentPanelEl?.classList.toggle("hub-panel-expanded", agentsOpen);
     hubAgentPanelEl?.classList.toggle("hub-panel-collapsed", !agentsOpen);
-    if (hubRepoPanelToggleEl) {
-        hubRepoPanelToggleEl.textContent = reposOpen ? "Collapse" : "Expand";
-        hubRepoPanelToggleEl.setAttribute("aria-expanded", reposOpen ? "true" : "false");
+    if (hubRepoPanelSummaryEl) {
+        hubRepoPanelSummaryEl.setAttribute("aria-expanded", reposOpen ? "true" : "false");
     }
-    if (hubAgentPanelToggleEl) {
-        hubAgentPanelToggleEl.textContent = agentsOpen ? "Collapse" : "Expand";
-        hubAgentPanelToggleEl.setAttribute("aria-expanded", agentsOpen ? "true" : "false");
+    if (hubRepoPanelStateEl) {
+        hubRepoPanelStateEl.textContent = reposOpen ? "Expanded" : "Show panel";
+    }
+    if (hubAgentPanelSummaryEl) {
+        hubAgentPanelSummaryEl.setAttribute("aria-expanded", agentsOpen ? "true" : "false");
+    }
+    if (hubAgentPanelStateEl) {
+        hubAgentPanelStateEl.textContent = agentsOpen ? "Expanded" : "Show panel";
     }
 }
 function toggleHubPanel(panel) {
-    const next = hubOpenPanel === panel ? "none" : panel;
-    saveHubOpenPanel(next);
-    applyHubPanelState(next);
+    if (hubOpenPanel === panel)
+        return;
+    saveHubOpenPanel(panel);
+    applyHubPanelState(panel);
 }
 function initHubPanelControls() {
     applyHubPanelState(hubOpenPanel);
-    hubRepoPanelToggleEl?.addEventListener("click", () => {
+    hubRepoPanelSummaryEl?.addEventListener("click", () => {
         toggleHubPanel("repos");
     });
-    hubAgentPanelToggleEl?.addEventListener("click", () => {
+    hubAgentPanelSummaryEl?.addEventListener("click", () => {
         toggleHubPanel("agents");
     });
 }
@@ -2602,10 +2613,16 @@ function attachHubHandlers() {
         });
     }
     if (newRepoBtn) {
-        newRepoBtn.addEventListener("click", showCreateRepoModal);
+        newRepoBtn.addEventListener("click", () => {
+            toggleHubPanel("repos");
+            showCreateRepoModal();
+        });
     }
     if (newAgentBtn) {
-        newAgentBtn.addEventListener("click", showCreateAgentWorkspaceModal);
+        newAgentBtn.addEventListener("click", () => {
+            toggleHubPanel("agents");
+            showCreateAgentWorkspaceModal();
+        });
     }
     if (createCancelBtn) {
         createCancelBtn.addEventListener("click", hideCreateRepoModal);
@@ -2819,6 +2836,10 @@ export const __hubTest = {
     renderAgentWorkspaces,
     applyHubPanelState,
     toggleHubPanel,
+    initInteractionHarness() {
+        attachHubHandlers();
+        initHubPanelControls();
+    },
     setHubChannelEntries(entries) {
         hubChannelEntries = Array.isArray(entries) ? [...entries] : [];
     },

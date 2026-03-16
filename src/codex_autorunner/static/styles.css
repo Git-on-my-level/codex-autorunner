@@ -307,6 +307,16 @@ body {
   min-height: 0;
 }
 
+.hub-shell[data-hub-open-panel="repos"]>#hub-repo-panel,
+.hub-shell[data-hub-open-panel="agents"]>#hub-agent-panel {
+  flex: 1 1 auto;
+}
+
+.hub-shell[data-hub-open-panel="repos"]>#hub-agent-panel,
+.hub-shell[data-hub-open-panel="agents"]>#hub-repo-panel {
+  flex: 0 0 auto;
+}
+
 .hub-shell>.hub-repo-panel.hub-panel-collapsed {
   flex: 0 0 auto;
   min-height: auto;
@@ -1232,12 +1242,21 @@ main {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--sp-3);
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+}
+
+.hub-panel-expanded {
+  border-color: rgba(108, 245, 216, 0.38);
+  box-shadow: 0 0 0 1px rgba(108, 245, 216, 0.08);
+}
+
+.hub-panel-collapsed {
+  background: rgba(255, 255, 255, 0.015);
 }
 
 .hub-panel-header {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
   padding-bottom: 6px;
@@ -1247,6 +1266,9 @@ main {
 .hub-panel-header-main {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .hub-panel-header p {
@@ -1261,10 +1283,58 @@ main {
   flex-wrap: wrap;
 }
 
-.hub-panel-toggle {
-  align-self: center;
+.hub-panel-summary {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(108, 245, 216, 0.14);
+  border-radius: calc(var(--radius) - 4px);
+  background: rgba(108, 245, 216, 0.03);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.hub-panel-summary:hover {
+  border-color: rgba(108, 245, 216, 0.28);
+  background: rgba(108, 245, 216, 0.06);
+}
+
+.hub-panel-summary-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hub-panel-summary-note {
+  display: block;
+}
+
+.hub-panel-summary-state {
   flex-shrink: 0;
-  min-width: 72px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.hub-panel-summary-state::after {
+  content: "▾";
+  font-size: 12px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.hub-panel-summary[aria-expanded="false"] .hub-panel-summary-state::after {
+  transform: rotate(-90deg);
 }
 
 .hub-panel-collapsed .hub-panel-header {
@@ -7435,8 +7505,15 @@ button.loading::after {
 
   .hub-panel-title {
     width: 100%;
-    justify-content: space-between;
     gap: 8px;
+  }
+
+  .hub-panel-summary {
+    padding: 7px 8px;
+  }
+
+  .hub-panel-summary-note {
+    font-size: 9px;
   }
 
   .hub-repo-controls {

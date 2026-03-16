@@ -69,8 +69,15 @@
     <section class="hub-repo-panel" id="hub-repo-panel" data-hub-panel="repos">
       <div class="hub-panel-header">
         <div class="hub-panel-header-main">
+          <button class="hub-panel-summary" id="hub-repo-panel-summary" type="button"
+            aria-controls="hub-repo-list" aria-expanded="true">
+            <span class="hub-panel-summary-copy">
+              <span class="label">Repositories</span>
+              <span class="hub-panel-summary-note muted small">Browse repos, worktrees, and flow status</span>
+            </span>
+            <span class="hub-panel-summary-state" id="hub-repo-panel-state">Expanded</span>
+          </button>
           <div class="hub-panel-title">
-            <span class="label">Repositories</span>
             <div class="hub-repo-controls">
               <label class="hub-repo-control">
                 Flow
@@ -100,8 +107,6 @@
             </div>
           </div>
         </div>
-        <button class="ghost sm hub-panel-toggle" id="hub-repo-panel-toggle" type="button"
-          aria-controls="hub-repo-list" aria-expanded="true">Collapse</button>
       </div>
       <div class="hub-repo-list" id="hub-repo-list">
         <div class="muted small">Loading…</div>
@@ -110,13 +115,15 @@
     <section class="hub-repo-panel hub-agent-panel" id="hub-agent-panel" data-hub-panel="agents">
       <div class="hub-panel-header">
         <div class="hub-panel-header-main">
-          <div class="hub-panel-title">
-            <span class="label">Agents</span>
-            <p class="muted small">Managed agent workspaces</p>
-          </div>
+          <button class="hub-panel-summary" id="hub-agent-panel-summary" type="button"
+            aria-controls="hub-agent-workspace-list" aria-expanded="false">
+            <span class="hub-panel-summary-copy">
+              <span class="label">Agents</span>
+              <span class="hub-panel-summary-note muted small">Managed agent workspaces and runtimes</span>
+            </span>
+            <span class="hub-panel-summary-state" id="hub-agent-panel-state">Show panel</span>
+          </button>
         </div>
-        <button class="ghost sm hub-panel-toggle" id="hub-agent-panel-toggle" type="button"
-          aria-controls="hub-agent-workspace-list" aria-expanded="false">Expand</button>
       </div>
       <div class="hub-repo-list hub-agent-list" id="hub-agent-workspace-list">
         <div class="muted small">Loading…</div>

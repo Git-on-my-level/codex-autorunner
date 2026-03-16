@@ -226,7 +226,7 @@ interface HubViewPrefs {
   sortOrder: HubSortOrder;
 }
 
-type HubOpenPanel = "repos" | "agents" | "none";
+type HubOpenPanel = "repos" | "agents";
 
 interface HubRepoGroup {
   base: HubRepo;
@@ -303,12 +303,15 @@ const hubSortOrderEl = document.getElementById(
 ) as HTMLSelectElement | null;
 const hubRepoPanelEl = document.getElementById("hub-repo-panel");
 const hubAgentPanelEl = document.getElementById("hub-agent-panel");
-const hubRepoPanelToggleEl = document.getElementById(
-  "hub-repo-panel-toggle"
+const hubShellEl = document.getElementById("hub-shell");
+const hubRepoPanelSummaryEl = document.getElementById(
+  "hub-repo-panel-summary"
 ) as HTMLButtonElement | null;
-const hubAgentPanelToggleEl = document.getElementById(
-  "hub-agent-panel-toggle"
+const hubAgentPanelSummaryEl = document.getElementById(
+  "hub-agent-panel-summary"
 ) as HTMLButtonElement | null;
+const hubRepoPanelStateEl = document.getElementById("hub-repo-panel-state");
+const hubAgentPanelStateEl = document.getElementById("hub-agent-panel-state");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
 const HUB_PANEL_PREFS_KEY = `car:hub-open-panel:${HUB_BASE || "/"}`;
 const HUB_JOB_POLL_INTERVAL_MS = 1200;
@@ -361,7 +364,7 @@ function saveHubOpenPanel(value: HubOpenPanel): void {
 function loadHubOpenPanel(): HubOpenPanel {
   try {
     const raw = localStorage.getItem(HUB_PANEL_PREFS_KEY);
-    if (raw === "repos" || raw === "agents" || raw === "none") {
+    if (raw === "repos" || raw === "agents") {
       return raw;
     }
   } catch (_err) {
@@ -2657,30 +2660,37 @@ function applyHubPanelState(openPanel: HubOpenPanel): void {
   hubOpenPanel = openPanel;
   const reposOpen = openPanel === "repos";
   const agentsOpen = openPanel === "agents";
+  hubShellEl?.setAttribute("data-hub-open-panel", openPanel);
+  hubRepoPanelEl?.classList.toggle("hub-panel-expanded", reposOpen);
   hubRepoPanelEl?.classList.toggle("hub-panel-collapsed", !reposOpen);
+  hubAgentPanelEl?.classList.toggle("hub-panel-expanded", agentsOpen);
   hubAgentPanelEl?.classList.toggle("hub-panel-collapsed", !agentsOpen);
-  if (hubRepoPanelToggleEl) {
-    hubRepoPanelToggleEl.textContent = reposOpen ? "Collapse" : "Expand";
-    hubRepoPanelToggleEl.setAttribute("aria-expanded", reposOpen ? "true" : "false");
+  if (hubRepoPanelSummaryEl) {
+    hubRepoPanelSummaryEl.setAttribute("aria-expanded", reposOpen ? "true" : "false");
   }
-  if (hubAgentPanelToggleEl) {
-    hubAgentPanelToggleEl.textContent = agentsOpen ? "Collapse" : "Expand";
-    hubAgentPanelToggleEl.setAttribute("aria-expanded", agentsOpen ? "true" : "false");
+  if (hubRepoPanelStateEl) {
+    hubRepoPanelStateEl.textContent = reposOpen ? "Expanded" : "Show panel";
+  }
+  if (hubAgentPanelSummaryEl) {
+    hubAgentPanelSummaryEl.setAttribute("aria-expanded", agentsOpen ? "true" : "false");
+  }
+  if (hubAgentPanelStateEl) {
+    hubAgentPanelStateEl.textContent = agentsOpen ? "Expanded" : "Show panel";
   }
 }
 
-function toggleHubPanel(panel: Exclude<HubOpenPanel, "none">): void {
-  const next: HubOpenPanel = hubOpenPanel === panel ? "none" : panel;
-  saveHubOpenPanel(next);
-  applyHubPanelState(next);
+function toggleHubPanel(panel: HubOpenPanel): void {
+  if (hubOpenPanel === panel) return;
+  saveHubOpenPanel(panel);
+  applyHubPanelState(panel);
 }
 
 function initHubPanelControls(): void {
   applyHubPanelState(hubOpenPanel);
-  hubRepoPanelToggleEl?.addEventListener("click", () => {
+  hubRepoPanelSummaryEl?.addEventListener("click", () => {
     toggleHubPanel("repos");
   });
-  hubAgentPanelToggleEl?.addEventListener("click", () => {
+  hubAgentPanelSummaryEl?.addEventListener("click", () => {
     toggleHubPanel("agents");
   });
 }
@@ -3257,10 +3267,16 @@ function attachHubHandlers(): void {
   }
 
   if (newRepoBtn) {
-    newRepoBtn.addEventListener("click", showCreateRepoModal);
+    newRepoBtn.addEventListener("click", () => {
+      toggleHubPanel("repos");
+      showCreateRepoModal();
+    });
   }
   if (newAgentBtn) {
-    newAgentBtn.addEventListener("click", showCreateAgentWorkspaceModal);
+    newAgentBtn.addEventListener("click", () => {
+      toggleHubPanel("agents");
+      showCreateAgentWorkspaceModal();
+    });
   }
   if (createCancelBtn) {
     createCancelBtn.addEventListener("click", hideCreateRepoModal);
@@ -3479,6 +3495,10 @@ export const __hubTest = {
   renderAgentWorkspaces,
   applyHubPanelState,
   toggleHubPanel,
+  initInteractionHarness(): void {
+    attachHubHandlers();
+    initHubPanelControls();
+  },
   setHubChannelEntries(entries: HubChannelEntry[]): void {
     hubChannelEntries = Array.isArray(entries) ? [...entries] : [];
   },
