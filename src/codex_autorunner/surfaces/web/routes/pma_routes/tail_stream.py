@@ -375,6 +375,8 @@ def build_managed_thread_tail_routes(
                 and turn_status == "running"
             ),
             "status": str(serialized_thread.get("status") or ""),
+            "operator_status": str(serialized_thread.get("operator_status") or ""),
+            "is_reusable": bool(serialized_thread.get("is_reusable")),
             "status_reason": normalize_optional_text(
                 serialized_thread.get("status_reason")
             )

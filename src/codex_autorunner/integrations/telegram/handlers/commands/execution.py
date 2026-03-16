@@ -3266,14 +3266,27 @@ class ExecutionCommands(SharedHelpers):
             )
         return base_key
 
-    async def _prepare_pma_prompt(self, message_text: str) -> Optional[str]:
+    async def _prepare_pma_prompt(
+        self,
+        message_text: str,
+        *,
+        record: "TelegramTopicRecord",
+        message: TelegramMessage,
+    ) -> Optional[str]:
         hub_root = getattr(self, "_hub_root", None)
         if hub_root is None:
             return None
         supervisor = getattr(self, "_hub_supervisor", None)
         snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
         base_prompt = load_pma_prompt(hub_root)
-        return format_pma_prompt(base_prompt, snapshot, message_text, hub_root=hub_root)
+        prompt_state_key = self._pma_registry_key(record, message)
+        return format_pma_prompt(
+            base_prompt,
+            snapshot,
+            message_text,
+            hub_root=hub_root,
+            prompt_state_key=prompt_state_key,
+        )
 
     async def _prepare_turn_context(
         self,
@@ -3463,7 +3476,11 @@ class ExecutionCommands(SharedHelpers):
         )
         if pma_enabled:
             user_message_prompt = prompt_text
-            pma_prompt = await self._prepare_pma_prompt(prompt_text)
+            pma_prompt = await self._prepare_pma_prompt(
+                prompt_text,
+                record=record,
+                message=message,
+            )
             if pma_prompt is None:
                 failure_message = "PMA unavailable; hub snapshot failed."
                 if send_failure_response:

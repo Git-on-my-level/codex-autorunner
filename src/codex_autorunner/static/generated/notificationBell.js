@@ -31,6 +31,12 @@ function itemBody(item) {
     const payload = item.dispatch || item.message || {};
     return payload.body || item.run_state?.blocking_reason || "";
 }
+function isSuperseded(item) {
+    return item.supersession?.superseded === true;
+}
+function isPrimary(item) {
+    return item.supersession?.is_primary === true;
+}
 function formatFreshnessAge(ageSeconds) {
     if (typeof ageSeconds !== "number" || !Number.isFinite(ageSeconds) || ageSeconds < 0) {
         return "";
@@ -64,7 +70,9 @@ function renderList(items) {
         listEl.innerHTML = '<div class="muted">No dispatches</div>';
         return;
     }
-    const html = items
+    const actionableItems = items.filter((item) => !isSuperseded(item));
+    const supersededItems = items.filter(isSuperseded);
+    const html = actionableItems
         .map((item) => {
         const title = itemTitle(item);
         const excerpt = itemBody(item).slice(0, 180);
@@ -100,8 +108,9 @@ function renderList(items) {
             : stateLabel === "paused"
                 ? "pill-warn"
                 : "pill-caution";
+        const primaryIndicator = isPrimary(item) ? "primary-item" : "";
         return `
-        <div class="notification-item">
+        <div class="notification-item ${primaryIndicator}">
           <div class="notification-item-header">
             <span class="notification-repo">${escapeHtml(repoLabel)} <span class="muted">(${item.run_id.slice(0, 8)}${seq})</span></span>
             <span class="pill pill-small ${stateClass}">${escapeHtml(stateLabel)}</span>
@@ -119,7 +128,32 @@ function renderList(items) {
       `;
     })
         .join("");
-    listEl.innerHTML = html;
+    const supersededHtml = supersededItems.length
+        ? supersededItems
+            .map((item) => {
+            const title = itemTitle(item);
+            const repoLabel = item.repo_display_name || item.repo_id;
+            const seq = item.seq ? `#${item.seq}` : "";
+            const supersededBy = item.supersession?.superseded_by || "newer item";
+            const supersededReason = item.supersession?.reason || "Superseded by newer action";
+            return `
+            <div class="notification-item superseded-item muted">
+              <div class="notification-item-header">
+                <span class="notification-repo">${escapeHtml(repoLabel)} <span class="muted">(${item.run_id.slice(0, 8)}${seq})</span></span>
+                <span class="pill pill-small pill-muted">superseded</span>
+              </div>
+              <div class="notification-title">${escapeHtml(title)}</div>
+              <div class="notification-next small">Replaced by: ${escapeHtml(supersededBy)}</div>
+              <div class="notification-next small">${escapeHtml(supersededReason)}</div>
+            </div>
+          `;
+        })
+            .join("")
+        : "";
+    const supersededSection = supersededItems.length
+        ? `<div class="notification-superseded-section"><div class="notification-section-label muted small">Superseded items</div>${supersededHtml}</div>`
+        : "";
+    listEl.innerHTML = html + supersededSection;
 }
 async function fetchNotifications() {
     const payload = (await api("/hub/messages", { method: "GET" }));
@@ -129,7 +163,8 @@ async function refreshNotifications(options = {}) {
     const { silent = true, render = false } = options;
     try {
         const items = await fetchNotifications();
-        setBadges(items.length);
+        const actionableItems = items.filter((item) => !isSuperseded(item));
+        setBadges(actionableItems.length);
         if (modalOpen || render) {
             renderList(items);
         }

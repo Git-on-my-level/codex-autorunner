@@ -47,6 +47,8 @@ def test_create_managed_thread_with_repo_id(hub_env) -> None:
     assert thread["name"] == "Primary thread"
     assert thread["backend_thread_id"] == "thread-backend-1"
     assert thread["status"] == "idle"
+    assert thread["operator_status"] == "idle"
+    assert thread["is_reusable"] is True
     assert thread["lifecycle_status"] == "active"
     assert thread["status_reason"] == "thread_created"
     assert thread["status_terminal"] is False
@@ -379,6 +381,8 @@ def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     assert fetched["repo_id"] == hub_env.repo_id
     assert fetched["resource_kind"] == "repo"
     assert fetched["resource_id"] == hub_env.repo_id
+    assert fetched["operator_status"] == "idle"
+    assert fetched["is_reusable"] is True
 
 
 def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) -> None:
@@ -501,6 +505,8 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
         assert resume_resp.status_code == 200
         resumed_thread = resume_resp.json()["thread"]
         assert resumed_thread["status"] == "idle"
+        assert resumed_thread["operator_status"] == "idle"
+        assert resumed_thread["is_reusable"] is True
         assert resumed_thread["lifecycle_status"] == "active"
         assert resumed_thread["backend_thread_id"] == resumed_backend_id
 
@@ -516,6 +522,8 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
         get_resp = client.get(f"/hub/pma/threads/{managed_thread_id}")
         assert get_resp.status_code == 200
         assert get_resp.json()["thread"]["status"] == "completed"
+        assert get_resp.json()["thread"]["operator_status"] == "reusable"
+        assert get_resp.json()["thread"]["is_reusable"] is True
         assert get_resp.json()["thread"]["lifecycle_status"] == "active"
 
     assert fake_supervisor.client.resume_calls == [resumed_backend_id]
@@ -701,6 +709,10 @@ def test_managed_thread_crud_routes_use_orchestration_service(
     assert resume_resp.json()["thread"]["backend_thread_id"] == "backend-thread-2"
     assert archive_resp.json()["thread"]["lifecycle_status"] == "archived"
     assert archive_resp.json()["thread"]["status"] == "archived"
+    assert created["operator_status"] == "idle"
+    assert created["is_reusable"] is True
+    assert archive_resp.json()["thread"]["operator_status"] == "archived"
+    assert archive_resp.json()["thread"]["is_reusable"] is False
 
     assert fake_service.calls == [
         (

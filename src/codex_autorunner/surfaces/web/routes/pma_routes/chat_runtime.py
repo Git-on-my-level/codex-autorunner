@@ -764,7 +764,14 @@ async def _execute_queue_item(
         )
 
         snapshot = await snapshot_builder(supervisor, hub_root=hub_root)
-        prompt = format_pma_prompt(prompt_base, snapshot, message, hub_root=hub_root)
+        prompt_state_key = PMA_OPENCODE_KEY if agent_id == "opencode" else PMA_KEY
+        prompt = format_pma_prompt(
+            prompt_base,
+            snapshot,
+            message,
+            hub_root=hub_root,
+            prompt_state_key=prompt_state_key,
+        )
         prompt, _ = await github_context_injector(
             prompt_text=prompt,
             link_source_text=message,

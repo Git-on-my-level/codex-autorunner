@@ -446,7 +446,7 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
     assert '"managed_thread_id": "thread-1"' in info_result.stdout
     assert status_result.exit_code == 0
     assert (
-        "id=thread-1 agent=codex repo=repo-1 thread=completed lifecycle=active"
+        "id=thread-1 agent=codex repo=repo-1 status=reusable last_turn=completed"
         in status_result.stdout
     )
     assert "latest output:" in status_result.stdout

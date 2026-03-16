@@ -428,6 +428,8 @@ def _format_resource_owner_label(item: dict[str, Any]) -> str:
 
 
 def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
+    from ...core.managed_thread_status import derive_managed_thread_operator_status
+
     raw_thread = data.get("thread")
     thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
     raw_turn = data.get("turn")
@@ -435,8 +437,15 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
     managed_thread_id = str(data.get("managed_thread_id") or "")
     agent = str(thread.get("agent") or "-")
     owner = _format_resource_owner_label(thread)
-    thread_state = str(data.get("status") or thread.get("status") or "-")
+    raw_thread_status = str(data.get("status") or thread.get("status") or "-")
     lifecycle_state = str(thread.get("lifecycle_status") or "-")
+    operator_status = derive_managed_thread_operator_status(
+        normalized_status=raw_thread_status,
+        lifecycle_status=lifecycle_state,
+    )
+    last_turn_outcome = (
+        raw_thread_status if raw_thread_status in {"completed", "failed"} else "-"
+    )
     status_reason = str(data.get("status_reason") or thread.get("status_reason") or "-")
     managed_turn_id = str(turn.get("managed_turn_id") or "-")
     turn_state = str(turn.get("status") or "-")
@@ -450,8 +459,8 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
                 f"id={managed_thread_id}",
                 f"agent={agent}",
                 owner,
-                f"thread={thread_state}",
-                f"lifecycle={lifecycle_state}",
+                f"status={operator_status}",
+                f"last_turn={last_turn_outcome}",
                 f"alive={alive}",
             ]
         )

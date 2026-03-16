@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from .....agents.registry import get_registered_agents
+from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.models import ThreadTarget
@@ -126,6 +127,25 @@ def _normalize_notify_on(value: Any) -> Optional[str]:
     return notify_on
 
 
+def _build_operator_status_fields(
+    *,
+    normalized_status: Optional[str],
+    lifecycle_status: Optional[str],
+) -> dict[str, Any]:
+    operator_status = derive_managed_thread_operator_status(
+        normalized_status=normalized_status,
+        lifecycle_status=lifecycle_status,
+    )
+    return {
+        "operator_status": operator_status,
+        "is_reusable": operator_status
+        in {
+            "idle",
+            "reusable",
+        },
+    }
+
+
 def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
     payload = dict(thread)
     lifecycle_status = normalize_optional_text(
@@ -146,11 +166,17 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
     payload["accepts_messages"] = lifecycle_status == "active"
     payload["resource_kind"] = normalize_optional_text(thread.get("resource_kind"))
     payload["resource_id"] = normalize_optional_text(thread.get("resource_id"))
+    payload.update(
+        _build_operator_status_fields(
+            normalized_status=payload["normalized_status"],
+            lifecycle_status=lifecycle_status,
+        )
+    )
     return payload
 
 
 def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
-    return {
+    payload = {
         "managed_thread_id": thread.thread_target_id,
         "agent": thread.agent_id,
         "repo_id": thread.repo_id,
@@ -171,6 +197,13 @@ def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
         "compact_seed": thread.compact_seed,
         "accepts_messages": thread.lifecycle_status == "active",
     }
+    payload.update(
+        _build_operator_status_fields(
+            normalized_status=thread.status,
+            lifecycle_status=thread.lifecycle_status,
+        )
+    )
+    return payload
 
 
 def _raise_agent_workspace_runtime_not_ready(

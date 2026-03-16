@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import shlex
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, TypedDict, cast
 
@@ -30,6 +32,8 @@ from .freshness import (
     summarize_section_freshness,
 )
 from .hub import HubSupervisor
+from .locks import file_lock
+from .managed_thread_status import derive_managed_thread_operator_status
 from .pma_active_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     get_active_context_auto_prune_meta,
@@ -42,6 +46,8 @@ from .ticket_flow_projection import (
     select_authoritative_run_record,
 )
 from .ticket_flow_summary import build_ticket_flow_summary
+from .time_utils import now_iso
+from .utils import atomic_write
 
 _logger = logging.getLogger(__name__)
 
@@ -54,6 +60,36 @@ PMA_MAX_PMA_FILES = 50
 PMA_MAX_LIFECYCLE_EVENTS = 20
 PMA_MAX_PMA_THREADS = 20
 PMA_MAX_AUTOMATION_ITEMS = 10
+PMA_PROMPT_STATE_FILENAME = "prompt_state.json"
+PMA_PROMPT_STATE_VERSION = 1
+PMA_PROMPT_STATE_MAX_SESSIONS = 200
+PMA_PROMPT_DIGEST_PREVIEW = 12
+
+PMA_PROMPT_SECTION_ORDER = (
+    "agents",
+    "active_context",
+    "context_log_tail",
+    "hub_snapshot",
+)
+PMA_PROMPT_SECTION_META: dict[str, dict[str, str]] = {
+    "agents": {"label": "AGENTS_MD", "tag": "AGENTS_MD"},
+    "active_context": {
+        "label": "ACTIVE_CONTEXT_MD",
+        "tag": "ACTIVE_CONTEXT_MD",
+    },
+    "context_log_tail": {
+        "label": "CONTEXT_LOG_TAIL_MD",
+        "tag": "CONTEXT_LOG_TAIL_MD",
+    },
+    "hub_snapshot": {"label": "HUB_SNAPSHOT", "tag": "hub_snapshot"},
+}
+
+PMA_ACTION_QUEUE_PRECEDENCE: dict[str, tuple[int, str]] = {
+    "ticket_flow_inbox": (10, "ticket_flow_inbox"),
+    "managed_thread_followup": (20, "managed_thread_followup"),
+    "pma_file_inbox": (30, "pma_file_inbox"),
+    "automation_wakeup": (40, "automation_wakeup"),
+}
 
 # Keep this short and stable; see ticket TICKET-001 for rationale.
 PMA_FASTPATH = """<pma_fastpath>
@@ -229,6 +265,158 @@ def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
         "active_context_auto_pruned": bool(auto_prune_state),
         "active_context_auto_prune": auto_prune_meta,
     }
+
+
+def default_pma_prompt_state_path(hub_root: Path) -> Path:
+    return hub_root / ".codex-autorunner" / "pma" / PMA_PROMPT_STATE_FILENAME
+
+
+def _default_pma_prompt_state() -> dict[str, Any]:
+    return {
+        "version": PMA_PROMPT_STATE_VERSION,
+        "sessions": {},
+        "updated_at": now_iso(),
+    }
+
+
+def _prompt_state_lock_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".lock")
+
+
+def _digest_text(value: Any) -> str:
+    raw = value if isinstance(value, str) else str(value or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _digest_preview(digest: Any) -> str:
+    if not isinstance(digest, str):
+        return ""
+    return digest[:PMA_PROMPT_DIGEST_PREVIEW]
+
+
+def _is_digest(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    return all(ch in "0123456789abcdef" for ch in value)
+
+
+def _build_prompt_bundle_digest(sections: Mapping[str, Mapping[str, Any]]) -> str:
+    payload = {
+        name: str((sections.get(name) or {}).get("digest") or "")
+        for name in PMA_PROMPT_SECTION_ORDER
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+    return _digest_text(raw)
+
+
+def _read_pma_prompt_state_unlocked(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return _default_pma_prompt_state()
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except Exception as exc:
+        _logger.warning("Could not read PMA prompt state: %s", exc)
+        return _default_pma_prompt_state()
+    return data if isinstance(data, dict) else _default_pma_prompt_state()
+
+
+def _write_pma_prompt_state_unlocked(path: Path, state: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def _validate_prompt_session_record(record: Any) -> bool:
+    if not isinstance(record, Mapping):
+        return False
+    sections = record.get("sections")
+    if not isinstance(sections, Mapping):
+        return False
+    for name in PMA_PROMPT_SECTION_ORDER:
+        section = sections.get(name)
+        if not isinstance(section, Mapping):
+            return False
+        if not _is_digest(section.get("digest")):
+            return False
+    bundle_digest = record.get("bundle_digest")
+    if not _is_digest(bundle_digest):
+        return False
+    return bundle_digest == _build_prompt_bundle_digest(
+        cast(Mapping[str, Mapping[str, Any]], sections)
+    )
+
+
+def _trim_prompt_sessions(sessions: Mapping[str, Any]) -> dict[str, Any]:
+    items: list[tuple[str, Mapping[str, Any]]] = []
+    for key, value in sessions.items():
+        if not isinstance(key, str) or not key:
+            continue
+        if not isinstance(value, Mapping):
+            continue
+        items.append((key, value))
+    if len(items) <= PMA_PROMPT_STATE_MAX_SESSIONS:
+        return {key: dict(value) for key, value in items}
+
+    def _sort_key(item: tuple[str, Mapping[str, Any]]) -> tuple[str, str]:
+        updated_at = str(item[1].get("updated_at") or "")
+        return (updated_at, item[0])
+
+    trimmed = sorted(items, key=_sort_key)[-PMA_PROMPT_STATE_MAX_SESSIONS:]
+    return {key: dict(value) for key, value in trimmed}
+
+
+def _merge_prompt_session_state(
+    hub_root: Path,
+    *,
+    prompt_state_key: str,
+    sections: Mapping[str, Mapping[str, str]],
+    force_full_context: bool,
+) -> tuple[bool, str, Optional[Mapping[str, Any]], Optional[str]]:
+    path = default_pma_prompt_state_path(hub_root)
+    lock_path = _prompt_state_lock_path(path)
+    use_delta = False
+    delta_reason = "first_turn"
+    prior_sections: Optional[Mapping[str, Any]] = None
+    prior_updated_at: Optional[str] = None
+
+    with file_lock(lock_path):
+        state = _read_pma_prompt_state_unlocked(path)
+        sessions = state.get("sessions")
+        if isinstance(sessions, Mapping):
+            prior_record = sessions.get(prompt_state_key)
+            if _validate_prompt_session_record(prior_record):
+                validated_record = cast(Mapping[str, Any], prior_record)
+                prior_sections = cast(
+                    Optional[Mapping[str, Any]], validated_record.get("sections")
+                )
+                prior_updated_at = cast(
+                    Optional[str], validated_record.get("updated_at")
+                )
+                if force_full_context:
+                    delta_reason = "explicit_refresh"
+                else:
+                    use_delta = True
+                    delta_reason = "cached_context"
+            elif prior_record is not None:
+                delta_reason = "digest_mismatch"
+
+        updated_sessions = dict(sessions) if isinstance(sessions, Mapping) else {}
+        timestamp = now_iso()
+        updated_sessions[prompt_state_key] = {
+            "version": PMA_PROMPT_STATE_VERSION,
+            "updated_at": timestamp,
+            "bundle_digest": _build_prompt_bundle_digest(sections),
+            "sections": {
+                name: {"digest": str(payload.get("digest") or "")}
+                for name, payload in sections.items()
+            },
+        }
+        state["version"] = PMA_PROMPT_STATE_VERSION
+        state["updated_at"] = timestamp
+        state["sessions"] = _trim_prompt_sessions(updated_sessions)
+        _write_pma_prompt_state_unlocked(path, state)
+
+    return use_delta, delta_reason, prior_sections, prior_updated_at
 
 
 def _truncate(text: Optional[str], limit: int) -> str:
@@ -429,6 +617,379 @@ def _extract_entry_freshness(entry: Mapping[str, Any]) -> Optional[Mapping[str, 
     return None
 
 
+def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_sort_value(value: Any) -> float:
+    parsed = _parse_iso_timestamp(value)
+    if parsed is None:
+        return 0.0
+    return parsed.timestamp()
+
+
+def _queue_precedence(source: str) -> tuple[int, str]:
+    return PMA_ACTION_QUEUE_PRECEDENCE.get(source, (999, source or "unknown"))
+
+
+def _queue_supersession_payload(
+    *,
+    status: str,
+    is_primary: bool,
+    superseded: bool,
+    superseded_by: Optional[str],
+    reason: Optional[str],
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "is_primary": is_primary,
+        "superseded": superseded,
+        "superseded_by": superseded_by,
+        "reason": reason,
+    }
+
+
+def _build_ticket_flow_queue_items(
+    inbox: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank, label = _queue_precedence("ticket_flow_inbox")
+    for entry in inbox:
+        if not isinstance(entry, dict):
+            continue
+        copied = dict(entry)
+        repo_id = str(copied.get("repo_id") or "").strip()
+        run_id = str(copied.get("run_id") or "").strip()
+        seq = copied.get("seq")
+        queue_id = f"ticket_flow_inbox:{repo_id or '-'}:{run_id or '-'}:{seq or 0}"
+        recommended_detail = (
+            str((copied.get("run_state") or {}).get("recommended_action") or "").strip()
+            or None
+        )
+        next_action = (
+            str(copied.get("next_action") or "").strip() or "inspect_and_resume"
+        )
+        freshness = _extract_entry_freshness(copied)
+        copied.update(
+            {
+                "action_queue_id": queue_id,
+                "queue_source": "ticket_flow_inbox",
+                "precedence": {"rank": rank, "label": label},
+                "why_selected": (
+                    "Newest authoritative ticket-flow run requires operator attention"
+                    if copied.get("dispatch_actionable") is False
+                    else "Newest authoritative ticket-flow run has an unanswered dispatch"
+                ),
+                "recommended_action": next_action,
+                "recommended_detail": recommended_detail,
+                "freshness": (
+                    dict(freshness) if isinstance(freshness, Mapping) else None
+                ),
+                "scope": {
+                    "kind": "run",
+                    "key": f"run:{run_id}" if run_id else f"repo:{repo_id}",
+                },
+                "sort_timestamp": _timestamp_sort_value(
+                    (freshness or {}).get("basis_at")
+                    if isinstance(freshness, Mapping)
+                    else copied.get("run_created_at")
+                ),
+            }
+        )
+        items.append(copied)
+    return items
+
+
+def _thread_followup_next_action(status: str) -> tuple[str, str]:
+    normalized = status.strip().lower()
+    if normalized == "failed":
+        return (
+            "inspect_managed_thread_failure",
+            "Managed thread failed and needs inspection before reuse",
+        )
+    if normalized == "paused":
+        return (
+            "resume_managed_thread",
+            "Managed thread is paused and can be resumed",
+        )
+    if normalized == "completed":
+        return (
+            "resume_managed_thread",
+            "Managed thread completed its last turn and is reusable",
+        )
+    return (
+        "resume_managed_thread",
+        "Managed thread is idle and ready for another turn",
+    )
+
+
+def _build_thread_queue_items(
+    pma_threads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank, label = _queue_precedence("managed_thread_followup")
+    for entry in pma_threads:
+        if not isinstance(entry, dict):
+            continue
+        status = str(entry.get("status") or "").strip().lower()
+        if status in {"", "running", "archived"}:
+            continue
+        repo_id = str(entry.get("repo_id") or "").strip()
+        managed_thread_id = str(entry.get("managed_thread_id") or "").strip()
+        next_action, why_selected = _thread_followup_next_action(status)
+        freshness = _extract_entry_freshness(entry)
+        scope_key = (
+            f"thread:{managed_thread_id}"
+            if managed_thread_id
+            else (
+                f"resource:{entry.get('resource_kind')}:{entry.get('resource_id')}"
+                if entry.get("resource_kind") and entry.get("resource_id")
+                else f"repo:{repo_id}"
+            )
+        )
+        items.append(
+            {
+                "item_type": "managed_thread_followup",
+                "managed_thread_id": managed_thread_id,
+                "repo_id": repo_id or None,
+                "agent": entry.get("agent"),
+                "resource_kind": entry.get("resource_kind"),
+                "resource_id": entry.get("resource_id"),
+                "workspace_root": entry.get("workspace_root"),
+                "name": entry.get("name"),
+                "status": entry.get("status"),
+                "lifecycle_status": entry.get("lifecycle_status"),
+                "status_reason": entry.get("status_reason"),
+                "status_terminal": entry.get("status_terminal"),
+                "last_turn_id": entry.get("last_turn_id"),
+                "last_message_preview": entry.get("last_message_preview"),
+                "updated_at": entry.get("updated_at"),
+                "open_url": (
+                    f"/hub/pma/threads/{managed_thread_id}"
+                    if managed_thread_id
+                    else None
+                ),
+                "action_queue_id": f"managed_thread_followup:{managed_thread_id or '-'}",
+                "queue_source": "managed_thread_followup",
+                "precedence": {"rank": rank, "label": label},
+                "why_selected": why_selected,
+                "recommended_action": next_action,
+                "recommended_detail": (
+                    f'car pma thread send --id {managed_thread_id} --message "..." --watch'
+                    if managed_thread_id and next_action == "resume_managed_thread"
+                    else (
+                        f"car pma thread status --id {managed_thread_id}"
+                        if managed_thread_id
+                        else None
+                    )
+                ),
+                "freshness": (
+                    dict(freshness) if isinstance(freshness, Mapping) else None
+                ),
+                "scope": {
+                    "kind": "thread" if managed_thread_id else "resource",
+                    "key": scope_key,
+                },
+                "sort_timestamp": _timestamp_sort_value(
+                    (freshness or {}).get("basis_at")
+                    if isinstance(freshness, Mapping)
+                    else entry.get("updated_at")
+                ),
+            }
+        )
+    return items
+
+
+def _build_file_queue_items(
+    pma_files_detail: Mapping[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank, label = _queue_precedence("pma_file_inbox")
+    for entry in pma_files_detail.get("inbox") or []:
+        if not isinstance(entry, dict):
+            continue
+        freshness = _extract_entry_freshness(entry)
+        name = str(entry.get("name") or "").strip()
+        copied = dict(entry)
+        copied.update(
+            {
+                "action_queue_id": f"pma_file_inbox:{name or '-'}",
+                "queue_source": "pma_file_inbox",
+                "precedence": {"rank": rank, "label": label},
+                "why_selected": "Uploaded file is waiting in the PMA inbox",
+                "recommended_action": "process_uploaded_file",
+                "recommended_detail": (
+                    "Inspect `.codex-autorunner/filebox/inbox/` and route the upload"
+                ),
+                "freshness": (
+                    dict(freshness) if isinstance(freshness, Mapping) else None
+                ),
+                "scope": {"kind": "filebox", "key": f"filebox:inbox:{name or '-'}"},
+                "sort_timestamp": _timestamp_sort_value(
+                    (freshness or {}).get("basis_at")
+                    if isinstance(freshness, Mapping)
+                    else entry.get("modified_at")
+                ),
+            }
+        )
+        items.append(copied)
+    return items
+
+
+def _build_automation_queue_items(
+    automation: Mapping[str, Any],
+    *,
+    generated_at: str,
+    stale_threshold_seconds: int,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    rank, label = _queue_precedence("automation_wakeup")
+    wakeups = (automation.get("wakeups") or {}).get("pending_sample") or []
+    for entry in wakeups:
+        if not isinstance(entry, dict):
+            continue
+        repo_id = str(entry.get("repo_id") or "").strip()
+        thread_id = str(entry.get("thread_id") or "").strip()
+        wakeup_id = str(entry.get("wakeup_id") or "").strip()
+        basis_at = entry.get("timestamp")
+        freshness = build_freshness_payload(
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+            candidates=[("automation_wakeup", basis_at)],
+        )
+        scope_key = (
+            f"wakeup:{wakeup_id}"
+            if wakeup_id
+            else (f"thread:{thread_id}" if thread_id else f"repo:{repo_id}")
+        )
+        items.append(
+            {
+                "item_type": "automation_wakeup",
+                "wakeup_id": wakeup_id or None,
+                "source": entry.get("source"),
+                "event_type": entry.get("event_type"),
+                "subscription_id": entry.get("subscription_id"),
+                "timer_id": entry.get("timer_id"),
+                "repo_id": repo_id or None,
+                "run_id": entry.get("run_id"),
+                "thread_id": thread_id or None,
+                "lane_id": entry.get("lane_id"),
+                "from_state": entry.get("from_state"),
+                "to_state": entry.get("to_state"),
+                "reason": entry.get("reason"),
+                "timestamp": basis_at,
+                "action_queue_id": f"automation_wakeup:{wakeup_id or scope_key}",
+                "queue_source": "automation_wakeup",
+                "precedence": {"rank": rank, "label": label},
+                "why_selected": "Pending automation wakeup signals follow-up work",
+                "recommended_action": "handle_automation_wakeup",
+                "recommended_detail": (
+                    f"Continue lane {entry.get('lane_id')}"
+                    if entry.get("lane_id")
+                    else "Inspect the pending PMA automation wakeup"
+                ),
+                "freshness": freshness,
+                "scope": {
+                    "kind": "wakeup",
+                    "key": scope_key,
+                },
+                "sort_timestamp": _timestamp_sort_value(basis_at),
+            }
+        )
+    return items
+
+
+def build_pma_action_queue(
+    *,
+    inbox: list[dict[str, Any]],
+    pma_threads: list[dict[str, Any]],
+    pma_files_detail: Mapping[str, list[dict[str, Any]]],
+    automation: Mapping[str, Any],
+    generated_at: Optional[str] = None,
+    stale_threshold_seconds: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    """Build one operator-facing queue across inbox, threads, files, and wakeups."""
+
+    resolved_generated_at = generated_at or iso_now()
+    resolved_stale_threshold = resolve_stale_threshold_seconds(stale_threshold_seconds)
+    items = [
+        *_build_ticket_flow_queue_items(inbox),
+        *_build_thread_queue_items(pma_threads),
+        *_build_file_queue_items(pma_files_detail),
+        *_build_automation_queue_items(
+            automation,
+            generated_at=resolved_generated_at,
+            stale_threshold_seconds=resolved_stale_threshold,
+        ),
+    ]
+
+    items = sorted(
+        items,
+        key=lambda item: (
+            int(((item.get("precedence") or {}).get("rank") or 999)),
+            -float(item.get("sort_timestamp") or 0.0),
+            str(item.get("action_queue_id") or ""),
+        ),
+    )
+
+    winning_scope: dict[str, dict[str, Any]] = {}
+    winning_repo_blocker: dict[str, dict[str, Any]] = {}
+    primary_queue_id = str(items[0].get("action_queue_id") or "") if items else None
+    for index, item in enumerate(items, start=1):
+        scope = item.get("scope") or {}
+        scope_key = str(scope.get("key") or "")
+        queue_id = str(item.get("action_queue_id") or "")
+        repo_key = str(item.get("repo_id") or "").strip()
+        repo_blocker = winning_repo_blocker.get(repo_key) if repo_key else None
+        scope_winner = winning_scope.get(scope_key) if scope_key else None
+        winner = repo_blocker or scope_winner
+        if winner is not None:
+            item["supersession"] = _queue_supersession_payload(
+                status="superseded",
+                is_primary=False,
+                superseded=True,
+                superseded_by=str(winner.get("action_queue_id") or "") or None,
+                reason=(
+                    "A higher-precedence action already covers the same operator scope"
+                ),
+            )
+        else:
+            if scope_key:
+                winning_scope[scope_key] = item
+            is_primary = bool(primary_queue_id and queue_id == primary_queue_id)
+            item["supersession"] = _queue_supersession_payload(
+                status="primary" if is_primary else "non_primary",
+                is_primary=is_primary,
+                superseded=False,
+                superseded_by=None,
+                reason=(
+                    "Highest-priority actionable item in the queue"
+                    if is_primary
+                    else "Actionable, but lower priority than the current primary item"
+                ),
+            )
+        if (
+            str(item.get("queue_source") or "") == "ticket_flow_inbox"
+            and repo_key
+            and repo_key not in winning_repo_blocker
+        ):
+            winning_repo_blocker[repo_key] = item
+        item["queue_rank"] = index
+        item.pop("sort_timestamp", None)
+    return items
+
+
 def _build_snapshot_freshness_summary(
     *,
     generated_at: str,
@@ -436,6 +997,7 @@ def _build_snapshot_freshness_summary(
     repos: list[dict[str, Any]],
     agent_workspaces: list[dict[str, Any]],
     inbox: list[dict[str, Any]],
+    action_queue: list[dict[str, Any]],
     pma_threads: list[dict[str, Any]],
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
 ) -> dict[str, Any]:
@@ -457,6 +1019,12 @@ def _build_snapshot_freshness_summary(
             ),
             "inbox": summarize_section_freshness(
                 inbox,
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                extractor=_extract_entry_freshness,
+            ),
+            "action_queue": summarize_section_freshness(
+                action_queue,
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
                 extractor=_extract_entry_freshness,
@@ -625,6 +1193,83 @@ def _render_hub_snapshot(
                 )
         lines.append("")
 
+    action_queue = snapshot.get("action_queue") or []
+    if action_queue:
+        lines.append("PMA Action Queue:")
+        for item in list(action_queue)[: max(0, max_messages)]:
+            queue_id = _truncate(
+                str(item.get("action_queue_id") or ""), max_field_chars
+            )
+            source = _truncate(str(item.get("queue_source") or ""), max_field_chars)
+            queue_rank = _truncate(str(item.get("queue_rank") or ""), max_field_chars)
+            item_type = _truncate(str(item.get("item_type") or ""), max_field_chars)
+            repo_id = _truncate(str(item.get("repo_id") or ""), max_field_chars)
+            run_id = _truncate(str(item.get("run_id") or ""), max_field_chars)
+            managed_thread_id = _truncate(
+                str(item.get("managed_thread_id") or item.get("thread_id") or ""),
+                max_field_chars,
+            )
+            file_name = _truncate(str(item.get("name") or ""), max_field_chars)
+            recommended_action = _truncate(
+                str(item.get("recommended_action") or ""), max_field_chars
+            )
+            precedence = item.get("precedence") or {}
+            precedence_rank = _truncate(
+                str(precedence.get("rank") or ""), max_field_chars
+            )
+            precedence_label = _truncate(
+                str(precedence.get("label") or ""), max_field_chars
+            )
+            supersession = item.get("supersession") or {}
+            supersession_status = _truncate(
+                str(supersession.get("status") or ""), max_field_chars
+            )
+            superseded_by = _truncate(
+                str(supersession.get("superseded_by") or ""), max_field_chars
+            )
+            lines.append(
+                f"- rank={queue_rank} source={source} precedence={precedence_rank}:{precedence_label} "
+                f"status={supersession_status} item_type={item_type} id={queue_id}"
+                + (f" repo_id={repo_id}" if repo_id else "")
+                + (f" run_id={run_id}" if run_id else "")
+                + (
+                    f" managed_thread_id={managed_thread_id}"
+                    if managed_thread_id
+                    else ""
+                )
+                + (f" file={file_name}" if file_name else "")
+                + (
+                    f" recommended_action={recommended_action}"
+                    if recommended_action
+                    else ""
+                )
+            )
+            why_selected = item.get("why_selected")
+            if why_selected:
+                lines.append(
+                    f"  why_selected: {_truncate(str(why_selected), max_text_chars)}"
+                )
+            recommended_detail = item.get("recommended_detail")
+            if recommended_detail:
+                lines.append(
+                    "  recommended_detail: "
+                    f"{_truncate(str(recommended_detail), max_text_chars)}"
+                )
+            if superseded_by:
+                lines.append(f"  superseded_by: {superseded_by}")
+            supersession_reason = supersession.get("reason")
+            if supersession_reason:
+                lines.append(
+                    "  supersession_reason: "
+                    f"{_truncate(str(supersession_reason), max_text_chars)}"
+                )
+            freshness_summary = _render_freshness_summary(
+                _extract_entry_freshness(item), max_field_chars=max_field_chars
+            )
+            if freshness_summary:
+                lines.append(f"  freshness: {freshness_summary}")
+        lines.append("")
+
     inbox = snapshot.get("inbox") or []
     if inbox:
         lines.append("Run Dispatches (paused runs needing attention):")
@@ -685,10 +1330,11 @@ def _render_hub_snapshot(
                 lines.append(
                     f"  blocking_reason: {_truncate(str(blocking_reason), max_text_chars)}"
                 )
-            recommended_action = run_state.get("recommended_action")
-            if recommended_action:
+            run_recommended_action = run_state.get("recommended_action")
+            if run_recommended_action:
                 lines.append(
-                    f"  recommended_action: {_truncate(str(recommended_action), max_text_chars)}"
+                    "  recommended_action: "
+                    f"{_truncate(str(run_recommended_action), max_text_chars)}"
                 )
             freshness_summary = _render_freshness_summary(
                 _extract_entry_freshness(item), max_field_chars=max_field_chars
@@ -843,9 +1489,15 @@ def _render_hub_snapshot(
                 max_field_chars=max_field_chars,
             )
             agent = _truncate(str(thread.get("agent") or ""), max_field_chars)
-            status = _truncate(str(thread.get("status") or ""), max_field_chars)
-            lifecycle_status = _truncate(
-                str(thread.get("lifecycle_status") or "-"),
+            raw_status = str(thread.get("status") or "")
+            lifecycle_status = str(thread.get("lifecycle_status") or "-")
+            operator_status = derive_managed_thread_operator_status(
+                normalized_status=raw_status,
+                lifecycle_status=lifecycle_status,
+            )
+            status_display = _truncate(operator_status, max_field_chars)
+            last_turn_outcome = _truncate(
+                raw_status if raw_status in {"completed", "failed"} else "-",
                 max_field_chars,
             )
             status_reason = _truncate(
@@ -859,7 +1511,7 @@ def _render_hub_snapshot(
             )
             lines.append(
                 f"- {managed_thread_id} {owner_summary} agent={agent} "
-                f"status={status} lifecycle={lifecycle_status} "
+                f"status={status_display} last_turn={last_turn_outcome} "
                 f"reason={status_reason} name={name} last={preview}"
             )
             freshness_summary = _render_freshness_summary(
@@ -997,13 +1649,6 @@ def format_pma_discoverability_preamble(
     hub_root: Optional[Path] = None,
     pma_docs: Optional[dict[str, Any]] = None,
 ) -> str:
-    resolved_docs = pma_docs
-    if resolved_docs is None and hub_root is not None:
-        try:
-            resolved_docs = load_pma_workspace_docs(hub_root)
-        except Exception as exc:
-            _logger.warning("Could not load PMA workspace docs: %s", exc)
-
     prompt = (
         "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`.\n"
         "Durable guidance: `.codex-autorunner/pma/docs/AGENTS.md`.\n"
@@ -1016,29 +1661,154 @@ def format_pma_discoverability_preamble(
         "Note: Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` redirect to filebox.\n\n"
     )
 
+    resolved_docs = pma_docs
+    if resolved_docs is None and hub_root is not None:
+        try:
+            resolved_docs = load_pma_workspace_docs(hub_root)
+        except Exception as exc:
+            _logger.warning("Could not load PMA workspace docs: %s", exc)
     if resolved_docs:
-        max_lines = resolved_docs.get("active_context_max_lines")
-        line_count = resolved_docs.get("active_context_line_count")
-        auto_prune = resolved_docs.get("active_context_auto_prune") or {}
-        auto_pruned_at = auto_prune.get("last_auto_pruned_at")
-        auto_pruned_before = auto_prune.get("line_count_before")
-        auto_pruned_budget = auto_prune.get("line_budget")
-        prompt += (
-            "<pma_workspace_docs>\n"
-            "<AGENTS_MD>\n"
-            f"{resolved_docs.get('agents', '')}\n"
-            "</AGENTS_MD>\n"
-            "<ACTIVE_CONTEXT_MD>\n"
-            f"{resolved_docs.get('active_context', '')}\n"
-            "</ACTIVE_CONTEXT_MD>\n"
-            f"<ACTIVE_CONTEXT_BUDGET lines='{max_lines}' current_lines='{line_count}' />\n"
-            f"<ACTIVE_CONTEXT_AUTO_PRUNE last_at='{auto_pruned_at}' line_count_before='{auto_pruned_before}' line_budget='{auto_pruned_budget}' triggered_now='{str(bool(resolved_docs.get('active_context_auto_pruned'))).lower()}' />\n"
-            "<CONTEXT_LOG_TAIL_MD>\n"
-            f"{resolved_docs.get('context_log_tail', '')}\n"
-            "</CONTEXT_LOG_TAIL_MD>\n"
-            "</pma_workspace_docs>\n\n"
-        )
+        prompt += _render_pma_workspace_docs(resolved_docs)
     return prompt
+
+
+def _render_pma_workspace_docs(resolved_docs: Mapping[str, Any]) -> str:
+    max_lines = resolved_docs.get("active_context_max_lines")
+    line_count = resolved_docs.get("active_context_line_count")
+    auto_prune = resolved_docs.get("active_context_auto_prune") or {}
+    auto_pruned_at = auto_prune.get("last_auto_pruned_at")
+    auto_pruned_before = auto_prune.get("line_count_before")
+    auto_pruned_budget = auto_prune.get("line_budget")
+    return (
+        "<pma_workspace_docs>\n"
+        "<AGENTS_MD>\n"
+        f"{resolved_docs.get('agents', '')}\n"
+        "</AGENTS_MD>\n"
+        "<ACTIVE_CONTEXT_MD>\n"
+        f"{resolved_docs.get('active_context', '')}\n"
+        "</ACTIVE_CONTEXT_MD>\n"
+        f"<ACTIVE_CONTEXT_BUDGET lines='{max_lines}' current_lines='{line_count}' />\n"
+        f"<ACTIVE_CONTEXT_AUTO_PRUNE last_at='{auto_pruned_at}' line_count_before='{auto_pruned_before}' line_budget='{auto_pruned_budget}' triggered_now='{str(bool(resolved_docs.get('active_context_auto_pruned'))).lower()}' />\n"
+        "<CONTEXT_LOG_TAIL_MD>\n"
+        f"{resolved_docs.get('context_log_tail', '')}\n"
+        "</CONTEXT_LOG_TAIL_MD>\n"
+        "</pma_workspace_docs>\n\n"
+    )
+
+
+def _build_prompt_sections(
+    *,
+    pma_docs: Optional[Mapping[str, Any]],
+    snapshot_text: str,
+) -> dict[str, dict[str, str]]:
+    sections: dict[str, dict[str, str]] = {
+        "agents": {
+            "label": PMA_PROMPT_SECTION_META["agents"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["agents"]["tag"],
+            "content": str((pma_docs or {}).get("agents") or ""),
+        },
+        "active_context": {
+            "label": PMA_PROMPT_SECTION_META["active_context"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["active_context"]["tag"],
+            "content": str((pma_docs or {}).get("active_context") or ""),
+        },
+        "context_log_tail": {
+            "label": PMA_PROMPT_SECTION_META["context_log_tail"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["context_log_tail"]["tag"],
+            "content": str((pma_docs or {}).get("context_log_tail") or ""),
+        },
+        "hub_snapshot": {
+            "label": PMA_PROMPT_SECTION_META["hub_snapshot"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["hub_snapshot"]["tag"],
+            "content": snapshot_text,
+        },
+    }
+    for payload in sections.values():
+        payload["digest"] = _digest_text(payload.get("content") or "")
+    return sections
+
+
+def _render_pma_actionable_state(
+    snapshot: Mapping[str, Any],
+    *,
+    max_repos: int,
+    max_messages: int,
+    max_text_chars: int,
+) -> str:
+    actionable_snapshot: dict[str, Any] = {}
+    if snapshot.get("generated_at") is not None:
+        actionable_snapshot["generated_at"] = snapshot.get("generated_at")
+    if snapshot.get("freshness") is not None:
+        actionable_snapshot["freshness"] = snapshot.get("freshness")
+
+    action_queue = snapshot.get("action_queue") or []
+    if action_queue:
+        actionable_snapshot["action_queue"] = action_queue
+    else:
+        for key in ("inbox", "pma_threads", "pma_files_detail", "automation"):
+            value = snapshot.get(key)
+            if value:
+                actionable_snapshot[key] = value
+
+    rendered = _render_hub_snapshot(
+        actionable_snapshot,
+        max_repos=max_repos,
+        max_messages=max_messages,
+        max_text_chars=max_text_chars,
+    ).strip()
+    return rendered or "No current PMA actions."
+
+
+def _render_prompt_delta_header(
+    *,
+    sections: Mapping[str, Mapping[str, str]],
+    prior_sections: Optional[Mapping[str, Any]],
+    prompt_state_key: str,
+    current_mode: str,
+    reason: str,
+    prior_updated_at: Optional[str],
+) -> str:
+    attrs = [
+        f"mode='{current_mode}'",
+        f"reason='{reason}'",
+        f"state_key='{prompt_state_key}'",
+    ]
+    if prior_updated_at:
+        attrs.append(f"prior_updated_at='{prior_updated_at}'")
+    lines = [f"<what_changed_since_last_turn {' '.join(attrs)}>"]
+    prior_section_map = prior_sections if isinstance(prior_sections, Mapping) else {}
+
+    for name in PMA_PROMPT_SECTION_ORDER:
+        section = sections.get(name) or {}
+        current_digest = str(section.get("digest") or "")
+        previous = prior_section_map.get(name)
+        previous_digest = (
+            str(previous.get("digest") or "") if isinstance(previous, Mapping) else ""
+        )
+        if current_mode == "full" and not previous_digest:
+            status = "first_turn"
+        elif current_mode == "full":
+            status = "full_refresh"
+        elif previous_digest and previous_digest == current_digest:
+            status = "unchanged"
+        elif previous_digest:
+            status = "changed"
+        else:
+            status = "new"
+        line = (
+            f"- section={section.get('label') or name} status={status} "
+            f"digest={_digest_preview(current_digest)}"
+        )
+        if previous_digest and previous_digest != current_digest:
+            line += f" previous={_digest_preview(previous_digest)}"
+        lines.append(line)
+        if current_mode == "delta" and status == "changed" and name != "hub_snapshot":
+            tag = section.get("tag") or str(name)
+            lines.append(f"<{tag}>")
+            lines.append(str(section.get("content") or ""))
+            lines.append(f"</{tag}>")
+    lines.append("</what_changed_since_last_turn>")
+    return "\n".join(lines) + "\n\n"
 
 
 def format_pma_prompt(
@@ -1046,26 +1816,80 @@ def format_pma_prompt(
     snapshot: dict[str, Any],
     message: str,
     hub_root: Optional[Path] = None,
+    *,
+    prompt_state_key: Optional[str] = None,
+    force_full_context: bool = False,
 ) -> str:
     limits = snapshot.get("limits") or {}
+    max_repos = limits.get("max_repos", PMA_MAX_REPOS)
+    max_messages = limits.get("max_messages", PMA_MAX_MESSAGES)
+    max_text_chars = limits.get("max_text_chars", PMA_MAX_TEXT)
     snapshot_text = _render_hub_snapshot(
         snapshot,
-        max_repos=limits.get("max_repos", PMA_MAX_REPOS),
-        max_messages=limits.get("max_messages", PMA_MAX_MESSAGES),
-        max_text_chars=limits.get("max_text_chars", PMA_MAX_TEXT),
+        max_repos=max_repos,
+        max_messages=max_messages,
+        max_text_chars=max_text_chars,
     )
+    actionable_state_text = _render_pma_actionable_state(
+        snapshot,
+        max_repos=max_repos,
+        max_messages=max_messages,
+        max_text_chars=max_text_chars,
+    )
+    pma_docs: Optional[dict[str, Any]] = None
+    if hub_root is not None:
+        try:
+            pma_docs = load_pma_workspace_docs(hub_root)
+        except Exception as exc:
+            _logger.warning("Could not load PMA workspace docs: %s", exc)
+
+    sections = _build_prompt_sections(pma_docs=pma_docs, snapshot_text=snapshot_text)
+    use_delta = False
+    delta_reason = "state_key_missing"
+    prior_sections: Optional[Mapping[str, Any]] = None
+    prior_updated_at: Optional[str] = None
+
+    if hub_root is not None and prompt_state_key:
+        (
+            use_delta,
+            delta_reason,
+            prior_sections,
+            prior_updated_at,
+        ) = _merge_prompt_session_state(
+            hub_root,
+            prompt_state_key=prompt_state_key,
+            sections=sections,
+            force_full_context=force_full_context,
+        )
 
     prompt = f"{base_prompt}\n\n"
-    prompt += format_pma_discoverability_preamble(hub_root=hub_root)
+    prompt += format_pma_discoverability_preamble(hub_root=None)
+    if not use_delta and pma_docs:
+        prompt += _render_pma_workspace_docs(pma_docs)
     prompt += f"{PMA_FASTPATH}\n\n"
+    if prompt_state_key:
+        prompt += _render_prompt_delta_header(
+            sections=sections,
+            prior_sections=prior_sections,
+            prompt_state_key=prompt_state_key,
+            current_mode="delta" if use_delta else "full",
+            reason=delta_reason,
+            prior_updated_at=prior_updated_at,
+        )
     prompt += (
-        "<hub_snapshot>\n"
-        f"{snapshot_text}\n"
-        "</hub_snapshot>\n\n"
-        "<user_message>\n"
-        f"{message}\n"
-        "</user_message>\n"
+        "<current_actionable_state>\n"
+        f"{actionable_state_text}\n"
+        "</current_actionable_state>\n\n"
     )
+    if not use_delta:
+        prompt += "<hub_snapshot>\n" f"{snapshot_text}\n" "</hub_snapshot>\n\n"
+    elif prompt_state_key:
+        prompt += (
+            "<hub_snapshot_ref "
+            f"digest='{_digest_preview(str((sections.get('hub_snapshot') or {}).get('digest') or ''))}' "
+            f"state_key='{prompt_state_key}' />\n\n"
+        )
+    prompt += "<user_message>\n" f"{message}\n" "</user_message>\n"
     return prompt
 
 
@@ -1855,6 +2679,7 @@ async def build_hub_snapshot(
             "repos": [],
             "agent_workspaces": [],
             "inbox": [],
+            "action_queue": [],
             "templates": {"enabled": False, "repos": []},
             "lifecycle_events": [],
             "pma_files_detail": {"inbox": [], "outbox": []},
@@ -1874,6 +2699,7 @@ async def build_hub_snapshot(
                 repos=[],
                 agent_workspaces=[],
                 inbox=[],
+                action_queue=[],
                 pma_threads=[],
                 pma_files_detail={"inbox": [], "outbox": []},
             ),
@@ -2005,12 +2831,22 @@ async def build_hub_snapshot(
                     candidates=[("file_modified_at", entry.get("modified_at"))],
                 )
 
+    action_queue = build_pma_action_queue(
+        inbox=inbox,
+        pma_threads=pma_threads,
+        pma_files_detail=pma_files_detail,
+        automation=automation,
+        generated_at=generated_at,
+        stale_threshold_seconds=stale_threshold_seconds,
+    )
+
     freshness = _build_snapshot_freshness_summary(
         generated_at=generated_at,
         stale_threshold_seconds=stale_threshold_seconds,
         repos=repos,
         agent_workspaces=agent_workspaces,
         inbox=inbox,
+        action_queue=action_queue,
         pma_threads=pma_threads,
         pma_files_detail=pma_files_detail,
     )
@@ -2020,6 +2856,7 @@ async def build_hub_snapshot(
         "repos": repos,
         "agent_workspaces": agent_workspaces,
         "inbox": inbox,
+        "action_queue": action_queue,
         "templates": templates,
         "pma_files": pma_files,
         "pma_files_detail": pma_files_detail,
