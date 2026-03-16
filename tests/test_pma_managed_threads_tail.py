@@ -154,16 +154,43 @@ def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> N
         assert isinstance(payload.get("thread"), dict)
         assert isinstance(payload.get("turn"), dict)
         assert payload["status"] == "completed"
+        assert payload["operator_status"] == "reusable"
+        assert payload["is_reusable"] is True
         assert payload["status_reason"] == "managed_turn_completed"
         assert payload["status_terminal"] is True
         assert payload["thread"]["lifecycle_status"] == "active"
         assert payload["thread"]["status"] == "completed"
         assert payload["thread"]["normalized_status"] == "completed"
+        assert payload["thread"]["operator_status"] == "reusable"
+        assert payload["thread"]["is_reusable"] is True
         assert payload["thread"]["accepts_messages"] is True
         assert payload["turn"]["status"] == "ok"
         assert payload["is_alive"] is False
         assert isinstance(payload.get("recent_progress"), list)
         assert "completed assistant output" in payload.get("latest_output_excerpt", "")
+
+
+def test_managed_thread_status_surfaces_attention_required_separately_from_failure(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    managed_thread_id, managed_turn_id = _seed_managed_thread_with_events(hub_env, app)
+    store = PmaThreadStore(hub_env.hub_root)
+    store.mark_turn_interrupted(managed_turn_id)
+
+    with TestClient(app) as client:
+        resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "failed"
+    assert payload["operator_status"] == "attention_required"
+    assert payload["is_reusable"] is False
+    assert payload["status_reason"] == "managed_turn_interrupted"
+    assert payload["thread"]["normalized_status"] == "failed"
+    assert payload["thread"]["operator_status"] == "attention_required"
+    assert payload["thread"]["is_reusable"] is False
 
 
 def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:

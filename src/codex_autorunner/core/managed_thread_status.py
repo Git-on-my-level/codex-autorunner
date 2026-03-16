@@ -49,6 +49,15 @@ class ManagedThreadStatus(str, Enum):
     FAILED = "failed"
 
 
+class ManagedThreadOperatorStatus(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    REUSABLE = "reusable"
+    ATTENTION_REQUIRED = "attention_required"
+    ARCHIVED = "archived"
+
+
 class ManagedThreadStatusReason(str, Enum):
     THREAD_CREATED = "thread_created"
     THREAD_RESUMED = "thread_resumed"
@@ -326,7 +335,36 @@ def backfill_managed_thread_status(
     )
 
 
+def derive_managed_thread_operator_status(
+    *,
+    normalized_status: str | None,
+    lifecycle_status: str | None,
+) -> str:
+    normalized_lifecycle = str(lifecycle_status or "").strip().lower()
+    normalized_runtime = str(normalized_status or "").strip().lower()
+
+    if normalized_lifecycle == ManagedThreadStatus.ARCHIVED.value:
+        return ManagedThreadOperatorStatus.ARCHIVED.value
+    if normalized_runtime == ManagedThreadStatus.COMPLETED.value:
+        return ManagedThreadOperatorStatus.REUSABLE.value
+    if normalized_runtime == ManagedThreadStatus.FAILED.value:
+        return ManagedThreadOperatorStatus.ATTENTION_REQUIRED.value
+    if normalized_runtime in {
+        ManagedThreadStatus.IDLE.value,
+        ManagedThreadStatus.RUNNING.value,
+        ManagedThreadStatus.PAUSED.value,
+        ManagedThreadOperatorStatus.ARCHIVED.value,
+    }:
+        return normalized_runtime
+    if normalized_lifecycle == ManagedThreadStatus.ACTIVE.value:
+        return ManagedThreadOperatorStatus.IDLE.value
+    if normalized_lifecycle == ManagedThreadStatus.ARCHIVED.value:
+        return ManagedThreadOperatorStatus.ARCHIVED.value
+    return ManagedThreadOperatorStatus.IDLE.value
+
+
 __all__ = [
+    "ManagedThreadOperatorStatus",
     "ManagedThreadStatus",
     "ManagedThreadStatusReason",
     "ManagedThreadStatusSnapshot",
@@ -334,6 +372,7 @@ __all__ = [
     "TRANSITION_TABLE",
     "backfill_managed_thread_status",
     "build_managed_thread_status_snapshot",
+    "derive_managed_thread_operator_status",
     "normalize_status_timestamp",
     "transition_managed_thread_status",
 ]

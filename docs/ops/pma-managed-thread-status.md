@@ -1,6 +1,7 @@
 # PMA Managed-Thread Status Model
 
-CAR uses one normalized operator-facing status for PMA managed threads.
+CAR persists one normalized runtime status and now exposes a separate
+operator-facing headline for PMA managed threads.
 
 ## Status Enum
 
@@ -37,9 +38,35 @@ Each managed thread persists:
 - `status_turn_id`
 
 API, CLI, and hub UI surfaces read these persisted fields instead of re-inferring
-status from mixed lifecycle signals. Operator-facing payloads keep compatibility
-aliases such as `status_reason` and `status_changed_at`, while lifecycle write
-admission remains separate in `lifecycle_status`.
+status from mixed lifecycle signals.
+
+## Operator-Facing API Contract
+
+Managed-thread API responses now expose:
+
+- `operator_status`: recommended headline state for operator surfaces
+- `is_reusable`: convenience boolean for "can this thread take more work now?"
+
+The operator headline intentionally differs from the persisted runtime outcome:
+
+| `normalized_status` | `lifecycle_status` | `operator_status` | `is_reusable` |
+| --- | --- | --- | --- |
+| `idle` | `active` | `idle` | `true` |
+| `completed` | `active` | `reusable` | `true` |
+| `failed` | `active` | `attention_required` | `false` |
+| `running` | `active` | `running` | `false` |
+| `paused` | `active` | `paused` | `false` |
+| `archived` | `archived` | `archived` | `false` |
+
+Compatibility expectations:
+
+- `normalized_status` remains the raw runtime state and should be used for audit,
+  debugging, and low-level automation.
+- `lifecycle_status` remains the write-admission state (`active` vs `archived`).
+- `status` remains a compatibility alias for `normalized_status` on PMA thread API
+  payloads while downstream surfaces migrate.
+- `status_reason`, `status_changed_at`, `status_terminal`, and `status_turn_id`
+  continue to expose the last raw transition details without translation.
 
 As of the orchestration cutover, PMA thread create/list/get/resume/archive and
 status/tail reads go through the shared orchestration service seam. PMA keeps
