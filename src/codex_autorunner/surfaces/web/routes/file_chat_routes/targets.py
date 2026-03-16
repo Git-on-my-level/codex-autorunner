@@ -12,7 +12,11 @@ from .....contextspace.paths import (
     normalize_contextspace_doc_kind,
 )
 from .....core import drafts as draft_utils
-from .....core.context_awareness import CAR_AWARENESS_BLOCK, format_file_role_addendum
+from .....core.car_context import DEFAULT_REPO_THREAD_CONTEXT_PROFILE
+from .....core.context_awareness import (
+    format_file_role_addendum,
+    maybe_inject_car_awareness,
+)
 from .....core.file_chat_keys import ticket_chat_scope, ticket_state_key
 from .....core.utils import find_repo_root
 
@@ -153,19 +157,28 @@ def build_file_chat_prompt(
         "- Respond with a short summary of what you did.",
     ]
     instructions = "\n".join(instruction_lines)
+    declared_profile = DEFAULT_REPO_THREAD_CONTEXT_PROFILE
     if target.kind == "ticket":
+        declared_profile = "car_core"
         file_role_context = (
             f"{format_file_role_addendum('ticket', target.rel_path)}\n"
             "Edits here change what ticket flow agent will do; keep YAML "
             "frontmatter valid."
         )
     elif target.kind == "contextspace":
+        declared_profile = "car_core"
         file_role_context = (
             f"{format_file_role_addendum('contextspace', target.rel_path)}\n"
             "These docs act as shared memory across ticket turns."
         )
     else:
         file_role_context = format_file_role_addendum("other", target.rel_path)
+    car_context, _ = maybe_inject_car_awareness(
+        "",
+        declared_profile=declared_profile,
+        target_path=target.rel_path,
+    )
+    context_prefix = f"{car_context}\n\n" if car_context else ""
 
     if editable_rel_path and editable_rel_path != target.rel_path:
         draft_path_block = (
@@ -178,7 +191,7 @@ def build_file_chat_prompt(
         )
 
     return (
-        f"{CAR_AWARENESS_BLOCK}\n\n"
+        f"{context_prefix}"
         "<file_role_context>\n"
         f"{file_role_context}\n"
         "</file_role_context>\n\n"

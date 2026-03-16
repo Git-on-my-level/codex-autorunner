@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
+from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..pma_thread_store import PmaThreadStore
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
@@ -109,8 +110,13 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
+        metadata_payload = dict(metadata or {})
+        normalized_context_profile = normalize_car_context_profile(context_profile)
+        if normalized_context_profile is not None:
+            metadata_payload["context_profile"] = normalized_context_profile
         created = self._store.create_thread(
             agent_id,
             workspace_root,
@@ -119,7 +125,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             resource_id=resource_id,
             name=display_name,
             backend_thread_id=backend_thread_id,
-            metadata=metadata,
+            metadata=metadata_payload,
         )
         return _thread_target_from_store_row(created)
 
@@ -459,6 +465,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
         definition = self.get_agent_definition(agent_id)
@@ -476,6 +483,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             resource_id=resource_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
+            context_profile=context_profile,
             metadata=metadata,
         )
 
@@ -490,6 +498,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
         if thread_target_id:
@@ -505,6 +514,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             resource_id=resource_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
+            context_profile=context_profile,
             metadata=metadata,
         )
 
@@ -582,6 +592,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 else None
             ),
             input_items=normalized_input_items,
+            context_profile=normalize_car_context_profile(
+                request_data.get("context_profile")
+            ),
             metadata=dict(metadata),
         )
         return request, payload.get("client_request_id"), payload.get("sandbox_policy")

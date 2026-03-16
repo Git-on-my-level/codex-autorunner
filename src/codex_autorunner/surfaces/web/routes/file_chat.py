@@ -56,6 +56,7 @@ _EXTRACTED_FILE_CHAT_SEAMS = (
 )
 
 ExtractedTarget = extracted_targets._Target
+_Target = extracted_targets._Target
 _build_file_chat_prompt = extracted_targets.build_file_chat_prompt
 _build_patch = extracted_targets.build_patch
 _parse_target = extracted_targets.parse_target

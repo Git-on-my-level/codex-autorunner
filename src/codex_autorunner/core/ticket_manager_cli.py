@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -50,6 +51,7 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 _TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})([^/]*)\\.md$", re.IGNORECASE)
+_TICKET_ID_RE = re.compile(r"^[A-Za-z0-9._-]{6,128}$")
 _IGNORED_NON_TICKET_FILENAMES = {"AGENTS.md", "ingest_state.json"}
 
 
@@ -60,6 +62,16 @@ class TicketFile:
     suffix: str
     title: Optional[str]
     done: Optional[bool]
+    ticket_id: Optional[str]
+
+
+def _sanitize_ticket_id(raw: object) -> Optional[str]:
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip()
+    if not cleaned or not _TICKET_ID_RE.match(cleaned):
+        return None
+    return cleaned
 
 
 def _ticket_dir(repo_root: Path) -> Path:
@@ -123,6 +135,11 @@ def _parse_yaml(fm_yaml: Optional[str]):
 
 def _lint_frontmatter(data: dict):
     errors: List[str] = []
+    ticket_id = data.get("ticket_id")
+    if not isinstance(ticket_id, str) or not _TICKET_ID_RE.match(ticket_id.strip()):
+        errors.append(
+            "frontmatter.ticket_id is required and must match [A-Za-z0-9._-]{6,128}."
+        )
     agent = data.get("agent")
     if not isinstance(agent, str) or not agent.strip():
         errors.append("frontmatter.agent is required and must be a non-empty string.")
@@ -152,11 +169,22 @@ def _read_ticket(path: Path) -> Tuple[Optional[TicketFile], List[str]]:
 
     title = data.get("title") if isinstance(data, dict) else None
     done_val = data.get("done") if isinstance(data, dict) else None
+    ticket_id = _sanitize_ticket_id(data.get("ticket_id"))
 
     m = _TICKET_NAME_RE.match(path.name)
     idx = int(m.group(1)) if m else 0
     suffix = m.group(2) if m else ""
-    return TicketFile(index=idx, path=path, suffix=suffix, title=title, done=done_val), []
+    return (
+        TicketFile(
+            index=idx,
+            path=path,
+            suffix=suffix,
+            title=title,
+            done=done_val,
+            ticket_id=ticket_id,
+        ),
+        [],
+    )
 
 
 def _ticket_files(ticket_dir: Path) -> Tuple[List[TicketFile], List[str]]:
@@ -216,17 +244,25 @@ def cmd_list(ticket_dir: Path) -> int:
 
 
 def cmd_lint(ticket_dir: Path) -> int:
-    paths, name_errors = _ticket_paths(ticket_dir)
-    errors = list(name_errors)
-    for path in paths:
-        _, errs = _read_ticket(path)
-        errors.extend(errs)
+    tickets, errors = _ticket_files(ticket_dir)
+    ticket_id_to_paths: dict[str, list[str]] = {}
+    for ticket in tickets:
+        if not ticket.ticket_id:
+            continue
+        ticket_id_to_paths.setdefault(ticket.ticket_id, []).append(ticket.path.name)
+
+    for ticket_id, filenames in ticket_id_to_paths.items():
+        if len(filenames) > 1:
+            filenames_str = ", ".join(filenames)
+            errors.append(
+                f"Duplicate ticket_id {ticket_id!r}: multiple files share the same logical ticket identity ({filenames_str})."
+            )
 
     if errors:
         for msg in errors:
             sys.stderr.write(msg + "\\n")
         return 1
-    sys.stdout.write(f"OK: {len(paths)} ticket(s) linted.\\n")
+    sys.stdout.write(f"OK: {len(tickets)} ticket(s) linted.\\n")
     return 0
 
 
@@ -262,6 +298,10 @@ def _parse_suffix(name: str) -> str:
     return m.group(2) if m else ""
 
 
+def _generate_ticket_id() -> str:
+    return f"tkt_{uuid.uuid4().hex}"
+
+
 def _create_ticket_file(ticket_dir: Path, *, index: int, title: str, agent: str, existing_indices: List[int]) -> Path:
     width = _pad_width(existing_indices + [index])
     name = _fmt_name(index, "", width)
@@ -271,11 +311,13 @@ def _create_ticket_file(ticket_dir: Path, *, index: int, title: str, agent: str,
     path.parent.mkdir(parents=True, exist_ok=True)
     title_scalar = _yaml_scalar(title)
     agent_scalar = _yaml_scalar(agent)
+    ticket_id_scalar = _yaml_scalar(_generate_ticket_id())
     body = (
         f"---\\n"
         f"title: {title_scalar}\\n"
         f"agent: {agent_scalar}\\n"
         f"done: false\\n"
+        f"ticket_id: {ticket_id_scalar}\\n"
         f"---\\n\\n"
         f"## Goal\\n- \\n"
     )

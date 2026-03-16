@@ -15,6 +15,7 @@ def _write_valid_ticket(repo_root: Path) -> None:
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / "TICKET-001.md").write_text(
         """---
+ticket_id: "tkt_maxturns001"
 agent: codex
 done: false
 title: "Test ticket"

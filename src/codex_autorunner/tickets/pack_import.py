@@ -13,7 +13,7 @@ from ..agents.registry import validate_agent_id
 from ..core.utils import atomic_write
 from .doctor import TicketDoctorReport, format_or_doctor_tickets
 from .files import list_ticket_paths
-from .frontmatter import split_markdown_frontmatter
+from .frontmatter import ensure_ticket_id, split_markdown_frontmatter
 from .ingest_state import ingest_state_path, write_ingest_receipt
 from .lint import parse_ticket_index
 
@@ -123,7 +123,9 @@ def _extract_ticket_pack(zip_path: Path, ticket_dir: Path) -> list[str]:
 
 
 def _render_ticket(data: dict, body: str) -> str:
-    fm_yaml = yaml.safe_dump(data, sort_keys=False).rstrip()
+    normalized_data = dict(data)
+    ensure_ticket_id(normalized_data)
+    fm_yaml = yaml.safe_dump(normalized_data, sort_keys=False).rstrip()
     return f"---\n{fm_yaml}\n---{body}"
 
 

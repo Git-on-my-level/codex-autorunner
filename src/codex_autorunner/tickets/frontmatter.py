@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import re
+import uuid
+from collections.abc import MutableMapping
 from typing import Any, Optional, Tuple
 
 import yaml
 
 _FRONTMATTER_START = re.compile(r"^---\s*$")
 _FRONTMATTER_END = re.compile(r"^(---|\.\.\.)\s*$")
+_TICKET_ID_RE = re.compile(r"^[A-Za-z0-9._-]{6,128}$")
 
 
 def split_markdown_frontmatter(text: str) -> Tuple[Optional[str], str]:
@@ -53,3 +56,42 @@ def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     fm_yaml, body = split_markdown_frontmatter(text)
     data = parse_yaml_frontmatter(fm_yaml)
     return data, body
+
+
+def generate_ticket_id() -> str:
+    return f"tkt_{uuid.uuid4().hex}"
+
+
+def sanitize_ticket_id(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    if not _TICKET_ID_RE.match(value):
+        return None
+    return value
+
+
+def ensure_ticket_id(
+    data: MutableMapping[str, Any],
+    *,
+    fallback_ticket_id: str | None = None,
+) -> str:
+    ticket_id = sanitize_ticket_id(data.get("ticket_id"))
+    if ticket_id is None:
+        ticket_id = sanitize_ticket_id(fallback_ticket_id)
+    if ticket_id is None:
+        ticket_id = generate_ticket_id()
+    data["ticket_id"] = ticket_id
+    return ticket_id
+
+
+def render_markdown_frontmatter(data: dict[str, Any], body: str) -> str:
+    normalized = dict(data)
+    ensure_ticket_id(normalized)
+    fm_yaml = yaml.safe_dump(normalized, sort_keys=False).rstrip()
+    normalized_body = body.lstrip("\n").rstrip()
+    if normalized_body:
+        return f"---\n{fm_yaml}\n---\n\n{normalized_body}\n"
+    return f"---\n{fm_yaml}\n---\n"

@@ -3,11 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .....agents.managed_runtime import sync_managed_workspace_compat_files
+from .....core.car_context import (
+    build_car_context_bundle,
+    default_managed_thread_context_profile,
+    normalize_car_context_profile,
+    render_injected_car_context,
+)
 from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
 from .....core.orchestration import MessageRequest
 from .....core.orchestration.runtime_threads import (
@@ -76,10 +84,11 @@ def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
 def _compose_execution_prompt(
     *,
     agent: Any,
-    hub_root,
+    hub_root: Path,
     stored_backend_id: Optional[str],
     compact_seed: Optional[str],
     message: str,
+    context_profile: Any,
 ) -> str:
     execution_message = message
     if not stored_backend_id and compact_seed:
@@ -91,12 +100,16 @@ def _compose_execution_prompt(
     if str(agent or "").strip().lower() == "zeroclaw":
         return execution_message
 
-    return (
-        f"{format_pma_discoverability_preamble(hub_root=hub_root)}"
-        "<user_message>\n"
-        f"{execution_message}\n"
-        "</user_message>\n"
+    preamble = format_pma_discoverability_preamble(hub_root=hub_root)
+    user_message = "<user_message>\n" f"{execution_message}\n" "</user_message>\n"
+    bundle = build_car_context_bundle(
+        context_profile,
+        prompt_text=message,
     )
+    car_context = render_injected_car_context(bundle)
+    if not car_context:
+        return f"{preamble}{user_message}"
+    return f"{preamble}{car_context}\n\n{user_message}"
 
 
 def _sanitize_managed_thread_result_error(detail: Any) -> str:
@@ -400,13 +413,32 @@ def build_managed_thread_runtime_routes(
         )
         stored_backend_id = normalize_optional_text(thread.get("backend_thread_id"))
         compact_seed = normalize_optional_text(thread.get("compact_seed"))
+        metadata = thread.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        context_profile = normalize_car_context_profile(
+            thread.get("context_profile") or metadata.get("context_profile"),
+            default=default_managed_thread_context_profile(
+                resource_kind=thread.get("resource_kind")
+            ),
+        )
         execution_prompt = _compose_execution_prompt(
             agent=thread.get("agent"),
             hub_root=hub_root,
             stored_backend_id=stored_backend_id,
             compact_seed=compact_seed,
             message=message,
+            context_profile=context_profile,
         )
+        if str(thread.get("agent") or "").strip().lower() == "zeroclaw":
+            sync_managed_workspace_compat_files(
+                "zeroclaw",
+                runtime_workspace_root=Path(thread["workspace_root"]) / "workspace",
+                bundle=build_car_context_bundle(
+                    context_profile,
+                    prompt_text=message,
+                ),
+            )
         service = _build_managed_thread_orchestration_service(
             request,
             thread_store=thread_store,
@@ -422,6 +454,7 @@ def build_managed_thread_runtime_routes(
                     model=model,
                     reasoning=reasoning,
                     approval_mode="on-request",
+                    context_profile=context_profile,
                     metadata={
                         "runtime_prompt": execution_prompt,
                         "execution_error_message": (

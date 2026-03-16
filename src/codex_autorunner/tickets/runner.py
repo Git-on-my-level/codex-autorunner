@@ -316,7 +316,7 @@ class TicketRunner:
             state=state,
             lint_errors=lint_errors if lint_errors else None,
         )
-        current_ticket_id = safe_relpath(current_path, self._workspace_root)
+        current_ticket_path = safe_relpath(current_path, self._workspace_root)
         if validation_result.status == "paused":
             reason_details = (
                 "Errors:\n- " + "\n- ".join(validation_result.errors)
@@ -327,18 +327,20 @@ class TicketRunner:
                 state,
                 reason=validation_result.pause_reason or "Ticket validation failed.",
                 reason_details=reason_details,
-                current_ticket=current_ticket_id,
+                current_ticket=current_ticket_path,
                 reason_code=validation_result.pause_reason_code or "needs_user_fix",
             )
         if not validation_result.validated:
             return self._pause(
                 state,
                 reason="Ticket validation failed unexpectedly.",
-                current_ticket=current_ticket_id,
+                current_ticket=current_ticket_path,
                 reason_code="infra_error",
             )
 
         ticket_doc = validation_result.validated.ticket_doc
+        current_ticket_id = ticket_doc.frontmatter.ticket_id
+        state["current_ticket_id"] = current_ticket_id
         if validation_result.validated.skip_execution:
             return TicketResult(status="continue", state=state)
 
@@ -404,9 +406,7 @@ class TicketRunner:
             reply_context=reply_context,
             requested_context=requested_context_block,
             previous_ticket_content=previous_ticket_content,
-            prior_no_change_turns=self._prior_no_change_turns(
-                state, safe_relpath(current_path, self._workspace_root)
-            ),
+            prior_no_change_turns=self._prior_no_change_turns(state, current_ticket_id),
             prompt_max_bytes=self._config.prompt_max_bytes,
         )
 
@@ -424,7 +424,7 @@ class TicketRunner:
         state["total_turns"] = total_turns
         state["ticket_turns"] = ticket_turns
 
-        current_ticket_id = safe_relpath(current_path, self._workspace_root)
+        current_ticket_path = safe_relpath(current_path, self._workspace_root)
 
         git_state_before = capture_git_state(workspace_root=self._workspace_root)
         repo_fingerprint_before_turn = git_state_before["repo_fingerprint_before"]
@@ -459,7 +459,7 @@ class TicketRunner:
                         f"Network error detected (attempt {result.network_retries}/{self._config.max_network_retries}): {result.error}\n"
                         "Retrying automatically..."
                     ),
-                    current_ticket=current_ticket_id,
+                    current_ticket=current_ticket_path,
                     agent_output=result.text,
                     agent_id=result.agent_id,
                     agent_conversation_id=result.conversation_id,
@@ -471,7 +471,7 @@ class TicketRunner:
                 state,
                 reason="Agent turn failed. Fix the issue and resume.",
                 reason_details=f"Error: {result.error}",
-                current_ticket=current_ticket_id,
+                current_ticket=current_ticket_path,
                 reason_code="infra_error",
             )
 
@@ -496,12 +496,12 @@ class TicketRunner:
 
         # Post-turn: archive outbox if DISPATCH.md exists.
         dispatch_seq = int(state.get("dispatch_seq") or 0)
-        current_ticket_id = safe_relpath(current_path, self._workspace_root)
         current_ticket_key = ticket_instance_token(current_path)
+        dispatch_ticket_id = current_ticket_path or current_ticket_id
         dispatch, dispatch_errors = archive_dispatch(
             outbox_paths,
             next_seq=dispatch_seq + 1,
-            ticket_id=current_ticket_id,
+            ticket_id=dispatch_ticket_id,
             repo_id=self._repo_id,
             run_id=self._run_id,
             origin="runner",
@@ -514,7 +514,7 @@ class TicketRunner:
                 state,
                 reason="Invalid DISPATCH.md frontmatter.",
                 reason_details="Errors:\n- " + "\n- ".join(dispatch_errors),
-                current_ticket=safe_relpath(current_path, self._workspace_root),
+                current_ticket=current_ticket_path,
                 reason_code="needs_user_fix",
             )
 
@@ -548,7 +548,7 @@ class TicketRunner:
             outbox_paths,
             next_seq=turn_summary_seq,
             agent_output=result.text or "",
-            ticket_id=current_ticket_id,
+            ticket_id=dispatch_ticket_id,
             agent_id=result.agent_id,
             turn_number=total_turns,
             diff_stats=turn_diff_stats,
@@ -565,7 +565,7 @@ class TicketRunner:
                         {
                             "ticket_id": current_ticket_id,
                             "ticket_key": current_ticket_key,
-                            "ticket_path": current_ticket_id,
+                            "ticket_path": current_ticket_path,
                             "dispatch_seq": turn_summary.seq,
                             "insertions": int(turn_diff_stats.get("insertions") or 0),
                             "deletions": int(turn_diff_stats.get("deletions") or 0),
@@ -581,7 +581,6 @@ class TicketRunner:
         # Loop guard: if the same ticket runs with no repository state change for
         # LOOP_NO_CHANGE_THRESHOLD consecutive successful turns, pause and ask for
         # user intervention instead of spinning.
-        current_ticket_id = safe_relpath(current_path, self._workspace_root)
         lint_retry_mode = bool(lint_errors)
         loop_guard_result = compute_loop_guard(
             state=state,
@@ -599,7 +598,7 @@ class TicketRunner:
             reason = "Ticket appears stuck: same ticket ran twice with no repository diff changes."
             details = (
                 "Runner paused to avoid repeated no-op work.\n\n"
-                f"Ticket: {current_ticket_id}\n"
+                f"Ticket: {current_ticket_path}\n"
                 f"Consecutive no-change turns: {no_change_count}\n\n"
                 "Please provide unblock guidance via reply, or change repository state, then resume. "
                 "Use force resume only if you intentionally want to retry unchanged."
@@ -610,6 +609,7 @@ class TicketRunner:
                 title="Ticket loop detected (no repo diff change)",
                 body=details,
                 ticket_id=current_ticket_id,
+                ticket_path=current_ticket_path,
             )
             pause_context: dict[str, Any] = {
                 "paused_reply_seq": int(state.get("reply_seq") or 0),
@@ -628,7 +628,7 @@ class TicketRunner:
                 reason=reason,
                 reason_details=details,
                 dispatch=dispatch_record,
-                current_ticket=current_ticket_id,
+                current_ticket=current_ticket_path,
                 agent_output=result.text,
                 agent_id=result.agent_id,
                 agent_conversation_id=result.conversation_id,
@@ -647,7 +647,7 @@ class TicketRunner:
                         "Exceeded lint retry limit. Fix the ticket frontmatter manually and resume.\n\n"
                         "Errors:\n- " + "\n- ".join(fm_errors)
                     ),
-                    current_ticket=safe_relpath(current_path, self._workspace_root),
+                    current_ticket=current_ticket_path,
                     reason_code="needs_user_fix",
                 )
 
@@ -660,7 +660,7 @@ class TicketRunner:
                 status="continue",
                 state=state,
                 reason="Ticket frontmatter invalid; requesting agent fix.",
-                current_ticket=safe_relpath(current_path, self._workspace_root),
+                current_ticket=current_ticket_path,
                 agent_output=result.text,
                 agent_id=result.agent_id,
                 agent_conversation_id=result.conversation_id,
@@ -729,7 +729,7 @@ class TicketRunner:
                         state,
                         reason=commit_reason,
                         reason_details=commit_reason_details,
-                        current_ticket=current_ticket_id,
+                        current_ticket=current_ticket_path,
                         reason_code=commit_reason_code,
                     )
 
@@ -737,7 +737,7 @@ class TicketRunner:
                     status=commit_status or "continue",
                     state=state,
                     reason="Ticket done but commit required; requesting agent commit.",
-                    current_ticket=current_ticket_id,
+                    current_ticket=current_ticket_path,
                     agent_output=result.text,
                     agent_id=result.agent_id,
                     agent_conversation_id=result.conversation_id,
@@ -747,6 +747,7 @@ class TicketRunner:
             # Clean (or unknown) → commit satisfied (or no changes / cannot check).
             state.pop("commit", None)
             state.pop("current_ticket", None)
+            state.pop("current_ticket_id", None)
             state.pop("ticket_turns", None)
             state.pop("last_agent_output", None)
             state.pop("lint", None)
@@ -765,7 +766,7 @@ class TicketRunner:
             state=state,
             reason="Turn complete.",
             dispatch=dispatch,
-            current_ticket=safe_relpath(current_path, self._workspace_root),
+            current_ticket=current_ticket_path,
             agent_output=result.text,
             agent_id=result.agent_id,
             agent_conversation_id=result.conversation_id,
@@ -837,12 +838,14 @@ class TicketRunner:
         title: str,
         body: str,
         ticket_id: str,
+        ticket_path: Optional[str] = None,
     ):
         """Create and archive a runner-generated pause dispatch."""
         return runner_post_turn.create_runner_pause_dispatch(
             outbox_paths=outbox_paths,
             state=state,
             ticket_id=ticket_id,
+            ticket_path=ticket_path,
             repo_id=self._repo_id,
             run_id=self._run_id,
             title=title,

@@ -37,6 +37,7 @@ from ....core.runtime import RuntimeContext
 from ....core.utils import resolve_executable
 from ....tickets import AgentPool
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
+from ....tickets.frontmatter import generate_ticket_id
 
 
 def _build_force_attestation(
@@ -813,9 +814,11 @@ def register_flow_commands(
         existing_tickets = list_ticket_paths(ticket_dir)
         seeded = False
         if not existing_tickets and not ticket_path.exists():
-            template = """---
+            bootstrap_ticket_id = generate_ticket_id()
+            template = f"""---
 agent: codex
 done: false
+ticket_id: "{bootstrap_ticket_id}"
 title: Bootstrap ticket plan
 goal: Capture scope and seed follow-up tickets
 ---

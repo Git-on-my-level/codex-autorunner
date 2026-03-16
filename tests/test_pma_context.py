@@ -740,6 +740,44 @@ def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None
     assert run_state.get("state") == "blocked"
 
 
+def test_build_hub_snapshot_demotes_stale_paused_dispatch_when_no_tickets_remain(
+    hub_env,
+) -> None:
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    for ticket in ticket_dir.glob("TICKET-*.md"):
+        ticket.unlink()
+
+    run_id = "67676767-6767-6767-6767-676767676767"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1, mode="pause")
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=2, mode="turn_summary")
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    inbox = snapshot.get("inbox") or []
+    assert len(inbox) == 1
+    item = inbox[0]
+    assert item["run_id"] == run_id
+    assert item["item_type"] == "run_state_attention"
+    assert item["next_action"] == "inspect_and_resume"
+    assert item["seq"] == 1
+    assert (item.get("dispatch") or {}).get("mode") == "pause"
+    assert (
+        "resume preflight would fail because no tickets remain"
+        in (item.get("reason") or "").lower()
+    )
+    run_state = item.get("run_state") or {}
+    assert run_state.get("state") == "blocked"
+    assert run_state.get("recommended_action", "").endswith("--force")
+
+
 def test_build_hub_snapshot_repo_entries_include_canonical_state_v1(hub_env) -> None:
     ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)

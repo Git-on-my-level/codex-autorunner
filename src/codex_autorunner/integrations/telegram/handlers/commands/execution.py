@@ -1305,7 +1305,10 @@ class ExecutionCommands(SharedHelpers):
         return maybe_inject_prompt_writing_hint(prompt_text)
 
     def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
-        return maybe_inject_car_awareness(prompt_text)
+        return maybe_inject_car_awareness(
+            prompt_text,
+            declared_profile="car_ambient",
+        )
 
     def _maybe_inject_outbox_context(
         self,

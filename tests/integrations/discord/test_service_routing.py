@@ -1469,11 +1469,11 @@ async def test_service_tickets_search_autocomplete_returns_filtered_tickets(
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_alpha1"\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-002.md").write_text(
-        "---\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_beta1"\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3582,7 +3582,7 @@ async def test_car_tickets_returns_ticket_picker_components(tmp_path: Path) -> N
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\ntitle: First\ndone: false\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_first"\ntitle: First\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3628,7 +3628,7 @@ async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
     long_name = f"TICKET-001-{'x' * 120}.md"
     ticket_rel = f".codex-autorunner/tickets/{long_name}"
     (ticket_dir / long_name).write_text(
-        "---\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_long1"\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3672,7 +3672,7 @@ async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
         assert modal_payload["type"] == 9
         text_input = modal_payload["data"]["components"][0]["component"]
         assert text_input["value"] == (
-            "---\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n"
+            '---\nticket_id: "tkt_discord_long1"\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n'
         )
         assert (
             service._resolve_ticket_picker_value(
@@ -3693,11 +3693,11 @@ async def test_car_tickets_search_filters_picker_and_persists_across_filter_chan
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_alpha2"\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-002.md").write_text(
-        "---\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_beta2"\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional, TypedDict, cast
 
 from ..bootstrap import ensure_pma_docs, pma_doc_path
-from ..tickets.files import safe_relpath
+from ..tickets.files import list_ticket_paths, safe_relpath
 from ..tickets.models import Dispatch
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..tickets.replies import resolve_reply_paths
@@ -1946,6 +1946,57 @@ def _dispatch_is_actionable(dispatch_payload: Any) -> bool:
     return mode == "pause"
 
 
+def _paused_dispatch_resume_invalid_reason(repo_root: Path) -> Optional[str]:
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    try:
+        ticket_paths = list_ticket_paths(ticket_dir)
+    except Exception as exc:
+        _logger.warning(
+            "Could not inspect ticket dir for paused dispatch guard: %s", exc
+        )
+        return None
+    if ticket_paths:
+        return None
+    return (
+        "Latest dispatch is stale; ticket flow resume preflight would fail because "
+        f"no tickets remain in {safe_relpath(ticket_dir, repo_root)}"
+    )
+
+
+def _resolve_paused_dispatch_state(
+    *,
+    repo_root: Path,
+    record_status: FlowRunStatus,
+    latest_payload: Mapping[str, Any],
+    latest_reply_seq: int,
+) -> tuple[bool, Optional[str]]:
+    seq = int(latest_payload.get("seq") or 0)
+    latest_seq = int(latest_payload.get("latest_seq") or 0)
+    dispatch_payload = latest_payload.get("dispatch")
+    dispatch_is_actionable = _dispatch_is_actionable(dispatch_payload)
+    has_dispatch = bool(dispatch_is_actionable and seq > 0 and latest_reply_seq < seq)
+    if record_status == FlowRunStatus.PAUSED and has_dispatch and latest_seq > seq:
+        preflight_invalid_reason = _paused_dispatch_resume_invalid_reason(repo_root)
+        if preflight_invalid_reason:
+            return False, preflight_invalid_reason
+
+    if record_status != FlowRunStatus.PAUSED or has_dispatch:
+        return has_dispatch, None
+
+    if latest_payload.get("errors"):
+        return False, "Paused run has unreadable dispatch metadata"
+    if dispatch_is_actionable and seq > 0 and latest_reply_seq >= seq:
+        return False, "Latest dispatch already replied; run is still paused"
+    if (
+        dispatch_payload
+        and not dispatch_is_actionable
+        and seq > 0
+        and latest_reply_seq < seq
+    ):
+        return False, "Latest dispatch is informational and does not require reply"
+    return False, "Run is paused without an actionable dispatch"
+
+
 def _latest_dispatch(
     repo_root: Path, run_id: str, input_data: dict, *, max_text_chars: int
 ) -> Optional[dict[str, Any]]:
@@ -2029,6 +2080,7 @@ def _latest_dispatch(
         selected_dispatch = selected["dispatch"]
         return {
             "seq": selected["seq"],
+            "latest_seq": latest_seq,
             "dir": safe_relpath(selected_dir, repo_root),
             "dispatch": _dispatch_dict(
                 selected_dispatch, max_text_chars=max_text_chars
@@ -2233,41 +2285,13 @@ def get_latest_ticket_flow_run_state_with_record(
             reply_seq = _latest_reply_history_seq(
                 repo_root, str(record.id), dict(record.input_data or {})
             )
-            dispatch_seq = (
-                int(latest.get("seq") or 0) if isinstance(latest, dict) else 0
+            latest_payload = latest if isinstance(latest, dict) else {}
+            has_dispatch, reason = _resolve_paused_dispatch_state(
+                repo_root=repo_root,
+                record_status=record.status,
+                latest_payload=latest_payload,
+                latest_reply_seq=reply_seq,
             )
-            dispatch_payload = (
-                latest.get("dispatch") if isinstance(latest, dict) else None
-            )
-            dispatch_is_actionable = _dispatch_is_actionable(dispatch_payload)
-            has_dispatch = bool(
-                dispatch_is_actionable and dispatch_seq > 0 and reply_seq < dispatch_seq
-            )
-            reason = None
-            if record.status == FlowRunStatus.PAUSED and not has_dispatch:
-                if (
-                    latest
-                    and isinstance(latest.get("errors"), list)
-                    and latest.get("errors")
-                ):
-                    reason = "Paused run has unreadable dispatch metadata"
-                elif (
-                    dispatch_is_actionable
-                    and dispatch_seq > 0
-                    and reply_seq >= dispatch_seq
-                ):
-                    reason = "Latest dispatch already replied; run is still paused"
-                elif (
-                    dispatch_payload
-                    and not dispatch_is_actionable
-                    and dispatch_seq > 0
-                    and reply_seq < dispatch_seq
-                ):
-                    reason = (
-                        "Latest dispatch is informational and does not require reply"
-                    )
-                else:
-                    reason = "Run is paused without an actionable dispatch"
             run_state = build_ticket_flow_run_state(
                 repo_root=repo_root,
                 repo_id=repo_id,
@@ -2343,36 +2367,15 @@ def _gather_inbox(
                     )
                     seq = int(latest_payload.get("seq") or 0)
                     dispatch_payload = latest_payload.get("dispatch")
-                    dispatch_is_actionable = _dispatch_is_actionable(dispatch_payload)
-                    has_dispatch = bool(
-                        dispatch_is_actionable and seq > 0 and latest_reply_seq < seq
+                    has_dispatch, dispatch_state_reason = (
+                        _resolve_paused_dispatch_state(
+                            repo_root=repo_root,
+                            record_status=record.status,
+                            latest_payload=latest_payload,
+                            latest_reply_seq=latest_reply_seq,
+                        )
                     )
-                    dispatch_state_reason = None
-                    if record.status == FlowRunStatus.PAUSED and not has_dispatch:
-                        if latest_payload.get("errors"):
-                            dispatch_state_reason = (
-                                "Paused run has unreadable dispatch metadata"
-                            )
-                        elif (
-                            dispatch_is_actionable
-                            and seq > 0
-                            and latest_reply_seq >= seq
-                        ):
-                            dispatch_state_reason = (
-                                "Latest dispatch already replied; run is still paused"
-                            )
-                        elif (
-                            dispatch_payload
-                            and not dispatch_is_actionable
-                            and seq > 0
-                            and latest_reply_seq < seq
-                        ):
-                            dispatch_state_reason = "Latest dispatch is informational and does not require reply"
-                        else:
-                            dispatch_state_reason = (
-                                "Run is paused without an actionable dispatch"
-                            )
-                    elif record.status == FlowRunStatus.FAILED:
+                    if record.status == FlowRunStatus.FAILED:
                         dispatch_state_reason = record.error_message or "Run failed"
                     elif record.status == FlowRunStatus.STOPPED:
                         dispatch_state_reason = "Run was stopped"

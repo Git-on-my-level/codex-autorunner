@@ -13,6 +13,7 @@ from codex_autorunner.core.lifecycle_events import (
 )
 from codex_autorunner.tickets.outbox import (
     archive_dispatch,
+    create_turn_summary,
     ensure_outbox_dirs,
     parse_dispatch,
     resolve_outbox_paths,
@@ -72,6 +73,52 @@ def test_archive_dispatch_archives_dispatch_and_attachments(tmp_path: Path) -> N
     record2, errors2 = archive_dispatch(paths, next_seq=2)
     assert record2 is None
     assert errors2 == []
+
+
+def test_archive_dispatch_preserves_supplied_ticket_reference(tmp_path: Path) -> None:
+    paths = resolve_outbox_paths(
+        workspace_root=tmp_path,
+        run_id="run-1",
+    )
+    ensure_outbox_dirs(paths)
+    _write_dispatch(paths.dispatch_path, mode="pause", body="Review attached")
+
+    record, errors = archive_dispatch(
+        paths,
+        next_seq=1,
+        ticket_id=".codex-autorunner/tickets/TICKET-001.md",
+    )
+
+    assert errors == []
+    assert record is not None
+    assert record.dispatch.extra["ticket_id"] == (
+        ".codex-autorunner/tickets/TICKET-001.md"
+    )
+
+
+def test_create_turn_summary_preserves_supplied_ticket_reference(
+    tmp_path: Path,
+) -> None:
+    paths = resolve_outbox_paths(
+        workspace_root=tmp_path,
+        run_id="run-1",
+    )
+    ensure_outbox_dirs(paths)
+
+    record, errors = create_turn_summary(
+        paths,
+        next_seq=1,
+        agent_output="Completed the ticket.",
+        ticket_id=".codex-autorunner/tickets/TICKET-001.md",
+        agent_id="codex",
+        turn_number=2,
+    )
+
+    assert errors == []
+    assert record is not None
+    assert record.dispatch.extra["ticket_id"] == (
+        ".codex-autorunner/tickets/TICKET-001.md"
+    )
 
 
 def test_archive_dispatch_invalid_frontmatter_does_not_delete(

@@ -10,6 +10,10 @@ import httpx
 import typer
 
 from ...bootstrap import ensure_pma_docs, pma_doc_path
+from ...core.car_context import (
+    default_managed_thread_context_profile,
+    normalize_car_context_profile,
+)
 from ...core.config import load_hub_config
 
 logger = logging.getLogger(__name__)
@@ -978,6 +982,11 @@ def pma_thread_spawn(
     backend_id: Optional[str] = typer.Option(
         None, "--backend-id", help="Optional existing backend thread/session id"
     ),
+    context_profile: Optional[str] = typer.Option(
+        None,
+        "--context-profile",
+        help="CAR context profile (car_core|car_ambient|none)",
+    ),
     notify_on: Optional[str] = typer.Option(
         None,
         "--notify-on",
@@ -1031,6 +1040,17 @@ def pma_thread_spawn(
             err=True,
         )
         raise typer.Exit(code=1) from None
+    normalized_context_profile = normalize_car_context_profile(context_profile)
+    if context_profile is not None and normalized_context_profile is None:
+        typer.echo(
+            "--context-profile must be one of: car_core, car_ambient, none",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    if normalized_context_profile is None:
+        normalized_context_profile = default_managed_thread_context_profile(
+            resource_kind=normalized_resource_kind
+        )
 
     hub_root = _resolve_hub_path(path)
     try:
@@ -1061,6 +1081,7 @@ def pma_thread_spawn(
                 "workspace_root": normalized_workspace_root,
                 "name": name,
                 "backend_thread_id": backend_id,
+                "context_profile": normalized_context_profile,
                 "notify_on": normalized_notify_on,
                 "notify_lane": notify_lane,
                 "notify_once": notify_once,

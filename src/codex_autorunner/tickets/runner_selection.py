@@ -70,6 +70,7 @@ def select_ticket(
 
     def _clear_per_ticket_state() -> None:
         state_updates["current_ticket"] = None
+        state_updates["current_ticket_id"] = None
         state_updates["ticket_turns"] = None
         state_updates["last_agent_output"] = None
         state_updates["lint"] = None
@@ -127,7 +128,7 @@ def select_ticket(
         selected=SelectedTicket(
             path=current_path,
             rel_path=safe_relpath(current_path, workspace_root),
-            frontmatter=TicketFrontmatter(agent="", done=False),
+            frontmatter=TicketFrontmatter(ticket_id="", agent="", done=False),
         ),
         status="continue",
         state_updates=state_updates,
@@ -235,7 +236,11 @@ def _validate_ticket_lint_retry(
             ticket_doc=TicketDoc(
                 path=ticket_path,
                 index=0,
-                frontmatter=TicketFrontmatter(agent=agent_id, done=False),
+                frontmatter=TicketFrontmatter(
+                    ticket_id="lint-retry-ticket",
+                    agent=agent_id,
+                    done=False,
+                ),
                 body="",
             ),
             skip_execution=False,

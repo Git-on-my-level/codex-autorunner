@@ -7,6 +7,7 @@ from typing import Optional
 
 from ..contextspace.paths import contextspace_doc_path, read_contextspace_doc
 from .files import list_ticket_paths, safe_relpath
+from .frontmatter import generate_ticket_id
 from .ingest_state import ingest_state_path, write_ingest_receipt
 
 logger = logging.getLogger(__name__)
@@ -56,9 +57,11 @@ def ingest_workspace_spec_to_tickets(repo_root: Path) -> SpecIngestTicketsResult
     ticket_path = _ticket_path(repo_root, 1)
 
     rel_spec = safe_relpath(spec_path, repo_root)
+    ticket_id = generate_ticket_id()
     template = f"""---
 agent: codex
 done: false
+ticket_id: "{ticket_id}"
 title: Bootstrap tickets from contextspace spec
 goal: Read contextspace spec and create follow-up tickets
 ---

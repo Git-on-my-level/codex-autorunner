@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import logging
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+
+from .....tickets.frontmatter import generate_ticket_id
 
 if TYPE_CHECKING:
     from .....core.flows.ux_helpers import BootstrapCheckResult, IssueSeedResult
@@ -250,7 +251,7 @@ def build_ticket_bootstrap_routes(
         tickets_exist = bool(existing_tickets)
 
         if not tickets_exist and not ticket_path.exists():
-            bootstrap_ticket_id = f"tkt_{uuid.uuid4().hex}"
+            bootstrap_ticket_id = generate_ticket_id()
             template = f"""---
 agent: codex
 done: false

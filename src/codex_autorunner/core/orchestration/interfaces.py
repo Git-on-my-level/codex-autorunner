@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
+from ..car_context import CarContextProfile
 from .models import (
     AgentDefinition,
     BusyThreadPolicy,
@@ -121,6 +122,7 @@ class ThreadExecutionStore(Protocol):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 
@@ -250,6 +252,7 @@ class OrchestrationThreadService(Protocol):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 
@@ -264,6 +267,7 @@ class OrchestrationThreadService(Protocol):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 

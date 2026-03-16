@@ -4,11 +4,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-import yaml
-
 from ..core.utils import atomic_write
 from .files import list_ticket_paths, safe_relpath
-from .frontmatter import parse_markdown_frontmatter
+from .frontmatter import (
+    ensure_ticket_id,
+    parse_markdown_frontmatter,
+    render_markdown_frontmatter,
+)
 from .lint import lint_ticket_frontmatter, parse_ticket_index
 
 
@@ -50,8 +52,7 @@ def parse_ticket_range(range_spec: Optional[str]) -> Optional[tuple[int, int]]:
 
 
 def _render_ticket(frontmatter: dict[str, Any], body: str) -> str:
-    fm_yaml = yaml.safe_dump(frontmatter, sort_keys=False).rstrip()
-    return f"---\n{fm_yaml}\n---{body}"
+    return render_markdown_frontmatter(frontmatter, body)
 
 
 def _select_ticket_paths(
@@ -82,16 +83,9 @@ def _apply_ticket_update(
         return False, False, [f"{safe_relpath(path, repo_root)}: {exc}"]
 
     data, body = parse_markdown_frontmatter(raw)
-    frontmatter, errors = lint_ticket_frontmatter(data)
-    if errors or frontmatter is None:
-        return (
-            False,
-            False,
-            [f"{safe_relpath(path, repo_root)}: {err}" for err in errors],
-        )
-
     updated = dict(data) if isinstance(data, dict) else {}
     mutate(updated)
+    ensure_ticket_id(updated)
 
     _, errors = lint_ticket_frontmatter(updated)
     if errors:

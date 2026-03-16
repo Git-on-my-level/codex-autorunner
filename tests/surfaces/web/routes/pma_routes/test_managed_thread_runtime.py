@@ -11,6 +11,7 @@ from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
+from codex_autorunner.core.pma_context import format_pma_discoverability_preamble
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_thread_runtime
@@ -136,6 +137,13 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     assert payload["status"] == "ok"
     assert payload["assistant_text"] == "assistant-output"
     assert captured["sandbox_policy"] == "dangerFullAccess"
+    assert captured["request"].context_profile == "car_ambient"
+    assert "<injected context>" not in captured["request"].metadata["runtime_prompt"]
+    assert (
+        captured["request"]
+        .metadata["runtime_prompt"]
+        .startswith(format_pma_discoverability_preamble(hub_root=hub_env.hub_root))
+    )
     assert (
         captured["request"]
         .metadata["runtime_prompt"]
@@ -143,6 +151,283 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     )
     assert fake_service.record_calls[0]["status"] == "ok"
     assert fake_service.record_calls[0]["execution_id"] == "managed-turn-1"
+
+
+def test_managed_thread_message_route_honors_explicit_core_context_profile(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+        metadata={"context_profile": "car_core"},
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(
+            self,
+            thread_target_id: str,
+            execution_id: str,
+            *,
+            status: str,
+            assistant_text: Optional[str] = None,
+            error: Optional[str] = None,
+            backend_turn_id: Optional[str] = None,
+            transcript_turn_id: Optional[str] = None,
+        ):
+            _ = (
+                thread_target_id,
+                execution_id,
+                assistant_text,
+                error,
+                backend_turn_id,
+                transcript_turn_id,
+            )
+            return SimpleNamespace(status=status, error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        captured["request"] = request
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+            ),
+            thread=SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+            ),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "await_runtime_thread_outcome",
+        _fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    assert captured["request"].context_profile == "car_core"
+    assert (
+        captured["request"]
+        .metadata["runtime_prompt"]
+        .startswith(format_pma_discoverability_preamble(hub_root=hub_env.hub_root))
+    )
+    assert "<injected context>" in captured["request"].metadata["runtime_prompt"]
+
+
+def test_managed_thread_message_route_injects_core_context_when_profile_is_core(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+        metadata={"context_profile": "car_core"},
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(self, *args, **kwargs):
+            _ = args, kwargs
+            return SimpleNamespace(status="ok", error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        captured["request"] = request
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+            ),
+            thread=SimpleNamespace(backend_thread_id="backend-thread-1"),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "await_runtime_thread_outcome",
+        _fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    assert captured["request"].context_profile == "car_core"
+    assert "<injected context>" in captured["request"].metadata["runtime_prompt"]
+
+
+def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    workspace_root = (
+        hub_env.hub_root / ".codex-autorunner" / "runtimes" / "zeroclaw" / "zc-main"
+    )
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "zeroclaw",
+        workspace_root.resolve(),
+        resource_kind="agent_workspace",
+        resource_id="zc-main",
+        metadata={"context_profile": "car_core"},
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(self, *args, **kwargs):
+            _ = args, kwargs
+            return SimpleNamespace(status="ok", error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+            ),
+            thread=SimpleNamespace(backend_thread_id="backend-thread-1"),
+            workspace_root=workspace_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "await_runtime_thread_outcome",
+        _fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "sync runtime context"},
+        )
+
+    assert response.status_code == 200
+    agents_path = workspace_root / "workspace" / "AGENTS.md"
+    assert agents_path.exists()
+    assert "# AGENTS" in agents_path.read_text(encoding="utf-8")
 
 
 def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
