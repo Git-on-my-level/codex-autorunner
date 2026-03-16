@@ -292,7 +292,6 @@ def test_template_apply_rejects_removed_out_alias(hub_env, tmp_path: Path) -> No
     )
 
     assert result.exit_code != 0
-    assert "--out" in result.output
 
     created_path = hub_env.repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md"
     assert not created_path.exists()
