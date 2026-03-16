@@ -52,20 +52,11 @@
         </button>
       </div>
     </header>
-    <section class="hub-stats">
-      <div class="hub-stat">
-        <div class="hub-stat-value" id="hub-count-total">–</div>
-        <p class="muted small">repos</p>
-      </div>
-      <div class="hub-stat">
-        <div class="hub-stat-value" id="hub-count-running">–</div>
-        <p class="muted small">running</p>
-      </div>
-      <div class="hub-stat">
-        <div class="hub-stat-value" id="hub-count-missing">–</div>
-        <p class="muted small">missing</p>
-      </div>
-    </section>
+    <div class="hub-stats-inline">
+      <span class="hub-stat-inline"><span class="hub-stat-value" id="hub-count-total">–</span> repos</span>
+      <span class="hub-stat-inline"><span class="hub-stat-value" id="hub-count-running">–</span> running</span>
+      <span class="hub-stat-inline"><span class="hub-stat-value" id="hub-count-missing">–</span> missing</span>
+    </div>
     <section class="hub-repo-panel" id="hub-repo-panel" data-hub-panel="repos">
       <div class="hub-panel-header">
         <div class="hub-panel-header-main">
@@ -73,7 +64,6 @@
             aria-controls="hub-repo-list" aria-expanded="true">
             <span class="hub-panel-summary-copy">
               <span class="label">Repositories</span>
-              <span class="hub-panel-summary-note muted small">Browse repos, worktrees, and flow status</span>
             </span>
             <span class="hub-panel-summary-state" id="hub-repo-panel-state">Expanded</span>
           </button>
@@ -119,7 +109,6 @@
             aria-controls="hub-agent-workspace-list" aria-expanded="false">
             <span class="hub-panel-summary-copy">
               <span class="label">Agents</span>
-              <span class="hub-panel-summary-note muted small">Managed agent workspaces and runtimes</span>
             </span>
             <span class="hub-panel-summary-state" id="hub-agent-panel-state">Show panel</span>
           </button>
