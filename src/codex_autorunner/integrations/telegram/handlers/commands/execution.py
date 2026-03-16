@@ -62,6 +62,7 @@ from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
     AppServerThreadRegistry,
     pma_base_key,
+    pma_topic_scoped_key,
 )
 from .....integrations.chat.compaction import match_pending_compact_seed
 from .....integrations.chat.runtime_thread_errors import (
@@ -3258,11 +3259,11 @@ class ExecutionCommands(SharedHelpers):
         agent = self._effective_agent(record)
         base_key = pma_base_key(agent)
 
-        # PMA thread scoping: per-topic when require_topics is true
         require_topics = getattr(self._config, "require_topics", False)
         if require_topics and message is not None:
-            topic_key = build_topic_key(message.chat_id, message.thread_id)
-            return f"{base_key}.{topic_key}"
+            return pma_topic_scoped_key(
+                agent, message.chat_id, message.thread_id, topic_key_fn=build_topic_key
+            )
         return base_key
 
     async def _prepare_pma_prompt(self, message_text: str) -> Optional[str]:

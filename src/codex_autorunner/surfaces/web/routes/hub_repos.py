@@ -31,6 +31,7 @@ from ....integrations.app_server.threads import (
     default_app_server_threads_path,
     file_chat_discord_key,
     pma_base_key,
+    pma_topic_scoped_key,
 )
 from ....integrations.telegram.state import topic_key
 from ....manifest import Manifest, load_manifest
@@ -944,7 +945,9 @@ def build_hub_repo_routes(
                     thread_id = int(str(thread_id_raw))
                 except (TypeError, ValueError):
                     thread_id = None
-            return f"{base_key}.{topic_key(chat_id, thread_id)}"
+            return pma_topic_scoped_key(
+                agent, chat_id, thread_id, topic_key_fn=topic_key
+            )
 
         if platform != "discord":
             return None
