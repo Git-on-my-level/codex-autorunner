@@ -49,6 +49,7 @@ class RuntimeThreadRunEventState:
     assistant_stream_text: str = ""
     assistant_message_text: str = ""
     token_usage: Optional[dict[str, Any]] = None
+    last_error_message: Optional[str] = None
     message_roles: dict[str, str] = field(default_factory=dict)
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
     pending_stream_no_id: str = ""
@@ -364,7 +365,22 @@ def _normalize_message_event(
         state.token_usage = dict(usage)
         return [TokenUsage(timestamp=now_iso(), usage=dict(usage))]
 
-    if method in {"turn/completed", "turn/error", "error", "session.idle"}:
+    if method == "turn/error":
+        error_message = params.get("message")
+        if not isinstance(error_message, str) or not error_message.strip():
+            error_message = "Turn error"
+        state.last_error_message = str(error_message)
+        return [Failed(timestamp=now_iso(), error_message=str(error_message))]
+
+    if method == "error":
+        error = _coerce_dict(params.get("error"))
+        error_message = error.get("message") or params.get("message")
+        if not isinstance(error_message, str) or not error_message.strip():
+            error_message = "Turn error"
+        state.last_error_message = str(error_message)
+        return [Failed(timestamp=now_iso(), error_message=str(error_message))]
+
+    if method in {"turn/completed", "session.idle"}:
         return []
 
     if method == "session.status":
@@ -866,4 +882,11 @@ __all__ = [
     "RuntimeThreadRunEventState",
     "normalize_runtime_thread_raw_event",
     "terminal_run_event_from_outcome",
+    "_extract_output_delta",
+    "_output_delta_type_for_method",
+    "_normalize_tool_name",
+    "_extract_agent_message_text",
+    "_extract_usage",
+    "_coerce_dict",
+    "_normalize_message_event",
 ]

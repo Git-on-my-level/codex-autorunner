@@ -226,7 +226,9 @@ def _sanitize_runtime_thread_result_error(
         return interrupted_error
     if sanitized in {timeout_error, interrupted_error}:
         return sanitized
-    return public_error
+    if not sanitized or sanitized in {public_error, "Runtime thread failed"}:
+        return public_error
+    return format_public_error(sanitized)
 
 
 def _build_managed_thread_input_items(
@@ -599,8 +601,12 @@ async def _finalize_telegram_managed_thread_execution(
             if finalized_status == "interrupted":
                 detail = interrupted_error
             elif finalized_status == "error" and finalized_execution is not None:
+                raw_error = (
+                    getattr(finalized_execution, "error", None)
+                    or event_state.last_error_message
+                )
                 detail = _sanitize_runtime_thread_result_error(
-                    finalized_execution.error,
+                    raw_error,
                     public_error=public_execution_error,
                     timeout_error=timeout_error,
                     interrupted_error=interrupted_error,
@@ -647,8 +653,9 @@ async def _finalize_telegram_managed_thread_execution(
             "token_usage": event_state.token_usage,
         }
 
+    raw_error = outcome.error or event_state.last_error_message
     detail = _sanitize_runtime_thread_result_error(
-        outcome.error,
+        raw_error,
         public_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
@@ -756,6 +763,24 @@ def _ensure_telegram_managed_thread_queue_worker(
 
     worker_task = handlers._spawn_task(_queue_worker())
     task_map[managed_thread_id] = worker_task
+
+
+def _sync_pma_registry_thread_id(
+    handlers: Any,
+    record: "TelegramTopicRecord",
+    message: TelegramMessage,
+    backend_thread_id: Optional[str],
+) -> None:
+    if not isinstance(backend_thread_id, str) or not backend_thread_id.strip():
+        return
+    registry = getattr(handlers, "_hub_thread_registry", None)
+    pma_key_builder = getattr(handlers, "_pma_registry_key", None)
+    if registry is None or not callable(pma_key_builder):
+        return
+    pma_key = pma_key_builder(record, message)
+    if not isinstance(pma_key, str) or not pma_key.strip():
+        return
+    registry.set_thread_id(pma_key, backend_thread_id)
 
 
 async def _run_telegram_managed_thread_turn(
@@ -1018,6 +1043,14 @@ async def _run_telegram_managed_thread_turn(
             transcript_message_id,
             transcript_text,
         )
+    if pma_enabled:
+        _sync_pma_registry_thread_id(
+            handlers,
+            record,
+            message,
+            str(getattr(started_execution.thread, "backend_thread_id", "") or "")
+            or None,
+        )
     if pending_seed and not pma_enabled:
         await handlers._router.update_topic(
             message.chat_id,
@@ -1171,6 +1204,13 @@ async def _run_telegram_managed_thread_turn(
             transcript_text,
         )
     resolved_backend_thread_id = str(finalized.get("backend_thread_id") or "") or None
+    if pma_enabled and resolved_backend_thread_id:
+        _sync_pma_registry_thread_id(
+            handlers,
+            record,
+            message,
+            resolved_backend_thread_id,
+        )
     if not pma_enabled and resolved_backend_thread_id and hasattr(handlers, "_router"):
         await _sync_telegram_thread_binding(
             handlers,
@@ -3474,7 +3514,6 @@ class ExecutionCommands(SharedHelpers):
 
         if (
             pma_enabled
-            and allow_new_thread
             and getattr(self._config, "root", None) is not None
             and callable(getattr(self, "_spawn_task", None))
         ):
@@ -3491,6 +3530,8 @@ class ExecutionCommands(SharedHelpers):
                 transcript_message_id=transcript_message_id,
                 transcript_text=transcript_text,
                 placeholder_id=placeholder_id,
+                allow_new_thread=allow_new_thread,
+                missing_thread_message=missing_thread_message,
             )
 
         if getattr(self._config, "root", None) is not None and callable(

@@ -71,7 +71,7 @@ class _RouterStub:
         return self._record
 
 
-def test_sanitize_runtime_thread_result_error_returns_public_error_for_unknown_failures() -> (
+def test_sanitize_runtime_thread_result_error_formats_unknown_failures_for_public_output() -> (
     None
 ):
     assert (
@@ -81,7 +81,7 @@ def test_sanitize_runtime_thread_result_error_returns_public_error_for_unknown_f
             timeout_error="Telegram PMA turn timed out",
             interrupted_error="Telegram PMA turn interrupted",
         )
-        == "Telegram PMA turn failed"
+        == "backend exploded with private detail"
     )
 
 
@@ -1737,6 +1737,172 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
         for task in remaining_tasks:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+@pytest.mark.anyio
+async def test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+
+    class _FakeHarness:
+        display_name = "Fake"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        def __init__(self) -> None:
+            self.start_calls: list[tuple[str, str]] = []
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="telegram-backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            self.start_calls.append((conversation_id, prompt))
+            turn_id = f"telegram-backend-turn-{len(self.start_calls)}"
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, timeout
+            assert conversation_id == "telegram-backend-thread-1"
+            assert isinstance(turn_id, str)
+            return SimpleNamespace(
+                status="ok",
+                assistant_text=f"reply for {turn_id}",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    first_message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="first pma orchestration prompt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(first_message, runtime=_RuntimeStub())
+
+    assert handler._hub_thread_registry.get_thread_id(PMA_KEY) == (
+        "telegram-backend-thread-1"
+    )
+
+    followup_message = TelegramMessage(
+        update_id=2,
+        message_id=11,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="/compact",
+        date=None,
+        is_topic_message=True,
+    )
+
+    outcome = await handler._run_turn_and_collect_result(
+        followup_message,
+        runtime=_RuntimeStub(),
+        text_override="compact summary prompt",
+        record=record,
+        allow_new_thread=False,
+        missing_thread_message="No active thread to compact. Use /new to start one.",
+        send_placeholder=False,
+    )
+
+    assert isinstance(outcome, _TurnRunResult)
+    assert outcome.thread_id == "telegram-backend-thread-1"
+    assert handler._hub_thread_registry.get_thread_id(PMA_KEY) == (
+        "telegram-backend-thread-1"
+    )
+    assert [call[0] for call in harness.start_calls] == [
+        "telegram-backend-thread-1",
+        "telegram-backend-thread-1",
+    ]
 
 
 @pytest.mark.anyio

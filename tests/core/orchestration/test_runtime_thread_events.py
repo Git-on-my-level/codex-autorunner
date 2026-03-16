@@ -100,6 +100,29 @@ async def test_normalize_runtime_thread_raw_event_handles_codex_app_server_updat
     assert state.best_assistant_text() == "partial reply"
 
 
+async def test_normalize_runtime_thread_raw_event_surfaces_generic_error_notifications() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "error",
+                    "params": {"error": {"message": "Auth required"}},
+                }
+            },
+        ),
+        state,
+    )
+
+    assert isinstance(output[0], Failed)
+    assert output[0].error_message == "Auth required"
+    assert state.last_error_message == "Auth required"
+
+
 async def test_terminal_run_event_from_outcome_uses_streamed_fallback_text() -> None:
     state = RuntimeThreadRunEventState(assistant_stream_text="streamed fallback")
 

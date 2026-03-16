@@ -20,6 +20,10 @@ from ..types import (
 
 _DEFAULT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 _INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
+_MISSING_THREAD_MARKERS = (
+    "thread not found",
+    "no rollout found for thread id",
+)
 
 
 def _coerce_entries(result: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -93,6 +97,13 @@ def _select_display_name(model_id: str, display_name_raw: Any) -> str:
     if _normalize_model_name(display_name_raw) == _normalize_model_name(model_id):
         return model_id
     return display_name_raw
+
+
+def _is_missing_thread_error(exc: Exception) -> bool:
+    if not isinstance(exc, CodexAppServerResponseError):
+        return False
+    message = str(exc).lower()
+    return any(marker in message for marker in _MISSING_THREAD_MARKERS)
 
 
 class CodexHarness(AgentHarness):
@@ -187,7 +198,12 @@ class CodexHarness(AgentHarness):
         resume = getattr(client, "thread_resume", None)
         if not callable(resume):
             return ConversationRef(agent=self.agent_id, id=conversation_id)
-        result = await resume(conversation_id)
+        try:
+            result = await resume(conversation_id)
+        except Exception as exc:
+            if _is_missing_thread_error(exc):
+                return ConversationRef(agent=self.agent_id, id=conversation_id)
+            raise
         thread_id = conversation_id
         if isinstance(result, dict):
             candidate = result.get("id")

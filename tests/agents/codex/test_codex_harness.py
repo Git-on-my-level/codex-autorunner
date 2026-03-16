@@ -7,6 +7,9 @@ import pytest
 
 from codex_autorunner.agents.codex.harness import CodexHarness
 from codex_autorunner.agents.registry import get_registered_agents
+from codex_autorunner.integrations.app_server.client import (
+    CodexAppServerResponseError,
+)
 
 
 class _TurnHandle:
@@ -63,12 +66,37 @@ async def test_codex_harness_wait_for_turn_returns_plain_text_terminal_result() 
 
 
 @pytest.mark.asyncio
-async def test_codex_harness_resume_conversation_propagates_resume_failures() -> None:
+async def test_codex_harness_resume_conversation_ignores_missing_thread_failures() -> (
+    None
+):
     class _Client:
         async def thread_resume(self, _thread_id: str) -> None:
-            raise RuntimeError("missing thread")
+            raise CodexAppServerResponseError(
+                method="thread/resume",
+                code=-32000,
+                message="Thread not found",
+            )
 
     harness = CodexHarness(supervisor=_Supervisor(_Client()), events=object())  # type: ignore[arg-type]
 
-    with pytest.raises(RuntimeError, match="missing thread"):
+    resumed = await harness.resume_conversation(Path("."), "thread-1")
+
+    assert resumed.id == "thread-1"
+
+
+@pytest.mark.asyncio
+async def test_codex_harness_resume_conversation_propagates_non_missing_failures() -> (
+    None
+):
+    class _Client:
+        async def thread_resume(self, _thread_id: str) -> None:
+            raise CodexAppServerResponseError(
+                method="thread/resume",
+                code=-32000,
+                message="permission denied",
+            )
+
+    harness = CodexHarness(supervisor=_Supervisor(_Client()), events=object())  # type: ignore[arg-type]
+
+    with pytest.raises(CodexAppServerResponseError, match="permission denied"):
         await harness.resume_conversation(Path("."), "thread-1")
