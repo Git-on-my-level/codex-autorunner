@@ -14,6 +14,7 @@ from codex_autorunner.core.orchestration import (
     OrchestrationThreadService,
     RuntimeThreadHarness,
     ThreadExecutionStore,
+    ThreadStopOutcome,
     ThreadTarget,
 )
 
@@ -352,6 +353,12 @@ class _FakeService:
 
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord:
         return self.store.execution
+
+    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome:
+        return ThreadStopOutcome(
+            thread_target_id=thread_target_id,
+            execution=self.store.execution,
+        )
 
     def get_execution(
         self, thread_target_id: str, execution_id: str

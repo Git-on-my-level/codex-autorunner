@@ -11,6 +11,7 @@ from .models import (
     FlowTarget,
     MessageRequest,
     MessageRequestKind,
+    ThreadStopOutcome,
     ThreadTarget,
 )
 
@@ -281,6 +282,8 @@ class OrchestrationThreadService(Protocol):
     ) -> ExecutionRecord: ...
 
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord: ...
+
+    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome: ...
 
     def get_execution(
         self, thread_target_id: str, execution_id: str

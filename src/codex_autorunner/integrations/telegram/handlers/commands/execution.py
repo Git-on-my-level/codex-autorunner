@@ -380,13 +380,17 @@ async def _sync_telegram_thread_binding(
     canonical_workspace = str(workspace_root.resolve())
     normalized_repo_id = repo_id.strip() if isinstance(repo_id, str) else None
     if replace_existing and current_thread is not None:
-        orchestration_service.cancel_queued_executions(current_thread.thread_target_id)
-        if (
-            orchestration_service.get_running_execution(current_thread.thread_target_id)
-            is not None
-        ):
-            await orchestration_service.interrupt_thread(
-                current_thread.thread_target_id
+        stop_outcome = await orchestration_service.stop_thread(
+            current_thread.thread_target_id
+        )
+        if stop_outcome.recovered_lost_backend:
+            log_event(
+                handlers._logger,
+                logging.INFO,
+                "telegram.thread.recovered_lost_backend",
+                surface_key=surface_key,
+                managed_thread_id=current_thread.thread_target_id,
+                mode=mode,
             )
         orchestration_service.archive_thread_target(current_thread.thread_target_id)
         current_thread = None

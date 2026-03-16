@@ -485,21 +485,11 @@ class TelegramCommandHandlers(
                 )
             )
             if current_thread is not None:
-                interrupted_active = False
-                cancelled_queued = 0
                 pma_mode = bool(getattr(record, "pma_enabled", False))
-                running_execution = orchestration_service.get_running_execution(
-                    current_thread.thread_target_id
-                )
                 try:
-                    cancelled_queued = orchestration_service.cancel_queued_executions(
+                    stop_outcome = await orchestration_service.stop_thread(
                         current_thread.thread_target_id
                     )
-                    if running_execution is not None:
-                        await orchestration_service.interrupt_thread(
-                            current_thread.thread_target_id
-                        )
-                        interrupted_active = True
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -523,20 +513,32 @@ class TelegramCommandHandlers(
                         reply_to=reply_to,
                     )
                     return
-                if interrupted_active or cancelled_queued:
+                if (
+                    stop_outcome.interrupted_active
+                    or stop_outcome.recovered_lost_backend
+                    or stop_outcome.cancelled_queued
+                ):
                     parts = []
-                    if interrupted_active:
+                    if stop_outcome.interrupted_active:
                         parts.append(
                             "Interrupted active PMA turn."
                             if pma_mode
                             else "Interrupted active turn."
                         )
-                    if cancelled_queued:
+                    elif stop_outcome.recovered_lost_backend:
                         parts.append(
                             (
-                                f"Cancelled {cancelled_queued} queued PMA turn(s)."
+                                "Recovered stale PMA session after backend thread was lost."
                                 if pma_mode
-                                else f"Cancelled {cancelled_queued} queued turn(s)."
+                                else "Recovered stale session after backend thread was lost."
+                            )
+                        )
+                    if stop_outcome.cancelled_queued:
+                        parts.append(
+                            (
+                                f"Cancelled {stop_outcome.cancelled_queued} queued PMA turn(s)."
+                                if pma_mode
+                                else f"Cancelled {stop_outcome.cancelled_queued} queued turn(s)."
                             )
                         )
                     await self._send_message(

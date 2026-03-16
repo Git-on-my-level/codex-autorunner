@@ -168,6 +168,17 @@ def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
             store.mark_turn_interrupted(managed_turn_id)
             return SimpleNamespace(status="interrupted")
 
+        async def stop_thread(self, thread_target_id: str):
+            calls.append(thread_target_id)
+            store.mark_turn_interrupted(managed_turn_id)
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                execution=SimpleNamespace(status="interrupted"),
+                interrupted_active=True,
+                recovered_lost_backend=False,
+                cancelled_queued=0,
+            )
+
         def record_execution_interrupted(
             self, thread_target_id: str, execution_id: str
         ):

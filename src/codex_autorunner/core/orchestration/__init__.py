@@ -50,6 +50,7 @@ from .models import (
     OrchestrationTableRole,
     TargetCapability,
     TargetKind,
+    ThreadStopOutcome,
     ThreadTarget,
 )
 from .runtime_threads import (
@@ -132,6 +133,7 @@ __all__ = [
     "TargetCapability",
     "TargetKind",
     "ThreadExecutionStore",
+    "ThreadStopOutcome",
     "ThreadControlRequest",
     "ThreadTarget",
     "TranscriptMirrorRow",

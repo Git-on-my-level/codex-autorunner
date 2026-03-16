@@ -2284,6 +2284,197 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
 
 
 @pytest.mark.anyio
+async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class _FakeHarness:
+        display_name = "Fake"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        def __init__(self) -> None:
+            self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="telegram-backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            turn_id = "telegram-backend-turn-1"
+            if release_first.is_set():
+                turn_id = "telegram-backend-turn-2"
+            return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, timeout
+            assert isinstance(turn_id, str)
+            if turn_id == "telegram-backend-turn-1":
+                first_started.set()
+                await release_first.wait()
+                return SimpleNamespace(
+                    status="error",
+                    assistant_text="",
+                    errors=["stale backend thread"],
+                )
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="unexpected queued reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
+            raise CodexAppServerResponseError(
+                method="turn/interrupt",
+                code=-32600,
+                message="thread not found: telegram-backend-thread-1",
+                data=None,
+            )
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="interruptible orchestration prompt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    first_task = asyncio.create_task(
+        handler._handle_normal_message(message, runtime=_RuntimeStub())
+    )
+    try:
+        await first_started.wait()
+        await handler._process_interrupt(
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+            runtime=_RuntimeStub(),
+            message_id=99,
+        )
+        with anyio.fail_after(2):
+            while not any(
+                "Recovered stale PMA session" in sent for sent in handler._sent
+            ):
+                await anyio.sleep(0.05)
+        release_first.set()
+        await first_task
+
+        assert harness.interrupt_calls == [
+            (tmp_path, "telegram-backend-thread-1", "telegram-backend-turn-1")
+        ]
+        assert any(
+            "Recovered stale PMA session after backend thread was lost." in sent
+            for sent in handler._sent
+        )
+        thread_store = execution_commands_module.PmaThreadStore(tmp_path)
+        threads = thread_store.list_threads(limit=10)
+        assert len(threads) == 1
+        turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
+        assert turns[0]["status"] == "error"
+        assert turns[0]["error"] == "Backend thread lost after restart"
+    finally:
+        release_first.set()
+        if not first_task.done():
+            first_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await first_task
+        remaining_tasks = list(handler._spawned_tasks)
+        for task in remaining_tasks:
+            if not task.done():
+                task.cancel()
+        for task in remaining_tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+@pytest.mark.anyio
 async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_continuity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3127,6 +3318,78 @@ def _patch_newt_branch_reset(
         workspace_commands_module, "reset_branch_from_origin_main", _fake_reset
     )
     return calls
+
+
+@pytest.mark.anyio
+async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery() -> (
+    None
+):
+    workspace = Path("/tmp/telegram-recovery-workspace").resolve()
+    calls: list[tuple[str, str]] = []
+
+    class _FakeThreadService:
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            calls.append(("stop", thread_target_id))
+            return SimpleNamespace(recovered_lost_backend=True)
+
+        def archive_thread_target(self, thread_target_id: str) -> None:
+            calls.append(("archive", thread_target_id))
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            calls.append(("create", agent))
+            assert workspace_root == workspace
+            return SimpleNamespace(
+                thread_target_id="thread-2",
+                agent_id=agent,
+                workspace_root=str(workspace_root),
+            )
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            calls.append(("bind", str(kwargs["thread_target_id"])))
+
+    handlers = SimpleNamespace(_logger=logging.getLogger("test"))
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="repo"),
+            SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                workspace_root=str(workspace),
+            ),
+        ),
+    )
+    try:
+        _service, thread = (
+            await execution_commands_module._sync_telegram_thread_binding(
+                handlers,
+                surface_key="topic-1",
+                workspace_root=workspace,
+                agent="codex",
+                repo_id="repo-1",
+                resource_kind="repo",
+                resource_id="repo-1",
+                backend_thread_id="backend-2",
+                mode="repo",
+                pma_enabled=False,
+                replace_existing=True,
+            )
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert thread.thread_target_id == "thread-2"
+    assert calls == [
+        ("stop", "thread-1"),
+        ("archive", "thread-1"),
+        ("create", "codex"),
+        ("bind", "thread-2"),
+    ]
 
 
 @pytest.mark.anyio

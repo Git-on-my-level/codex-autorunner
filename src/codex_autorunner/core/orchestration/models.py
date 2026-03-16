@@ -207,6 +207,20 @@ class ExecutionRecord:
 
 
 @dataclass(frozen=True)
+class ThreadStopOutcome:
+    """Result of stopping a managed thread's active/queued execution state."""
+
+    thread_target_id: str
+    cancelled_queued: int = 0
+    execution: Optional[ExecutionRecord] = None
+    interrupted_active: bool = False
+    recovered_lost_backend: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class OrchestrationTableDefinition:
     """Schema metadata for one orchestration SQLite table."""
 

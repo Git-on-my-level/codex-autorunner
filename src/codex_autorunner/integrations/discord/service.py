@@ -1732,17 +1732,16 @@ class DiscordBotService:
         )
         had_previous = current_thread is not None
         if current_thread is not None:
-            orchestration_service.cancel_queued_executions(
+            stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
             )
-            if (
-                orchestration_service.get_running_execution(
-                    current_thread.thread_target_id
-                )
-                is not None
-            ):
-                await orchestration_service.interrupt_thread(
-                    current_thread.thread_target_id
+            if stop_outcome.recovered_lost_backend:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.thread.recovered_lost_backend",
+                    channel_id=channel_id,
+                    thread_target_id=current_thread.thread_target_id,
                 )
             orchestration_service.archive_thread_target(current_thread.thread_target_id)
         owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
@@ -11037,30 +11036,31 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
         try:
-            cancelled_queued = orchestration_service.cancel_queued_executions(
+            stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
             )
-            interrupted_active = False
             if (
-                orchestration_service.get_running_execution(
-                    current_thread.thread_target_id
-                )
-                is not None
+                not stop_outcome.interrupted_active
+                and not stop_outcome.recovered_lost_backend
+                and not stop_outcome.cancelled_queued
             ):
-                await orchestration_service.interrupt_thread(
-                    current_thread.thread_target_id
-                )
-                interrupted_active = True
-            if not interrupted_active and not cancelled_queued:
                 text = format_discord_message("No active turn to interrupt.")
                 await self._respond_ephemeral(interaction_id, interaction_token, text)
                 return
             parts = []
-            if interrupted_active:
+            if stop_outcome.interrupted_active:
                 parts.append("Stopping current turn...")
-            if cancelled_queued:
-                parts.append(f"Cancelled {cancelled_queued} queued turn(s).")
-            text = format_discord_message("Stopping current turn...")
+            elif stop_outcome.recovered_lost_backend:
+                parts.append("Recovered stale session after backend thread was lost.")
+            if stop_outcome.cancelled_queued:
+                parts.append(
+                    f"Cancelled {stop_outcome.cancelled_queued} queued turn(s)."
+                )
+            text = format_discord_message(
+                "Recovered stale session after backend thread was lost."
+                if stop_outcome.recovered_lost_backend
+                else "Stopping current turn..."
+            )
             if parts:
                 text = format_discord_message(" ".join(parts))
             await self._respond_ephemeral(interaction_id, interaction_token, text)

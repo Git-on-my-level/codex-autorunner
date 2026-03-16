@@ -27,11 +27,18 @@ from .models import (
     FlowTarget,
     MessageRequest,
     MessageRequestKind,
+    ThreadStopOutcome,
     ThreadTarget,
 )
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 
 MessagePreviewLimit = 120
+LOST_BACKEND_THREAD_ERROR = "Backend thread lost after restart"
+MISSING_BACKEND_THREAD_ERROR = "Backend thread missing from orchestration state"
+_MISSING_THREAD_MARKERS = (
+    "thread not found",
+    "no rollout found for thread id",
+)
 
 
 def _truncate_text(value: str, limit: int = MessagePreviewLimit) -> str:
@@ -51,6 +58,10 @@ def _normalize_request_kind(value: Any) -> MessageRequestKind:
     if normalized == "review":
         return "review"
     return "message"
+
+
+def _is_missing_thread_error(exc: Exception) -> bool:
+    return any(marker in str(exc).lower() for marker in _MISSING_THREAD_MARKERS)
 
 
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
@@ -716,7 +727,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
         running = self.get_running_execution(thread.thread_target_id)
         if running is not None and request.busy_policy == "interrupt":
-            await self.interrupt_thread(thread.thread_target_id)
+            await self.stop_thread(thread.thread_target_id)
             thread = self.get_thread_target(thread.thread_target_id) or thread
 
         execution = self.thread_store.create_execution(
@@ -812,6 +823,67 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
         return self.thread_store.record_execution_interrupted(
             thread_target_id, execution.execution_id
+        )
+
+    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome:
+        thread = self.get_thread_target(thread_target_id)
+        if thread is None:
+            raise KeyError(f"Unknown thread target '{thread_target_id}'")
+
+        cancelled_queued = self.cancel_queued_executions(thread_target_id)
+        execution = self.get_running_execution(thread_target_id)
+        if execution is None:
+            return ThreadStopOutcome(
+                thread_target_id=thread_target_id,
+                cancelled_queued=cancelled_queued,
+            )
+
+        backend_thread_id = thread.backend_thread_id
+        if not backend_thread_id:
+            recovered = self.thread_store.record_execution_result(
+                thread_target_id,
+                execution.execution_id,
+                status="error",
+                assistant_text="",
+                error=MISSING_BACKEND_THREAD_ERROR,
+                backend_turn_id=execution.backend_id,
+                transcript_turn_id=None,
+            )
+            self.thread_store.set_thread_backend_id(thread_target_id, None)
+            return ThreadStopOutcome(
+                thread_target_id=thread_target_id,
+                cancelled_queued=cancelled_queued,
+                execution=recovered,
+                recovered_lost_backend=True,
+            )
+
+        try:
+            interrupted = await self.interrupt_thread(thread_target_id)
+        except Exception as exc:
+            if not _is_missing_thread_error(exc):
+                raise
+            recovered = self.thread_store.record_execution_result(
+                thread_target_id,
+                execution.execution_id,
+                status="error",
+                assistant_text="",
+                error=LOST_BACKEND_THREAD_ERROR,
+                backend_turn_id=execution.backend_id,
+                transcript_turn_id=None,
+            )
+            self.thread_store.set_thread_backend_id(thread_target_id, None)
+            return ThreadStopOutcome(
+                thread_target_id=thread_target_id,
+                cancelled_queued=cancelled_queued,
+                execution=recovered,
+                recovered_lost_backend=True,
+            )
+
+        return ThreadStopOutcome(
+            thread_target_id=thread_target_id,
+            cancelled_queued=cancelled_queued,
+            execution=interrupted,
+            interrupted_active=True,
         )
 
     def get_execution(

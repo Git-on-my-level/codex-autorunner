@@ -4364,17 +4364,13 @@ async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> 
             assert thread_target_id == "thread-1"
             return SimpleNamespace(thread_target_id="thread-1")
 
-        def cancel_queued_executions(self, thread_target_id: str) -> int:
-            assert thread_target_id == "thread-1"
-            return 2
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="exec-1")
-
-        async def interrupt_thread(self, thread_target_id: str) -> Any:
+        async def stop_thread(self, thread_target_id: str) -> Any:
             interrupted.append(thread_target_id)
-            return SimpleNamespace(status="interrupted")
+            return SimpleNamespace(
+                interrupted_active=True,
+                recovered_lost_backend=False,
+                cancelled_queued=2,
+            )
 
     service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
 
@@ -4391,6 +4387,138 @@ async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> 
         assert "cancelled 2 queued turn" in content
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(
+                interrupted_active=False,
+                recovered_lost_backend=True,
+                cancelled_queued=0,
+            )
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_interrupt(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "recovered stale session" in content
+        assert "backend thread was lost" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            calls.append(("stop", thread_target_id))
+            return SimpleNamespace(recovered_lost_backend=True)
+
+        def archive_thread_target(self, thread_target_id: str) -> None:
+            calls.append(("archive", thread_target_id))
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            calls.append(("create", agent))
+            assert workspace_root == workspace
+            return SimpleNamespace(thread_target_id="thread-2")
+
+        def upsert_binding(self, **kwargs: Any) -> Any:
+            calls.append(("bind", str(kwargs["thread_target_id"])))
+            return SimpleNamespace(thread_target_id=kwargs["thread_target_id"])
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        had_previous, new_thread_id = await service._reset_discord_thread_binding(
+            channel_id="channel-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            pma_enabled=False,
+        )
+    finally:
+        await store.close()
+
+    assert had_previous is True
+    assert new_thread_id == "thread-2"
+    assert calls == [
+        ("stop", "thread-1"),
+        ("archive", "thread-1"),
+        ("create", "codex"),
+        ("bind", "thread-2"),
+    ]
 
 
 @pytest.mark.anyio
