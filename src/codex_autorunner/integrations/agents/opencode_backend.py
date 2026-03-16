@@ -136,12 +136,16 @@ class OpenCodeBackend(AgentBackend):
         await self._supervisor.mark_turn_finished(self._workspace_root)
 
     def configure(self, **options: Any) -> None:
+        approval_policy = options.get("approval_policy")
+        if approval_policy is None:
+            approval_policy = options.get("approval_policy_default")
+
         self._model = options.get("model")
         reasoning = options.get("reasoning")
         if reasoning is None:
             reasoning = options.get("reasoning_effort")
         self._reasoning = reasoning
-        self._approval_policy = options.get("approval_policy")
+        self._approval_policy = approval_policy
         self._reuse_session = bool(options.get("reuse_session", False))
 
     async def start_session(self, target: dict, context: dict) -> str:
