@@ -58,12 +58,12 @@ async def test_opencode_backend_uses_approval_policy_default_when_not_explicit(
     events = [event async for event in backend.run_turn_events("", "hello")]
 
     assert isinstance(events[-1], Completed)
-    assert observed["permission_policy"] == "deny"
+    assert observed["permission_policy"] == "allow"
 
 
-def test_map_approval_policy_to_permission_treats_never_as_deny() -> None:
+def test_map_approval_policy_to_permission_keeps_never_as_allow() -> None:
     from codex_autorunner.agents.opencode.runtime import (
         map_approval_policy_to_permission,
     )
 
-    assert map_approval_policy_to_permission("never", default="allow") == "deny"
+    assert map_approval_policy_to_permission("never", default="allow") == "allow"

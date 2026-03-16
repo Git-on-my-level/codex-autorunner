@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
@@ -20,13 +22,101 @@ from ..types import (
 from .constants import DEFAULT_TICKET_MODEL
 from .runtime import (
     build_turn_id,
+    collect_opencode_output_from_events,
     extract_session_id,
     extract_turn_id,
+    map_approval_policy_to_permission,
     split_model_id,
 )
 from .supervisor import OpenCodeSupervisor
 
 _logger = logging.getLogger(__name__)
+_GLOB_META_RE = re.compile(r"[*?\[\]{]")
+
+
+@dataclass
+class _PendingTurnConfig:
+    model_payload: Optional[dict[str, str]]
+    approval_mode: Optional[str]
+    sandbox_policy: Optional[Any]
+    question_policy: str
+    command_task: Optional[asyncio.Task[Any]] = None
+
+
+def _path_is_within(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _permission_candidate_path(value: Any, workspace_root: Path) -> Optional[Path]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    match = _GLOB_META_RE.search(text)
+    if match is not None:
+        text = text[: match.start()]
+    text = text.rstrip("/")
+    if not text:
+        return None
+    path = Path(text)
+    if not path.is_absolute():
+        path = workspace_root / path
+    return path.resolve(strict=False)
+
+
+def _collect_permission_paths(
+    props: dict[str, Any], workspace_root: Path
+) -> list[Path]:
+    candidates: list[Path] = []
+
+    def _append(value: Any) -> None:
+        path = _permission_candidate_path(value, workspace_root)
+        if path is not None:
+            candidates.append(path)
+
+    for key in ("path", "filepath", "directory"):
+        _append(props.get(key))
+
+    patterns = props.get("patterns")
+    if isinstance(patterns, list):
+        for item in patterns:
+            _append(item)
+
+    metadata = props.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("path", "filepath", "directory"):
+            _append(metadata.get(key))
+        nested_patterns = metadata.get("patterns")
+        if isinstance(nested_patterns, list):
+            for item in nested_patterns:
+                _append(item)
+
+    return candidates
+
+
+def _workspace_permission_decision(
+    props: dict[str, Any],
+    *,
+    workspace_root: Path,
+) -> str:
+    permission_kind = (
+        str(props.get("permission") or props.get("type") or props.get("tool") or "")
+        .strip()
+        .lower()
+    )
+    paths = _collect_permission_paths(props, workspace_root)
+    if paths:
+        if all(_path_is_within(workspace_root, path) for path in paths):
+            return "allow"
+        return "reject"
+    if permission_kind in {"external_directory", "external_file", "external_path"}:
+        return "reject"
+    return "allow"
 
 
 def _normalize_message_text(value: Any) -> Optional[str]:
@@ -341,6 +431,7 @@ class OpenCodeHarness(AgentHarness):
 
     def __init__(self, supervisor: OpenCodeSupervisor) -> None:
         self._supervisor = supervisor
+        self._pending_turns: dict[tuple[str, str], _PendingTurnConfig] = {}
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.get_client(workspace_root)
@@ -457,15 +548,26 @@ class OpenCodeHarness(AgentHarness):
         if model is None:
             model = DEFAULT_TICKET_MODEL
         model_payload = split_model_id(model)
+        turn_id = build_turn_id(conversation_id)
         await client.prompt_async(
             conversation_id,
             message=prompt,
             model=model_payload,
             variant=reasoning,
         )
+        self._pending_turns[(conversation_id, turn_id)] = _PendingTurnConfig(
+            model_payload=model_payload,
+            approval_mode=approval_mode,
+            sandbox_policy=sandbox_policy,
+            question_policy=(
+                "reject"
+                if approval_mode is not None or sandbox_policy is not None
+                else "ignore"
+            ),
+        )
         return TurnRef(
             conversation_id=conversation_id,
-            turn_id=build_turn_id(conversation_id),
+            turn_id=turn_id,
         )
 
     async def start_review(
@@ -483,23 +585,30 @@ class OpenCodeHarness(AgentHarness):
         if model is None:
             model = DEFAULT_TICKET_MODEL
         arguments = prompt if prompt else ""
+        turn_id = build_turn_id(conversation_id)
 
         async def _send_review() -> None:
-            try:
-                result = await client.send_command(
-                    conversation_id,
-                    command="review",
-                    arguments=arguments,
-                    model=model,
-                )
-                turn_id = extract_turn_id(conversation_id, result)
-                if turn_id:
-                    _logger.debug("OpenCode review started: %s", turn_id)
-            except Exception as exc:
-                _logger.warning("OpenCode review command failed: %s", exc)
+            result = await client.send_command(
+                conversation_id,
+                command="review",
+                arguments=arguments,
+                model=model,
+            )
+            started_turn_id = extract_turn_id(conversation_id, result)
+            if started_turn_id:
+                _logger.debug("OpenCode review started: %s", started_turn_id)
 
-        asyncio.create_task(_send_review())
-        turn_id = build_turn_id(conversation_id)
+        self._pending_turns[(conversation_id, turn_id)] = _PendingTurnConfig(
+            model_payload=split_model_id(model),
+            approval_mode=approval_mode,
+            sandbox_policy=sandbox_policy,
+            question_policy=(
+                "reject"
+                if approval_mode is not None or sandbox_policy is not None
+                else "ignore"
+            ),
+            command_task=asyncio.create_task(_send_review()),
+        )
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
     async def interrupt(
@@ -557,40 +666,163 @@ class OpenCodeHarness(AgentHarness):
         *,
         timeout: Optional[float] = None,
     ) -> TerminalTurnResult:
-        _ = turn_id
+        pending = self._pending_turns.get((conversation_id, turn_id or ""))
+        client = await self._supervisor.get_client(workspace_root)
+        workspace_root = workspace_root.resolve()
 
         async def _collect() -> TerminalTurnResult:
-            payloads: list[dict[str, Any]] = []
+            if pending is None:
+                payloads: list[dict[str, Any]] = []
 
-            async def _iter_lines(raw_event_text: str) -> AsyncIterator[str]:
-                for line in raw_event_text.splitlines():
-                    yield line
-                yield ""
+                async def _iter_lines(raw_event_text: str) -> AsyncIterator[str]:
+                    for line in raw_event_text.splitlines():
+                        yield line
+                    yield ""
 
-            async for raw_event in self.stream_events(
-                workspace_root,
-                conversation_id,
-                turn_id or "",
-            ):
-                async for sse_event in parse_sse_lines(_iter_lines(str(raw_event))):
+                async for raw_event in self.stream_events(
+                    workspace_root,
+                    conversation_id,
+                    turn_id or "",
+                ):
+                    async for sse_event in parse_sse_lines(_iter_lines(str(raw_event))):
+                        try:
+                            payload = (
+                                json.loads(sse_event.data) if sse_event.data else {}
+                            )
+                        except json.JSONDecodeError:
+                            payload = {}
+                        if isinstance(payload, dict):
+                            payloads.append(payload)
+
+                assistant_text, errors = _collect_terminal_text(payloads)
+                return TerminalTurnResult(
+                    status="error" if errors else "ok",
+                    assistant_text=assistant_text,
+                    errors=errors,
+                    raw_events=payloads,
+                )
+
+            raw_events: list[dict[str, Any]] = []
+
+            async def _event_stream() -> AsyncIterator[Any]:
+                async for event in client.stream_events(directory=str(workspace_root)):
+                    payload = event.data
                     try:
-                        payload = json.loads(sse_event.data) if sse_event.data else {}
+                        parsed = json.loads(payload) if payload else {}
                     except json.JSONDecodeError:
-                        payload = {}
-                    if isinstance(payload, dict):
-                        payloads.append(payload)
+                        parsed = {"raw": payload}
+                    if isinstance(parsed, dict):
+                        wrapped = {"message": {"method": event.event, "params": parsed}}
+                        raw_events.append(wrapped)
+                    yield event
 
-            assistant_text, errors = _collect_terminal_text(payloads)
+            async def _fetch_session() -> Any:
+                statuses = await client.session_status(directory=str(workspace_root))
+                if isinstance(statuses, dict):
+                    session_status = statuses.get(conversation_id)
+                    if session_status is None:
+                        return {"status": {"type": "idle"}}
+                    if isinstance(session_status, dict):
+                        return {"status": session_status}
+                    if isinstance(session_status, str):
+                        return {"status": session_status}
+                return {"status": {}}
+
+            async def _fetch_providers() -> Any:
+                return await client.providers(directory=str(workspace_root))
+
+            async def _respond_permission(request_id: str, reply: str) -> None:
+                await client.respond_permission(request_id=request_id, reply=reply)
+
+            async def _reply_question(
+                request_id: str, answers: list[list[str]]
+            ) -> None:
+                await client.reply_question(request_id, answers=answers)
+
+            async def _reject_question(request_id: str) -> None:
+                await client.reject_question(request_id)
+
+            permission_policy = map_approval_policy_to_permission(
+                pending.approval_mode if pending is not None else None,
+                default="allow",
+            )
+            permission_handler = None
+            if permission_policy == "ask":
+
+                async def _permission_handler(
+                    _request_id: str, props: dict[str, Any]
+                ) -> str:
+                    return _workspace_permission_decision(
+                        props,
+                        workspace_root=workspace_root,
+                    )
+
+                permission_handler = _permission_handler
+
+            collect_task = asyncio.create_task(
+                collect_opencode_output_from_events(
+                    None,
+                    session_id=conversation_id,
+                    model_payload=(
+                        pending.model_payload if pending is not None else None
+                    ),
+                    permission_policy=permission_policy,
+                    permission_handler=permission_handler,
+                    question_policy=(
+                        pending.question_policy if pending is not None else "ignore"
+                    ),
+                    respond_permission=_respond_permission,
+                    reply_question=_reply_question,
+                    reject_question=_reject_question,
+                    event_stream_factory=_event_stream,
+                    session_fetcher=_fetch_session,
+                    provider_fetcher=_fetch_providers,
+                    stall_timeout_seconds=self._supervisor.session_stall_timeout_seconds,
+                )
+            )
+            command_task = pending.command_task if pending is not None else None
+            if command_task is None:
+                output = await collect_task
+            else:
+                try:
+                    done, _pending = await asyncio.wait(
+                        {collect_task, command_task},
+                        return_when=asyncio.FIRST_EXCEPTION,
+                    )
+                    if command_task in done:
+                        exc = command_task.exception()
+                        if exc is not None:
+                            collect_task.cancel()
+                            try:
+                                await collect_task
+                            except asyncio.CancelledError:
+                                pass
+                            raise exc
+                    output = await collect_task
+                    await command_task
+                except Exception as exc:
+                    return TerminalTurnResult(
+                        status="error",
+                        assistant_text="",
+                        errors=[str(exc)],
+                        raw_events=raw_events,
+                    )
+
+            errors = [output.error] if output.error else []
             return TerminalTurnResult(
                 status="error" if errors else "ok",
-                assistant_text=assistant_text,
+                assistant_text=output.text,
                 errors=errors,
-                raw_events=payloads,
+                raw_events=raw_events,
             )
 
-        if timeout is None:
-            return await _collect()
-        return await asyncio.wait_for(_collect(), timeout=timeout)
+        try:
+            if timeout is None:
+                return await _collect()
+            return await asyncio.wait_for(_collect(), timeout=timeout)
+        finally:
+            if turn_id is not None:
+                self._pending_turns.pop((conversation_id, turn_id), None)
 
 
 __all__ = ["OpenCodeHarness"]

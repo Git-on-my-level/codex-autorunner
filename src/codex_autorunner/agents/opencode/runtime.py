@@ -385,9 +385,9 @@ def map_approval_policy_to_permission(
     if approval_policy is None:
         return default
     normalized = approval_policy.strip().lower()
-    if normalized in ("allow", "approved", "approve"):
+    if normalized in ("never", "allow", "approved", "approve"):
         return PERMISSION_ALLOW
-    if normalized in ("never", "deny", "reject", "blocked"):
+    if normalized in ("deny", "reject", "blocked"):
         return PERMISSION_DENY
     if normalized in (
         "on-request",
