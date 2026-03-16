@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import shlex
@@ -31,6 +32,7 @@ from .freshness import (
     summarize_section_freshness,
 )
 from .hub import HubSupervisor
+from .locks import file_lock
 from .managed_thread_status import derive_managed_thread_operator_status
 from .pma_active_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
@@ -44,6 +46,8 @@ from .ticket_flow_projection import (
     select_authoritative_run_record,
 )
 from .ticket_flow_summary import build_ticket_flow_summary
+from .time_utils import now_iso
+from .utils import atomic_write
 
 _logger = logging.getLogger(__name__)
 
@@ -56,6 +60,29 @@ PMA_MAX_PMA_FILES = 50
 PMA_MAX_LIFECYCLE_EVENTS = 20
 PMA_MAX_PMA_THREADS = 20
 PMA_MAX_AUTOMATION_ITEMS = 10
+PMA_PROMPT_STATE_FILENAME = "prompt_state.json"
+PMA_PROMPT_STATE_VERSION = 1
+PMA_PROMPT_STATE_MAX_SESSIONS = 200
+PMA_PROMPT_DIGEST_PREVIEW = 12
+
+PMA_PROMPT_SECTION_ORDER = (
+    "agents",
+    "active_context",
+    "context_log_tail",
+    "hub_snapshot",
+)
+PMA_PROMPT_SECTION_META: dict[str, dict[str, str]] = {
+    "agents": {"label": "AGENTS_MD", "tag": "AGENTS_MD"},
+    "active_context": {
+        "label": "ACTIVE_CONTEXT_MD",
+        "tag": "ACTIVE_CONTEXT_MD",
+    },
+    "context_log_tail": {
+        "label": "CONTEXT_LOG_TAIL_MD",
+        "tag": "CONTEXT_LOG_TAIL_MD",
+    },
+    "hub_snapshot": {"label": "HUB_SNAPSHOT", "tag": "hub_snapshot"},
+}
 
 PMA_ACTION_QUEUE_PRECEDENCE: dict[str, tuple[int, str]] = {
     "ticket_flow_inbox": (10, "ticket_flow_inbox"),
@@ -238,6 +265,110 @@ def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
         "active_context_auto_pruned": bool(auto_prune_state),
         "active_context_auto_prune": auto_prune_meta,
     }
+
+
+def default_pma_prompt_state_path(hub_root: Path) -> Path:
+    return hub_root / ".codex-autorunner" / "pma" / PMA_PROMPT_STATE_FILENAME
+
+
+def _default_pma_prompt_state() -> dict[str, Any]:
+    return {
+        "version": PMA_PROMPT_STATE_VERSION,
+        "sessions": {},
+        "updated_at": now_iso(),
+    }
+
+
+def _prompt_state_lock_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".lock")
+
+
+def _digest_text(value: Any) -> str:
+    raw = value if isinstance(value, str) else str(value or "")
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _digest_preview(digest: Any) -> str:
+    if not isinstance(digest, str):
+        return ""
+    return digest[:PMA_PROMPT_DIGEST_PREVIEW]
+
+
+def _is_digest(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) != 64:
+        return False
+    return all(ch in "0123456789abcdef" for ch in value)
+
+
+def _build_prompt_bundle_digest(sections: Mapping[str, Mapping[str, Any]]) -> str:
+    payload = {
+        name: str((sections.get(name) or {}).get("digest") or "")
+        for name in PMA_PROMPT_SECTION_ORDER
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
+    return _digest_text(raw)
+
+
+def _load_pma_prompt_state(hub_root: Path) -> dict[str, Any]:
+    path = default_pma_prompt_state_path(hub_root)
+    lock_path = _prompt_state_lock_path(path)
+    with file_lock(lock_path):
+        if not path.exists():
+            return _default_pma_prompt_state()
+        try:
+            raw = path.read_text(encoding="utf-8")
+            data = json.loads(raw)
+        except Exception as exc:
+            _logger.warning("Could not read PMA prompt state: %s", exc)
+            return _default_pma_prompt_state()
+        return data if isinstance(data, dict) else _default_pma_prompt_state()
+
+
+def _save_pma_prompt_state(hub_root: Path, state: Mapping[str, Any]) -> None:
+    path = default_pma_prompt_state_path(hub_root)
+    lock_path = _prompt_state_lock_path(path)
+    with file_lock(lock_path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(path, json.dumps(state, indent=2, sort_keys=True) + "\n")
+
+
+def _validate_prompt_session_record(record: Any) -> bool:
+    if not isinstance(record, Mapping):
+        return False
+    sections = record.get("sections")
+    if not isinstance(sections, Mapping):
+        return False
+    for name in PMA_PROMPT_SECTION_ORDER:
+        section = sections.get(name)
+        if not isinstance(section, Mapping):
+            return False
+        if not _is_digest(section.get("digest")):
+            return False
+    bundle_digest = record.get("bundle_digest")
+    if not _is_digest(bundle_digest):
+        return False
+    return bundle_digest == _build_prompt_bundle_digest(
+        cast(Mapping[str, Mapping[str, Any]], sections)
+    )
+
+
+def _trim_prompt_sessions(sessions: Mapping[str, Any]) -> dict[str, Any]:
+    items: list[tuple[str, Mapping[str, Any]]] = []
+    for key, value in sessions.items():
+        if not isinstance(key, str) or not key:
+            continue
+        if not isinstance(value, Mapping):
+            continue
+        items.append((key, value))
+    if len(items) <= PMA_PROMPT_STATE_MAX_SESSIONS:
+        return {key: dict(value) for key, value in items}
+
+    def _sort_key(item: tuple[str, Mapping[str, Any]]) -> tuple[str, str]:
+        updated_at = str(item[1].get("updated_at") or "")
+        return (updated_at, item[0])
+
+    trimmed = sorted(items, key=_sort_key)[-PMA_PROMPT_STATE_MAX_SESSIONS:]
+    return {key: dict(value) for key, value in trimmed}
 
 
 def _truncate(text: Optional[str], limit: int) -> str:
@@ -1470,13 +1601,6 @@ def format_pma_discoverability_preamble(
     hub_root: Optional[Path] = None,
     pma_docs: Optional[dict[str, Any]] = None,
 ) -> str:
-    resolved_docs = pma_docs
-    if resolved_docs is None and hub_root is not None:
-        try:
-            resolved_docs = load_pma_workspace_docs(hub_root)
-        except Exception as exc:
-            _logger.warning("Could not load PMA workspace docs: %s", exc)
-
     prompt = (
         "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`.\n"
         "Durable guidance: `.codex-autorunner/pma/docs/AGENTS.md`.\n"
@@ -1489,29 +1613,154 @@ def format_pma_discoverability_preamble(
         "Note: Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` redirect to filebox.\n\n"
     )
 
+    resolved_docs = pma_docs
+    if resolved_docs is None and hub_root is not None:
+        try:
+            resolved_docs = load_pma_workspace_docs(hub_root)
+        except Exception as exc:
+            _logger.warning("Could not load PMA workspace docs: %s", exc)
     if resolved_docs:
-        max_lines = resolved_docs.get("active_context_max_lines")
-        line_count = resolved_docs.get("active_context_line_count")
-        auto_prune = resolved_docs.get("active_context_auto_prune") or {}
-        auto_pruned_at = auto_prune.get("last_auto_pruned_at")
-        auto_pruned_before = auto_prune.get("line_count_before")
-        auto_pruned_budget = auto_prune.get("line_budget")
-        prompt += (
-            "<pma_workspace_docs>\n"
-            "<AGENTS_MD>\n"
-            f"{resolved_docs.get('agents', '')}\n"
-            "</AGENTS_MD>\n"
-            "<ACTIVE_CONTEXT_MD>\n"
-            f"{resolved_docs.get('active_context', '')}\n"
-            "</ACTIVE_CONTEXT_MD>\n"
-            f"<ACTIVE_CONTEXT_BUDGET lines='{max_lines}' current_lines='{line_count}' />\n"
-            f"<ACTIVE_CONTEXT_AUTO_PRUNE last_at='{auto_pruned_at}' line_count_before='{auto_pruned_before}' line_budget='{auto_pruned_budget}' triggered_now='{str(bool(resolved_docs.get('active_context_auto_pruned'))).lower()}' />\n"
-            "<CONTEXT_LOG_TAIL_MD>\n"
-            f"{resolved_docs.get('context_log_tail', '')}\n"
-            "</CONTEXT_LOG_TAIL_MD>\n"
-            "</pma_workspace_docs>\n\n"
-        )
+        prompt += _render_pma_workspace_docs(resolved_docs)
     return prompt
+
+
+def _render_pma_workspace_docs(resolved_docs: Mapping[str, Any]) -> str:
+    max_lines = resolved_docs.get("active_context_max_lines")
+    line_count = resolved_docs.get("active_context_line_count")
+    auto_prune = resolved_docs.get("active_context_auto_prune") or {}
+    auto_pruned_at = auto_prune.get("last_auto_pruned_at")
+    auto_pruned_before = auto_prune.get("line_count_before")
+    auto_pruned_budget = auto_prune.get("line_budget")
+    return (
+        "<pma_workspace_docs>\n"
+        "<AGENTS_MD>\n"
+        f"{resolved_docs.get('agents', '')}\n"
+        "</AGENTS_MD>\n"
+        "<ACTIVE_CONTEXT_MD>\n"
+        f"{resolved_docs.get('active_context', '')}\n"
+        "</ACTIVE_CONTEXT_MD>\n"
+        f"<ACTIVE_CONTEXT_BUDGET lines='{max_lines}' current_lines='{line_count}' />\n"
+        f"<ACTIVE_CONTEXT_AUTO_PRUNE last_at='{auto_pruned_at}' line_count_before='{auto_pruned_before}' line_budget='{auto_pruned_budget}' triggered_now='{str(bool(resolved_docs.get('active_context_auto_pruned'))).lower()}' />\n"
+        "<CONTEXT_LOG_TAIL_MD>\n"
+        f"{resolved_docs.get('context_log_tail', '')}\n"
+        "</CONTEXT_LOG_TAIL_MD>\n"
+        "</pma_workspace_docs>\n\n"
+    )
+
+
+def _build_prompt_sections(
+    *,
+    pma_docs: Optional[Mapping[str, Any]],
+    snapshot_text: str,
+) -> dict[str, dict[str, str]]:
+    sections: dict[str, dict[str, str]] = {
+        "agents": {
+            "label": PMA_PROMPT_SECTION_META["agents"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["agents"]["tag"],
+            "content": str((pma_docs or {}).get("agents") or ""),
+        },
+        "active_context": {
+            "label": PMA_PROMPT_SECTION_META["active_context"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["active_context"]["tag"],
+            "content": str((pma_docs or {}).get("active_context") or ""),
+        },
+        "context_log_tail": {
+            "label": PMA_PROMPT_SECTION_META["context_log_tail"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["context_log_tail"]["tag"],
+            "content": str((pma_docs or {}).get("context_log_tail") or ""),
+        },
+        "hub_snapshot": {
+            "label": PMA_PROMPT_SECTION_META["hub_snapshot"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["hub_snapshot"]["tag"],
+            "content": snapshot_text,
+        },
+    }
+    for payload in sections.values():
+        payload["digest"] = _digest_text(payload.get("content") or "")
+    return sections
+
+
+def _render_pma_actionable_state(
+    snapshot: Mapping[str, Any],
+    *,
+    max_repos: int,
+    max_messages: int,
+    max_text_chars: int,
+) -> str:
+    actionable_snapshot: dict[str, Any] = {}
+    if snapshot.get("generated_at") is not None:
+        actionable_snapshot["generated_at"] = snapshot.get("generated_at")
+    if snapshot.get("freshness") is not None:
+        actionable_snapshot["freshness"] = snapshot.get("freshness")
+
+    action_queue = snapshot.get("action_queue") or []
+    if action_queue:
+        actionable_snapshot["action_queue"] = action_queue
+    else:
+        for key in ("inbox", "pma_threads", "pma_files_detail", "automation"):
+            value = snapshot.get(key)
+            if value:
+                actionable_snapshot[key] = value
+
+    rendered = _render_hub_snapshot(
+        actionable_snapshot,
+        max_repos=max_repos,
+        max_messages=max_messages,
+        max_text_chars=max_text_chars,
+    ).strip()
+    return rendered or "No current PMA actions."
+
+
+def _render_prompt_delta_header(
+    *,
+    sections: Mapping[str, Mapping[str, str]],
+    prior_sections: Optional[Mapping[str, Any]],
+    prompt_state_key: str,
+    current_mode: str,
+    reason: str,
+    prior_updated_at: Optional[str],
+) -> str:
+    attrs = [
+        f"mode='{current_mode}'",
+        f"reason='{reason}'",
+        f"state_key='{prompt_state_key}'",
+    ]
+    if prior_updated_at:
+        attrs.append(f"prior_updated_at='{prior_updated_at}'")
+    lines = [f"<what_changed_since_last_turn {' '.join(attrs)}>"]
+    prior_section_map = prior_sections if isinstance(prior_sections, Mapping) else {}
+
+    for name in PMA_PROMPT_SECTION_ORDER:
+        section = sections.get(name) or {}
+        current_digest = str(section.get("digest") or "")
+        previous = prior_section_map.get(name)
+        previous_digest = (
+            str(previous.get("digest") or "") if isinstance(previous, Mapping) else ""
+        )
+        if current_mode == "full" and not previous_digest:
+            status = "first_turn"
+        elif current_mode == "full":
+            status = "full_refresh"
+        elif previous_digest and previous_digest == current_digest:
+            status = "unchanged"
+        elif previous_digest:
+            status = "changed"
+        else:
+            status = "new"
+        line = (
+            f"- section={section.get('label') or name} status={status} "
+            f"digest={_digest_preview(current_digest)}"
+        )
+        if previous_digest and previous_digest != current_digest:
+            line += f" previous={_digest_preview(previous_digest)}"
+        lines.append(line)
+        if current_mode == "delta" and status == "changed" and name != "hub_snapshot":
+            tag = section.get("tag") or str(name)
+            lines.append(f"<{tag}>")
+            lines.append(str(section.get("content") or ""))
+            lines.append(f"</{tag}>")
+    lines.append("</what_changed_since_last_turn>")
+    return "\n".join(lines) + "\n\n"
 
 
 def format_pma_prompt(
@@ -1519,26 +1768,105 @@ def format_pma_prompt(
     snapshot: dict[str, Any],
     message: str,
     hub_root: Optional[Path] = None,
+    *,
+    prompt_state_key: Optional[str] = None,
+    force_full_context: bool = False,
 ) -> str:
     limits = snapshot.get("limits") or {}
+    max_repos = limits.get("max_repos", PMA_MAX_REPOS)
+    max_messages = limits.get("max_messages", PMA_MAX_MESSAGES)
+    max_text_chars = limits.get("max_text_chars", PMA_MAX_TEXT)
     snapshot_text = _render_hub_snapshot(
         snapshot,
-        max_repos=limits.get("max_repos", PMA_MAX_REPOS),
-        max_messages=limits.get("max_messages", PMA_MAX_MESSAGES),
-        max_text_chars=limits.get("max_text_chars", PMA_MAX_TEXT),
+        max_repos=max_repos,
+        max_messages=max_messages,
+        max_text_chars=max_text_chars,
     )
+    actionable_state_text = _render_pma_actionable_state(
+        snapshot,
+        max_repos=max_repos,
+        max_messages=max_messages,
+        max_text_chars=max_text_chars,
+    )
+    pma_docs: Optional[dict[str, Any]] = None
+    if hub_root is not None:
+        try:
+            pma_docs = load_pma_workspace_docs(hub_root)
+        except Exception as exc:
+            _logger.warning("Could not load PMA workspace docs: %s", exc)
+
+    sections = _build_prompt_sections(pma_docs=pma_docs, snapshot_text=snapshot_text)
+    use_delta = False
+    delta_reason = "state_key_missing"
+    prior_sections: Optional[Mapping[str, Any]] = None
+    prior_updated_at: Optional[str] = None
+
+    if hub_root is not None and prompt_state_key:
+        state = _load_pma_prompt_state(hub_root)
+        sessions = state.get("sessions")
+        if isinstance(sessions, Mapping):
+            prior_record = sessions.get(prompt_state_key)
+            if _validate_prompt_session_record(prior_record):
+                validated_record = cast(Mapping[str, Any], prior_record)
+                prior_sections = cast(
+                    Mapping[str, Any], validated_record.get("sections")
+                )
+                prior_updated_at = cast(
+                    Optional[str], validated_record.get("updated_at")
+                )
+                if force_full_context:
+                    delta_reason = "explicit_refresh"
+                else:
+                    use_delta = True
+                    delta_reason = "cached_context"
+            elif prior_record is not None:
+                delta_reason = "digest_mismatch"
+            else:
+                delta_reason = "first_turn"
+
+        updated_sessions = dict(sessions) if isinstance(sessions, Mapping) else {}
+        updated_sessions[prompt_state_key] = {
+            "version": PMA_PROMPT_STATE_VERSION,
+            "updated_at": now_iso(),
+            "bundle_digest": _build_prompt_bundle_digest(sections),
+            "sections": {
+                name: {"digest": str(payload.get("digest") or "")}
+                for name, payload in sections.items()
+            },
+        }
+        state["version"] = PMA_PROMPT_STATE_VERSION
+        state["updated_at"] = now_iso()
+        state["sessions"] = _trim_prompt_sessions(updated_sessions)
+        _save_pma_prompt_state(hub_root, state)
 
     prompt = f"{base_prompt}\n\n"
-    prompt += format_pma_discoverability_preamble(hub_root=hub_root)
+    prompt += format_pma_discoverability_preamble(hub_root=None)
+    if not use_delta and pma_docs:
+        prompt += _render_pma_workspace_docs(pma_docs)
     prompt += f"{PMA_FASTPATH}\n\n"
+    if prompt_state_key:
+        prompt += _render_prompt_delta_header(
+            sections=sections,
+            prior_sections=prior_sections,
+            prompt_state_key=prompt_state_key,
+            current_mode="delta" if use_delta else "full",
+            reason=delta_reason,
+            prior_updated_at=prior_updated_at,
+        )
     prompt += (
-        "<hub_snapshot>\n"
-        f"{snapshot_text}\n"
-        "</hub_snapshot>\n\n"
-        "<user_message>\n"
-        f"{message}\n"
-        "</user_message>\n"
+        "<current_actionable_state>\n"
+        f"{actionable_state_text}\n"
+        "</current_actionable_state>\n\n"
     )
+    if not use_delta:
+        prompt += "<hub_snapshot>\n" f"{snapshot_text}\n" "</hub_snapshot>\n\n"
+    elif prompt_state_key:
+        prompt += (
+            "<hub_snapshot_ref "
+            f"digest='{_digest_preview(str((sections.get('hub_snapshot') or {}).get('digest') or ''))}' "
+            f"state_key='{prompt_state_key}' />\n\n"
+        )
+    prompt += "<user_message>\n" f"{message}\n" "</user_message>\n"
     return prompt
 
 

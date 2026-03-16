@@ -1159,22 +1159,13 @@ def test_render_hub_snapshot_includes_all_next_action_types(tmp_path: Path) -> N
     assert "PMA File Inbox:" not in result
 
 
-class TestIssue975CharacterizationPmaPromptBaseline:
-    """Characterization tests for issue #975: PMA prompt assembly baseline.
-
-    These tests document the current pre-issue-975 behavior for:
-    - PMA prompt assembly including durable docs and rendered hub snapshot
-    - How AGENTS, active_context, context_log_tail, and hub_snapshot are injected
-    - What sections appear in the prompt and in what order
-
-    Later tickets for issue #975 will introduce delta-aware prompt assembly;
-    these characterization tests ensure the baseline is preserved as a fallback.
-    """
+class TestIssue975DeltaPmaPromptAssembly:
+    """Coverage for issue #975 delta-aware PMA prompt assembly."""
 
     def test_format_pma_prompt_structure_sections_in_order(
         self, tmp_path: Path
     ) -> None:
-        """Document the ordered structure of PMA prompt sections."""
+        """First turn keeps the full context path and action queue section ordering."""
         seed_hub_files(tmp_path, force=True)
 
         snapshot = {
@@ -1205,7 +1196,11 @@ class TestIssue975CharacterizationPmaPromptBaseline:
         }
 
         result = format_pma_prompt(
-            "Base prompt", snapshot, "User message", hub_root=tmp_path
+            "Base prompt",
+            snapshot,
+            "User message",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-order",
         )
 
         preamble_idx = result.find("<pma_workspace_docs>")
@@ -1213,6 +1208,8 @@ class TestIssue975CharacterizationPmaPromptBaseline:
         active_context_idx = result.find("<ACTIVE_CONTEXT_MD>")
         context_log_idx = result.find("<CONTEXT_LOG_TAIL_MD>")
         fastpath_idx = result.find("<pma_fastpath>")
+        change_idx = result.find("<what_changed_since_last_turn")
+        actionable_idx = result.find("<current_actionable_state>\n")
         snapshot_idx = result.find("<hub_snapshot>\n")
         user_msg_idx = result.find("<user_message>\n")
 
@@ -1221,13 +1218,15 @@ class TestIssue975CharacterizationPmaPromptBaseline:
         assert active_context_idx > agents_idx
         assert context_log_idx > active_context_idx
         assert fastpath_idx > context_log_idx
-        assert snapshot_idx > fastpath_idx
+        assert change_idx > fastpath_idx
+        assert actionable_idx > change_idx
+        assert snapshot_idx > actionable_idx
         assert user_msg_idx > snapshot_idx
 
-    def test_format_pma_prompt_injects_full_durable_docs_every_turn(
+    def test_format_pma_prompt_reuses_durable_context_by_digest_after_first_turn(
         self, tmp_path: Path
     ) -> None:
-        """Document that full durable docs are injected on every turn (pre-issue-975)."""
+        """Repeated turns reference unchanged docs and full snapshot by digest."""
         seed_hub_files(tmp_path, force=True)
 
         agents_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "AGENTS.md"
@@ -1241,64 +1240,159 @@ class TestIssue975CharacterizationPmaPromptBaseline:
             "# Current Context\n\nWorking on issue 975.\n", encoding="utf-8"
         )
 
-        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        snapshot = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "action_queue": [
+                {
+                    "action_queue_id": "ticket_flow_inbox:repo-1:run-1",
+                    "queue_source": "ticket_flow_inbox",
+                    "queue_rank": 1,
+                    "item_type": "run_dispatch",
+                    "repo_id": "repo-1",
+                    "run_id": "run-1",
+                    "recommended_action": "reply_and_resume",
+                    "precedence": {"rank": 10, "label": "ticket_flow_inbox"},
+                    "supersession": {"status": "primary", "is_primary": True},
+                }
+            ],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+        }
         result1 = format_pma_prompt(
-            "Base prompt", snapshot, "Turn 1", hub_root=tmp_path
+            "Base prompt",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-delta",
         )
         result2 = format_pma_prompt(
-            "Base prompt", snapshot, "Turn 2", hub_root=tmp_path
+            "Base prompt",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-delta",
         )
 
         assert "# Durable Agent Guidance" in result1
-        assert "# Durable Agent Guidance" in result2
         assert "# Current Context" in result1
-        assert "# Current Context" in result2
+        assert "<pma_workspace_docs>" not in result2
+        assert "\n<hub_snapshot>\n" not in result2
+        assert "<hub_snapshot_ref " in result2
+        assert "section=AGENTS_MD status=unchanged" in result2
+        assert "section=ACTIVE_CONTEXT_MD status=unchanged" in result2
+        assert "section=HUB_SNAPSHOT status=unchanged" in result2
+        assert "PMA Action Queue:" in result2
+        assert "recommended_action=reply_and_resume" in result2
 
-        agents_start = result1.find("<AGENTS_MD>")
-        agents_end = result1.find("</AGENTS_MD>")
-        agents_content = result1[agents_start:agents_end]
-        assert "Rule 1: Be concise" in agents_content
-
-    def test_format_pma_prompt_injects_full_hub_snapshot_every_turn(
+    def test_format_pma_prompt_delta_surfaces_only_changed_docs(
         self, tmp_path: Path
     ) -> None:
-        """Document that full hub_snapshot is injected on every turn (pre-issue-975)."""
+        """Changed durable docs are re-injected while unchanged docs stay digest-only."""
         seed_hub_files(tmp_path, force=True)
+
+        agents_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "AGENTS.md"
+        active_context_path = (
+            tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+        )
+        agents_path.write_text(
+            "# Durable Agent Guidance\n\nRule 1: Be concise.\n", encoding="utf-8"
+        )
+        active_context_path.write_text(
+            "# Current Context\n\nWorking on issue 975.\n", encoding="utf-8"
+        )
 
         snapshot = {
             "generated_at": "2026-03-16T00:00:00Z",
-            "inbox": [
-                {
-                    "item_type": "run_dispatch",
-                    "next_action": "reply_and_resume",
-                    "repo_id": "repo-snap",
-                    "run_id": "run-snap-1",
-                    "seq": 5,
-                    "dispatch": {
-                        "mode": "pause",
-                        "title": "Snapshot dispatch",
-                        "body": "Body text",
-                        "is_handoff": False,
-                    },
-                    "files": [],
-                    "open_url": "/repos/repo-snap/",
-                    "run_state": {"state": "paused"},
-                }
-            ],
+            "action_queue": [],
+            "inbox": [],
             "repos": [],
             "pma_files": {"inbox": [], "outbox": []},
             "pma_files_detail": {"inbox": [], "outbox": []},
         }
 
+        _ = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-changed-docs",
+        )
+        active_context_path.write_text(
+            "# Current Context\n\nWorking on issue 975.\n\nNext: wire delta prompt.\n",
+            encoding="utf-8",
+        )
         result = format_pma_prompt(
-            "Base prompt", snapshot, "User message", hub_root=tmp_path
+            "Base prompt",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-changed-docs",
         )
 
+        assert "section=AGENTS_MD status=unchanged" in result
+        assert "section=ACTIVE_CONTEXT_MD status=changed" in result
+        assert "<ACTIVE_CONTEXT_MD>" in result
+        assert "Next: wire delta prompt." in result
+        assert "Rule 1: Be concise." not in result
+        assert "\n<hub_snapshot>\n" not in result
+
+    def test_format_pma_prompt_force_full_context_refresh(self, tmp_path: Path) -> None:
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        _ = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-refresh",
+        )
+        result = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-refresh",
+            force_full_context=True,
+        )
+
+        assert "<pma_workspace_docs>" in result
         assert "<hub_snapshot>" in result
-        assert "</hub_snapshot>" in result
-        assert "repo_id=repo-snap" in result
-        assert "run_id=run-snap-1" in result
-        assert "seq=5" in result
+        assert "reason='explicit_refresh'" in result
+
+    def test_format_pma_prompt_digest_mismatch_falls_back_to_full_context(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        _ = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-digest-mismatch",
+        )
+
+        state_path = tmp_path / ".codex-autorunner" / "pma" / "prompt_state.json"
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        payload["sessions"]["pma.test-digest-mismatch"][
+            "bundle_digest"
+        ] = "not-a-digest"
+        state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+        result = format_pma_prompt(
+            "Base prompt",
+            snapshot,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-digest-mismatch",
+        )
+
+        assert "<pma_workspace_docs>" in result
+        assert "<hub_snapshot>" in result
+        assert "reason='digest_mismatch'" in result
 
 
 class TestIssue975CharacterizationMixedPmaState:

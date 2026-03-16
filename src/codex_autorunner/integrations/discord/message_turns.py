@@ -428,6 +428,7 @@ async def handle_message_event(
                     snapshot,
                     prompt_text,
                     hub_root=service._config.root,
+                    prompt_state_key=session_key,
                 )
             except Exception as exc:
                 log_event_fn(
