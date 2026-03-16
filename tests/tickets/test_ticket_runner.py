@@ -552,6 +552,9 @@ async def test_ticket_runner_dispatch_pause_message(tmp_path: Path) -> None:
     assert r1.status == "paused"
     assert r1.dispatch is not None
     assert r1.dispatch.dispatch.mode == "pause"
+    assert r1.dispatch.dispatch.extra["ticket_id"] == (
+        ".codex-autorunner/tickets/TICKET-001.md"
+    )
     # dispatch_seq is 2: dispatch at seq=1, turn_summary at seq=2
     assert r1.state.get("dispatch_seq") == 2
     assert (run_dir / "dispatch_history" / "0001" / "DISPATCH.md").exists()

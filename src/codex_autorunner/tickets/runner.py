@@ -501,10 +501,11 @@ class TicketRunner:
         # Post-turn: archive outbox if DISPATCH.md exists.
         dispatch_seq = int(state.get("dispatch_seq") or 0)
         current_ticket_key = ticket_instance_token(current_path)
+        dispatch_ticket_id = current_ticket_path or current_ticket_id
         dispatch, dispatch_errors = archive_dispatch(
             outbox_paths,
             next_seq=dispatch_seq + 1,
-            ticket_id=current_ticket_id,
+            ticket_id=dispatch_ticket_id,
             repo_id=self._repo_id,
             run_id=self._run_id,
             origin="runner",
@@ -551,7 +552,7 @@ class TicketRunner:
             outbox_paths,
             next_seq=turn_summary_seq,
             agent_output=result.text or "",
-            ticket_id=current_ticket_id,
+            ticket_id=dispatch_ticket_id,
             agent_id=result.agent_id,
             turn_number=total_turns,
             diff_stats=turn_diff_stats,
@@ -612,6 +613,7 @@ class TicketRunner:
                 title="Ticket loop detected (no repo diff change)",
                 body=details,
                 ticket_id=current_ticket_id,
+                ticket_path=current_ticket_path,
             )
             pause_context: dict[str, Any] = {
                 "paused_reply_seq": int(state.get("reply_seq") or 0),
@@ -840,12 +842,14 @@ class TicketRunner:
         title: str,
         body: str,
         ticket_id: str,
+        ticket_path: Optional[str] = None,
     ):
         """Create and archive a runner-generated pause dispatch."""
         return runner_post_turn.create_runner_pause_dispatch(
             outbox_paths=outbox_paths,
             state=state,
             ticket_id=ticket_id,
+            ticket_path=ticket_path,
             repo_id=self._repo_id,
             run_id=self._run_id,
             title=title,

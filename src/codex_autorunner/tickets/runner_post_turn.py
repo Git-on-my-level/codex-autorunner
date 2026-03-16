@@ -34,10 +34,13 @@ def archive_dispatch_and_create_summary(
     emit_event: Optional[Any] = None,
 ) -> tuple[Optional[Any], Optional[dict[str, Any]]]:
     """Archive DISPATCH and create turn summary."""
+    dispatch_ticket_id = (
+        str(current_ticket_path) if current_ticket_path else current_ticket_id
+    )
     dispatch, dispatch_errors = archive_dispatch(
         outbox_paths,
         next_seq=dispatch_seq + 1,
-        ticket_id=current_ticket_id,
+        ticket_id=dispatch_ticket_id,
         repo_id=repo_id,
         run_id=run_id,
         origin="runner",
@@ -68,7 +71,7 @@ def archive_dispatch_and_create_summary(
         outbox_paths,
         next_seq=turn_summary_seq,
         agent_output=agent_output or "",
-        ticket_id=current_ticket_id,
+        ticket_id=dispatch_ticket_id,
         agent_id=agent_id,
         turn_number=turn_number,
         diff_stats=turn_diff_stats,
@@ -89,10 +92,7 @@ def archive_dispatch_and_create_summary(
             if current_ticket_path is not None:
                 event_payload["ticket_path"] = str(current_ticket_path)
                 event_payload["ticket_key"] = ticket_instance_token(current_ticket_path)
-            emit_event(
-                FlowEventType.DIFF_UPDATED,
-                event_payload,
-            )
+            emit_event(FlowEventType.DIFF_UPDATED, event_payload)
         except Exception:
             pass
 
@@ -119,6 +119,7 @@ def create_runner_pause_dispatch(
     outbox_paths: Any,
     state: dict[str, Any],
     ticket_id: str,
+    ticket_path: Optional[str] = None,
     repo_id: str,
     run_id: str,
     title: str,
@@ -133,10 +134,11 @@ def create_runner_pause_dispatch(
     except OSError:
         return None
     next_seq = int(state.get("dispatch_seq") or 0) + 1
+    dispatch_ticket_id = ticket_path or ticket_id
     dispatch_record, dispatch_errors = archive_dispatch(
         outbox_paths,
         next_seq=next_seq,
-        ticket_id=ticket_id,
+        ticket_id=dispatch_ticket_id,
         repo_id=repo_id,
         run_id=run_id,
         origin="runner",
