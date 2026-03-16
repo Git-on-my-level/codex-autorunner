@@ -544,3 +544,180 @@ def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env, monkeypatch) 
     data = json.loads(dismissals_path.read_text(encoding="utf-8"))
     stored = data["items"][f"{run_id}:run_failed"]
     assert stored["resolved_by"] == "hub_messages_resolve"
+
+
+class TestIssue975CharacterizationHubMessageFreshness:
+    """Characterization tests for hub-message freshness/supersession (issue #975).
+
+    These tests document the current baseline for:
+    - Freshness metadata attached to inbox items
+    - Supersession rules when multiple runs exist for the same repo
+    - canonical_state_v1 structure and fields
+
+    Later tickets for issue #975 will build on this baseline to ensure
+    stale/superseded state is clearly marked in PMA-facing surfaces.
+    """
+
+    def test_inbox_item_includes_canonical_state_v1_freshness(
+        self, hub_env, monkeypatch
+    ) -> None:
+        """Document canonical_state_v1 freshness structure on inbox items."""
+        run_id = "1a1a1a1a-1a1a-1a1a-1a1a-1a1a1a1a1a1a"
+        _seed_paused_run(hub_env.repo_root, run_id)
+        _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+        app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+        with TestClient(app) as client:
+            res = client.get("/hub/messages")
+            assert res.status_code == 200
+            items = res.json()["items"]
+            assert len(items) == 1
+
+            item = items[0]
+            canonical = item.get("canonical_state_v1") or {}
+            freshness = canonical.get("freshness") or {}
+
+            assert canonical.get("schema_version") == 1
+            assert canonical.get("repo_id") == hub_env.repo_id
+            assert canonical.get("repo_root") == str(hub_env.repo_root)
+            assert canonical.get("ingest_source") == "ticket_files"
+            assert canonical.get("latest_run_id") == run_id
+            assert canonical.get("latest_run_status") == "paused"
+            assert canonical.get("state") == "paused"
+
+            assert freshness.get("generated_at")
+            assert freshness.get("recency_basis")
+            assert freshness.get("basis_at")
+            assert isinstance(freshness.get("is_stale"), bool)
+
+    def test_supersession_hides_older_paused_when_newer_completed_exists(
+        self, hub_env, monkeypatch
+    ) -> None:
+        """Document that older paused runs are hidden when newer completed runs exist."""
+        older_paused_id = "2b2b2b2b-2b2b-2b2b-2b2b-2b2b2b2b2b2b"
+        newer_completed_id = "3c3c3c3c-3c3c-3c3c-3c3c-3c3c3c3c3c3c"
+        _seed_paused_run(hub_env.repo_root, older_paused_id)
+        _write_dispatch_history(hub_env.repo_root, older_paused_id, seq=1)
+        _seed_completed_run(hub_env.repo_root, newer_completed_id)
+
+        app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+        with TestClient(app) as client:
+            res = client.get("/hub/messages")
+            assert res.status_code == 200
+            items = res.json()["items"]
+
+            assert items == []
+
+    def test_supersession_shows_only_newest_run_for_repo(
+        self, hub_env, monkeypatch
+    ) -> None:
+        """Document that only the newest run is shown per repo."""
+        run_1 = "4d4d4d4d-4d4d-4d4d-4d4d-4d4d4d4d4d4d"
+        run_2 = "5e5e5e5e-5e5e-5e5e-5e5e-5e5e5e5e5e5e"
+        run_3 = "6f6f6f6f-6f6f-6f6f-6f6f-6f6f6f6f6f6f"
+        _seed_paused_run(hub_env.repo_root, run_1)
+        _seed_failed_run(hub_env.repo_root, run_2)
+        _seed_paused_run(hub_env.repo_root, run_3)
+        _write_dispatch_history(hub_env.repo_root, run_3, seq=1)
+
+        app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+        with TestClient(app) as client:
+            res = client.get("/hub/messages")
+            assert res.status_code == 200
+            items = res.json()["items"]
+
+            assert len(items) == 1
+            assert items[0]["run_id"] == run_3
+            assert items[0]["item_type"] == "run_dispatch"
+
+    def test_top_level_freshness_includes_section_counts(
+        self, hub_env, monkeypatch
+    ) -> None:
+        """Document top-level freshness payload with section counts."""
+        run_id = "7g7g7g7g-7g7g-7g7g-7g7g-7g7g7g7g7g7g"
+        _seed_paused_run(hub_env.repo_root, run_id)
+        _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+        app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+        with TestClient(app) as client:
+            res = client.get("/hub/messages")
+            assert res.status_code == 200
+            payload = res.json()
+
+            assert payload.get("generated_at")
+            freshness = payload.get("freshness") or {}
+            assert freshness.get("generated_at")
+
+            inbox_section = (freshness.get("sections") or {}).get("inbox") or {}
+            assert inbox_section.get("entity_count") == 1
+            assert inbox_section.get("fresh_count") >= 1
+            assert inbox_section.get("stale_count") is not None
+
+    def test_canonical_state_v1_recommended_actions_structure(
+        self, hub_env, monkeypatch
+    ) -> None:
+        """Document canonical_state_v1 recommended_actions and confidence."""
+        run_id = "8h8h8h8h-8h8h-8h8h-8h8h-8h8h8h8h8h8h"
+        _seed_paused_run(hub_env.repo_root, run_id)
+        _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+        app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+        with TestClient(app) as client:
+            res = client.get("/hub/messages")
+            assert res.status_code == 200
+            items = res.json()["items"]
+            assert len(items) == 1
+
+            item = items[0]
+            canonical = item.get("canonical_state_v1") or {}
+
+            assert isinstance(canonical.get("recommended_actions"), list)
+            assert len(canonical.get("recommended_actions") or []) > 0
+            assert canonical.get("recommended_action")
+            assert canonical.get("recommendation_confidence") in {
+                "high",
+                "medium",
+                "low",
+            }
+            assert canonical.get("observed_at")
+            assert canonical.get("recommendation_generated_at")
+
+    def test_run_state_fields_on_inbox_items(self, hub_env, monkeypatch) -> None:
+        """Document run_state fields present on inbox items."""
+        run_id = "9i9i9i9i-9i9i-9i9i-9i9i-9i9i9i9i9i9i"
+        _seed_paused_run(hub_env.repo_root, run_id)
+        _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+        app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+        with TestClient(app) as client:
+            res = client.get("/hub/messages")
+            assert res.status_code == 200
+            items = res.json()["items"]
+            assert len(items) == 1
+
+            item = items[0]
+            run_state = item.get("run_state") or {}
+
+            assert run_state.get("state") == "paused"
+            assert run_state.get("recommended_action")
+            assert run_state.get("recommended_actions")
+            assert isinstance(run_state.get("recommended_actions"), list)
+            assert run_state.get("attention_required") is True
+
+    def test_failed_run_item_type_and_next_action(self, hub_env, monkeypatch) -> None:
+        """Document item_type and next_action for failed runs."""
+        run_id = "0j0j0j0j-0j0j-0j0j-0j0j-0j0j0j0j0j0j"
+        _seed_failed_run(hub_env.repo_root, run_id)
+
+        app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+        with TestClient(app) as client:
+            res = client.get("/hub/messages")
+            assert res.status_code == 200
+            items = res.json()["items"]
+            assert len(items) == 1
+
+            item = items[0]
+            assert item["item_type"] == "run_failed"
+            assert item["next_action"] == "diagnose_or_restart"
+            assert item["resolution_state"] == "terminal_attention"
+            assert "dismiss" in (item.get("resolvable_actions") or [])

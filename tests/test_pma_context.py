@@ -1100,3 +1100,559 @@ def test_render_hub_snapshot_includes_all_next_action_types(tmp_path: Path) -> N
     assert "repo_id=repo-1" in result
     assert "repo_id=repo-2" in result
     assert "PMA File Inbox:" not in result
+
+
+class TestIssue975CharacterizationPmaPromptBaseline:
+    """Characterization tests for issue #975: PMA prompt assembly baseline.
+
+    These tests document the current pre-issue-975 behavior for:
+    - PMA prompt assembly including durable docs and rendered hub snapshot
+    - How AGENTS, active_context, context_log_tail, and hub_snapshot are injected
+    - What sections appear in the prompt and in what order
+
+    Later tickets for issue #975 will introduce delta-aware prompt assembly;
+    these characterization tests ensure the baseline is preserved as a fallback.
+    """
+
+    def test_format_pma_prompt_structure_sections_in_order(
+        self, tmp_path: Path
+    ) -> None:
+        """Document the ordered structure of PMA prompt sections."""
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {
+            "inbox": [
+                {
+                    "item_type": "run_dispatch",
+                    "next_action": "reply_and_resume",
+                    "repo_id": "repo-char",
+                    "run_id": "run-char-1",
+                    "seq": 1,
+                    "dispatch": {
+                        "mode": "pause",
+                        "title": "Baseline dispatch",
+                        "body": "Please review.",
+                        "is_handoff": False,
+                    },
+                    "files": ["review.md"],
+                    "open_url": "/repos/repo-char/?tab=inbox&run_id=run-char-1",
+                    "run_state": {
+                        "state": "paused",
+                        "blocking_reason": "Waiting for input",
+                    },
+                }
+            ],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+            "pma_files_detail": {"inbox": [], "outbox": []},
+        }
+
+        result = format_pma_prompt(
+            "Base prompt", snapshot, "User message", hub_root=tmp_path
+        )
+
+        preamble_idx = result.find("<pma_workspace_docs>")
+        agents_idx = result.find("<AGENTS_MD>")
+        active_context_idx = result.find("<ACTIVE_CONTEXT_MD>")
+        context_log_idx = result.find("<CONTEXT_LOG_TAIL_MD>")
+        fastpath_idx = result.find("<pma_fastpath>")
+        snapshot_idx = result.find("<hub_snapshot>\n")
+        user_msg_idx = result.find("<user_message>\n")
+
+        assert preamble_idx >= 0
+        assert agents_idx > preamble_idx
+        assert active_context_idx > agents_idx
+        assert context_log_idx > active_context_idx
+        assert fastpath_idx > context_log_idx
+        assert snapshot_idx > fastpath_idx
+        assert user_msg_idx > snapshot_idx
+
+    def test_format_pma_prompt_injects_full_durable_docs_every_turn(
+        self, tmp_path: Path
+    ) -> None:
+        """Document that full durable docs are injected on every turn (pre-issue-975)."""
+        seed_hub_files(tmp_path, force=True)
+
+        agents_path = tmp_path / ".codex-autorunner" / "pma" / "docs" / "AGENTS.md"
+        active_context_path = (
+            tmp_path / ".codex-autorunner" / "pma" / "docs" / "active_context.md"
+        )
+        agents_path.write_text(
+            "# Durable Agent Guidance\n\nRule 1: Be concise.\n", encoding="utf-8"
+        )
+        active_context_path.write_text(
+            "# Current Context\n\nWorking on issue 975.\n", encoding="utf-8"
+        )
+
+        snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
+        result1 = format_pma_prompt(
+            "Base prompt", snapshot, "Turn 1", hub_root=tmp_path
+        )
+        result2 = format_pma_prompt(
+            "Base prompt", snapshot, "Turn 2", hub_root=tmp_path
+        )
+
+        assert "# Durable Agent Guidance" in result1
+        assert "# Durable Agent Guidance" in result2
+        assert "# Current Context" in result1
+        assert "# Current Context" in result2
+
+        agents_start = result1.find("<AGENTS_MD>")
+        agents_end = result1.find("</AGENTS_MD>")
+        agents_content = result1[agents_start:agents_end]
+        assert "Rule 1: Be concise" in agents_content
+
+    def test_format_pma_prompt_injects_full_hub_snapshot_every_turn(
+        self, tmp_path: Path
+    ) -> None:
+        """Document that full hub_snapshot is injected on every turn (pre-issue-975)."""
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "inbox": [
+                {
+                    "item_type": "run_dispatch",
+                    "next_action": "reply_and_resume",
+                    "repo_id": "repo-snap",
+                    "run_id": "run-snap-1",
+                    "seq": 5,
+                    "dispatch": {
+                        "mode": "pause",
+                        "title": "Snapshot dispatch",
+                        "body": "Body text",
+                        "is_handoff": False,
+                    },
+                    "files": [],
+                    "open_url": "/repos/repo-snap/",
+                    "run_state": {"state": "paused"},
+                }
+            ],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+            "pma_files_detail": {"inbox": [], "outbox": []},
+        }
+
+        result = format_pma_prompt(
+            "Base prompt", snapshot, "User message", hub_root=tmp_path
+        )
+
+        assert "<hub_snapshot>" in result
+        assert "</hub_snapshot>" in result
+        assert "repo_id=repo-snap" in result
+        assert "run_id=run-snap-1" in result
+        assert "seq=5" in result
+
+
+class TestIssue975CharacterizationMixedPmaState:
+    """Characterization tests for mixed PMA state snapshots (issue #975).
+
+    These tests document the baseline for a hub snapshot containing:
+    - Mixed run inbox items (paused, failed, completed)
+    - Managed threads with various statuses
+    - PMA file inbox entries
+    - Freshness metadata
+
+    The fixture helper can be reused by later tickets to verify changes.
+    """
+
+    @staticmethod
+    def build_mixed_pma_snapshot(
+        *,
+        include_dispatch: bool = True,
+        include_failed_run: bool = True,
+        include_completed_run: bool = True,
+        include_pma_thread: bool = True,
+        include_pma_file: bool = True,
+    ) -> dict:
+        """Build a mixed PMA snapshot for characterization tests.
+
+        This helper creates a representative snapshot with all the state
+        categories that issue #975 touches. Later tickets can use this
+        to verify action-queue, status-label, and prompt-delta changes.
+        """
+        inbox: list[dict] = []
+
+        if include_dispatch:
+            inbox.append(
+                {
+                    "item_type": "run_dispatch",
+                    "next_action": "reply_and_resume",
+                    "repo_id": "repo-mixed",
+                    "run_id": "run-dispatch-1",
+                    "seq": 3,
+                    "dispatch": {
+                        "mode": "pause",
+                        "title": "Mixed state dispatch",
+                        "body": "Please review this mixed state.",
+                        "is_handoff": False,
+                    },
+                    "files": ["request.md", "context.json"],
+                    "open_url": "/repos/repo-mixed/?tab=inbox&run_id=run-dispatch-1",
+                    "run_state": {
+                        "state": "paused",
+                        "blocking_reason": "Waiting for operator input",
+                        "recommended_action": "car flow ticket_flow resume",
+                        "recommended_actions": [
+                            "car flow ticket_flow resume",
+                            "car flow ticket_flow status",
+                        ],
+                        "attention_required": True,
+                    },
+                    "canonical_state_v1": {
+                        "schema_version": 1,
+                        "repo_id": "repo-mixed",
+                        "latest_run_id": "run-dispatch-1",
+                        "latest_run_status": "paused",
+                        "state": "paused",
+                        "recommended_action": "car flow ticket_flow resume",
+                        "recommendation_confidence": "high",
+                        "freshness": {
+                            "generated_at": "2026-03-16T12:00:00Z",
+                            "recency_basis": "run_state",
+                            "basis_at": "2026-03-16T11:55:00Z",
+                            "is_stale": False,
+                        },
+                    },
+                }
+            )
+
+        if include_failed_run:
+            inbox.append(
+                {
+                    "item_type": "run_failed",
+                    "next_action": "diagnose_or_restart",
+                    "repo_id": "repo-mixed",
+                    "run_id": "run-failed-1",
+                    "seq": None,
+                    "dispatch": None,
+                    "files": [],
+                    "open_url": "/repos/repo-mixed/?tab=inbox&run_id=run-failed-1",
+                    "run_state": {
+                        "state": "blocked",
+                        "blocking_reason": "Run failed: connection timeout",
+                        "recommended_action": "car flow ticket_flow resume --force",
+                        "attention_required": False,
+                    },
+                    "canonical_state_v1": {
+                        "schema_version": 1,
+                        "repo_id": "repo-mixed",
+                        "latest_run_id": "run-failed-1",
+                        "latest_run_status": "failed",
+                        "state": "blocked",
+                        "recommendation_confidence": "medium",
+                        "freshness": {
+                            "generated_at": "2026-03-16T11:00:00Z",
+                            "recency_basis": "run_state",
+                            "basis_at": "2026-03-16T10:30:00Z",
+                            "is_stale": True,
+                        },
+                    },
+                }
+            )
+
+        if include_completed_run:
+            inbox.append(
+                {
+                    "item_type": "run_completed",
+                    "next_action": "start_new_flow",
+                    "repo_id": "repo-mixed",
+                    "run_id": "run-completed-1",
+                    "seq": None,
+                    "dispatch": None,
+                    "files": [],
+                    "open_url": "/repos/repo-mixed/?tab=inbox&run_id=run-completed-1",
+                    "run_state": {
+                        "state": "completed",
+                        "blocking_reason": None,
+                        "recommended_action": "car flow ticket_flow start",
+                        "attention_required": False,
+                    },
+                    "canonical_state_v1": {
+                        "schema_version": 1,
+                        "repo_id": "repo-mixed",
+                        "latest_run_id": "run-completed-1",
+                        "latest_run_status": "completed",
+                        "state": "completed",
+                        "recommendation_confidence": "low",
+                        "recommendation_stale_reason": "run already completed",
+                        "freshness": {
+                            "generated_at": "2026-03-16T09:00:00Z",
+                            "recency_basis": "run_state",
+                            "basis_at": "2026-03-16T08:00:00Z",
+                            "is_stale": True,
+                        },
+                    },
+                }
+            )
+
+        pma_threads: list[dict] = []
+        if include_pma_thread:
+            pma_threads.append(
+                {
+                    "managed_thread_id": "thread-idle-1",
+                    "agent": "codex",
+                    "repo_id": "repo-mixed",
+                    "resource_kind": "repo",
+                    "resource_id": "repo-mixed",
+                    "workspace_root": "/worktrees/repo-mixed",
+                    "name": "refactor-thread",
+                    "status": "idle",
+                    "lifecycle_status": "active",
+                    "status_reason": "managed_turn_completed",
+                    "status_terminal": False,
+                    "last_turn_id": "turn-001",
+                    "last_message_preview": "Refactoring complete, ready for review.",
+                    "updated_at": "2026-03-16T11:00:00Z",
+                    "freshness": {
+                        "generated_at": "2026-03-16T12:00:00Z",
+                        "recency_basis": "thread_updated_at",
+                        "basis_at": "2026-03-16T11:00:00Z",
+                        "is_stale": False,
+                    },
+                }
+            )
+            pma_threads.append(
+                {
+                    "managed_thread_id": "thread-completed-1",
+                    "agent": "opencode",
+                    "repo_id": "repo-mixed",
+                    "resource_kind": "repo",
+                    "resource_id": "repo-mixed",
+                    "workspace_root": "/worktrees/repo-mixed",
+                    "name": "completed-thread",
+                    "status": "completed",
+                    "lifecycle_status": "active",
+                    "status_reason": "managed_turn_completed",
+                    "status_terminal": False,
+                    "last_turn_id": "turn-002",
+                    "last_message_preview": "Task finished successfully.",
+                    "updated_at": "2026-03-16T10:00:00Z",
+                    "freshness": {
+                        "generated_at": "2026-03-16T12:00:00Z",
+                        "recency_basis": "thread_updated_at",
+                        "basis_at": "2026-03-16T10:00:00Z",
+                        "is_stale": False,
+                    },
+                }
+            )
+
+        pma_files_detail: dict[str, list[dict]] = {"inbox": [], "outbox": []}
+        if include_pma_file:
+            pma_files_detail["inbox"] = [
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "ticket-pack.md",
+                    "source": "filebox",
+                    "size": "1500",
+                    "modified_at": "2026-03-16T11:30:00Z",
+                    "freshness": {
+                        "generated_at": "2026-03-16T12:00:00Z",
+                        "recency_basis": "file_modified_at",
+                        "basis_at": "2026-03-16T11:30:00Z",
+                        "is_stale": False,
+                    },
+                }
+            ]
+
+        return {
+            "generated_at": "2026-03-16T12:00:00Z",
+            "inbox": inbox,
+            "repos": [],
+            "pma_threads": pma_threads,
+            "pma_files": {"inbox": ["ticket-pack.md"], "outbox": []},
+            "pma_files_detail": pma_files_detail,
+            "freshness": {
+                "generated_at": "2026-03-16T12:00:00Z",
+                "stale_threshold_seconds": 3600,
+                "sections": {
+                    "inbox": {
+                        "entity_count": len(inbox),
+                        "fresh_count": sum(
+                            1
+                            for item in inbox
+                            if not (item.get("canonical_state_v1") or {})
+                            .get("freshness", {})
+                            .get("is_stale", False)
+                        ),
+                        "stale_count": sum(
+                            1
+                            for item in inbox
+                            if (item.get("canonical_state_v1") or {})
+                            .get("freshness", {})
+                            .get("is_stale", False)
+                        ),
+                    },
+                    "pma_threads": {"entity_count": len(pma_threads), "stale_count": 0},
+                },
+            },
+        }
+
+    def test_mixed_snapshot_rendered_contains_all_categories(
+        self, tmp_path: Path
+    ) -> None:
+        """Verify mixed snapshot renders all categories in hub_snapshot."""
+        from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot()
+
+        result = _render_hub_snapshot(snapshot)
+
+        assert "Run Dispatches (paused runs needing attention):" in result
+        assert "repo_id=repo-mixed" in result
+        assert "run_id=run-dispatch-1" in result
+        assert "next_action=reply_and_resume" in result
+        assert "next_action=diagnose_or_restart" in result
+
+        assert "PMA Managed Threads:" in result
+        assert "thread-idle-1" in result
+        assert "thread-completed-1" in result
+        assert "status=idle" in result
+        assert "status=completed" in result
+        assert "lifecycle=active" in result
+
+        assert "PMA File Inbox:" in result
+        assert "ticket-pack.md" in result
+
+    def test_mixed_snapshot_freshness_metadata_present(self, tmp_path: Path) -> None:
+        """Verify freshness metadata is attached to items in mixed snapshot."""
+        from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot()
+
+        result = _render_hub_snapshot(snapshot)
+
+        assert "Snapshot Freshness:" in result
+        assert "stale_threshold_seconds=" in result
+        assert "section=inbox" in result
+
+    def test_format_pma_prompt_with_mixed_snapshot(self, tmp_path: Path) -> None:
+        """Verify format_pma_prompt handles mixed snapshot correctly."""
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot()
+
+        result = format_pma_prompt(
+            "Base prompt", snapshot, "Mixed state user message", hub_root=tmp_path
+        )
+
+        assert "<hub_snapshot>" in result
+        assert "</hub_snapshot>" in result
+        assert "<user_message>" in result
+        assert "Mixed state user message" in result
+
+        assert "Run Dispatches (paused runs needing attention):" in result
+        assert "PMA Managed Threads:" in result
+        assert "PMA File Inbox:" in result
+
+
+class TestIssue975CharacterizationManagedThreadPayload:
+    """Characterization tests for managed-thread operator payload shape (issue #975).
+
+    These tests document the current baseline for managed-thread payloads:
+    - status field (normalized_status)
+    - lifecycle_status field
+    - status_terminal field
+    - How "completed lifecycle=active" appears in rendered output
+
+    Later tickets will introduce operator-facing reusable-thread status labels;
+    these tests ensure the baseline payload shape is documented.
+    """
+
+    def test_pma_thread_payload_includes_all_status_fields(self, hub_env) -> None:
+        """Document that managed thread payloads include all status fields.
+
+        Note: The 'status' field contains lifecycle_status (e.g., 'active'),
+        while 'normalized_status' contains the runtime status (e.g., 'idle').
+        This baseline documents the pre-issue-975 status model where:
+        - status == lifecycle_status (machine-level lifecycle)
+        - normalized_status == runtime status (operator-facing runtime state)
+        """
+        store = PmaThreadStore(hub_env.hub_root)
+        thread = store.create_thread(
+            "codex",
+            hub_env.repo_root,
+            repo_id=hub_env.repo_id,
+            name="status-characterization",
+        )
+
+        assert "managed_thread_id" in thread
+        assert thread["status"] == "active"
+        assert thread["lifecycle_status"] == "active"
+        assert thread["normalized_status"] == "idle"
+        assert thread["status_reason"] == "thread_created"
+        assert thread["status_terminal"] is False
+
+    def test_completed_thread_shows_completed_normalized_status_with_active_lifecycle(
+        self, hub_env
+    ) -> None:
+        """Document the 'completed lifecycle=active' baseline rendering.
+
+        After a turn completes, normalized_status becomes 'completed' while
+        lifecycle_status remains 'active'. Note that status_terminal is True
+        for 'completed' status, which is one of the pre-issue-975 pain points:
+        operators see 'terminal=true' but the thread is actually reusable.
+
+        The TERMINAL_STATUSES set includes COMPLETED, FAILED, and ARCHIVED.
+        Issue #975 aims to distinguish "reusable" from "truly terminal".
+        """
+        store = PmaThreadStore(hub_env.hub_root)
+        thread = store.create_thread(
+            "codex",
+            hub_env.repo_root,
+            repo_id=hub_env.repo_id,
+            name="completed-baseline",
+        )
+        thread_id = thread["managed_thread_id"]
+
+        store.create_turn(thread_id, prompt="First turn")
+        store.mark_turn_finished(
+            store.get_running_turn(thread_id)["managed_turn_id"],
+            status="ok",
+            assistant_text="Done",
+        )
+
+        updated = store.get_thread(thread_id)
+        assert updated["status"] == "active"
+        assert updated["lifecycle_status"] == "active"
+        assert updated["normalized_status"] == "completed"
+        assert updated["status_terminal"] is True
+
+    def test_hub_snapshot_renders_completed_lifecycle_active_format(
+        self, hub_env
+    ) -> None:
+        """Document how 'completed lifecycle=active' appears in rendered snapshot."""
+        from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+        store = PmaThreadStore(hub_env.hub_root)
+        thread = store.create_thread(
+            "codex",
+            hub_env.repo_root,
+            repo_id=hub_env.repo_id,
+            name="snapshot-render-test",
+        )
+        thread_id = thread["managed_thread_id"]
+
+        store.create_turn(thread_id, prompt="Turn for render test")
+        store.mark_turn_finished(
+            store.get_running_turn(thread_id)["managed_turn_id"],
+            status="ok",
+            assistant_text="Completed",
+        )
+
+        supervisor = HubSupervisor.from_path(hub_env.hub_root)
+        try:
+            snapshot = asyncio.run(
+                build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+            )
+        finally:
+            supervisor.shutdown()
+
+        rendered = _render_hub_snapshot(snapshot)
+
+        assert "PMA Managed Threads:" in rendered
+        assert "status=completed" in rendered
+        assert "lifecycle=active" in rendered
