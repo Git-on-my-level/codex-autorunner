@@ -12,7 +12,12 @@ import yaml
 
 from ..core.utils import atomic_write
 from .files import list_ticket_paths, read_ticket, safe_relpath
-from .frontmatter import parse_markdown_frontmatter, split_markdown_frontmatter
+from .frontmatter import (
+    ensure_ticket_id,
+    parse_markdown_frontmatter,
+    render_markdown_frontmatter,
+    split_markdown_frontmatter,
+)
 from .ingest_state import (
     INGEST_STATE_FILENAME,
     ingest_state_path,
@@ -274,8 +279,7 @@ def load_template_frontmatter(content: str) -> dict[str, Any]:
 
 
 def _render_ticket(frontmatter: dict[str, Any], body: str) -> str:
-    fm_yaml = yaml.safe_dump(frontmatter, sort_keys=False).rstrip()
-    return f"---\n{fm_yaml}\n---{body}"
+    return render_markdown_frontmatter(frontmatter, body)
 
 
 def _collect_zip_tickets(zip_path: Path) -> list[tuple[str, int, str]]:
@@ -440,16 +444,18 @@ def import_ticket_pack(
                 "Removed frontmatter.depends_on (CAR executes tickets in filename order)."
             )
 
-        _frontmatter, fm_errors = lint_ticket_frontmatter(data)
-        if fm_errors:
+        if not isinstance(data, dict) or not data:
             item.status = "error"
-            item.errors.extend(fm_errors)
+            item.errors.append(
+                "Missing or invalid YAML frontmatter (expected a mapping)."
+            )
             items.append(item)
             continue
 
         merged: dict[str, Any] = {}
         if template_frontmatter:
             merged.update(template_frontmatter)
+            merged.pop("ticket_id", None)
         if isinstance(data, dict):
             merged.update(data)
 
@@ -458,6 +464,7 @@ def import_ticket_pack(
         if clear_model_pin:
             merged.pop("model", None)
             merged.pop("reasoning", None)
+        ensure_ticket_id(merged)
 
         _frontmatter2, fm_errors2 = lint_ticket_frontmatter(merged)
         if fm_errors2:

@@ -34,7 +34,7 @@ async def test_runner_clears_stale_pause_and_runs(tmp_path: Path) -> None:
     ticket_dir.mkdir(parents=True, exist_ok=True)
     ticket_path = ticket_dir / "TICKET-001.md"
     ticket_path.write_text(
-        "---\nagent: codex\ndone: false\ntitle: T\n---\n\nbody\n",
+        '---\nticket_id: "tkt_stalepause001"\nagent: codex\ndone: false\ntitle: T\n---\n\nbody\n',
         encoding="utf-8",
     )
 

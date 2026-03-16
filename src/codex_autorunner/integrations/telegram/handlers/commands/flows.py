@@ -36,6 +36,7 @@ from .....core.ticket_flow_summary import build_ticket_flow_display
 from .....core.utils import atomic_write, canonicalize_path
 from .....manifest import load_manifest
 from .....tickets.files import list_ticket_paths
+from .....tickets.frontmatter import generate_ticket_id
 from ....chat.run_mirror import ChatRunMirror
 from ....github.service import GitHubError, GitHubService
 from ...adapter import (
@@ -1506,9 +1507,11 @@ class FlowCommands(SharedHelpers):
         if not tickets_exist:
             first_ticket = ticket_dir / "TICKET-001.md"
             if not first_ticket.exists():
-                template = """---
+                bootstrap_ticket_id = generate_ticket_id()
+                template = f"""---
 agent: codex
 done: false
+ticket_id: "{bootstrap_ticket_id}"
 title: Bootstrap ticket plan
 goal: Capture scope and seed follow-up tickets
 ---

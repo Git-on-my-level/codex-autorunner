@@ -46,7 +46,7 @@ def _seed_ticket(repo_root: Path) -> None:
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: user\ndone: false\n---\n\nStatus ticket\n",
+        '---\nticket_id: "tkt_archive001"\nagent: user\ndone: false\n---\n\nStatus ticket\n',
         encoding="utf-8",
     )
 

@@ -37,6 +37,7 @@ def test_flow_worker_sigterm_closes_agent_pool_and_controller(
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
         """---
+ticket_id: "tkt_worker001"
 title: "Test ticket"
 agent: "codex"
 done: false

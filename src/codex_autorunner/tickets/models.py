@@ -24,6 +24,7 @@ class TicketFrontmatter:
     keys are preserved in `extra` for forward compatibility.
     """
 
+    ticket_id: str
     agent: str
     done: bool
     title: Optional[str] = None

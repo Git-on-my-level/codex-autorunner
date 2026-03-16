@@ -30,6 +30,7 @@ from ....core.utils import (
 )
 from ....manifest import load_manifest
 from ....tickets.files import list_ticket_paths, read_ticket, safe_relpath
+from ....tickets.frontmatter import render_markdown_frontmatter
 from ....tickets.ingest_state import INGEST_STATE_FILENAME
 from ....tickets.lint import lint_ticket_directory, parse_ticket_index
 
@@ -493,8 +494,7 @@ def validate_tickets(ticket_dir: Path) -> list[str]:
 
 
 def render_ticket_markdown(frontmatter: dict, body: str) -> str:
-    fm_yaml = yaml.safe_dump(frontmatter, sort_keys=False).rstrip()
-    return f"---\n{fm_yaml}\n---\n\n{body.rstrip()}\n"
+    return render_markdown_frontmatter(frontmatter, body)
 
 
 def guard_unregistered_hub_repo(repo_root: Path, hub: Optional[Path]) -> None:

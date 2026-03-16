@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from ..agents.registry import validate_agent_id
+from .frontmatter import parse_markdown_frontmatter, sanitize_ticket_id
 from .models import TicketContextEntry, TicketFrontmatter
 
 # Accept TICKET-###.md or TICKET-###<suffix>.md (suffix optional), case-insensitive.
@@ -94,6 +95,7 @@ def lint_ticket_frontmatter(
     """Validate and normalize ticket frontmatter.
 
     Required keys:
+    - ticket_id: stable opaque ticket identity
     - agent: string (or the special value "user")
     - done: bool
     """
@@ -103,6 +105,12 @@ def lint_ticket_frontmatter(
         return None, ["Missing or invalid YAML frontmatter (expected a mapping)."]
 
     extra = {k: v for k, v in data.items()}
+
+    ticket_id = sanitize_ticket_id(data.get("ticket_id"))
+    if not ticket_id:
+        errors.append(
+            "frontmatter.ticket_id is required and must match [A-Za-z0-9._-]{6,128}."
+        )
 
     agent_raw = data.get("agent")
     agent = _as_optional_str(agent_raw)
@@ -134,16 +142,27 @@ def lint_ticket_frontmatter(
     errors.extend(context_errors)
 
     # Remove normalized keys from extra.
-    for key in ("agent", "done", "title", "goal", "model", "reasoning", "context"):
+    for key in (
+        "ticket_id",
+        "agent",
+        "done",
+        "title",
+        "goal",
+        "model",
+        "reasoning",
+        "context",
+    ):
         extra.pop(key, None)
 
     if errors:
         return None, errors
 
+    assert ticket_id is not None
     assert agent is not None
     assert done is not None
     return (
         TicketFrontmatter(
+            ticket_id=ticket_id,
             agent=agent,
             done=done,
             title=title,
@@ -181,7 +200,7 @@ def lint_dispatch_frontmatter(
 
 
 def lint_ticket_directory(ticket_dir: Path) -> list[str]:
-    """Validate ticket directory for duplicate indices.
+    """Validate ticket directory for duplicate logical identities.
 
     Returns a list of error messages (empty if valid).
 
@@ -194,6 +213,7 @@ def lint_ticket_directory(ticket_dir: Path) -> list[str]:
 
     errors: list[str] = []
     index_to_paths: dict[int, list[str]] = defaultdict(list)
+    ticket_id_to_paths: dict[str, list[str]] = defaultdict(list)
 
     for path in ticket_dir.iterdir():
         if not path.is_file():
@@ -202,6 +222,14 @@ def lint_ticket_directory(ticket_dir: Path) -> list[str]:
         if idx is None:
             continue
         index_to_paths[idx].append(path.name)
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        data, _body = parse_markdown_frontmatter(raw)
+        ticket_id = sanitize_ticket_id(data.get("ticket_id"))
+        if ticket_id:
+            ticket_id_to_paths[ticket_id].append(path.name)
 
     for idx, filenames in index_to_paths.items():
         if len(filenames) > 1:
@@ -209,6 +237,14 @@ def lint_ticket_directory(ticket_dir: Path) -> list[str]:
             errors.append(
                 f"Duplicate ticket index {idx:03d}: multiple files share the same index ({filenames_str}). "
                 "Rename or remove duplicates to ensure deterministic ordering."
+            )
+
+    for ticket_id, filenames in ticket_id_to_paths.items():
+        if len(filenames) > 1:
+            filenames_str = ", ".join([f"'{f}'" for f in filenames])
+            errors.append(
+                f"Duplicate ticket_id {ticket_id!r}: multiple files share the same logical ticket identity ({filenames_str}). "
+                "Backfill or rewrite one of the ticket_ids so ticket-owned state remains unambiguous."
             )
 
     return errors

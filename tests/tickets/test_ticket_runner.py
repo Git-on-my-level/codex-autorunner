@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Callable
 
@@ -29,6 +30,7 @@ def _write_ticket(
 ) -> None:
     text = (
         "---\n"
+        f"ticket_id: tkt_{uuid.uuid4().hex}\n"
         f"agent: {agent}\n"
         f"done: {str(done).lower()}\n"
         f"{frontmatter_extra}"

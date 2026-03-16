@@ -104,7 +104,7 @@ def test_get_ticket_by_index(tmp_path, monkeypatch):
     ticket_dir.mkdir(parents=True)
     ticket_path = ticket_dir / "TICKET-002.md"
     ticket_path.write_text(
-        "---\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody here\n",
+        '---\nticket_id: "tkt_get002"\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody here\n',
         encoding="utf-8",
     )
 
@@ -170,11 +170,11 @@ def test_create_ticket_appends_after_highest_index_when_gaps_exist(
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---\n\nOne\n",
+        '---\nticket_id: "tkt_gap001"\nagent: codex\ndone: false\n---\n\nOne\n',
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-003.md").write_text(
-        "---\nagent: codex\ndone: false\n---\n\nThree\n",
+        '---\nticket_id: "tkt_gap003"\nagent: codex\ndone: false\n---\n\nThree\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
@@ -227,7 +227,7 @@ def test_update_ticket_allows_colon_titles_and_models(tmp_path, monkeypatch):
     ticket_dir.mkdir(parents=True)
     ticket_path = ticket_dir / "TICKET-004.md"
     ticket_path.write_text(
-        "---\nagent: codex\ndone: false\n---\n\nBody\n",
+        "---\nticket_id: tkt_update004\nagent: codex\ndone: false\n---\n\nBody\n",
         encoding="utf-8",
     )
 
@@ -237,6 +237,7 @@ def test_update_ticket_allows_colon_titles_and_models(tmp_path, monkeypatch):
     app.include_router(flow_routes.build_flow_routes())
 
     content = """---
+ticket_id: "tkt_update004"
 agent: \"opencode\"
 done: false
 title: \"TICKET-004: Review CLI lint error (issue #512)\"
@@ -276,12 +277,12 @@ def test_ticket_list_keeps_diff_stats_for_latest_completed_run(tmp_path, monkeyp
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_id = "tkt_diffstats001"
     ticket_path.write_text(
-        "---\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody\n",
+        f'---\nticket_id: "{ticket_id}"\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody\n',
         encoding="utf-8",
     )
     rel_ticket_path = ".codex-autorunner/tickets/TICKET-001.md"
-
     db_path = tmp_path / ".codex-autorunner" / "flows.db"
     store = FlowStore(db_path)
     store.initialize()
@@ -296,7 +297,7 @@ def test_ticket_list_keeps_diff_stats_for_latest_completed_run(tmp_path, monkeyp
         run_id=run_id,
         event_type=FlowEventType.DIFF_UPDATED,
         data={
-            "ticket_id": rel_ticket_path,
+            "ticket_id": ticket_id,
             "insertions": 12,
             "deletions": 3,
             "files_changed": 2,
@@ -328,12 +329,11 @@ def test_ticket_list_keeps_diff_stats_when_newer_run_has_no_events(
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     ticket_path = ticket_dir / "TICKET-001.md"
+    ticket_id = "tkt_diffstats002"
     ticket_path.write_text(
-        "---\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody\n",
+        f'---\nticket_id: "{ticket_id}"\nagent: codex\ndone: false\ntitle: Demo\n---\n\nBody\n',
         encoding="utf-8",
     )
-    rel_ticket_path = ".codex-autorunner/tickets/TICKET-001.md"
-
     db_path = tmp_path / ".codex-autorunner" / "flows.db"
     store = FlowStore(db_path)
     store.initialize()
@@ -348,7 +348,7 @@ def test_ticket_list_keeps_diff_stats_when_newer_run_has_no_events(
         run_id=older_run_id,
         event_type=FlowEventType.DIFF_UPDATED,
         data={
-            "ticket_id": rel_ticket_path,
+            "ticket_id": ticket_id,
             "insertions": 12,
             "deletions": 3,
             "files_changed": 2,
@@ -512,15 +512,15 @@ def test_reorder_ticket_moves_source_before_destination(tmp_path, monkeypatch):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\ntitle: One\n---\n\nBody 1\n",
+        "---\nticket_id: tkt_reorder001\nagent: codex\ndone: false\ntitle: One\n---\n\nBody 1\n",
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-002.md").write_text(
-        "---\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
+        "---\nticket_id: tkt_reorder002\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-003.md").write_text(
-        "---\nagent: codex\ndone: false\ntitle: Three\n---\n\nBody 3\n",
+        "---\nticket_id: tkt_reorder003\nagent: codex\ndone: false\ntitle: Three\n---\n\nBody 3\n",
         encoding="utf-8",
     )
 
@@ -553,15 +553,15 @@ def test_reorder_ticket_updates_active_run_current_ticket_path(tmp_path, monkeyp
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\ntitle: One\n---\n\nBody 1\n",
+        "---\nticket_id: tkt_active001\nagent: codex\ndone: false\ntitle: One\n---\n\nBody 1\n",
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-002.md").write_text(
-        "---\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
+        "---\nticket_id: tkt_active002\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-003.md").write_text(
-        "---\nagent: codex\ndone: false\ntitle: Three\n---\n\nBody 3\n",
+        "---\nticket_id: tkt_active003\nagent: codex\ndone: false\ntitle: Three\n---\n\nBody 3\n",
         encoding="utf-8",
     )
 
@@ -615,3 +615,43 @@ def test_reorder_ticket_updates_active_run_current_ticket_path(tmp_path, monkeyp
     assert (
         ticket_engine.get("current_ticket") == ".codex-autorunner/tickets/TICKET-001.md"
     )
+
+
+def test_reorder_ticket_does_not_overwrite_malformed_frontmatter(tmp_path, monkeypatch):
+    ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True)
+    malformed = (
+        "---\n"
+        "agent: codex\n"
+        "title: Broken\n"
+        "# done is missing on purpose\n"
+        "---\n\n"
+        "Body 1\n"
+    )
+    (ticket_dir / "TICKET-001.md").write_text(malformed, encoding="utf-8")
+    (ticket_dir / "TICKET-002.md").write_text(
+        "---\nticket_id: tkt_reorder_ok\nagent: codex\ndone: false\ntitle: Two\n---\n\nBody 2\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
+    app = FastAPI()
+    app.include_router(flow_routes.build_flow_routes())
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/api/flows/ticket_flow/tickets/reorder",
+            json={
+                "source_index": 2,
+                "destination_index": 1,
+                "place_after": False,
+            },
+        )
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert payload["status"] == "error"
+        assert payload["lint_errors"]
+
+    rewritten = (ticket_dir / "TICKET-002.md").read_text(encoding="utf-8")
+    assert "# done is missing on purpose" in rewritten
+    assert "ticket_id:" not in rewritten

@@ -40,7 +40,10 @@ def test_linter_rejects_invalid_filename_and_extension(repo: Path) -> None:
     invalid_only.unlink()
 
     good = tickets_dir / "TICKET-001.md"
-    good.write_text("---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8")
+    good.write_text(
+        '---\nticket_id: "tkt_lint001"\nagent: codex\ndone: false\n---\nBody\n',
+        encoding="utf-8",
+    )
 
     invalid_prefix = tickets_dir / "NOTE-001.md"
     invalid_prefix.write_text(
@@ -82,7 +85,7 @@ def test_linter_flags_invalid_yaml_with_suffix(repo: Path) -> None:
 
     good = tickets_dir / "TICKET-000.md"
     good.write_text(
-        "---\nagent: codex\ndone: false\n---\nBody\n",
+        '---\nticket_id: "tkt_lint000"\nagent: codex\ndone: false\n---\nBody\n',
         encoding="utf-8",
     )
     # Remove the bad ticket to allow a clean run.
@@ -99,10 +102,12 @@ def test_linter_detects_duplicate_indices(repo: Path) -> None:
 
     # Create duplicate ticket files
     (tickets_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+        '---\nticket_id: "tkt_lintdup001"\nagent: codex\ndone: false\n---\nBody\n',
+        encoding="utf-8",
     )
     (tickets_dir / "TICKET-001-dup.md").write_text(
-        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+        '---\nticket_id: "tkt_lintdup002"\nagent: codex\ndone: false\n---\nBody\n',
+        encoding="utf-8",
     )
 
     result = _run_linter(repo)
@@ -123,7 +128,8 @@ def test_linter_ignores_ingest_receipt_file(repo: Path) -> None:
     tickets_dir.mkdir(parents=True, exist_ok=True)
 
     (tickets_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---\nBody\n", encoding="utf-8"
+        '---\nticket_id: "tkt_lintingest001"\nagent: codex\ndone: false\n---\nBody\n',
+        encoding="utf-8",
     )
     (tickets_dir / "ingest_state.json").write_text("{}", encoding="utf-8")
 

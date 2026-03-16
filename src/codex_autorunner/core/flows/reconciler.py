@@ -289,7 +289,9 @@ def _ensure_crash_dispatch(
     state = record.state if isinstance(record.state, dict) else {}
     ticket_engine = state.get("ticket_engine")
     if isinstance(ticket_engine, dict):
-        candidate = ticket_engine.get("current_ticket")
+        candidate = ticket_engine.get("current_ticket_id")
+        if not (isinstance(candidate, str) and candidate.strip()):
+            candidate = ticket_engine.get("current_ticket")
         if isinstance(candidate, str) and candidate.strip():
             current_ticket = candidate.strip()
     archive_dispatch(

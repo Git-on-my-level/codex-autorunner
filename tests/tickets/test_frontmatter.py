@@ -15,6 +15,7 @@ def test_split_markdown_frontmatter_absent_returns_body_unchanged() -> None:
 
 def test_split_markdown_frontmatter_parses_yaml_and_preserves_body() -> None:
     text = """---
+ticket_id: tkt_test123
 agent: codex
 done: false
 ---
@@ -32,6 +33,7 @@ Body.
 
     data, parsed_body = parse_markdown_frontmatter(text)
     assert data["agent"] == "codex"
+    assert data["ticket_id"] == "tkt_test123"
     assert data["done"] is False
     assert parsed_body == body
 
@@ -39,6 +41,7 @@ Body.
 def test_split_markdown_frontmatter_malformed_is_treated_as_absent() -> None:
     # Missing closing --- should not throw; callers will lint based on empty mapping.
     text = """---
+ticket_id: tkt_test123
 agent: codex
 done: false
 

@@ -8,7 +8,11 @@ import yaml
 
 from ..core.utils import atomic_write
 from .files import list_ticket_paths
-from .frontmatter import split_markdown_frontmatter
+from .frontmatter import (
+    ensure_ticket_id,
+    render_markdown_frontmatter,
+    split_markdown_frontmatter,
+)
 from .lint import lint_ticket_frontmatter
 
 
@@ -52,8 +56,7 @@ def _split_with_recovery(raw: str) -> tuple[str | None, str]:
 
 
 def _render_ticket(data: dict[str, Any], body: str) -> str:
-    fm_yaml = yaml.safe_dump(data, sort_keys=False).rstrip()
-    return f"---\n{fm_yaml}\n---{body}"
+    return render_markdown_frontmatter(data, body)
 
 
 @dataclasses.dataclass
@@ -134,6 +137,14 @@ def format_or_doctor_tickets(
             data["done"] = False
             changed = True
             report.warnings.append(f"{rel}: inserted missing frontmatter.done=false.")
+
+        previous_ticket_id = data.get("ticket_id")
+        ticket_id = ensure_ticket_id(data)
+        if data.get("ticket_id") != previous_ticket_id:
+            changed = True
+            report.warnings.append(
+                f"{rel}: inserted missing frontmatter.ticket_id={ticket_id!r}."
+            )
 
         _fm, errors = lint_ticket_frontmatter(data)
         if errors:

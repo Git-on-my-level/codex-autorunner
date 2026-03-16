@@ -78,7 +78,7 @@ def archive_dispatch_and_create_summary(
         try:
             event_payload = {
                 "ticket_id": current_ticket_id,
-                "ticket_path": current_ticket_id,
+                "ticket_path": None,
                 "dispatch_seq": (
                     turn_summary.seq if turn_summary else turn_summary_seq
                 ),
@@ -87,6 +87,7 @@ def archive_dispatch_and_create_summary(
                 "files_changed": int(turn_diff_stats.get("files_changed") or 0),
             }
             if current_ticket_path is not None:
+                event_payload["ticket_path"] = str(current_ticket_path)
                 event_payload["ticket_key"] = ticket_instance_token(current_ticket_path)
             emit_event(
                 FlowEventType.DIFF_UPDATED,

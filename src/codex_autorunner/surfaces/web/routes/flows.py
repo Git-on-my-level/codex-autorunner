@@ -62,7 +62,12 @@ from ....tickets.files import (
     read_ticket,
     safe_relpath,
 )
-from ....tickets.frontmatter import parse_markdown_frontmatter
+from ....tickets.frontmatter import (
+    ensure_ticket_id,
+    generate_ticket_id,
+    parse_markdown_frontmatter,
+    render_markdown_frontmatter,
+)
 from ....tickets.lint import lint_ticket_frontmatter
 from ..schemas import (
     TicketBulkClearModelRequest,
@@ -1016,7 +1021,7 @@ def build_flow_routes() -> APIRouter:
 
         seeded = False
         if not tickets_exist and not ticket_path.exists():
-            bootstrap_ticket_id = f"tkt_{uuid.uuid4().hex}"
+            bootstrap_ticket_id = generate_ticket_id()
             template = f"""---
 agent: codex
 done: false
@@ -1117,7 +1122,7 @@ You are the first ticket in a new ticket_flow run.
                 parsed_body = None
             rel_path = safe_relpath(path, repo_root)
             stable_ticket_id = ticket_stable_id(path)
-            diff_refs = [stable_ticket_id] if stable_ticket_id else [rel_path]
+            diff_refs = [stable_ticket_id] if stable_ticket_id else []
             tickets.append(
                 {
                     "path": rel_path,
@@ -1195,7 +1200,7 @@ You are the first ticket in a new ticket_flow run.
 
         title_line = f"title: {_quote(request.title)}\n" if request.title else ""
         goal_line = f"goal: {_quote(request.goal)}\n" if request.goal else ""
-        ticket_id = f"tkt_{uuid.uuid4().hex}"
+        ticket_id = generate_ticket_id()
         ticket_id_line = f"ticket_id: {_quote(ticket_id)}\n"
 
         content = (
@@ -1237,8 +1242,24 @@ You are the first ticket in a new ticket_flow run.
         if not ticket_path:
             raise HTTPException(status_code=404, detail=f"Ticket {index:03d} not found")
 
+        existing_doc, _existing_errors = read_ticket(ticket_path)
+
         # Validate frontmatter before saving
         data, body = parse_markdown_frontmatter(request.content)
+        needs_render = False
+        if existing_doc is not None and "ticket_id" not in data:
+            data = dict(data)
+            data["ticket_id"] = existing_doc.frontmatter.ticket_id
+            needs_render = True
+        previous_ticket_id = data.get("ticket_id")
+        ensure_ticket_id(
+            data,
+            fallback_ticket_id=(
+                existing_doc.frontmatter.ticket_id if existing_doc is not None else None
+            ),
+        )
+        if data.get("ticket_id") != previous_ticket_id:
+            needs_render = True
         _, errors = lint_ticket_frontmatter(data)
         if errors:
             raise HTTPException(
@@ -1246,7 +1267,10 @@ You are the first ticket in a new ticket_flow run.
                 detail={"message": "Invalid ticket frontmatter", "errors": errors},
             )
 
-        atomic_write(ticket_path, request.content)
+        if needs_render:
+            atomic_write(ticket_path, render_markdown_frontmatter(data, body))
+        else:
+            atomic_write(ticket_path, request.content)
 
         # Read back to return validated data
         doc, read_errors = read_ticket(ticket_path)
