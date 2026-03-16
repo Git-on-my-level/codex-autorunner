@@ -307,6 +307,11 @@ body {
   min-height: 0;
 }
 
+.hub-shell>.hub-repo-panel.hub-panel-collapsed {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
 .hub-repo-list {
   flex: 1;
   overflow: auto;
@@ -1231,12 +1236,17 @@ main {
 
 .hub-panel-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 6px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
+}
+
+.hub-panel-header-main {
+  flex: 1;
+  min-width: 0;
 }
 
 .hub-panel-header p {
@@ -1249,6 +1259,23 @@ main {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.hub-panel-toggle {
+  align-self: center;
+  flex-shrink: 0;
+  min-width: 72px;
+}
+
+.hub-panel-collapsed .hub-panel-header {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.hub-panel-collapsed .hub-repo-controls,
+.hub-panel-collapsed .hub-repo-list {
+  display: none;
 }
 
 .hub-repo-controls {
@@ -1390,6 +1417,12 @@ main {
 }
 
 .hub-chat-binding-more {
+  white-space: nowrap;
+}
+
+.hub-chat-binding-count {
+  color: var(--muted);
+  font-size: 10px;
   white-space: nowrap;
 }
 

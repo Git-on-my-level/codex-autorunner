@@ -4,8 +4,14 @@ import { JSDOM } from "jsdom";
 
 const dom = new JSDOM(
   `<!doctype html><html><body>
-    <div id="hub-repo-list"></div>
-    <div id="hub-agent-workspace-list"></div>
+    <section id="hub-repo-panel" class="hub-repo-panel">
+      <button id="hub-repo-panel-toggle" aria-controls="hub-repo-list" aria-expanded="true"></button>
+      <div id="hub-repo-list"></div>
+    </section>
+    <section id="hub-agent-panel" class="hub-repo-panel hub-agent-panel">
+      <button id="hub-agent-panel-toggle" aria-controls="hub-agent-workspace-list" aria-expanded="false"></button>
+      <div id="hub-agent-workspace-list"></div>
+    </section>
     <div id="hub-last-scan"></div>
     <div id="pma-last-scan"></div>
     <div id="hub-count-total"></div>
@@ -160,6 +166,18 @@ test("repo cards collapse pma-managed threads into a compact summary row", () =>
       provenance: {
         source: "pma_thread",
         managed_thread_id: "two",
+        thread_kind: "ticket_flow",
+      },
+    },
+    {
+      key: "pma_thread:three",
+      repo_id: "stablecoin-engine",
+      source: "pma_thread",
+      display: "pma:codex",
+      seen_at: now,
+      provenance: {
+        source: "pma_thread",
+        managed_thread_id: "three",
         thread_kind: "interactive",
       },
     },
@@ -198,10 +216,28 @@ test("repo cards collapse pma-managed threads into a compact summary row", () =>
 
   const text = document.getElementById("hub-repo-list")?.textContent || "";
   assert.match(text, /Personal Workspace \/ #car-1/);
-  assert.match(text, /PMA threads/);
-  assert.match(text, /2 threads/);
+  assert.match(text, /ticket-flow/);
+  assert.match(text, /x2/);
+  assert.match(text, /pma:codex/);
   assert.doesNotMatch(text, /ticket-flow:codex/);
-  assert.doesNotMatch(text, /pma:codex/);
+});
+
+test("hub panel state collapses repositories and agents independently with one expanded panel", () => {
+  __hubTest.applyHubPanelState("agents");
+
+  const repoPanel = document.getElementById("hub-repo-panel");
+  const agentPanel = document.getElementById("hub-agent-panel");
+  const repoToggle = document.getElementById("hub-repo-panel-toggle");
+  const agentToggle = document.getElementById("hub-agent-panel-toggle");
+
+  assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
+  assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), false);
+  assert.equal(repoToggle?.getAttribute("aria-expanded"), "false");
+  assert.equal(agentToggle?.getAttribute("aria-expanded"), "true");
+
+  __hubTest.applyHubPanelState("none");
+  assert.equal(repoPanel?.classList.contains("hub-panel-collapsed"), true);
+  assert.equal(agentPanel?.classList.contains("hub-panel-collapsed"), true);
 });
 
 test("agent workspace cards render runtime, managed path, and lifecycle actions", () => {

@@ -66,49 +66,57 @@
         <p class="muted small">missing</p>
       </div>
     </section>
-    <section class="hub-repo-panel">
+    <section class="hub-repo-panel" id="hub-repo-panel" data-hub-panel="repos">
       <div class="hub-panel-header">
-        <div class="hub-panel-title">
-          <span class="label">Repositories</span>
-          <div class="hub-repo-controls">
-            <label class="hub-repo-control">
-              Flow
-              <select id="hub-flow-filter" class="hub-repo-select" aria-label="Filter by flow status">
-                <option value="all">All</option>
-                <option value="active">Active</option>
-                <option value="running">Running</option>
-                <option value="paused">Paused</option>
-                <option value="completed">Completed</option>
-                <option value="failed">Failed</option>
-                <option value="idle">Idle</option>
-              </select>
-            </label>
-            <label class="hub-repo-control">
-              Sort
-              <select id="hub-sort-order" class="hub-repo-select" aria-label="Sort parent repos">
-                <option value="repo_id">Repo ID (A-Z)</option>
-                <option value="last_activity_desc">Last activity (newest)</option>
-                <option value="last_activity_asc">Last activity (oldest)</option>
-                <option value="flow_progress_desc">Flow progress</option>
-              </select>
-            </label>
-            <label class="hub-repo-control hub-repo-search-control">
-              <input id="hub-repo-search" class="hub-repo-search-input" type="text"
-                placeholder="Search…" spellcheck="false" aria-label="Search repos and channels" />
-            </label>
+        <div class="hub-panel-header-main">
+          <div class="hub-panel-title">
+            <span class="label">Repositories</span>
+            <div class="hub-repo-controls">
+              <label class="hub-repo-control">
+                Flow
+                <select id="hub-flow-filter" class="hub-repo-select" aria-label="Filter by flow status">
+                  <option value="all">All</option>
+                  <option value="active">Active</option>
+                  <option value="running">Running</option>
+                  <option value="paused">Paused</option>
+                  <option value="completed">Completed</option>
+                  <option value="failed">Failed</option>
+                  <option value="idle">Idle</option>
+                </select>
+              </label>
+              <label class="hub-repo-control">
+                Sort
+                <select id="hub-sort-order" class="hub-repo-select" aria-label="Sort parent repos">
+                  <option value="repo_id">Repo ID (A-Z)</option>
+                  <option value="last_activity_desc">Last activity (newest)</option>
+                  <option value="last_activity_asc">Last activity (oldest)</option>
+                  <option value="flow_progress_desc">Flow progress</option>
+                </select>
+              </label>
+              <label class="hub-repo-control hub-repo-search-control">
+                <input id="hub-repo-search" class="hub-repo-search-input" type="text"
+                  placeholder="Search…" spellcheck="false" aria-label="Search repos and channels" />
+              </label>
+            </div>
           </div>
         </div>
+        <button class="ghost sm hub-panel-toggle" id="hub-repo-panel-toggle" type="button"
+          aria-controls="hub-repo-list" aria-expanded="true">Collapse</button>
       </div>
       <div class="hub-repo-list" id="hub-repo-list">
         <div class="muted small">Loading…</div>
       </div>
     </section>
-    <section class="hub-repo-panel hub-agent-panel">
+    <section class="hub-repo-panel hub-agent-panel" id="hub-agent-panel" data-hub-panel="agents">
       <div class="hub-panel-header">
-        <div class="hub-panel-title">
-          <span class="label">Agents</span>
-          <p class="muted small">Managed agent workspaces</p>
+        <div class="hub-panel-header-main">
+          <div class="hub-panel-title">
+            <span class="label">Agents</span>
+            <p class="muted small">Managed agent workspaces</p>
+          </div>
         </div>
+        <button class="ghost sm hub-panel-toggle" id="hub-agent-panel-toggle" type="button"
+          aria-controls="hub-agent-workspace-list" aria-expanded="false">Expand</button>
       </div>
       <div class="hub-repo-list hub-agent-list" id="hub-agent-workspace-list">
         <div class="muted small">Loading…</div>

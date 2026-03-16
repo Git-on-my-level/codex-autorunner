@@ -226,6 +226,8 @@ interface HubViewPrefs {
   sortOrder: HubSortOrder;
 }
 
+type HubOpenPanel = "repos" | "agents" | "none";
+
 interface HubRepoGroup {
   base: HubRepo;
   worktrees: HubRepo[];
@@ -299,7 +301,16 @@ const hubFlowFilterEl = document.getElementById(
 const hubSortOrderEl = document.getElementById(
   "hub-sort-order"
 ) as HTMLSelectElement | null;
+const hubRepoPanelEl = document.getElementById("hub-repo-panel");
+const hubAgentPanelEl = document.getElementById("hub-agent-panel");
+const hubRepoPanelToggleEl = document.getElementById(
+  "hub-repo-panel-toggle"
+) as HTMLButtonElement | null;
+const hubAgentPanelToggleEl = document.getElementById(
+  "hub-agent-panel-toggle"
+) as HTMLButtonElement | null;
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
+const HUB_PANEL_PREFS_KEY = `car:hub-open-panel:${HUB_BASE || "/"}`;
 const HUB_JOB_POLL_INTERVAL_MS = 1200;
 const HUB_JOB_TIMEOUT_MS = 180000;
 
@@ -336,6 +347,26 @@ function saveHubViewPrefs(): void {
   } catch (_err) {
     // Ignore local storage failures; prefs are best-effort.
   }
+}
+
+function saveHubOpenPanel(value: HubOpenPanel): void {
+  try {
+    localStorage.setItem(HUB_PANEL_PREFS_KEY, value);
+  } catch (_err) {
+    // Ignore local storage failures; prefs are best-effort.
+  }
+}
+
+function loadHubOpenPanel(): HubOpenPanel {
+  try {
+    const raw = localStorage.getItem(HUB_PANEL_PREFS_KEY);
+    if (raw === "repos" || raw === "agents" || raw === "none") {
+      return raw;
+    }
+  } catch (_err) {
+    // Ignore parse/storage errors; defaults apply.
+  }
+  return "repos";
 }
 
 function loadHubViewPrefs(): void {
@@ -1622,31 +1653,89 @@ function channelSummarySubline(
 }
 
 function pmaSummaryMarkup(
-  channels: HubChannelEntry[],
-  { lastActivity = "" }: { lastActivity?: string } = {}
+  channel: HubChannelEntry,
+  {
+    lastActivity = "",
+    label = channelDisplayLabel(channel),
+    count = 1,
+  }: { lastActivity?: string; label?: string; count?: number } = {}
 ): string {
-  if (!channels.length) return "";
-  const count = channels.length;
   const latestSeenAt =
-    typeof channels[0]?.seen_at === "string" && channels[0].seen_at
-      ? formatTimeCompact(channels[0].seen_at)
+    typeof channel.seen_at === "string" && channel.seen_at
+      ? formatTimeCompact(channel.seen_at)
       : "";
-  const metaParts = [`${count} thread${count === 1 ? "" : "s"}`];
+  const metaParts: string[] = [];
   if (latestSeenAt) {
     metaParts.push(`seen ${latestSeenAt}`);
   }
   if (lastActivity) {
     metaParts.push(lastActivity);
   }
+  const countMarkup =
+    count > 1
+      ? `<span class="hub-chat-binding-count">x${escapeHtml(String(count))}</span>`
+      : "";
   return `
     <div class="hub-chat-binding-row hub-chat-binding-row-compact">
       <div class="hub-chat-binding-main">
-        ${channelSourceBadgeMarkup(channels[0])}
-        <span class="hub-chat-binding-label">PMA threads</span>
+        ${channelSourceBadgeMarkup(channel)}
+        <span class="hub-chat-binding-label">${escapeHtml(label)}</span>
+        ${countMarkup}
       </div>
       <div class="hub-chat-binding-meta muted small">${escapeHtml(metaParts.join(" · "))}</div>
     </div>
   `;
+}
+
+function pmaChannelGroupKey(channel: HubChannelEntry): string {
+  const threadKind = String(
+    channel.provenance?.thread_kind || channel.meta?.thread_kind || ""
+  )
+    .trim()
+    .toLowerCase();
+  const display = channelDisplayLabel(channel);
+  const normalizedDisplay = display.trim().toLowerCase();
+  if (
+    threadKind === "ticket_flow" ||
+    normalizedDisplay === "ticket-flow" ||
+    normalizedDisplay.startsWith("ticket-flow:")
+  ) {
+    return "ticket-flow";
+  }
+  return `display:${normalizedDisplay}`;
+}
+
+function pmaChannelGroupLabel(channel: HubChannelEntry): string {
+  const key = pmaChannelGroupKey(channel);
+  if (key === "ticket-flow") return "ticket-flow";
+  return channelDisplayLabel(channel);
+}
+
+function groupPmaChannels(
+  channels: HubChannelEntry[]
+): Array<{ label: string; count: number; latest: HubChannelEntry }> {
+  const grouped = new Map<string, { label: string; count: number; latest: HubChannelEntry }>();
+  channels.forEach((channel) => {
+    const key = pmaChannelGroupKey(channel);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (channelSeenAtMs(channel) > channelSeenAtMs(existing.latest)) {
+        existing.latest = channel;
+      }
+      return;
+    }
+    grouped.set(key, {
+      label: pmaChannelGroupLabel(channel),
+      count: 1,
+      latest: channel,
+    });
+  });
+  return Array.from(grouped.values()).sort((a, b) => {
+    const seenDiff = channelSeenAtMs(b.latest) - channelSeenAtMs(a.latest);
+    if (seenDiff !== 0) return seenDiff;
+    return a.label.localeCompare(b.label);
+  });
 }
 
 function channelSeenAtMs(channel: HubChannelEntry): number {
@@ -1958,6 +2047,7 @@ function renderRepos(repos: HubRepo[]): void {
     const pmaChannels = inlineChannels.filter((channel) =>
       isManagedPmaChannel(channel)
     );
+    const pmaGroups = groupPmaChannels(pmaChannels);
     const visibleChannels = inlineChannels.filter(
       (channel) => !isManagedPmaChannel(channel)
     );
@@ -1987,8 +2077,12 @@ function renderRepos(repos: HubRepo[]): void {
           lastActivity,
           additionalCount: Math.max(0, visibleChannels.length - 1),
         })
-      : pmaChannels.length > 0
-      ? pmaSummaryMarkup(pmaChannels, { lastActivity })
+      : pmaGroups.length > 0
+      ? pmaSummaryMarkup(pmaGroups[0].latest, {
+          label: pmaGroups[0].label,
+          count: pmaGroups[0].count,
+          lastActivity,
+        })
       : infoItems.length > 0
       ? `<div class="hub-repo-subline"><span class="hub-repo-info-line">${escapeHtml(
           infoItems.join(" · ")
@@ -2012,11 +2106,22 @@ function renderRepos(repos: HubRepo[]): void {
         `;
       })
       .join("");
-    const pmaBlock = primaryChannel && pmaChannels.length > 0
-      ? pmaSummaryMarkup(pmaChannels)
+    const pmaRows = pmaGroups
+      .map((group, index) => {
+        if (!primaryChannel && index === 0) return "";
+        return pmaSummaryMarkup(group.latest, {
+          label: group.label,
+          count: group.count,
+        });
+      })
+      .join("");
+    const pmaBlock = primaryChannel && pmaGroups.length > 0
+      ? pmaRows
       : "";
-    const inlineChannelBlock = overflowChannelRows || pmaBlock
-      ? `<div class="hub-chat-binding-block">${pmaBlock}${overflowChannelRows}</div>`
+    const inlineChannelBlock = overflowChannelRows || pmaRows
+      ? `<div class="hub-chat-binding-block">${pmaBlock || ""}${overflowChannelRows}${
+          !primaryChannel ? pmaRows : ""
+        }</div>`
       : "";
 
     const setupBadge =
@@ -2545,6 +2650,38 @@ function initHubRepoListControls(): void {
       renderReposWithScroll(hubData.repos || []);
     });
   }
+}
+
+function applyHubPanelState(openPanel: HubOpenPanel): void {
+  const reposOpen = openPanel === "repos";
+  const agentsOpen = openPanel === "agents";
+  hubRepoPanelEl?.classList.toggle("hub-panel-collapsed", !reposOpen);
+  hubAgentPanelEl?.classList.toggle("hub-panel-collapsed", !agentsOpen);
+  if (hubRepoPanelToggleEl) {
+    hubRepoPanelToggleEl.textContent = reposOpen ? "Collapse" : "Expand";
+    hubRepoPanelToggleEl.setAttribute("aria-expanded", reposOpen ? "true" : "false");
+  }
+  if (hubAgentPanelToggleEl) {
+    hubAgentPanelToggleEl.textContent = agentsOpen ? "Collapse" : "Expand";
+    hubAgentPanelToggleEl.setAttribute("aria-expanded", agentsOpen ? "true" : "false");
+  }
+}
+
+function toggleHubPanel(panel: Exclude<HubOpenPanel, "none">): void {
+  const current = loadHubOpenPanel();
+  const next: HubOpenPanel = current === panel ? "none" : panel;
+  saveHubOpenPanel(next);
+  applyHubPanelState(next);
+}
+
+function initHubPanelControls(): void {
+  applyHubPanelState(loadHubOpenPanel());
+  hubRepoPanelToggleEl?.addEventListener("click", () => {
+    toggleHubPanel("repos");
+  });
+  hubAgentPanelToggleEl?.addEventListener("click", () => {
+    toggleHubPanel("agents");
+  });
 }
 
 async function setParentRepoPinned(repoId: string, pinned: boolean): Promise<void> {
@@ -3304,6 +3441,7 @@ function prefetchRepo(url: string): void {
 export function initHub(): void {
   attachHubHandlers();
   initHubRepoListControls();
+  initHubPanelControls();
   if (!repoListEl) return;
   initNotificationBell();
   const cachedHub = loadSessionCache<HubData | null>(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
@@ -3338,6 +3476,7 @@ export function initHub(): void {
 export const __hubTest = {
   renderRepos,
   renderAgentWorkspaces,
+  applyHubPanelState,
   setHubChannelEntries(entries: HubChannelEntry[]): void {
     hubChannelEntries = Array.isArray(entries) ? [...entries] : [];
   },
