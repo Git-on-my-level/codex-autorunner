@@ -1547,7 +1547,11 @@ async def collect_opencode_output(
     def _stream_factory() -> AsyncIterator[SSEEvent]:
         return cast(
             AsyncIterator[SSEEvent],
-            client.stream_events(directory=workspace_path, ready_event=ready_event),
+            client.stream_events(
+                directory=workspace_path,
+                ready_event=ready_event,
+                session_id=session_id,
+            ),
         )
 
     async def _fetch_session() -> Any:

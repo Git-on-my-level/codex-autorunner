@@ -1238,7 +1238,7 @@ class OpenCodeSupervisor:
                 if entry and entry not in merged:
                     merged.append(entry)
             env["PATH"] = os.pathsep.join(merged)
-        inferred_auth = resolve_opencode_auth_path(workspace_root)
+        inferred_auth = resolve_opencode_auth_path(workspace_root, env={})
         if inferred_auth is None or not inferred_auth.exists():
             return env
         env_auth = self._opencode_auth_path_for_env(env)
