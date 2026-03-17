@@ -1,7 +1,3 @@
 """Backward-compatible file chat routes."""
 
-import sys
-
-from ..surfaces.web.routes import file_chat as _file_chat
-
-sys.modules[__name__] = _file_chat
+from ..surfaces.web.routes.file_chat import *  # noqa: F401,F403
