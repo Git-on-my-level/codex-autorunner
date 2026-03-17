@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
+from ..ticket_helper_script_common import portable_ticket_validation_source
+
 LINTER_BASENAME = "lint_tickets.py"
 LINTER_REL_PATH = Path(".codex-autorunner/bin") / LINTER_BASENAME
+_COMMON_VALIDATION = portable_ticket_validation_source()
 
 # Self-contained portable linter (PyYAML optional but preferred).
 _SCRIPT = dedent(
@@ -15,7 +18,7 @@ _SCRIPT = dedent(
     - Validates ticket filenames (TICKET-<number>[suffix].md, e.g. TICKET-001-foo.md)
     - Parses YAML frontmatter for each .codex-autorunner/tickets/TICKET-*.md
     - Validates required keys: ticket_id, agent, and done
-    - Rejects deprecated keys like depends_on
+    - Validates agent ids against the runtime agents that seeded this repo
     - Exits non-zero on any error
     \"\"\"
 
@@ -39,17 +42,7 @@ _SCRIPT = dedent(
 
 
     _TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})(?:[^/]*)\\.md$", re.IGNORECASE)
-    _TICKET_ID_RE = re.compile(r"^[A-Za-z0-9._-]{6,128}$")
-    _IGNORED_NON_TICKET_FILENAMES = {"AGENTS.md", "ingest_state.json"}
-
-
-    def _sanitize_ticket_id(raw: object) -> Optional[str]:
-        if not isinstance(raw, str):
-            return None
-        cleaned = raw.strip()
-        if not cleaned or not _TICKET_ID_RE.match(cleaned):
-            return None
-        return cleaned
+    __COMMON_VALIDATION__
 
 
     def _ticket_paths(tickets_dir: Path) -> Tuple[List[Path], List[str]]:
@@ -132,32 +125,6 @@ _SCRIPT = dedent(
             return {}, ["Invalid YAML frontmatter (expected a mapping)."]
 
         return loaded, []
-
-
-    def _lint_frontmatter(data: dict[str, Any]) -> List[str]:
-        errors: List[str] = []
-
-        if "depends_on" in data:
-            errors.append(
-                "frontmatter.depends_on is no longer supported; order tickets by filename (TICKET-###)."
-            )
-
-        ticket_id = data.get("ticket_id")
-        if not isinstance(ticket_id, str) or not _TICKET_ID_RE.match(ticket_id.strip()):
-            errors.append(
-                "frontmatter.ticket_id is required and must match [A-Za-z0-9._-]{6,128}."
-            )
-
-        agent = data.get("agent")
-        if not isinstance(agent, str) or not agent.strip():
-            errors.append("frontmatter.agent is required and must be a non-empty string.")
-
-        done = data.get("done")
-        if not isinstance(done, bool):
-            errors.append("frontmatter.done is required and must be a boolean.")
-
-        return errors
-
 
     def lint_ticket(path: Path) -> List[str]:
         try:
@@ -303,7 +270,7 @@ _SCRIPT = dedent(
     if __name__ == \"__main__\":  # pragma: no cover
         sys.exit(main())
     """
-)
+).replace("__COMMON_VALIDATION__", _COMMON_VALIDATION)
 
 
 def ensure_ticket_linter(repo_root: Path, *, force: bool = False) -> Path:

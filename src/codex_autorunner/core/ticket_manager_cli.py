@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..ticket_helper_script_common import portable_ticket_validation_source
+
 MANAGER_BASENAME = "ticket_tool.py"
 MANAGER_REL_PATH = Path(".codex-autorunner/bin") / MANAGER_BASENAME
+_COMMON_VALIDATION = portable_ticket_validation_source()
 
 _SCRIPT = """#!/usr/bin/env python3
 \"\"\"Manage Codex Autorunner tickets (list, insert, move, create, lint).
@@ -51,8 +54,7 @@ except ImportError:  # pragma: no cover
     yaml = None
 
 _TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})([^/]*)\\.md$", re.IGNORECASE)
-_TICKET_ID_RE = re.compile(r"^[A-Za-z0-9._-]{6,128}$")
-_IGNORED_NON_TICKET_FILENAMES = {"AGENTS.md", "ingest_state.json"}
+__COMMON_VALIDATION__
 
 
 @dataclass
@@ -63,15 +65,6 @@ class TicketFile:
     title: Optional[str]
     done: Optional[bool]
     ticket_id: Optional[str]
-
-
-def _sanitize_ticket_id(raw: object) -> Optional[str]:
-    if not isinstance(raw, str):
-        return None
-    cleaned = raw.strip()
-    if not cleaned or not _TICKET_ID_RE.match(cleaned):
-        return None
-    return cleaned
 
 
 def _ticket_dir(repo_root: Path) -> Path:
@@ -131,22 +124,6 @@ def _parse_yaml(fm_yaml: Optional[str]):
     if loaded is None or not isinstance(loaded, dict):
         return {}, ["Invalid YAML frontmatter (expected a mapping)."]
     return loaded, []
-
-
-def _lint_frontmatter(data: dict):
-    errors: List[str] = []
-    ticket_id = data.get("ticket_id")
-    if not isinstance(ticket_id, str) or not _TICKET_ID_RE.match(ticket_id.strip()):
-        errors.append(
-            "frontmatter.ticket_id is required and must match [A-Za-z0-9._-]{6,128}."
-        )
-    agent = data.get("agent")
-    if not isinstance(agent, str) or not agent.strip():
-        errors.append("frontmatter.agent is required and must be a non-empty string.")
-    done = data.get("done")
-    if not isinstance(done, bool):
-        errors.append("frontmatter.done is required and must be a boolean.")
-    return errors
 
 
 def _read_ticket(path: Path) -> Tuple[Optional[TicketFile], List[str]]:
@@ -255,7 +232,8 @@ def cmd_lint(ticket_dir: Path) -> int:
         if len(filenames) > 1:
             filenames_str = ", ".join(filenames)
             errors.append(
-                f"Duplicate ticket_id {ticket_id!r}: multiple files share the same logical ticket identity ({filenames_str})."
+                f"Duplicate ticket_id {ticket_id!r}: multiple files share the same logical ticket identity ({filenames_str}). "
+                "Backfill or rewrite one of the ticket_ids so ticket-owned state remains unambiguous."
             )
 
     if errors:
@@ -303,6 +281,10 @@ def _generate_ticket_id() -> str:
 
 
 def _create_ticket_file(ticket_dir: Path, *, index: int, title: str, agent: str, existing_indices: List[int]) -> Path:
+    normalized_agent, agent_error = _normalize_agent(agent)
+    if agent_error:
+        raise ValueError(agent_error)
+    assert normalized_agent is not None
     width = _pad_width(existing_indices + [index])
     name = _fmt_name(index, "", width)
     path = ticket_dir / name
@@ -310,7 +292,7 @@ def _create_ticket_file(ticket_dir: Path, *, index: int, title: str, agent: str,
         raise ValueError(f"Ticket index {index} already exists: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     title_scalar = _yaml_scalar(title)
-    agent_scalar = _yaml_scalar(agent)
+    agent_scalar = _yaml_scalar(normalized_agent)
     ticket_id_scalar = _yaml_scalar(_generate_ticket_id())
     body = (
         f"---\\n"
@@ -514,6 +496,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(main())
 """
+_SCRIPT = _SCRIPT.replace("__COMMON_VALIDATION__", _COMMON_VALIDATION)
 
 
 def ensure_ticket_manager(repo_root: Path, *, force: bool = False) -> Path:
