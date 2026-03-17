@@ -27,6 +27,7 @@ from .....core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from .....core.orchestration.service import BusyInterruptFailedError
 from .....core.pma_context import format_pma_discoverability_preamble
 from .....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
@@ -52,6 +53,9 @@ logger = logging.getLogger(__name__)
 
 MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
 MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR = "Failed to interrupt backend turn"
+MANAGED_THREAD_INTERRUPT_FAILED_DETAIL = (
+    "Interrupt attempt failed; the active managed turn is still running"
+)
 PMA_TIMEOUT_SECONDS = 7200
 PMA_MAX_TEXT = PMA_DEFAULT_MAX_TEXT_CHARS
 
@@ -134,6 +138,36 @@ def _normalize_busy_policy(value: Any) -> Literal["queue", "interrupt", "reject"
             detail="busy_policy must be one of: queue, interrupt, reject",
         )
     return cast(Literal["queue", "interrupt", "reject"], busy_policy)
+
+
+def _interrupt_failure_payload(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: Optional[str],
+    backend_thread_id: str,
+    detail: str,
+    delivery_payload: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "send_state": "rejected",
+        "interrupt_state": "failed",
+        "execution_state": "running",
+        "reason": "interrupt_failed",
+        "detail": detail,
+        "next_step": (
+            "Wait for the active turn to finish, inspect thread status, "
+            "or retry the interrupt after checking runtime health."
+        ),
+        "active_turn_status": "running",
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": None,
+        "active_managed_turn_id": managed_turn_id,
+        "backend_thread_id": backend_thread_id,
+        "assistant_text": "",
+        "error": detail,
+        **delivery_payload,
+    }
 
 
 async def notify_managed_thread_terminal_transition(
@@ -510,6 +544,17 @@ def build_managed_thread_runtime_routes(
                     "error": "Managed thread already has a running turn",
                 },
             )
+        except BusyInterruptFailedError as exc:
+            return JSONResponse(
+                status_code=409,
+                content=_interrupt_failure_payload(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=exc.active_execution_id,
+                    backend_thread_id=exc.backend_thread_id or stored_backend_id or "",
+                    detail=exc.detail,
+                    delivery_payload=delivery_payload,
+                ),
+            )
         except Exception:
             logger.exception(
                 "Managed thread execution setup failed (managed_thread_id=%s)",
@@ -675,9 +720,11 @@ def build_managed_thread_runtime_routes(
                 if finalized_status != "ok":
                     detail = MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
                     response_status = "error"
+                    transition_state = "failed"
                     if finalized_status == "interrupted":
                         detail = "PMA chat interrupted"
                         response_status = "interrupted"
+                        transition_state = "interrupted"
                     elif (
                         finalized_status == "error" and finalized_execution is not None
                     ):
@@ -689,7 +736,7 @@ def build_managed_thread_runtime_routes(
                         thread=current_thread_row,
                         managed_thread_id=managed_thread_id,
                         managed_turn_id=current_turn_id,
-                        to_state="failed",
+                        to_state=transition_state,
                         reason=detail,
                     )
                     return {
@@ -737,7 +784,7 @@ def build_managed_thread_runtime_routes(
                     thread=current_thread_row,
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=current_turn_id,
-                    to_state="failed",
+                    to_state="interrupted",
                     reason=detail,
                 )
                 return {
@@ -971,16 +1018,6 @@ def build_managed_thread_runtime_routes(
                 or interrupted_execution.status == "running"
             ):
                 backend_error = MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR
-                try:
-                    interrupted_execution = service.record_execution_interrupted(
-                        managed_thread_id,
-                        managed_turn_id,
-                    )
-                except KeyError:
-                    interrupted_execution = service.get_execution(
-                        managed_thread_id,
-                        managed_turn_id,
-                    )
 
         interrupted = interrupted_execution is not None and (
             interrupted_execution.status == "interrupted"
@@ -991,7 +1028,7 @@ def build_managed_thread_runtime_routes(
                 thread=thread,
                 managed_thread_id=managed_thread_id,
                 managed_turn_id=managed_turn_id,
-                to_state="failed",
+                to_state="interrupted",
                 reason=backend_error or "managed_turn_interrupted",
             )
             store.append_action(
@@ -1009,13 +1046,25 @@ def build_managed_thread_runtime_routes(
                     ensure_ascii=True,
                 ),
             )
+            updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
+            return {
+                "status": "ok",
+                "interrupt_state": "succeeded",
+                "managed_thread_id": managed_thread_id,
+                "managed_turn_id": managed_turn_id,
+                "turn": updated_turn,
+                "backend_error": backend_error,
+            }
+
         updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
         return {
-            "status": "ok",
+            "status": "error",
+            "interrupt_state": "failed",
             "managed_thread_id": managed_thread_id,
             "managed_turn_id": managed_turn_id,
             "turn": updated_turn,
-            "backend_error": backend_error,
+            "backend_error": backend_error or MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR,
+            "detail": MANAGED_THREAD_INTERRUPT_FAILED_DETAIL,
         }
 
 

@@ -165,6 +165,7 @@ def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> N
         assert payload["thread"]["is_reusable"] is True
         assert payload["thread"]["accepts_messages"] is True
         assert payload["turn"]["status"] == "ok"
+        assert payload["turn"]["phase"] == "completed"
         assert payload["is_alive"] is False
         assert isinstance(payload.get("recent_progress"), list)
         assert "completed assistant output" in payload.get("latest_output_excerpt", "")
@@ -184,13 +185,14 @@ def test_managed_thread_status_surfaces_attention_required_separately_from_failu
 
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["status"] == "failed"
-    assert payload["operator_status"] == "attention_required"
-    assert payload["is_reusable"] is False
+    assert payload["status"] == "interrupted"
+    assert payload["operator_status"] == "reusable"
+    assert payload["is_reusable"] is True
     assert payload["status_reason"] == "managed_turn_interrupted"
-    assert payload["thread"]["normalized_status"] == "failed"
-    assert payload["thread"]["operator_status"] == "attention_required"
-    assert payload["thread"]["is_reusable"] is False
+    assert payload["thread"]["normalized_status"] == "interrupted"
+    assert payload["thread"]["operator_status"] == "reusable"
+    assert payload["thread"]["is_reusable"] is True
+    assert payload["turn"]["phase"] == "interrupted"
 
 
 def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:
@@ -309,3 +311,50 @@ def test_managed_thread_tail_stream_preserves_since_filter_for_live_events(
         assert "event: tail" in body
         assert "\nid: 2\n" in body
         assert "\nid: 1\n" not in body
+
+
+def test_managed_thread_status_surfaces_zeroclaw_phase_and_last_tool(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    thread = store.create_thread("zeroclaw", hub_env.repo_root.resolve())
+    managed_thread_id = str(thread["managed_thread_id"])
+    turn = store.create_turn(managed_thread_id, prompt="zeroclaw prompt")
+    managed_turn_id = str(turn["managed_turn_id"])
+    store.set_thread_backend_id(managed_thread_id, "zeroclaw-session-1")
+    store.set_turn_backend_turn_id(managed_turn_id, "zeroclaw-turn-1")
+
+    class FakeZeroClawSupervisor:
+        async def list_turn_events(
+            self, workspace_root: Path, session_id: str, turn_id: str
+        ) -> list[dict[str, str]]:
+            _ = workspace_root, session_id, turn_id
+            return [
+                {
+                    "raw_event": 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"🤔 Thinking..."}}}\n\n',
+                    "published_at": "2026-03-17T01:00:00Z",
+                },
+                {
+                    "raw_event": 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"⏳ web_search"}}}\n\n',
+                    "published_at": "2026-03-17T01:00:05Z",
+                },
+            ]
+
+    app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
+
+    with TestClient(app) as client:
+        status_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
+        assert status_resp.status_code == 200
+        status_payload = status_resp.json()
+        assert status_payload["stream_available"] is True
+        assert status_payload["turn"]["phase"] == "waiting_on_tool_call"
+        assert status_payload["turn"]["last_tool"]["name"] == "web_search"
+        assert status_payload["turn"]["last_tool"]["in_flight"] is True
+
+        tail_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail")
+        assert tail_resp.status_code == 200
+        tail_payload = tail_resp.json()
+        assert [event["event_type"] for event in tail_payload["events"]] == [
+            "assistant_update",
+            "tool_started",
+        ]

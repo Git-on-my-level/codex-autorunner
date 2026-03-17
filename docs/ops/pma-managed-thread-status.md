@@ -11,6 +11,7 @@ operator-facing headline for PMA managed threads.
 | `running` | A managed turn is currently executing | no |
 | `paused` | Execution was intentionally compacted/paused | no |
 | `completed` | The latest managed turn finished successfully | yes |
+| `interrupted` | The latest managed turn was intentionally interrupted | yes |
 | `failed` | The latest managed turn finished unsuccessfully | yes |
 | `archived` | The thread is read-only and archived | yes |
 
@@ -24,7 +25,7 @@ operator-facing headline for PMA managed threads.
 | `idle`, `completed`, `failed`, `paused` | `thread_compacted` | `paused` |
 | `running` | `managed_turn_completed` | `completed` |
 | `running` | `managed_turn_failed` | `failed` |
-| `running` | `managed_turn_interrupted` | `failed` |
+| `running` | `managed_turn_interrupted` | `interrupted` |
 | any | `thread_archived` | `archived` |
 
 ## Persisted Context
@@ -53,6 +54,7 @@ The operator headline intentionally differs from the persisted runtime outcome:
 | --- | --- | --- | --- |
 | `idle` | `active` | `idle` | `true` |
 | `completed` | `active` | `reusable` | `true` |
+| `interrupted` | `active` | `reusable` | `true` |
 | `failed` | `active` | `attention_required` | `false` |
 | `running` | `active` | `running` | `false` |
 | `paused` | `active` | `paused` | `false` |

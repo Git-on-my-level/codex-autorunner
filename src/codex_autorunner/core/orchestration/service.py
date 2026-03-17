@@ -42,6 +42,24 @@ _MISSING_THREAD_MARKERS = (
 )
 
 
+class BusyInterruptFailedError(RuntimeError):
+    """Busy-policy interrupt failed while the original execution remained active."""
+
+    def __init__(
+        self,
+        *,
+        thread_target_id: str,
+        active_execution_id: Optional[str],
+        backend_thread_id: Optional[str],
+        detail: str = "Interrupt attempt failed; original turn is still running",
+    ) -> None:
+        super().__init__(detail)
+        self.thread_target_id = thread_target_id
+        self.active_execution_id = active_execution_id
+        self.backend_thread_id = backend_thread_id
+        self.detail = detail
+
+
 def _truncate_text(value: str, limit: int = MessagePreviewLimit) -> str:
     if len(value) <= limit:
         return value
@@ -740,7 +758,32 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
         running = self.get_running_execution(thread.thread_target_id)
         if running is not None and request.busy_policy == "interrupt":
-            await self.stop_thread(thread.thread_target_id)
+            try:
+                await self.stop_thread(thread.thread_target_id)
+            except Exception as exc:
+                current_running = self.get_running_execution(thread.thread_target_id)
+                current_thread = (
+                    self.get_thread_target(thread.thread_target_id) or thread
+                )
+                raise BusyInterruptFailedError(
+                    thread_target_id=thread.thread_target_id,
+                    active_execution_id=(
+                        current_running.execution_id
+                        if current_running is not None
+                        else running.execution_id
+                    ),
+                    backend_thread_id=current_thread.backend_thread_id,
+                ) from exc
+            current_running = self.get_running_execution(thread.thread_target_id)
+            if current_running is not None:
+                current_thread = (
+                    self.get_thread_target(thread.thread_target_id) or thread
+                )
+                raise BusyInterruptFailedError(
+                    thread_target_id=thread.thread_target_id,
+                    active_execution_id=current_running.execution_id,
+                    backend_thread_id=current_thread.backend_thread_id,
+                )
             thread = self.get_thread_target(thread.thread_target_id) or thread
 
         execution = self.thread_store.create_execution(

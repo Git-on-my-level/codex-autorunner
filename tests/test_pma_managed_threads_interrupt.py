@@ -47,7 +47,11 @@ def test_interrupt_managed_thread_codex_marks_turn_interrupted(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -103,7 +107,11 @@ def test_interrupt_managed_thread_opencode_marks_turn_interrupted(hub_env) -> No
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "opencode", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "opencode",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -138,7 +146,11 @@ def test_interrupt_managed_thread_rejects_without_running_turn(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -181,7 +193,11 @@ def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -203,7 +219,7 @@ def test_interrupt_managed_thread_notifies_automation_failure(hub_env) -> None:
     assert transition["thread_id"] == managed_thread_id
     assert transition["repo_id"] == hub_env.repo_id
     assert transition["from_state"] == "running"
-    assert transition["to_state"] == "failed"
+    assert transition["to_state"] == "interrupted"
     assert transition["reason"] == "managed_turn_interrupted"
 
 
@@ -239,7 +255,11 @@ def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_fi
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -280,7 +300,8 @@ def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_fi
 
     assert interrupt_resp.status_code == 200
     payload = interrupt_resp.json()
-    assert payload["status"] == "ok"
+    assert payload["status"] == "error"
+    assert payload["interrupt_state"] == "failed"
     assert payload["managed_turn_id"] == managed_turn_id
     assert len(fake_store.transitions) == 0
 

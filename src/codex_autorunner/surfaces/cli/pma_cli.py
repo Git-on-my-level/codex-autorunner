@@ -270,11 +270,25 @@ def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
     managed_turn_id = snapshot.get("managed_turn_id") or "-"
     status = snapshot.get("turn_status") or "none"
     activity = snapshot.get("activity") or "idle"
+    phase = snapshot.get("phase") or "-"
     elapsed = _format_seconds(snapshot.get("elapsed_seconds"))
     idle = _format_seconds(snapshot.get("idle_seconds"))
     typer.echo(
-        f"turn={managed_turn_id} status={status} activity={activity} elapsed={elapsed} idle={idle}"
+        f"turn={managed_turn_id} status={status} activity={activity} phase={phase} elapsed={elapsed} idle={idle}"
     )
+    guidance = str(snapshot.get("guidance") or "").strip()
+    if guidance:
+        typer.echo(f"guidance: {guidance}")
+    last_tool = snapshot.get("last_tool")
+    if isinstance(last_tool, dict) and str(last_tool.get("name") or "").strip():
+        typer.echo(
+            "last_tool="
+            + str(last_tool.get("name") or "")
+            + " status="
+            + str(last_tool.get("status") or "-")
+            + " in_flight="
+            + ("yes" if bool(last_tool.get("in_flight")) else "no")
+        )
     lifecycle = snapshot.get("lifecycle_events")
     if isinstance(lifecycle, list) and lifecycle:
         typer.echo("lifecycle: " + ", ".join(str(item) for item in lifecycle))
@@ -495,12 +509,15 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
         lifecycle_status=lifecycle_state,
     )
     last_turn_outcome = (
-        raw_thread_status if raw_thread_status in {"completed", "failed"} else "-"
+        raw_thread_status
+        if raw_thread_status in {"completed", "interrupted", "failed"}
+        else "-"
     )
     status_reason = str(data.get("status_reason") or thread.get("status_reason") or "-")
     managed_turn_id = str(turn.get("managed_turn_id") or "-")
     turn_state = str(turn.get("status") or "-")
     activity = str(turn.get("activity") or "-")
+    phase = str(turn.get("phase") or "-")
     elapsed = _format_seconds(turn.get("elapsed_seconds"))
     idle = _format_seconds(turn.get("idle_seconds"))
     alive = "yes" if bool(data.get("is_alive")) else "no"
@@ -518,8 +535,21 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
     )
     typer.echo(f"reason={status_reason}")
     typer.echo(
-        f"turn={managed_turn_id} status={turn_state} activity={activity} elapsed={elapsed} idle={idle}"
+        f"turn={managed_turn_id} status={turn_state} activity={activity} phase={phase} elapsed={elapsed} idle={idle}"
     )
+    guidance = str(turn.get("guidance") or "").strip()
+    if guidance:
+        typer.echo(f"guidance: {guidance}")
+    last_tool = turn.get("last_tool")
+    if isinstance(last_tool, dict) and str(last_tool.get("name") or "").strip():
+        typer.echo(
+            "last_tool="
+            + str(last_tool.get("name") or "")
+            + " status="
+            + str(last_tool.get("status") or "-")
+            + " in_flight="
+            + ("yes" if bool(last_tool.get("in_flight")) else "no")
+        )
     progress = data.get("recent_progress")
     if isinstance(progress, list) and progress:
         typer.echo("recent progress:")
@@ -1642,7 +1672,11 @@ def pma_thread_tail(
                     status = data.get("turn_status") or "running"
                     elapsed = _format_seconds(data.get("elapsed_seconds"))
                     idle = _format_seconds(data.get("idle_seconds"))
-                    line = f"progress: status={status} elapsed={elapsed} idle={idle}"
+                    phase = str(data.get("phase") or "-")
+                    line = (
+                        f"progress: status={status} phase={phase} "
+                        f"elapsed={elapsed} idle={idle}"
+                    )
                     idle_seconds = data.get("idle_seconds")
                     if (
                         isinstance(idle_seconds, int)
@@ -1651,6 +1685,9 @@ def pma_thread_tail(
                     ):
                         line += " (possibly stalled)"
                     typer.echo(line)
+                    guidance = str(data.get("guidance") or "").strip()
+                    if guidance:
+                        typer.echo(f"guidance: {guidance}")
                     if status != "running":
                         return
     except httpx.HTTPError as exc:
@@ -1816,7 +1853,24 @@ def pma_thread_interrupt(
     if output_json:
         typer.echo(json.dumps(data, indent=2))
     else:
-        typer.echo(f"Interrupted {managed_thread_id}")
+        status = str(data.get("status") or "").strip().lower()
+        if status == "ok":
+            typer.echo(f"Interrupted {managed_thread_id}")
+        else:
+            detail = str(
+                data.get("detail")
+                or data.get("backend_error")
+                or "Managed thread interrupt failed"
+            )
+            interrupt_state = str(data.get("interrupt_state") or "").strip()
+            managed_turn_id = str(data.get("managed_turn_id") or "").strip()
+            line = detail
+            if interrupt_state:
+                line = f"interrupt_state={interrupt_state} error={detail}"
+            if managed_turn_id:
+                line += f" managed_turn_id={managed_turn_id}"
+            typer.echo(line, err=True)
+            raise typer.Exit(code=1) from None
 
 
 @pma_app.command("files")

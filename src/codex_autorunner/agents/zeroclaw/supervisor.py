@@ -297,6 +297,17 @@ class ZeroClawSupervisor:
         async for event in handle.client.stream_turn_events(turn_id):
             yield event
 
+    async def list_turn_events(
+        self,
+        workspace_root: Path,
+        session_id: str,
+        turn_id: str,
+    ) -> list[dict[str, str]]:
+        handle = await self._get_handle(workspace_root, session_id)
+        handle.last_used_at = time.time()
+        self._persist_metadata(handle)
+        return handle.client.list_turn_events(turn_id)
+
     async def close_all(self) -> None:
         async with self._lock:
             handles = list(self._handles.values())

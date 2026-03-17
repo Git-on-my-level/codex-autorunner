@@ -5,6 +5,7 @@ Normalized statuses:
 - ``running``: a managed turn is in flight
 - ``paused``: execution is intentionally compacted/paused without finishing
 - ``completed``: the latest managed turn finished successfully
+- ``interrupted``: the latest managed turn was intentionally interrupted
 - ``failed``: the latest managed turn finished unsuccessfully
 - ``archived``: the thread is terminal and read-only
 
@@ -18,11 +19,11 @@ Transition table:
 | --- | --- | --- | --- |
 | any | ``thread_created`` | ``idle`` | no |
 | ``paused``/``archived`` | ``thread_resumed`` | ``idle`` | no |
-| ``idle``/``completed``/``failed``/``paused`` | ``turn_started`` | ``running`` | no |
-| ``idle``/``completed``/``failed``/``paused`` | ``thread_compacted`` | ``paused`` | no |
+| ``idle``/``completed``/``interrupted``/``failed``/``paused`` | ``turn_started`` | ``running`` | no |
+| ``idle``/``completed``/``interrupted``/``failed``/``paused`` | ``thread_compacted`` | ``paused`` | no |
 | ``running`` | ``managed_turn_completed`` | ``completed`` | yes |
 | ``running`` | ``managed_turn_failed`` | ``failed`` | yes |
-| ``running`` | ``managed_turn_interrupted`` | ``failed`` | yes |
+| ``running`` | ``managed_turn_interrupted`` | ``interrupted`` | yes |
 | any | ``thread_archived`` | ``archived`` | yes |
 
 Rules:
@@ -46,6 +47,7 @@ class ManagedThreadStatus(str, Enum):
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
+    INTERRUPTED = "interrupted"
     FAILED = "failed"
 
 
@@ -72,6 +74,7 @@ class ManagedThreadStatusReason(str, Enum):
 TERMINAL_STATUSES = frozenset(
     {
         ManagedThreadStatus.COMPLETED.value,
+        ManagedThreadStatus.INTERRUPTED.value,
         ManagedThreadStatus.FAILED.value,
         ManagedThreadStatus.ARCHIVED.value,
     }
@@ -96,6 +99,7 @@ TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
         "from": (
             ManagedThreadStatus.IDLE.value,
             ManagedThreadStatus.COMPLETED.value,
+            ManagedThreadStatus.INTERRUPTED.value,
             ManagedThreadStatus.FAILED.value,
             ManagedThreadStatus.PAUSED.value,
         ),
@@ -106,6 +110,7 @@ TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
         "from": (
             ManagedThreadStatus.IDLE.value,
             ManagedThreadStatus.COMPLETED.value,
+            ManagedThreadStatus.INTERRUPTED.value,
             ManagedThreadStatus.FAILED.value,
             ManagedThreadStatus.PAUSED.value,
         ),
@@ -124,7 +129,7 @@ TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
     {
         "signal": ManagedThreadStatusReason.MANAGED_TURN_INTERRUPTED.value,
         "from": (ManagedThreadStatus.RUNNING.value,),
-        "to": ManagedThreadStatus.FAILED.value,
+        "to": ManagedThreadStatus.INTERRUPTED.value,
     },
     {
         "signal": ManagedThreadStatusReason.THREAD_ARCHIVED.value,
@@ -346,6 +351,8 @@ def derive_managed_thread_operator_status(
     if normalized_lifecycle == ManagedThreadStatus.ARCHIVED.value:
         return ManagedThreadOperatorStatus.ARCHIVED.value
     if normalized_runtime == ManagedThreadStatus.COMPLETED.value:
+        return ManagedThreadOperatorStatus.REUSABLE.value
+    if normalized_runtime == ManagedThreadStatus.INTERRUPTED.value:
         return ManagedThreadOperatorStatus.REUSABLE.value
     if normalized_runtime == ManagedThreadStatus.FAILED.value:
         return ManagedThreadOperatorStatus.ATTENTION_REQUIRED.value

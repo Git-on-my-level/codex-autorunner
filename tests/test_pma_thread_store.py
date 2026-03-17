@@ -204,7 +204,7 @@ def test_mark_turn_finished_does_not_override_interrupted_status(
 
     thread_after = store.get_thread(thread["managed_thread_id"])
     assert thread_after is not None
-    assert thread_after["normalized_status"] == "failed"
+    assert thread_after["normalized_status"] == "interrupted"
     assert thread_after["status_reason"] == "managed_turn_interrupted"
     assert thread_after["status_terminal"] is True
 

@@ -1499,7 +1499,11 @@ def _render_hub_snapshot(
             )
             status_display = _truncate(operator_status, max_field_chars)
             last_turn_outcome = _truncate(
-                raw_status if raw_status in {"completed", "failed"} else "-",
+                (
+                    raw_status
+                    if raw_status in {"completed", "interrupted", "failed"}
+                    else "-"
+                ),
                 max_field_chars,
             )
             status_reason = _truncate(

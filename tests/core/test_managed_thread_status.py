@@ -134,9 +134,17 @@ def test_backfill_prefers_terminal_latest_turn_over_compacted_state() -> None:
         changed_at="2026-03-08T00:00:20Z",
         compacted=True,
     )
+    interrupted = backfill_managed_thread_status(
+        lifecycle_status="active",
+        latest_turn_status="interrupted",
+        changed_at="2026-03-08T00:00:20Z",
+        compacted=True,
+    )
 
     assert completed.status == "completed"
     assert completed.reason_code == "managed_turn_completed"
+    assert interrupted.status == "interrupted"
+    assert interrupted.reason_code == "managed_turn_interrupted"
     assert failed.status == "failed"
     assert failed.reason_code == "managed_turn_failed"
 
@@ -145,6 +153,16 @@ def test_operator_status_marks_completed_active_threads_as_reusable() -> None:
     assert (
         derive_managed_thread_operator_status(
             normalized_status="completed",
+            lifecycle_status="active",
+        )
+        == ManagedThreadOperatorStatus.REUSABLE.value
+    )
+
+
+def test_operator_status_marks_interrupted_active_threads_as_reusable() -> None:
+    assert (
+        derive_managed_thread_operator_status(
+            normalized_status="interrupted",
             lifecycle_status="active",
         )
         == ManagedThreadOperatorStatus.REUSABLE.value
