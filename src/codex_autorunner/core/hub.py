@@ -1419,44 +1419,90 @@ class HubSupervisor:
             if isinstance(row["target_id"], str) and row["target_id"].strip()
         }
 
-    def _archive_unbound_repo_threads(
+    def _base_repo_paths(self, manifest: Manifest) -> dict[str, Path]:
+        base_repo_paths: dict[str, Path] = {}
+        for entry in manifest.repos:
+            if entry.kind != "base":
+                continue
+            base_repo_paths[entry.id] = (self.hub_config.root / entry.path).resolve()
+        return base_repo_paths
+
+    def _collect_unbound_repo_threads(
         self,
         *,
-        repo_id: str,
-        repo_path: Path,
-    ) -> list[str]:
+        manifest: Optional[Manifest] = None,
+    ) -> dict[str, list[str]]:
+        if manifest is None:
+            manifest = load_manifest(
+                self.hub_config.manifest_path,
+                self.hub_config.root,
+            )
+        base_repo_paths = self._base_repo_paths(manifest)
+        if not base_repo_paths:
+            return {}
+
         store = PmaThreadStore(self.hub_config.root)
-        archived_thread_ids: list[str] = []
-        seen_ids: set[str] = set()
         bound_thread_ids = self._bound_thread_target_ids()
-        canonical_repo = repo_path.resolve()
+        seen_ids: set[str] = set()
+        workspace_to_repo_id = {
+            str(path): repo_id for repo_id, path in base_repo_paths.items()
+        }
+        thread_ids_by_repo: dict[str, list[str]] = {}
 
         for thread in store.list_threads(status="active", limit=None):
             managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
-            if (
-                not managed_thread_id
-                or managed_thread_id in seen_ids
-                or managed_thread_id in bound_thread_ids
-            ):
+            if not managed_thread_id or managed_thread_id in seen_ids:
+                continue
+            if managed_thread_id in bound_thread_ids:
                 continue
 
             thread_repo_id = str(thread.get("repo_id") or "").strip()
             workspace_root = str(thread.get("workspace_root") or "").strip()
-            matches_repo = thread_repo_id == repo_id
-            matches_workspace = False
+            matched_repo_id: Optional[str] = None
+            if thread_repo_id in base_repo_paths:
+                matched_repo_id = thread_repo_id
             if workspace_root:
                 try:
-                    matches_workspace = Path(workspace_root).resolve() == canonical_repo
+                    resolved_workspace = str(Path(workspace_root).resolve())
                 except Exception:
-                    matches_workspace = False
-            if not matches_repo and not matches_workspace:
+                    resolved_workspace = ""
+                if not matched_repo_id and resolved_workspace:
+                    matched_repo_id = workspace_to_repo_id.get(resolved_workspace)
+            if not matched_repo_id:
                 continue
 
-            store.archive_thread(managed_thread_id)
-            archived_thread_ids.append(managed_thread_id)
+            thread_ids_by_repo.setdefault(matched_repo_id, []).append(managed_thread_id)
             seen_ids.add(managed_thread_id)
 
+        return thread_ids_by_repo
+
+    def _archive_unbound_repo_threads(
+        self,
+        *,
+        repo_id: str,
+        unbound_threads_by_repo: Optional[dict[str, list[str]]] = None,
+    ) -> list[str]:
+        thread_ids = list((unbound_threads_by_repo or {}).get(repo_id, ()))
+        if not thread_ids:
+            thread_ids = self._collect_unbound_repo_threads().get(repo_id, [])
+        if not thread_ids:
+            return []
+
+        store = PmaThreadStore(self.hub_config.root)
+        archived_thread_ids: list[str] = []
+        for managed_thread_id in thread_ids:
+            store.archive_thread(managed_thread_id)
+            archived_thread_ids.append(managed_thread_id)
         return archived_thread_ids
+
+    def unbound_repo_thread_counts(self) -> dict[str, int]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        thread_ids_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
+        return {
+            repo_id: len(thread_ids)
+            for repo_id, thread_ids in thread_ids_by_repo.items()
+            if thread_ids
+        }
 
     def _ensure_worktree_clean_for_archive(
         self, *, worktree_repo_id: str, worktree_path: Path
@@ -1922,9 +1968,10 @@ class HubSupervisor:
         if not repo_path.exists():
             raise ValueError(f"Repo path does not exist: {repo_path}")
 
+        unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
         archived_thread_ids = self._archive_unbound_repo_threads(
             repo_id=repo_id,
-            repo_path=repo_path,
+            unbound_threads_by_repo=unbound_threads_by_repo,
         )
         archived_count = len(archived_thread_ids)
         if archived_count == 0:
@@ -1940,6 +1987,61 @@ class HubSupervisor:
             "repo_id": repo_id,
             "archived_thread_ids": archived_thread_ids,
             "archived_count": archived_count,
+            "message": message,
+        }
+
+    def cleanup_all_repo_threads(self) -> Dict[str, object]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        base_repo_paths = self._base_repo_paths(manifest)
+        unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
+        dirty_repo_ids: list[str] = []
+        results: list[dict[str, object]] = []
+        total_archived = 0
+
+        for repo_id, repo_path in base_repo_paths.items():
+            is_dirty = False
+            if repo_path.exists() and git_available(repo_path):
+                try:
+                    is_dirty = not git_is_clean(repo_path)
+                except Exception:
+                    is_dirty = False
+            if is_dirty:
+                dirty_repo_ids.append(repo_id)
+
+            archived_thread_ids = self._archive_unbound_repo_threads(
+                repo_id=repo_id,
+                unbound_threads_by_repo=unbound_threads_by_repo,
+            )
+            archived_count = len(archived_thread_ids)
+            total_archived += archived_count
+            if archived_count > 0 or is_dirty:
+                results.append(
+                    {
+                        "repo_id": repo_id,
+                        "archived_thread_ids": archived_thread_ids,
+                        "archived_count": archived_count,
+                        "is_dirty": is_dirty,
+                    }
+                )
+
+        cleaned_repo_count = 0
+        for item in results:
+            archived_count_value = item.get("archived_count")
+            if isinstance(archived_count_value, int) and archived_count_value > 0:
+                cleaned_repo_count += 1
+        if total_archived == 0:
+            message = "No stale non-chat-bound threads found across base repos."
+        elif total_archived == 1:
+            message = "Archived 1 stale non-chat-bound thread across base repos."
+        else:
+            message = f"Archived {total_archived} stale non-chat-bound threads across base repos."
+        return {
+            "status": "ok",
+            "archived_count": total_archived,
+            "cleaned_repo_count": cleaned_repo_count,
+            "dirty_repo_ids": dirty_repo_ids,
+            "dirty_repo_count": len(dirty_repo_ids),
+            "results": results,
             "message": message,
         }
 

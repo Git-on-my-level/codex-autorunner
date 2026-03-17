@@ -1116,10 +1116,23 @@ def build_hub_repo_routes(
     @router.post("/hub/repos/{repo_id}/cleanup-threads")
     async def cleanup_repo_threads(repo_id: str):
         try:
-            return await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 context.supervisor.cleanup_repo_threads,
                 repo_id=repo_id,
             )
+            enricher.invalidate_runtime_caches()
+            return result
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/hub/repos/cleanup-threads")
+    async def cleanup_all_repo_threads():
+        try:
+            result = await asyncio.to_thread(
+                context.supervisor.cleanup_all_repo_threads
+            )
+            enricher.invalidate_runtime_caches()
+            return result
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

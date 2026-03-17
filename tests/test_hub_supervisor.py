@@ -827,6 +827,120 @@ def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
     assert untouched_thread["lifecycle_status"] == "active"
 
 
+def test_hub_repo_listing_includes_unbound_managed_thread_count(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id=base.id,
+        branch="feature/unbound-count",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/repos")
+    assert resp.status_code == 200
+    repos = {item["id"]: item for item in resp.json()["repos"]}
+    assert repos[base.id]["unbound_managed_thread_count"] == 1
+    assert repos[worktree.id]["unbound_managed_thread_count"] == 0
+
+
+def test_hub_api_cleanup_all_repo_threads_archives_unbound_threads_and_reports_dirty(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base_one = supervisor.create_repo("base-one")
+    base_two = supervisor.create_repo("base-two")
+    _init_git_repo(base_one.path)
+    _init_git_repo(base_two.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id=base_one.id,
+        branch="feature/bulk-cleanup",
+        start_point="HEAD",
+    )
+
+    (base_two.path / "DIRTY.txt").write_text("dirty\n", encoding="utf-8")
+
+    store = PmaThreadStore(hub_root)
+    base_one_unbound = store.create_thread(
+        "codex", base_one.path, repo_id=base_one.id, name="scratch-one"
+    )
+    base_one_bound = store.create_thread(
+        "codex",
+        base_one.path,
+        repo_id=base_one.id,
+        name="discord:bulk-123",
+    )
+    base_two_unbound = store.create_thread(
+        "codex", base_two.path, repo_id=base_two.id, name="scratch-two"
+    )
+    worktree_thread = store.create_thread(
+        "codex", worktree.path, repo_id=worktree.id, name="worktree-thread"
+    )
+
+    bindings = OrchestrationBindingStore(hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:bulk-123",
+        thread_target_id=base_one_bound["managed_thread_id"],
+        agent_id="codex",
+        repo_id=base_one.id,
+        resource_kind="repo",
+        resource_id=base_one.id,
+    )
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.post("/hub/repos/cleanup-threads")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["archived_count"] == 2
+    assert payload["cleaned_repo_count"] == 2
+    assert payload["dirty_repo_ids"] == [base_two.id]
+    results = {item["repo_id"]: item for item in payload["results"]}
+    assert results[base_one.id]["archived_count"] == 1
+    assert results[base_two.id]["archived_count"] == 1
+    assert results[base_two.id]["is_dirty"] is True
+
+    assert (
+        store.get_thread(base_one_unbound["managed_thread_id"])["lifecycle_status"]
+        == "archived"
+    )
+    assert (
+        store.get_thread(base_two_unbound["managed_thread_id"])["lifecycle_status"]
+        == "archived"
+    )
+    assert (
+        store.get_thread(base_one_bound["managed_thread_id"])["lifecycle_status"]
+        == "active"
+    )
+    assert (
+        store.get_thread(worktree_thread["managed_thread_id"])["lifecycle_status"]
+        == "active"
+    )
+
+
 @pytest.mark.slow
 def test_hub_pin_parent_repo_rejects_worktree(tmp_path: Path):
     hub_root = tmp_path / "hub"

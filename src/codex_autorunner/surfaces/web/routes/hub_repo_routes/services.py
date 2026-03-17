@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -11,6 +12,27 @@ class HubRepoEnricher:
     def __init__(self, context: HubAppContext, mount_manager: HubMountManager) -> None:
         self._context = context
         self._mount_manager = mount_manager
+        self._unbound_thread_counts_cache: Optional[dict[str, int]] = None
+        self._unbound_thread_counts_cached_at = 0.0
+
+    def invalidate_runtime_caches(self) -> None:
+        self._unbound_thread_counts_cache = None
+        self._unbound_thread_counts_cached_at = 0.0
+
+    def _unbound_repo_thread_counts(self) -> dict[str, int]:
+        now = time.monotonic()
+        if (
+            self._unbound_thread_counts_cache is not None
+            and now - self._unbound_thread_counts_cached_at < 1.0
+        ):
+            return dict(self._unbound_thread_counts_cache)
+        try:
+            counts = self._context.supervisor.unbound_repo_thread_counts()
+        except Exception:
+            counts = {}
+        self._unbound_thread_counts_cache = dict(counts)
+        self._unbound_thread_counts_cached_at = now
+        return dict(counts)
 
     def enrich_repo(
         self,
@@ -52,6 +74,12 @@ class HubRepoEnricher:
         repo_dict["telegram_chat_bound_thread_count"] = telegram_binding_count
         repo_dict["non_pma_chat_bound_thread_count"] = non_pma_binding_count
         repo_dict["cleanup_blocked_by_chat_binding"] = non_pma_binding_count > 0
+        unbound_thread_count = 0
+        if snapshot.kind == "base":
+            unbound_thread_count = int(
+                self._unbound_repo_thread_counts().get(snapshot.id, 0)
+            )
+        repo_dict["unbound_managed_thread_count"] = max(0, unbound_thread_count)
         repo_dict["has_car_state"] = (
             has_car_state(self._context.config.root / snapshot.path)
             if snapshot.exists_on_disk
