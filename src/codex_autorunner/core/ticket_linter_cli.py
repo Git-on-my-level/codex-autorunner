@@ -14,7 +14,7 @@ _SCRIPT = dedent(
 
     - Validates ticket filenames (TICKET-<number>[suffix].md, e.g. TICKET-001-foo.md)
     - Parses YAML frontmatter for each .codex-autorunner/tickets/TICKET-*.md
-    - Validates required keys: agent (string) and done (bool)
+    - Validates required keys: ticket_id, agent, and done
     - Rejects deprecated keys like depends_on
     - Exits non-zero on any error
     \"\"\"

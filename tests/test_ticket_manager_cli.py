@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -53,6 +54,20 @@ def test_create_quotes_special_scalars(repo: Path) -> None:
     ticket_path = tickets / "TICKET-001.md"
     content = ticket_path.read_text(encoding="utf-8")
     assert "Fix #123: timing" in content
+
+    res = _run(repo, "lint")
+    assert res.returncode == 0
+
+
+def test_create_emits_valid_ticket_id(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    res = _run(repo, "create", "--title", "First", "--agent", "codex")
+    assert res.returncode == 0
+
+    content = (tickets / "TICKET-001.md").read_text(encoding="utf-8")
+    assert re.search(r'^ticket_id: "tkt_[A-Za-z0-9]{32}"$', content, re.MULTILINE)
 
     res = _run(repo, "lint")
     assert res.returncode == 0

@@ -96,6 +96,20 @@ def test_linter_flags_invalid_yaml_with_suffix(repo: Path) -> None:
     assert "OK" in result_good.stdout
 
 
+def test_linter_requires_ticket_id(repo: Path) -> None:
+    tickets_dir = repo / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+
+    (tickets_dir / "TICKET-001.md").write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n",
+        encoding="utf-8",
+    )
+
+    result = _run_linter(repo)
+    assert result.returncode == 1
+    assert "frontmatter.ticket_id is required" in result.stderr
+
+
 def test_linter_detects_duplicate_indices(repo: Path) -> None:
     tickets_dir = repo / ".codex-autorunner" / "tickets"
     tickets_dir.mkdir(parents=True, exist_ok=True)
