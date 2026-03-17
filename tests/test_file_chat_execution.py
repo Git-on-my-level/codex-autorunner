@@ -9,6 +9,9 @@ import pytest
 
 from codex_autorunner.core import drafts as draft_utils
 from codex_autorunner.core.state import now_iso
+from codex_autorunner.surfaces.web.routes.file_chat_routes import (
+    execution as execution_module,
+)
 from codex_autorunner.surfaces.web.routes.file_chat_routes import runtime
 from codex_autorunner.surfaces.web.routes.file_chat_routes.drafts import (
     apply_file_patch,
@@ -81,7 +84,8 @@ async def test_execute_file_chat_writes_draft_working_copy_without_touching_live
     )
     monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.file_chat_routes.execution.execute_app_server",
+        execution_module,
+        "execute_app_server",
         fake_execute_app_server,
     )
 
@@ -178,7 +182,8 @@ async def test_execute_file_chat_continues_from_existing_draft_working_copy(
     )
     monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.file_chat_routes.execution.execute_app_server",
+        execution_module,
+        "execute_app_server",
         fake_execute_app_server,
     )
 

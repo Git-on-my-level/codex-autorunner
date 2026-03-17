@@ -356,8 +356,8 @@ def build_managed_thread_runtime_routes(
     ) -> Any:
         busy_policy = _normalize_busy_policy(payload.busy_policy)
 
-        message = (payload.message or "").strip()
-        if not message:
+        message = payload.message or ""
+        if not message.strip():
             raise HTTPException(status_code=400, detail="message is required")
 
         defaults = _get_pma_config(request)
@@ -387,6 +387,7 @@ def build_managed_thread_runtime_routes(
         notify_lane = normalize_optional_text(payload.notify_lane)
         notify_once = bool(payload.notify_once)
         defer_execution = bool(payload.defer_execution)
+        delivery_payload = {"delivered_message": message}
 
         if (thread.get("status") or "") == "archived":
             return JSONResponse(
@@ -523,6 +524,7 @@ def build_managed_thread_runtime_routes(
                 "backend_thread_id": stored_backend_id or "",
                 "assistant_text": "",
                 "error": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+                **delivery_payload,
             }
         managed_turn_id = started_execution.execution.execution_id
         if not managed_turn_id:
@@ -556,6 +558,7 @@ def build_managed_thread_runtime_routes(
                 "backend_thread_id": backend_thread_id or "",
                 "assistant_text": "",
                 "error": detail,
+                **delivery_payload,
             }
 
         notification: Optional[dict[str, Any]] = None
@@ -696,6 +699,7 @@ def build_managed_thread_runtime_routes(
                         "backend_thread_id": resolved_backend_thread_id or "",
                         "assistant_text": "",
                         "error": detail,
+                        **delivery_payload,
                     }
                 thread_store.update_thread_after_turn(
                     managed_thread_id,
@@ -717,6 +721,7 @@ def build_managed_thread_runtime_routes(
                     "backend_thread_id": resolved_backend_thread_id or "",
                     "assistant_text": outcome.assistant_text,
                     "error": None,
+                    **delivery_payload,
                 }
 
             if outcome.status == "interrupted":
@@ -742,6 +747,7 @@ def build_managed_thread_runtime_routes(
                     "backend_thread_id": resolved_backend_thread_id or "",
                     "assistant_text": "",
                     "error": detail,
+                    **delivery_payload,
                 }
 
             detail = _sanitize_managed_thread_result_error(outcome.error)
@@ -772,6 +778,7 @@ def build_managed_thread_runtime_routes(
                 "backend_thread_id": resolved_backend_thread_id or "",
                 "assistant_text": "",
                 "error": detail,
+                **delivery_payload,
             }
 
         def _ensure_queue_worker() -> None:
@@ -826,6 +833,7 @@ def build_managed_thread_runtime_routes(
                 "backend_thread_id": backend_thread_id or "",
                 "assistant_text": "",
                 "error": None,
+                **delivery_payload,
                 "queue_depth": service.get_queue_depth(managed_thread_id),
                 "active_managed_turn_id": (
                     running_execution.execution_id
@@ -847,6 +855,7 @@ def build_managed_thread_runtime_routes(
             "backend_thread_id": backend_thread_id or "",
             "assistant_text": "",
             "error": None,
+            **delivery_payload,
         }
         if notification is not None:
             accepted_payload["notification"] = notification

@@ -92,6 +92,8 @@ def test_pma_cli_thread_send_help_shows_json_option():
     assert "--watch" in output, "PMA thread send should support --watch"
     assert "--if-busy" in output, "PMA thread send should support busy-thread policy"
     assert "--notify-on" in output, "PMA thread send should support --notify-on"
+    assert "--message-file" in output, "PMA thread send should support file input"
+    assert "--message-stdin" in output, "PMA thread send should support stdin input"
 
 
 def test_pma_cli_thread_status_help_shows_json_option():
@@ -517,6 +519,7 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
                 "managed_turn_id": "turn-2",
                 "active_managed_turn_id": "turn-1",
                 "queue_depth": 1,
+                "delivered_message": "follow up",
                 "assistant_text": "",
             },
         )
@@ -544,12 +547,187 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
     assert "send_state=queued managed_turn_id=turn-2" in result.stdout
     assert "active_managed_turn_id=turn-1" in result.stdout
     assert "queue_depth=1" in result.stdout
+    assert "delivered message:\nfollow up\n" in result.stdout
     assert captured["url"] == "http://127.0.0.1:4321/hub/pma/threads/thread-1/messages"
     assert captured["payload"] == {
         "message": "follow up",
         "busy_policy": "queue",
         "defer_execution": False,
     }
+
+
+def test_pma_cli_thread_send_reads_message_from_file(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    captured: dict[str, object] = {}
+    message_path = tmp_path / "prompt.md"
+    message_path.write_text("literal `glm-5-turbo`\nsecond line\n", encoding="utf-8")
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, url, token_env, timeout
+        captured["payload"] = payload
+        return (
+            200,
+            {
+                "status": "ok",
+                "send_state": "accepted",
+                "execution_state": "completed",
+                "managed_turn_id": "turn-3",
+                "delivered_message": payload["message"],
+                "assistant_text": "done",
+            },
+        )
+
+    monkeypatch.setattr(
+        pma_cli, "_request_json_with_status", _fake_request_json_with_status
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message-file",
+            str(message_path),
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["payload"] == {
+        "message": "literal `glm-5-turbo`\nsecond line\n",
+        "busy_policy": "queue",
+        "defer_execution": False,
+    }
+    assert "delivered message:\nliteral `glm-5-turbo`\nsecond line\n" in result.stdout
+    assert "\nassistant:\ndone\n" in result.stdout
+
+
+def test_pma_cli_thread_send_reads_message_from_stdin(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_request_json_with_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        timeout=None,
+    ):
+        _ = method, url, token_env, timeout
+        captured["payload"] = payload
+        return (
+            200,
+            {
+                "status": "ok",
+                "send_state": "accepted",
+                "execution_state": "running",
+                "managed_turn_id": "turn-4",
+                "delivered_message": payload["message"],
+                "assistant_text": "",
+            },
+        )
+
+    monkeypatch.setattr(
+        pma_cli, "_request_json_with_status", _fake_request_json_with_status
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message-stdin",
+            "--path",
+            str(tmp_path),
+        ],
+        input="stdin payload with backticks `glm-5-turbo`\n",
+    )
+
+    assert result.exit_code == 0
+    assert captured["payload"] == {
+        "message": "stdin payload with backticks `glm-5-turbo`\n",
+        "busy_policy": "queue",
+        "defer_execution": False,
+    }
+    assert (
+        "delivered message:\nstdin payload with backticks `glm-5-turbo`\n"
+        in result.stdout
+    )
+
+
+def test_pma_cli_thread_send_requires_exactly_one_message_source(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    message_path = tmp_path / "prompt.md"
+    message_path.write_text("hello\n", encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "send",
+            "--id",
+            "thread-1",
+            "--message",
+            "inline",
+            "--message-file",
+            str(message_path),
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert (
+        "Provide exactly one of --message, --message-file, or --message-stdin."
+        in result.output
+    )
 
 
 def test_pma_cli_thread_control_commands_use_orchestration_routes(

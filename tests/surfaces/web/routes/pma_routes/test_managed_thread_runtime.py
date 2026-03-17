@@ -136,6 +136,7 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["assistant_text"] == "assistant-output"
+    assert payload["delivered_message"] == "hello from route"
     assert captured["sandbox_policy"] == "dangerFullAccess"
     assert captured["request"].context_profile == "car_ambient"
     assert "<injected context>" not in captured["request"].metadata["runtime_prompt"]
@@ -291,6 +292,10 @@ def test_managed_thread_message_route_injects_core_context_when_profile_is_core(
             _ = thread_target_id, execution_id
             return None
 
+        def get_running_execution(self, thread_target_id: str):
+            _ = thread_target_id
+            return None
+
     async def _fake_begin(
         service, request, *, client_request_id=None, sandbox_policy=None
     ):
@@ -341,6 +346,91 @@ def test_managed_thread_message_route_injects_core_context_when_profile_is_core(
     assert response.status_code == 200
     assert captured["request"].context_profile == "car_core"
     assert "<injected context>" in captured["request"].metadata["runtime_prompt"]
+
+
+def test_managed_thread_message_route_preserves_literal_message_whitespace(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(self, *args, **kwargs):
+            _ = args, kwargs
+            return SimpleNamespace(status="ok", error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        captured["request"] = request
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+            ),
+            thread=SimpleNamespace(backend_thread_id="backend-thread-1"),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "await_runtime_thread_outcome",
+        _fake_await,
+    )
+
+    literal_message = "  keep literal backticks `glm-5-turbo`\nsecond line\n"
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": literal_message},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["delivered_message"] == literal_message
+    assert captured["request"].message_text == literal_message
+    runtime_prompt = captured["request"].metadata["runtime_prompt"]
+    assert f"<user_message>\n{literal_message}" in runtime_prompt
+    assert runtime_prompt.endswith("\n</user_message>\n")
 
 
 def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(
