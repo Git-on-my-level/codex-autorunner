@@ -38,7 +38,6 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
     from ...services import flow_store as _flow_store_service
     from ...services.flow_store import get_flow_record
     from .definitions import get_flow_controller
-    from .run_routes import start_flow_worker as _start_flow_worker
     from .runtime_service import (
         build_flow_orchestration_service as _build_flow_orchestration_service,
     )
@@ -97,7 +96,7 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         build_flow_status_response=build_flow_status_snapshot,
         get_flow_record=get_flow_record,
         get_flow_controller=get_flow_controller_adapter,
-        start_flow_worker=_start_flow_worker,
+        start_flow_worker=None,
         recover_flow_store_if_possible=_recover_flow_store_if_possible,
         bootstrap_check=ux_bootstrap_check,
         seed_issue=seed_issueispatch,
