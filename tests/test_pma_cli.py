@@ -385,6 +385,21 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
                 "elapsed_seconds": 60,
                 "idle_seconds": 0,
             },
+            "active_turn_diagnostics": {
+                "managed_turn_id": "turn-1",
+                "request_kind": "message",
+                "model": "gpt-5",
+                "reasoning": "high",
+                "prompt_preview": "Inspect the live thread state",
+                "backend_thread_id": "backend-thread-1",
+                "backend_turn_id": "backend-turn-1",
+                "stream_available": True,
+                "last_event_at": "2026-03-17T10:11:12Z",
+                "last_event_type": "tool_completed",
+                "last_event_summary": "tool: status-check",
+                "stalled": False,
+                "stall_reason": None,
+            },
             "recent_progress": [],
             "latest_output_excerpt": "assistant output",
         },
@@ -396,6 +411,21 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
             "elapsed_seconds": 60,
             "idle_seconds": 0,
             "lifecycle_events": ["turn_started", "turn_completed"],
+            "active_turn_diagnostics": {
+                "managed_turn_id": "turn-1",
+                "request_kind": "message",
+                "model": "gpt-5",
+                "reasoning": "high",
+                "prompt_preview": "Inspect the live thread state",
+                "backend_thread_id": "backend-thread-1",
+                "backend_turn_id": "backend-turn-1",
+                "stream_available": True,
+                "last_event_at": "2026-03-17T10:11:12Z",
+                "last_event_type": "tool_completed",
+                "last_event_summary": "tool: status-check",
+                "stalled": False,
+                "stall_reason": None,
+            },
             "events": [],
         },
     }
@@ -451,9 +481,22 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
         "id=thread-1 agent=codex repo=repo-1 status=reusable last_turn=completed"
         in status_result.stdout
     )
+    assert (
+        "active_turn: kind=message model=gpt-5 reasoning=high stream=yes stalled=no"
+        in status_result.stdout
+    )
+    assert "prompt: Inspect the live thread state" in status_result.stdout
+    assert (
+        "last_event: tool_completed @10:11:12 tool: status-check"
+        in status_result.stdout
+    )
     assert "latest output:" in status_result.stdout
     assert tail_result.exit_code == 0
     assert "turn=turn-1 status=ok activity=completed" in tail_result.stdout
+    assert (
+        "active_turn: kind=message model=gpt-5 reasoning=high stream=yes stalled=no"
+        in tail_result.stdout
+    )
 
     assert calls == [
         (

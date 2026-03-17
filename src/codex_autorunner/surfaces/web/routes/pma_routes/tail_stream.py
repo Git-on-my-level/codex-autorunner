@@ -461,6 +461,129 @@ def _derive_progress_phase(
     )
 
 
+def _redacted_prompt_preview(value: Any) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    return truncate_text(redact_text(text), 120)
+
+
+def _derive_active_turn_diagnostics(
+    *,
+    snapshot: dict[str, Any],
+    turn_record: Optional[dict[str, Any]],
+) -> dict[str, Any] | None:
+    managed_turn_id = normalize_optional_text(
+        snapshot.get("managed_turn_id") or (turn_record or {}).get("managed_turn_id")
+    )
+    if managed_turn_id is None:
+        return None
+
+    events = snapshot.get("events")
+    event_list = (
+        [event for event in events if isinstance(event, dict)]
+        if isinstance(events, list)
+        else []
+    )
+    last_event = event_list[-1] if event_list else {}
+    turn_status = str(snapshot.get("turn_status") or "").strip().lower()
+    idle_seconds_raw = snapshot.get("idle_seconds")
+    idle_seconds = int(idle_seconds_raw) if isinstance(idle_seconds_raw, int) else None
+    last_event_at = normalize_optional_text(snapshot.get("last_event_at"))
+    stalled = bool(
+        turn_status == "running" and idle_seconds is not None and idle_seconds >= 30
+    )
+    stall_reason = None
+    if stalled:
+        stall_reason = (
+            "no_events_yet"
+            if last_event_at is None
+            else "no_new_events_since_last_progress"
+        )
+
+    return {
+        "managed_turn_id": managed_turn_id,
+        "request_kind": normalize_optional_text(
+            (turn_record or {}).get("request_kind")
+        ),
+        "model": normalize_optional_text((turn_record or {}).get("model")),
+        "reasoning": normalize_optional_text((turn_record or {}).get("reasoning")),
+        "prompt_preview": _redacted_prompt_preview((turn_record or {}).get("prompt")),
+        "backend_thread_id": normalize_optional_text(snapshot.get("backend_thread_id")),
+        "backend_turn_id": normalize_optional_text(
+            snapshot.get("backend_turn_id")
+            or (turn_record or {}).get("backend_turn_id")
+        ),
+        "stream_available": bool(snapshot.get("stream_available")),
+        "phase": normalize_optional_text(snapshot.get("phase")),
+        "guidance": normalize_optional_text(snapshot.get("guidance")),
+        "last_event_at": last_event_at,
+        "last_event_type": normalize_optional_text(last_event.get("event_type")),
+        "last_event_summary": normalize_optional_text(last_event.get("summary")),
+        "stalled": stalled,
+        "stall_reason": stall_reason,
+    }
+
+
+def _refresh_active_turn_diagnostics(
+    snapshot: dict[str, Any],
+    *,
+    turn_status: Optional[str] = None,
+    idle_seconds: Optional[int] = None,
+    last_event_at: Optional[str] = None,
+    phase: Optional[str] = None,
+    guidance: Optional[str] = None,
+) -> dict[str, Any] | None:
+    diagnostics = snapshot.get("active_turn_diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+
+    updated = dict(diagnostics)
+    events = snapshot.get("events")
+    event_list = (
+        [event for event in events if isinstance(event, dict)]
+        if isinstance(events, list)
+        else []
+    )
+    last_event = event_list[-1] if event_list else {}
+    resolved_status = (
+        str(turn_status or snapshot.get("turn_status") or "").strip().lower()
+    )
+    resolved_idle = (
+        idle_seconds
+        if idle_seconds is not None
+        else (
+            int(snapshot.get("idle_seconds"))
+            if isinstance(snapshot.get("idle_seconds"), int)
+            else None
+        )
+    )
+    resolved_last_event_at = normalize_optional_text(
+        last_event_at or snapshot.get("last_event_at")
+    )
+    stalled = bool(
+        resolved_status == "running"
+        and resolved_idle is not None
+        and resolved_idle >= 30
+    )
+    updated["phase"] = normalize_optional_text(phase) or normalize_optional_text(
+        snapshot.get("phase")
+    )
+    updated["guidance"] = normalize_optional_text(guidance) or normalize_optional_text(
+        snapshot.get("guidance")
+    )
+    updated["last_event_at"] = resolved_last_event_at
+    updated["last_event_type"] = normalize_optional_text(last_event.get("event_type"))
+    updated["last_event_summary"] = normalize_optional_text(last_event.get("summary"))
+    updated["stalled"] = stalled
+    updated["stall_reason"] = (
+        "no_events_yet"
+        if stalled and resolved_last_event_at is None
+        else ("no_new_events_since_last_progress" if stalled else None)
+    )
+    return updated
+
+
 def _serialize_tail_event(
     event: dict[str, Any],
     *,
@@ -637,8 +760,9 @@ async def _build_managed_thread_tail_snapshot(
         events=tail_events,
         idle_seconds=idle_seconds,
     )
-
-    return {
+    turn_store = PmaThreadStore(request.app.state.config.root)
+    turn_record = turn_store.get_turn(managed_thread_id, managed_turn_id)
+    snapshot: dict[str, Any] = {
         "managed_thread_id": managed_thread_id,
         "managed_turn_id": managed_turn_id,
         "agent": thread.agent_id,
@@ -660,6 +784,11 @@ async def _build_managed_thread_tail_snapshot(
         "guidance": guidance,
         "last_tool": last_tool,
     }
+    snapshot["active_turn_diagnostics"] = _derive_active_turn_diagnostics(
+        snapshot=snapshot,
+        turn_record=turn_record,
+    )
+    return snapshot
 
 
 def build_managed_thread_tail_routes(
@@ -751,6 +880,7 @@ def build_managed_thread_tail_routes(
             "recent_progress": snapshot.get("events") or [],
             "latest_output_excerpt": latest_output_excerpt,
             "stream_available": bool(snapshot.get("stream_available")),
+            "active_turn_diagnostics": snapshot.get("active_turn_diagnostics"),
         }
 
     @router.get("/threads/{managed_thread_id}/tail")
@@ -851,9 +981,16 @@ def build_managed_thread_tail_routes(
                         ],
                         idle_seconds=elapsed,
                     )
+                    active_turn_diagnostics = _refresh_active_turn_diagnostics(
+                        snapshot,
+                        turn_status="running",
+                        idle_seconds=elapsed,
+                        phase=phase,
+                        guidance=guidance,
+                    )
                     yield (
                         "event: progress\ndata: "
-                        f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': 'running', 'elapsed_seconds': elapsed, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool}, ensure_ascii=True)}\n\n"
+                        f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': 'running', 'elapsed_seconds': elapsed, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool, 'active_turn_diagnostics': active_turn_diagnostics}, ensure_ascii=True)}\n\n"
                     )
 
             if str(snapshot.get("agent") or "").strip().lower() == "zeroclaw":
@@ -905,7 +1042,7 @@ def build_managed_thread_tail_routes(
                         )
                         yield (
                             "event: progress\ndata: "
-                            f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': refreshed.get('managed_turn_id'), 'turn_status': refreshed.get('turn_status') or 'running', 'elapsed_seconds': refreshed.get('elapsed_seconds'), 'idle_seconds': refreshed.get('idle_seconds'), 'phase': refreshed.get('phase'), 'phase_source': refreshed.get('phase_source'), 'guidance': refreshed.get('guidance'), 'last_tool': refreshed.get('last_tool')}, ensure_ascii=True)}\n\n"
+                            f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': refreshed.get('managed_turn_id'), 'turn_status': refreshed.get('turn_status') or 'running', 'elapsed_seconds': refreshed.get('elapsed_seconds'), 'idle_seconds': refreshed.get('idle_seconds'), 'phase': refreshed.get('phase'), 'phase_source': refreshed.get('phase_source'), 'guidance': refreshed.get('guidance'), 'last_tool': refreshed.get('last_tool'), 'active_turn_diagnostics': refreshed.get('active_turn_diagnostics')}, ensure_ascii=True)}\n\n"
                         )
                         if (
                             str(refreshed.get("turn_status") or "").strip().lower()
@@ -962,9 +1099,16 @@ def build_managed_thread_tail_routes(
                         ],
                         idle_seconds=idle,
                     )
+                    active_turn_diagnostics = _refresh_active_turn_diagnostics(
+                        snapshot,
+                        turn_status=status or "running",
+                        idle_seconds=idle,
+                        phase=phase,
+                        guidance=guidance,
+                    )
                     yield (
                         "event: progress\ndata: "
-                        f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': status or 'running', 'elapsed_seconds': elapsed, 'idle_seconds': idle, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool}, ensure_ascii=True)}\n\n"
+                        f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': status or 'running', 'elapsed_seconds': elapsed, 'idle_seconds': idle, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool, 'active_turn_diagnostics': active_turn_diagnostics}, ensure_ascii=True)}\n\n"
                     )
                     if status != "running":
                         return

@@ -47,6 +47,9 @@ Managed-thread API responses now expose:
 
 - `operator_status`: recommended headline state for operator surfaces
 - `is_reusable`: convenience boolean for "can this thread take more work now?"
+- `active_turn_diagnostics`: compact in-flight provenance for the active/latest
+  managed turn, including request metadata, backend ids, last observed event,
+  and whether the turn currently appears stalled
 
 The operator headline intentionally differs from the persisted runtime outcome:
 
