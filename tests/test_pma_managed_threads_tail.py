@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes.pma_routes.tail_stream import (
+    _refresh_active_turn_diagnostics,
+)
 from tests.conftest import write_test_config
 
 pytestmark = pytest.mark.slow
@@ -92,6 +96,10 @@ def test_managed_thread_tail_snapshot_redacts_and_supports_cursor(hub_env) -> No
         assert len(payload["events"]) == 2
         first = payload["events"][0]
         assert first["event_id"] == 1
+        assert payload["active_turn_diagnostics"]["request_kind"] == "message"
+        assert payload["active_turn_diagnostics"]["prompt_preview"] == "tail prompt"
+        assert payload["active_turn_diagnostics"]["last_event_type"] == "tool_completed"
+        assert payload["active_turn_diagnostics"]["stalled"] is False
         rendered_first = json.dumps(first, ensure_ascii=True)
         assert "sk-[REDACTED]" in rendered_first
 
@@ -166,6 +174,19 @@ def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> N
         assert payload["thread"]["accepts_messages"] is True
         assert payload["turn"]["status"] == "ok"
         assert payload["turn"]["phase"] == "completed"
+        assert payload["active_turn_diagnostics"]["managed_turn_id"] == managed_turn_id
+        assert payload["active_turn_diagnostics"]["request_kind"] == "message"
+        assert payload["active_turn_diagnostics"]["prompt_preview"] == "tail prompt"
+        assert (
+            payload["active_turn_diagnostics"]["backend_thread_id"]
+            == "backend-thread-1"
+        )
+        assert payload["active_turn_diagnostics"]["backend_turn_id"] == "backend-turn-1"
+        assert payload["active_turn_diagnostics"]["last_event_type"] == "tool_completed"
+        assert "status-check" in (
+            payload["active_turn_diagnostics"]["last_event_summary"] or ""
+        )
+        assert payload["active_turn_diagnostics"]["stalled"] is False
         assert payload["is_alive"] is False
         assert isinstance(payload.get("recent_progress"), list)
         assert "completed assistant output" in payload.get("latest_output_excerpt", "")
@@ -193,6 +214,29 @@ def test_managed_thread_status_surfaces_attention_required_separately_from_failu
     assert payload["thread"]["operator_status"] == "reusable"
     assert payload["thread"]["is_reusable"] is True
     assert payload["turn"]["phase"] == "interrupted"
+
+
+def test_refresh_active_turn_diagnostics_recomputes_idle_without_events() -> None:
+    started_at = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat()
+    snapshot = {
+        "turn_status": "running",
+        "started_at": started_at,
+        "last_event_at": None,
+        "phase": "no_stream_available",
+        "guidance": "No stream is available yet.",
+        "events": [],
+        "active_turn_diagnostics": {
+            "managed_turn_id": "managed-turn-1",
+            "stalled": False,
+            "stall_reason": None,
+        },
+    }
+
+    refreshed = _refresh_active_turn_diagnostics(snapshot, turn_status="running")
+
+    assert refreshed is not None
+    assert refreshed["stalled"] is True
+    assert refreshed["stall_reason"] == "no_events_yet"
 
 
 def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:
@@ -350,6 +394,14 @@ def test_managed_thread_status_surfaces_zeroclaw_phase_and_last_tool(hub_env) ->
         assert status_payload["turn"]["phase"] == "waiting_on_tool_call"
         assert status_payload["turn"]["last_tool"]["name"] == "web_search"
         assert status_payload["turn"]["last_tool"]["in_flight"] is True
+        assert status_payload["active_turn_diagnostics"]["request_kind"] == "message"
+        assert (
+            status_payload["active_turn_diagnostics"]["last_event_type"]
+            == "tool_started"
+        )
+        assert "web_search" in (
+            status_payload["active_turn_diagnostics"]["last_event_summary"] or ""
+        )
 
         tail_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail")
         assert tail_resp.status_code == 200

@@ -266,6 +266,53 @@ def _format_tail_event_line(event: dict[str, Any]) -> str:
     return f"{prefix}{id_part}{event_type}: {summary}".rstrip()
 
 
+def _format_received_at_label(value: Any) -> str:
+    timestamp = str(value or "").strip()
+    if not timestamp:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return timestamp
+    return dt.strftime("%H:%M:%S")
+
+
+def _render_active_turn_diagnostics(data: dict[str, Any]) -> None:
+    request_kind = str(data.get("request_kind") or "-")
+    model = str(data.get("model") or "-")
+    reasoning = str(data.get("reasoning") or "-")
+    stalled = "yes" if bool(data.get("stalled")) else "no"
+    stream = "yes" if bool(data.get("stream_available")) else "no"
+    typer.echo(
+        "active_turn: "
+        f"kind={request_kind} model={model} reasoning={reasoning} "
+        f"stream={stream} stalled={stalled}"
+    )
+    prompt_preview = str(data.get("prompt_preview") or "").strip()
+    if prompt_preview:
+        typer.echo(f"prompt: {prompt_preview}")
+    last_event_type = str(data.get("last_event_type") or "").strip()
+    last_event_summary = str(data.get("last_event_summary") or "").strip()
+    if last_event_type or last_event_summary:
+        typer.echo(
+            "last_event: "
+            + (last_event_type or "-")
+            + " @"
+            + _format_received_at_label(data.get("last_event_at"))
+            + (f" {last_event_summary}" if last_event_summary else "")
+        )
+    backend_thread_id = str(data.get("backend_thread_id") or "").strip()
+    backend_turn_id = str(data.get("backend_turn_id") or "").strip()
+    if backend_thread_id or backend_turn_id:
+        typer.echo(
+            "backend: "
+            f"thread={backend_thread_id or '-'} turn={backend_turn_id or '-'}"
+        )
+    stall_reason = str(data.get("stall_reason") or "").strip()
+    if stall_reason:
+        typer.echo(f"stall_reason: {stall_reason}")
+
+
 def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
     managed_turn_id = snapshot.get("managed_turn_id") or "-"
     status = snapshot.get("turn_status") or "none"
@@ -279,6 +326,9 @@ def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
     guidance = str(snapshot.get("guidance") or "").strip()
     if guidance:
         typer.echo(f"guidance: {guidance}")
+    diagnostics = snapshot.get("active_turn_diagnostics")
+    if isinstance(diagnostics, dict):
+        _render_active_turn_diagnostics(diagnostics)
     last_tool = snapshot.get("last_tool")
     if isinstance(last_tool, dict) and str(last_tool.get("name") or "").strip():
         typer.echo(
@@ -540,6 +590,9 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
     guidance = str(turn.get("guidance") or "").strip()
     if guidance:
         typer.echo(f"guidance: {guidance}")
+    diagnostics = data.get("active_turn_diagnostics")
+    if isinstance(diagnostics, dict):
+        _render_active_turn_diagnostics(diagnostics)
     last_tool = turn.get("last_tool")
     if isinstance(last_tool, dict) and str(last_tool.get("name") or "").strip():
         typer.echo(
@@ -1688,6 +1741,9 @@ def pma_thread_tail(
                     guidance = str(data.get("guidance") or "").strip()
                     if guidance:
                         typer.echo(f"guidance: {guidance}")
+                    diagnostics = data.get("active_turn_diagnostics")
+                    if isinstance(diagnostics, dict):
+                        _render_active_turn_diagnostics(diagnostics)
                     if status != "running":
                         return
     except httpx.HTTPError as exc:
