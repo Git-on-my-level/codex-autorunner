@@ -72,7 +72,7 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
             logger=_logger,
         )
 
-    def seed_issueispatch(
+    def seed_issue_dispatch(
         repo_root: Path,
         run_id: str,
         issue_url: Optional[str] = None,
@@ -99,5 +99,5 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         start_flow_worker=None,
         recover_flow_store_if_possible=_recover_flow_store_if_possible,
         bootstrap_check=ux_bootstrap_check,
-        seed_issue=seed_issueispatch,
+        seed_issue=seed_issue_dispatch,
     )

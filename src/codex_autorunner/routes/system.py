@@ -1,3 +1,7 @@
 """Backward-compatible system routes."""
 
-from ..surfaces.web.routes.system import *  # noqa: F401,F403
+import sys
+
+from ..surfaces.web.routes import system as _system
+
+sys.modules[__name__] = _system

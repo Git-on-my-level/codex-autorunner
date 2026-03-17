@@ -7,8 +7,6 @@ src/codex_autorunner/surfaces/web/routes/ modules.
 
 from __future__ import annotations
 
-import sys
-
 
 def test_base_shim_re_exports_canonical_build_base_routes():
     from codex_autorunner.routes import base as legacy_base
@@ -72,41 +70,42 @@ def test_file_chat_shim_re_exports_canonical_build_file_chat_routes():
     )
 
 
-def test_all_shims_use_wildcard_re_export_pattern():
-    """Verify all shim modules use consistent wildcard re-export pattern."""
-    shim_files = [
-        "base",
-        "sessions",
-        "analytics",
-        "app_server",
-        "usage",
-        "repos",
-        "settings",
-        "shared",
-        "review",
-        "voice",
-        "agents",
-        "flows",
-        "system",
-        "messages",
-        "file_chat",
-    ]
+def test_flows_shim_preserves_module_identity_for_private_helpers():
+    from codex_autorunner.routes import flows as legacy_flows
+    from codex_autorunner.surfaces.web.routes import flows as canonical_flows
 
-    for shim_name in shim_files:
-        module = sys.modules.get(f"codex_autorunner.routes.{shim_name}")
-        if module is None:
-            __import__(f"codex_autorunner.routes.{shim_name}")
-            module = sys.modules[f"codex_autorunner.routes.{shim_name}"]
+    assert legacy_flows is canonical_flows
+    assert legacy_flows._get_flow_controller is canonical_flows._get_flow_controller
 
-        source_lines = open(module.__file__, encoding="utf-8").read().splitlines()
 
-        assert any(
-            "from ..surfaces.web.routes" in line for line in source_lines
-        ), f"Shim {shim_name} should use relative import from canonical routes"
+def test_system_shim_preserves_module_identity_for_private_helpers():
+    from codex_autorunner.routes import system as legacy_system
+    from codex_autorunner.surfaces.web.routes import system as canonical_system
 
-        assert "sys.modules[__name__]" not in "".join(
-            source_lines
-        ), f"Shim {shim_name} should not use sys.modules aliasing"
+    assert legacy_system is canonical_system
+    assert (
+        legacy_system._normalize_update_target
+        is canonical_system._normalize_update_target
+    )
+
+
+def test_messages_shim_preserves_module_identity_for_private_helpers():
+    from codex_autorunner.routes import messages as legacy_messages
+    from codex_autorunner.surfaces.web.routes import messages as canonical_messages
+
+    assert legacy_messages is canonical_messages
+    assert (
+        legacy_messages._safe_attachment_name
+        is canonical_messages._safe_attachment_name
+    )
+
+
+def test_file_chat_shim_preserves_module_identity_for_private_helpers():
+    from codex_autorunner.routes import file_chat as legacy_file_chat
+    from codex_autorunner.surfaces.web.routes import file_chat as canonical_file_chat
+
+    assert legacy_file_chat is canonical_file_chat
+    assert legacy_file_chat._read_file is canonical_file_chat._read_file
 
 
 def test_monkeypatch_base_shim_is_visible_to_canonical_code():
@@ -118,6 +117,7 @@ def test_monkeypatch_base_shim_is_visible_to_canonical_code():
         pass
 
     original_get_cls = canonical_base._get_pty_session_cls
+    original_pty_session = legacy_base.PTYSession
 
     try:
         legacy_base.PTYSession = FakePTY
@@ -125,5 +125,4 @@ def test_monkeypatch_base_shim_is_visible_to_canonical_code():
         assert result_cls is FakePTY
     finally:
         canonical_base._get_pty_session_cls = original_get_cls
-        if hasattr(legacy_base, "PTYSession"):
-            delattr(legacy_base, "PTYSession")
+        legacy_base.PTYSession = original_pty_session

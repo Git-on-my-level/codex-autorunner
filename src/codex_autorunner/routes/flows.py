@@ -1,3 +1,7 @@
 """Backward-compatible flow routes."""
 
-from ..surfaces.web.routes.flows import *  # noqa: F401,F403
+import sys
+
+from ..surfaces.web.routes import flows as _flows
+
+sys.modules[__name__] = _flows
