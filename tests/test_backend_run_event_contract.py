@@ -505,7 +505,9 @@ class _FakeOpenCodeClient:
     def __init__(self, events: list[SSEEvent]):
         self._events = events
 
-    async def stream_events(self, *, directory=None, ready_event=None, paths=None):
+    async def stream_events(
+        self, *, directory=None, ready_event=None, paths=None, session_id=None
+    ):
         if ready_event is not None:
             ready_event.set()
         for event in self._events:

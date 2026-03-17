@@ -14,7 +14,9 @@ class _FakeOpenCodeClient:
     def __init__(self, events: list[SSEEvent]):
         self._events = events
 
-    async def stream_events(self, *, directory=None, ready_event=None, paths=None):
+    async def stream_events(
+        self, *, directory=None, ready_event=None, paths=None, session_id=None
+    ):
         if ready_event is not None:
             ready_event.set()
         for event in self._events:
@@ -76,7 +78,7 @@ async def test_opencode_streaming_coalesces_text_deltas(tmp_path: Path) -> None:
     ]
 
     backend = OpenCodeBackend(workspace_root=tmp_path, supervisor=None)
-    backend._client = _FakeOpenCodeClient(events)
+    backend._client = _FakeOpenCodeClient(events)  # type: ignore
 
     assistant_chunks: list[str] = []
     final_message: Optional[str] = None
@@ -111,7 +113,7 @@ async def test_opencode_streaming_real_events_ignore_user_prompt(
     )
 
     backend = OpenCodeBackend(workspace_root=tmp_path, supervisor=None)
-    backend._client = _FakeOpenCodeClient(sse_events)
+    backend._client = _FakeOpenCodeClient(sse_events)  # type: ignore
 
     assistant_chunks: list[str] = []
     final_message: Optional[str] = None
@@ -152,7 +154,7 @@ async def test_opencode_backend_emits_single_canonical_usage_and_persists(
     ]
 
     backend = OpenCodeBackend(workspace_root=tmp_path, supervisor=None)
-    backend._client = _FakeOpenCodeClient(events)
+    backend._client = _FakeOpenCodeClient(events)  # type: ignore
 
     run_events = [event async for event in backend.run_turn_events(session_id, "Ping")]
     usage_events = [event for event in run_events if isinstance(event, TokenUsage)]

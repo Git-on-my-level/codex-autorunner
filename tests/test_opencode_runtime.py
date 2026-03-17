@@ -711,7 +711,9 @@ async def test_collect_output_poll_treats_missing_status_as_idle() -> None:
         def __init__(self):
             self.session_status_calls = 0
 
-        def stream_events(self, *, directory, ready_event=None):
+        def stream_events(
+            self, *, directory=None, ready_event=None, paths=None, session_id=None
+        ):
             async def _gen():
                 while True:
                     await asyncio.sleep(3600)

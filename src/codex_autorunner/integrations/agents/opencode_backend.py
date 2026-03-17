@@ -506,14 +506,11 @@ class OpenCodeBackend(AgentBackend):
         raise NotImplementedError("Approvals not implemented for OpenCodeBackend")
 
     async def _yield_events_until_completion(self) -> AsyncGenerator[AgentEvent, None]:
-        paths = ["/event", "/global/event"]
-        if self._session_id:
-            paths.insert(0, f"/session/{self._session_id}/event")
         try:
             client = await self._ensure_client()
             async for sse in client.stream_events(
                 directory=None,
-                paths=paths,
+                session_id=self._session_id,
             ):
                 if not self._sse_matches_session(sse):
                     continue
@@ -535,14 +532,11 @@ class OpenCodeBackend(AgentBackend):
     async def _yield_run_events_until_completion(
         self,
     ) -> AsyncGenerator[RunEvent, None]:
-        paths = ["/event", "/global/event"]
-        if self._session_id:
-            paths.insert(0, f"/session/{self._session_id}/event")
         try:
             client = await self._ensure_client()
             async for sse in client.stream_events(
                 directory=None,
-                paths=paths,
+                session_id=self._session_id,
             ):
                 if not self._sse_matches_session(sse):
                     continue
