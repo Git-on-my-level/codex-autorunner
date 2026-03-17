@@ -10,11 +10,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import (
     ManagedThreadNotActiveError,
     PmaThreadStore,
 )
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
+from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 
@@ -42,6 +45,63 @@ def _enable_pma(
 
 def _repo_owner(hub_env) -> dict[str, str]:
     return {"resource_kind": "repo", "resource_id": hub_env.repo_id}
+
+
+async def _bind_thread_to_discord(
+    hub_env,
+    *,
+    managed_thread_id: str,
+    channel_id: str,
+) -> None:
+    OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
+        surface_kind="discord",
+        surface_key=channel_id,
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+        mode="repo",
+    )
+    store = DiscordStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await store.upsert_binding(
+            channel_id=channel_id,
+            guild_id="guild-1",
+            workspace_path=str(hub_env.repo_root.resolve()),
+            repo_id=hub_env.repo_id,
+        )
+    finally:
+        await store.close()
+
+
+async def _bind_thread_to_telegram(
+    hub_env,
+    *,
+    managed_thread_id: str,
+    chat_id: int,
+    thread_id: int | None,
+) -> None:
+    surface_key = topic_key(chat_id, thread_id)
+    OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
+        surface_kind="telegram",
+        surface_key=surface_key,
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+        mode="repo",
+    )
+    store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        await store.bind_topic(
+            surface_key,
+            str(hub_env.repo_root.resolve()),
+            repo_id=hub_env.repo_id,
+        )
+    finally:
+        await store.close()
 
 
 def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
@@ -208,6 +268,214 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert metadata["model"] == "model-default"
     assert metadata["reasoning"] == "high"
     assert transcript["content"].strip() == "assistant-output-1"
+
+
+@pytest.mark.anyio
+async def test_send_message_enqueues_assistant_output_to_bound_chat_outboxes(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        create_resp = await client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        await _bind_thread_to_discord(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            channel_id="discord-123",
+        )
+        await _bind_thread_to_telegram(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            chat_id=1001,
+            thread_id=2002,
+        )
+
+        message_resp = await client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "cross-surface prompt"},
+        )
+
+    assert message_resp.status_code == 200
+    payload = message_resp.json()
+    assert payload["status"] == "ok"
+    assert payload["assistant_text"] == "assistant-output"
+
+    discord_store = DiscordStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    telegram_store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        discord_outbox = await discord_store.list_outbox()
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await discord_store.close()
+        await telegram_store.close()
+
+    assert any(
+        record.channel_id == "discord-123"
+        and record.payload_json.get("content") == "assistant-output"
+        for record in discord_outbox
+    )
+    assert any(
+        record.chat_id == 1001
+        and record.thread_id == 2002
+        and record.text == "assistant-output"
+        for record in telegram_outbox
+    )
+
+
+@pytest.mark.anyio
+async def test_send_message_continues_bound_chat_delivery_after_one_surface_fails(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    async def _fail_discord_enqueue(self, record):
+        _ = self, record
+        raise RuntimeError("discord enqueue failed")
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        create_resp = await client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        await _bind_thread_to_discord(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            channel_id="discord-123",
+        )
+        await _bind_thread_to_telegram(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            chat_id=1001,
+            thread_id=2002,
+        )
+        monkeypatch.setattr(
+            DiscordStateStore,
+            "enqueue_outbox",
+            _fail_discord_enqueue,
+        )
+
+        message_resp = await client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "cross-surface prompt"},
+        )
+
+    assert message_resp.status_code == 200
+    assert message_resp.json()["status"] == "ok"
+
+    telegram_store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await telegram_store.close()
+
+    assert any(
+        record.chat_id == 1001
+        and record.thread_id == 2002
+        and record.text == "assistant-output"
+        for record in telegram_outbox
+    )
 
 
 def test_send_message_rejects_archived_thread(hub_env) -> None:
@@ -1595,6 +1863,11 @@ async def test_send_message_defer_execution_completes_in_background(hub_env) -> 
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+        await _bind_thread_to_discord(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            channel_id="discord-background",
+        )
 
         message_resp = await client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
@@ -1641,6 +1914,23 @@ async def test_send_message_defer_execution_completes_in_background(hub_env) -> 
         with anyio.fail_after(2):
             while len(getattr(app.state, "pma_managed_thread_tasks", set())) != 0:
                 await anyio.sleep(0.05)
+
+    discord_store = DiscordStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        with anyio.fail_after(2):
+            while True:
+                discord_outbox = await discord_store.list_outbox()
+                if any(
+                    record.channel_id == "discord-background"
+                    and record.payload_json.get("content") == "assistant-output"
+                    for record in discord_outbox
+                ):
+                    break
+                await anyio.sleep(0.05)
+    finally:
+        await discord_store.close()
 
 
 @pytest.mark.anyio

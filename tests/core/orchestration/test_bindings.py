@@ -219,6 +219,35 @@ def test_binding_store_active_work_by_agent(tmp_path: Path) -> None:
     assert opencode_work[0].thread_target_id == opencode_thread_id
 
 
+def test_binding_store_filters_by_thread_target_id(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    initialize_orchestration_sqlite(hub_root)
+    bindings = OrchestrationBindingStore(hub_root)
+    first_thread_id = _create_thread(hub_root, workspace_name="repo-a-1")
+    second_thread_id = _create_thread(hub_root, workspace_name="repo-a-2")
+
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="channel-1",
+        thread_target_id=first_thread_id,
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+    bindings.upsert_binding(
+        surface_kind="telegram",
+        surface_key="123:root",
+        thread_target_id=second_thread_id,
+        agent_id="codex",
+        repo_id="repo-1",
+    )
+
+    listed = bindings.list_bindings(thread_target_id=first_thread_id)
+
+    assert len(listed) == 1
+    assert listed[0].thread_target_id == first_thread_id
+    assert listed[0].surface_kind == "discord"
+
+
 def test_binding_store_active_work_by_repo(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     initialize_orchestration_sqlite(hub_root)

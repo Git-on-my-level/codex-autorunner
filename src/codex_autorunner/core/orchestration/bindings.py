@@ -296,6 +296,7 @@ class OrchestrationBindingStore:
     def list_bindings(
         self,
         *,
+        thread_target_id: Optional[str] = None,
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -308,6 +309,10 @@ class OrchestrationBindingStore:
         params: list[Any] = []
         if not include_disabled:
             filters.append("b.disabled_at IS NULL")
+        normalized_thread_target_id = _normalize_text(thread_target_id)
+        if normalized_thread_target_id is not None:
+            filters.append("b.target_id = ?")
+            params.append(normalized_thread_target_id)
         normalized_resource_kind, normalized_resource_id, normalized_repo_id = (
             normalize_resource_owner_fields(
                 resource_kind=resource_kind,

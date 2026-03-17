@@ -424,6 +424,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
     def list_bindings(
         self,
         *,
+        thread_target_id: Optional[str] = None,
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -435,6 +436,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         if self.binding_store is None:
             return []
         return self.binding_store.list_bindings(
+            thread_target_id=thread_target_id,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,

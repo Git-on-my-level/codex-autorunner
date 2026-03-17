@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -16,8 +17,13 @@ from .....core.car_context import (
     normalize_car_context_profile,
     render_injected_car_context,
 )
+from .....core.chat_bindings import (
+    DISCORD_STATE_FILE_DEFAULT,
+    TELEGRAM_STATE_FILE_DEFAULT,
+)
 from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
 from .....core.orchestration import MessageRequest
+from .....core.orchestration.bindings import OrchestrationBindingStore
 from .....core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
@@ -35,6 +41,15 @@ from .....core.pma_thread_store import (
     PmaThreadStore,
 )
 from .....core.pma_transcripts import PmaTranscriptStore
+from .....core.time_utils import now_iso
+from .....integrations.discord.rendering import (
+    chunk_discord_message,
+    format_discord_message,
+)
+from .....integrations.discord.state import DiscordStateStore
+from .....integrations.discord.state import OutboxRecord as DiscordOutboxRecord
+from .....integrations.telegram.state import OutboxRecord as TelegramOutboxRecord
+from .....integrations.telegram.state import TelegramStateStore, parse_topic_key
 from ...schemas import PmaManagedThreadMessageRequest
 from .automation_adapter import (
     call_store_create_with_payload,
@@ -44,6 +59,11 @@ from .automation_adapter import (
 )
 from .managed_threads import (
     build_managed_thread_orchestration_service as _shared_managed_thread_orchestration_service,
+)
+from .publish import (
+    PMA_DISCORD_MESSAGE_MAX_LEN,
+    enqueue_with_retry,
+    resolve_chat_state_path,
 )
 
 if TYPE_CHECKING:
@@ -58,6 +78,7 @@ MANAGED_THREAD_INTERRUPT_FAILED_DETAIL = (
 )
 PMA_TIMEOUT_SECONDS = 7200
 PMA_MAX_TEXT = PMA_DEFAULT_MAX_TEXT_CHARS
+BOUND_CHAT_SURFACE_KINDS = frozenset({"discord", "telegram"})
 
 
 def _build_managed_thread_orchestration_service(
@@ -168,6 +189,148 @@ def _interrupt_failure_payload(
         "error": detail,
         **delivery_payload,
     }
+
+
+async def deliver_bound_chat_assistant_output(
+    request: Request,
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    assistant_text: str,
+) -> None:
+    message = str(assistant_text or "").strip()
+    if not message:
+        return
+
+    hub_root = request.app.state.config.root
+    binding_store = OrchestrationBindingStore(hub_root)
+    bindings = [
+        binding
+        for binding in binding_store.list_bindings(
+            thread_target_id=managed_thread_id,
+            include_disabled=False,
+            limit=1000,
+        )
+        if binding.surface_kind in BOUND_CHAT_SURFACE_KINDS
+    ]
+    if not bindings:
+        return
+
+    discord_store: Optional[DiscordStateStore] = None
+    telegram_store: Optional[TelegramStateStore] = None
+    created_at = now_iso()
+    try:
+        for binding in bindings:
+            try:
+                if binding.surface_kind == "discord":
+                    if discord_store is None:
+                        discord_store = DiscordStateStore(
+                            resolve_chat_state_path(
+                                request,
+                                section="discord_bot",
+                                default_state_file=DISCORD_STATE_FILE_DEFAULT,
+                            )
+                        )
+                    channel_id = normalize_optional_text(binding.surface_key)
+                    if channel_id is None:
+                        continue
+                    chunks = chunk_discord_message(
+                        format_discord_message(message),
+                        max_len=PMA_DISCORD_MESSAGE_MAX_LEN,
+                        with_numbering=False,
+                    )
+                    if not chunks:
+                        chunks = [format_discord_message(message)]
+                    for index, chunk in enumerate(chunks, start=1):
+                        digest = hashlib.sha256(
+                            (
+                                f"managed-thread:{managed_turn_id}:discord:{channel_id}:{index}"
+                            ).encode("utf-8")
+                        ).hexdigest()[:24]
+                        record_id = f"managed-thread:{digest}"
+                        if await discord_store.get_outbox(record_id) is not None:
+                            continue
+                        record = DiscordOutboxRecord(
+                            record_id=record_id,
+                            channel_id=channel_id,
+                            message_id=None,
+                            operation="send",
+                            payload_json={"content": chunk},
+                            created_at=created_at,
+                        )
+                        store = discord_store
+                        await enqueue_with_retry(
+                            lambda record=record, store=store: store.enqueue_outbox(
+                                record
+                            )
+                        )
+                    continue
+
+                if binding.surface_kind != "telegram":
+                    continue
+                if telegram_store is None:
+                    telegram_store = TelegramStateStore(
+                        resolve_chat_state_path(
+                            request,
+                            section="telegram_bot",
+                            default_state_file=TELEGRAM_STATE_FILE_DEFAULT,
+                        )
+                    )
+                surface_key = normalize_optional_text(binding.surface_key)
+                if surface_key is None:
+                    continue
+                try:
+                    chat_id, thread_id, _scope = parse_topic_key(surface_key)
+                except Exception:
+                    logger.warning(
+                        "Failed to parse telegram bound-chat surface key for managed-thread delivery: %s",
+                        surface_key,
+                    )
+                    continue
+                digest = hashlib.sha256(
+                    (
+                        f"managed-thread:{managed_turn_id}:telegram:{chat_id}:{thread_id or 'root'}"
+                    ).encode("utf-8")
+                ).hexdigest()[:24]
+                record_id = f"managed-thread:{digest}"
+                if await telegram_store.get_outbox(record_id) is not None:
+                    continue
+                outbox_key = f"managed-thread:{managed_turn_id}:{chat_id}:{thread_id or 'root'}:send"
+                record = TelegramOutboxRecord(
+                    record_id=record_id,
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    reply_to_message_id=None,
+                    placeholder_message_id=None,
+                    text=message,
+                    created_at=created_at,
+                    operation="send",
+                    message_id=None,
+                    outbox_key=outbox_key,
+                )
+                store = telegram_store
+                await enqueue_with_retry(
+                    lambda record=record, store=store: store.enqueue_outbox(record)
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to enqueue bound-chat delivery target (managed_thread_id=%s, managed_turn_id=%s, surface_kind=%s, surface_key=%s)",
+                    managed_thread_id,
+                    managed_turn_id,
+                    binding.surface_kind,
+                    binding.surface_key,
+                )
+    finally:
+        if discord_store is not None:
+            try:
+                await discord_store.close()
+            except Exception:
+                logger.exception("Failed to close discord bound-chat delivery store")
+        if telegram_store is not None:
+            try:
+                await telegram_store.close()
+            except Exception:
+                logger.exception("Failed to close telegram bound-chat delivery store")
 
 
 async def notify_managed_thread_terminal_transition(
@@ -752,6 +915,12 @@ def build_managed_thread_runtime_routes(
                     managed_thread_id,
                     last_turn_id=current_turn_id,
                     last_message_preview=current_preview,
+                )
+                await deliver_bound_chat_assistant_output(
+                    request,
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=current_turn_id,
+                    assistant_text=outcome.assistant_text,
                 )
                 await notify_managed_thread_terminal_transition(
                     request,
