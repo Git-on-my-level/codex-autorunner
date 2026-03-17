@@ -109,10 +109,6 @@ from .flow_routes.runtime_service import (
     list_orchestration_flow_run_records,
     resolve_flow_run_record,
 )
-from .flow_routes.ticket_bootstrap import (
-    build_ticket_bootstrap_routes as extracted_build_ticket_bootstrap_routes,
-)
-from .flow_routes.ticket_bootstrap import run_bootstrap as extracted_run_bootstrap
 
 _logger = logging.getLogger(__name__)
 
@@ -129,8 +125,6 @@ _EXTRACTED_FLOW_ROUTE_SEAMS = (
     extracted_resume_flow_run,
     extracted_archive_flow_run,
     extracted_get_flow_run_status,
-    extracted_build_ticket_bootstrap_routes,
-    extracted_run_bootstrap,
 )
 
 

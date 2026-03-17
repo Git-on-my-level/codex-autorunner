@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
+
+_logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .....core.flows import FlowController, FlowRunRecord, FlowStore
@@ -32,6 +35,7 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         seed_issue_from_text,
     )
     from .....core.utils import find_repo_root
+    from ...services import flow_store as _flow_store_service
     from ...services.flow_store import get_flow_record
     from .definitions import get_flow_controller
     from .run_routes import start_flow_worker as _start_flow_worker
@@ -41,7 +45,6 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
     from .runtime_service import (
         recover_flow_store_if_possible as _recover_flow_store_if_possible,
     )
-    from .ticket_bootstrap import safe_list_flow_runs
 
     def require_flow_store(repo_root: Path) -> "FlowStore":
         from .....core.flows import FlowStore
@@ -56,6 +59,19 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         repo_root: Path, flow_type: str, state: Any
     ) -> FlowController:
         return get_flow_controller(repo_root, flow_type, state)
+
+    def safe_list_flow_runs_wrapper(
+        repo_root: Path,
+        flow_type: Optional[str] = None,
+        *,
+        recover_stuck: bool = False,
+    ):
+        return _flow_store_service.safe_list_flow_runs(
+            repo_root,
+            flow_type=flow_type,
+            recover_stuck=recover_stuck,
+            logger=_logger,
+        )
 
     def seed_issueispatch(
         repo_root: Path,
@@ -77,7 +93,7 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
         find_repo_root=find_repo_root,
         build_flow_orchestration_service=_build_flow_orchestration_service,
         require_flow_store=require_flow_store,
-        safe_list_flow_runs=safe_list_flow_runs,
+        safe_list_flow_runs=safe_list_flow_runs_wrapper,
         build_flow_status_response=build_flow_status_snapshot,
         get_flow_record=get_flow_record,
         get_flow_controller=get_flow_controller_adapter,

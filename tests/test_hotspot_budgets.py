@@ -40,11 +40,6 @@ STANDARD_FILE_BUDGETS = (
         reason="Keep the extracted flow status/history slice small enough to stay injectable.",
     ),
     FileBudget(
-        path="src/codex_autorunner/surfaces/web/routes/flow_routes/ticket_bootstrap.py",
-        max_lines=320,
-        reason="Protect the extracted flow bootstrap route family from regrowing into flows.py.",
-    ),
-    FileBudget(
         path="src/codex_autorunner/surfaces/web/routes/file_chat_routes/execution.py",
         max_lines=460,
         reason="Keep the file-chat execution seam extracted from the legacy route builder.",
@@ -117,18 +112,6 @@ STANDARD_FUNCTION_BUDGETS = (
         qualname="build_status_history_routes",
         max_lines=300,
         reason="The extracted flow router builder should remain a composition layer.",
-    ),
-    FunctionBudget(
-        path="src/codex_autorunner/surfaces/web/routes/flow_routes/ticket_bootstrap.py",
-        qualname="build_ticket_bootstrap_routes",
-        max_lines=110,
-        reason="The bootstrap router builder should remain a thin assembly point.",
-    ),
-    FunctionBudget(
-        path="src/codex_autorunner/surfaces/web/routes/flow_routes/ticket_bootstrap.py",
-        qualname="build_ticket_bootstrap_routes.bootstrap_ticket_flow",
-        max_lines=70,
-        reason="The extracted bootstrap handler should stay smaller than the legacy flows.py copy.",
     ),
     FunctionBudget(
         path="src/codex_autorunner/surfaces/web/routes/file_chat_routes/execution.py",
