@@ -676,7 +676,7 @@ class PmaManagedThreadMessageRequest(Payload):
 
 
 class PmaManagedThreadCompactRequest(Payload):
-    summary: str
+    summary: Optional[str] = None
     reset_backend: bool = True
 
 

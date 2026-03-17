@@ -240,6 +240,145 @@ def test_compact_rejects_oversize_summary(hub_env) -> None:
 
 
 @pytest.mark.slow
+def test_compact_without_summary_uses_recent_turn_history(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        def __init__(self, turn_id: str, assistant_text: str) -> None:
+            self.turn_id = turn_id
+            self._assistant_text = assistant_text
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": [self._assistant_text],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.thread_start_calls = 0
+            self.turn_start_calls: list[dict[str, str]] = []
+
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            self.thread_start_calls += 1
+            return {"id": f"backend-thread-{self.thread_start_calls}"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, approval_policy, sandbox_policy, turn_kwargs
+            index = len(self.turn_start_calls) + 1
+            self.turn_start_calls.append({"prompt": prompt})
+            return FakeTurnHandle(
+                turn_id=f"backend-turn-{index}",
+                assistant_text=f"assistant output {index}",
+            )
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    fake_supervisor = FakeSupervisor()
+    app.state.app_server_supervisor = fake_supervisor
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        first_msg = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "first user message"},
+        )
+        assert first_msg.status_code == 200
+
+        compact_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/compact",
+            json={"reset_backend": True},
+        )
+        assert compact_resp.status_code == 200
+
+        store = PmaThreadStore(hub_env.hub_root)
+        compacted_thread = store.get_thread(managed_thread_id)
+        assert compacted_thread is not None
+        summary = str(compacted_thread["compact_seed"] or "")
+        assert "Compact summary of recent managed thread turns:" in summary
+        assert "User: first user message" in summary
+        assert "Assistant: assistant output 1" in summary
+
+        second_msg = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "follow-up question"},
+        )
+        assert second_msg.status_code == 200
+
+        second_prompt = fake_supervisor.client.turn_start_calls[1]["prompt"]
+        assert "Context summary (from compaction):" in second_prompt
+        assert "User: first user message" in second_prompt
+        assert "Assistant: assistant output 1" in second_prompt
+        assert "User message:\nfollow-up question" in second_prompt
+
+
+@pytest.mark.slow
+def test_compact_without_summary_rejects_threads_without_completed_turns(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        compact_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/compact",
+            json={"reset_backend": True},
+        )
+
+    assert compact_resp.status_code == 400
+    assert (
+        compact_resp.json()["detail"]
+        == "summary is required when thread has no completed turns"
+    )
+
+
+@pytest.mark.slow
 def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

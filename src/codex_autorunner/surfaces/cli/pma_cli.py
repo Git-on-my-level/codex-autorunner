@@ -1705,7 +1705,11 @@ def pma_thread_compact(
     managed_thread_id: str = typer.Option(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
-    summary: str = typer.Option(..., "--summary", help="Compaction summary"),
+    summary: Optional[str] = typer.Option(
+        None,
+        "--summary",
+        help="Compaction summary (defaults to recent turn history)",
+    ),
     no_reset_backend: bool = typer.Option(
         False, "--no-reset-backend", help="Preserve backend thread/session id"
     ),

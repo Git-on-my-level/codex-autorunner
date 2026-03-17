@@ -16,6 +16,7 @@ from .....core.managed_thread_status import derive_managed_thread_operator_statu
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.models import ThreadTarget
+from .....core.pma_thread_compaction import build_managed_thread_compact_summary
 from .....core.pma_thread_store import PmaThreadStore
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
@@ -714,10 +715,26 @@ def build_managed_thread_crud_routes(
         request: Request,
         payload: PmaManagedThreadCompactRequest,
     ) -> dict[str, Any]:
+        store = PmaThreadStore(request.app.state.config.root)
+        thread = store.get_thread(managed_thread_id)
+        if thread is None:
+            raise HTTPException(status_code=404, detail="Managed thread not found")
+
         summary = (payload.summary or "").strip()
-        if not summary:
-            raise HTTPException(status_code=400, detail="summary is required")
         max_text_chars = int(_get_pma_config(request).get("max_text_chars", 0) or 0)
+        if not summary:
+            summary = (
+                build_managed_thread_compact_summary(
+                    reversed(store.list_turns(managed_thread_id, limit=12)),
+                    max_chars=max_text_chars,
+                )
+                or ""
+            ).strip()
+        if not summary:
+            raise HTTPException(
+                status_code=400,
+                detail="summary is required when thread has no completed turns",
+            )
         if max_text_chars > 0 and len(summary) > max_text_chars:
             raise HTTPException(
                 status_code=400,
@@ -725,11 +742,6 @@ def build_managed_thread_crud_routes(
                     f"summary exceeds max_text_chars ({max_text_chars} characters)"
                 ),
             )
-
-        store = PmaThreadStore(request.app.state.config.root)
-        thread = store.get_thread(managed_thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="Managed thread not found")
 
         old_backend_thread_id = normalize_optional_text(thread.get("backend_thread_id"))
         reset_backend = bool(payload.reset_backend)
