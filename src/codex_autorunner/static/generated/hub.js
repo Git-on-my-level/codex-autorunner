@@ -778,6 +778,12 @@ function buildActions(repo) {
             title: syncTitle,
             disabled: syncDisabled,
         });
+        actions.push({
+            key: "cleanup_repo_threads",
+            label: "Cleanup threads",
+            kind: "ghost",
+            title: "Archive stale non-chat-bound managed threads for this repo",
+        });
     }
     if (!missing && kind === "worktree") {
         const cleanupBlockedByChatBinding = isCleanupBlockedByChatBinding(repo);
@@ -1308,6 +1314,22 @@ function pmaChannelGroupLabel(channel) {
         return "ticket-flow";
     return channelDisplayLabel(channel);
 }
+function isDuplicateChatBoundPmaGroup(label, visibleChannels) {
+    const normalizedLabel = label.trim().toLowerCase();
+    if (!normalizedLabel ||
+        (!normalizedLabel.startsWith("discord:") &&
+            !normalizedLabel.startsWith("telegram:"))) {
+        return false;
+    }
+    return visibleChannels.some((channel) => {
+        const channelKey = String(channel.key || "")
+            .trim()
+            .toLowerCase();
+        return (channelKey === normalizedLabel ||
+            channelKey.startsWith(`${normalizedLabel}:`) ||
+            normalizedLabel.startsWith(`${channelKey}:`));
+    });
+}
 function groupPmaChannels(channels) {
     const grouped = new Map();
     channels.forEach((channel) => {
@@ -1568,8 +1590,8 @@ function renderRepos(repos) {
         const lastActivity = formatLastActivity(repo);
         const runDuration = repo.last_run_finished_at ? formatRunDuration(repo.last_run_duration_seconds) : "";
         const pmaChannels = inlineChannels.filter((channel) => isManagedPmaChannel(channel));
-        const pmaGroups = groupPmaChannels(pmaChannels);
         const visibleChannels = inlineChannels.filter((channel) => !isManagedPmaChannel(channel));
+        const pmaGroups = groupPmaChannels(pmaChannels).filter((group) => !isDuplicateChatBoundPmaGroup(group.label, visibleChannels));
         const primaryChannel = visibleChannels[0] || null;
         const infoItems = [];
         if (!primaryChannel) {
@@ -2552,6 +2574,26 @@ async function handleRepoAction(repoId, action) {
                 startedMessage: "Worktree cleanup queued",
             });
             flash(`Removed worktree: ${repoId}`, "success");
+            await refreshHub();
+            return;
+        }
+        if (action === "cleanup_repo_threads") {
+            const repo = hubData.repos.find((item) => item.id === repoId);
+            if (!repo) {
+                flash(`Repo not found: ${repoId}`, "error");
+                return;
+            }
+            const displayName = repo.display_name || repoId;
+            const ok = await confirmModal(`Clean up stale non-chat threads for "${displayName}"?\n\nCAR will archive unbound managed threads for this root repo. Discord and Telegram-bound threads will stay active.`, { confirmText: "Cleanup threads" });
+            if (!ok)
+                return;
+            const response = (await api(`/hub/repos/${encodeURIComponent(repoId)}/cleanup-threads`, {
+                method: "POST",
+            }));
+            const message = typeof response?.message === "string" && response.message.trim()
+                ? response.message.trim()
+                : `Cleaned up stale threads for ${displayName}`;
+            flash(message, "success");
             await refreshHub();
             return;
         }

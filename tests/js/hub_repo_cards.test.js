@@ -158,6 +158,116 @@ test("worktree cards show archive state action when CAR state is present", () =>
   assert.match(text, /Cleanup/);
 });
 
+test("base repo cards show cleanup threads action", () => {
+  __hubTest.setHubChannelEntries([]);
+  __hubTest.renderRepos([
+    {
+      id: "base",
+      path: "/tmp/base",
+      display_name: "base",
+      enabled: true,
+      auto_run: false,
+      worktree_setup_commands: [],
+      kind: "base",
+      worktree_of: null,
+      branch: "main",
+      exists_on_disk: true,
+      is_clean: true,
+      initialized: true,
+      init_error: null,
+      status: "idle",
+      lock_status: "unlocked",
+      last_run_id: null,
+      last_exit_code: null,
+      last_run_started_at: null,
+      last_run_finished_at: null,
+      runner_pid: null,
+      effective_destination: { kind: "local" },
+      mounted: false,
+      mount_error: null,
+      cleanup_blocked_by_chat_binding: false,
+      ticket_flow: null,
+      ticket_flow_display: null,
+    },
+  ]);
+
+  const text = document.getElementById("hub-repo-list")?.textContent || "";
+  assert.match(text, /Cleanup threads/);
+});
+
+test("repo cards hide duplicate chat-bound pma thread labels", () => {
+  const now = new Date().toISOString();
+  __hubTest.setHubChannelEntries([
+    {
+      key: "discord:1234567890",
+      repo_id: "stablecoin-engine",
+      source: "discord",
+      display: "Personal Workspace / #car-1",
+      seen_at: now,
+    },
+    {
+      key: "pma_thread:dup",
+      repo_id: "stablecoin-engine",
+      source: "pma_thread",
+      display: "discord:1234567890",
+      seen_at: now,
+      provenance: {
+        source: "pma_thread",
+        managed_thread_id: "dup",
+        thread_kind: "interactive",
+      },
+    },
+    {
+      key: "pma_thread:flow",
+      repo_id: "stablecoin-engine",
+      source: "pma_thread",
+      display: "ticket-flow:codex",
+      seen_at: now,
+      provenance: {
+        source: "pma_thread",
+        managed_thread_id: "flow",
+        thread_kind: "ticket_flow",
+      },
+    },
+  ]);
+
+  __hubTest.renderRepos([
+    {
+      id: "stablecoin-engine",
+      path: "/tmp/stablecoin-engine",
+      display_name: "stablecoin-engine",
+      enabled: true,
+      auto_run: false,
+      worktree_setup_commands: [],
+      kind: "base",
+      worktree_of: null,
+      branch: "main",
+      exists_on_disk: true,
+      is_clean: true,
+      initialized: true,
+      init_error: null,
+      status: "running",
+      lock_status: "unlocked",
+      last_run_id: "run-1",
+      last_exit_code: null,
+      last_run_started_at: now,
+      last_run_finished_at: now,
+      runner_pid: null,
+      effective_destination: { kind: "local" },
+      mounted: false,
+      mount_error: null,
+      cleanup_blocked_by_chat_binding: false,
+      ticket_flow: null,
+      ticket_flow_display: null,
+    },
+  ]);
+
+  const text = document.getElementById("hub-repo-list")?.textContent || "";
+  assert.match(text, /Personal Workspace \/ #car-1/);
+  assert.match(text, /ticket-flow/);
+  assert.doesNotMatch(text, /\bdiscord:1234567890\b/);
+});
+
 test("repo cards collapse pma-managed threads into a compact summary row", () => {
   const now = new Date().toISOString();
   __hubTest.setHubChannelEntries([

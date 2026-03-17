@@ -23,6 +23,7 @@ from codex_autorunner.core.destinations import default_car_docker_container_name
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
 from codex_autorunner.integrations.agents.backend_orchestrator import (
@@ -766,6 +767,64 @@ def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     unpin_resp = client.post("/hub/repos/demo/pin", json={"pinned": False})
     assert unpin_resp.status_code == 200
     assert "demo" not in unpin_resp.json()["pinned_parent_repo_ids"]
+
+
+def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    other = supervisor.create_repo("other")
+    _init_git_repo(base.path)
+    _init_git_repo(other.path)
+
+    store = PmaThreadStore(hub_root)
+    unbound = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
+    bound = store.create_thread(
+        "codex",
+        base.path,
+        repo_id=base.id,
+        name="discord:1234567890",
+    )
+    untouched = store.create_thread("codex", other.path, repo_id=other.id, name="other")
+
+    bindings = OrchestrationBindingStore(hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:1234567890",
+        thread_target_id=bound["managed_thread_id"],
+        agent_id="codex",
+        repo_id=base.id,
+        resource_kind="repo",
+        resource_id=base.id,
+    )
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.post(f"/hub/repos/{base.id}/cleanup-threads")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["archived_count"] == 1
+    assert payload["archived_thread_ids"] == [unbound["managed_thread_id"]]
+
+    unbound_thread = store.get_thread(unbound["managed_thread_id"])
+    bound_thread = store.get_thread(bound["managed_thread_id"])
+    untouched_thread = store.get_thread(untouched["managed_thread_id"])
+    assert unbound_thread is not None
+    assert bound_thread is not None
+    assert untouched_thread is not None
+    assert unbound_thread["lifecycle_status"] == "archived"
+    assert bound_thread["lifecycle_status"] == "active"
+    assert untouched_thread["lifecycle_status"] == "active"
 
 
 @pytest.mark.slow

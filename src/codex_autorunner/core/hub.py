@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
@@ -62,6 +63,7 @@ from .lifecycle_events import (
     LifecycleEventType,
 )
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
+from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_store import DEFAULT_PMA_LANE_ID, PmaAutomationStore
 from .pma_dispatch_interceptor import PmaDispatchInterceptor
 from .pma_queue import PmaQueue
@@ -1395,6 +1397,67 @@ class HubSupervisor:
 
         return archived_thread_ids
 
+    def _bound_thread_target_ids(self) -> set[str]:
+        try:
+            with open_orchestration_sqlite(self.hub_config.root) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT target_id
+                      FROM orch_bindings
+                     WHERE disabled_at IS NULL
+                       AND target_kind = 'thread'
+                       AND TRIM(COALESCE(target_id, '')) != ''
+                    """
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                return set()
+            raise
+        return {
+            str(row["target_id"]).strip()
+            for row in rows
+            if isinstance(row["target_id"], str) and row["target_id"].strip()
+        }
+
+    def _archive_unbound_repo_threads(
+        self,
+        *,
+        repo_id: str,
+        repo_path: Path,
+    ) -> list[str]:
+        store = PmaThreadStore(self.hub_config.root)
+        archived_thread_ids: list[str] = []
+        seen_ids: set[str] = set()
+        bound_thread_ids = self._bound_thread_target_ids()
+        canonical_repo = repo_path.resolve()
+
+        for thread in store.list_threads(status="active", limit=None):
+            managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
+            if (
+                not managed_thread_id
+                or managed_thread_id in seen_ids
+                or managed_thread_id in bound_thread_ids
+            ):
+                continue
+
+            thread_repo_id = str(thread.get("repo_id") or "").strip()
+            workspace_root = str(thread.get("workspace_root") or "").strip()
+            matches_repo = thread_repo_id == repo_id
+            matches_workspace = False
+            if workspace_root:
+                try:
+                    matches_workspace = Path(workspace_root).resolve() == canonical_repo
+                except Exception:
+                    matches_workspace = False
+            if not matches_repo and not matches_workspace:
+                continue
+
+            store.archive_thread(managed_thread_id)
+            archived_thread_ids.append(managed_thread_id)
+            seen_ids.add(managed_thread_id)
+
+        return archived_thread_ids
+
     def _ensure_worktree_clean_for_archive(
         self, *, worktree_repo_id: str, worktree_path: Path
     ) -> None:
@@ -1847,6 +1910,37 @@ class HubSupervisor:
             "latest_flow_run_id": result.latest_flow_run_id,
             "archived_paths": list(result.archived_paths),
             "reset_paths": list(result.reset_paths),
+        }
+
+    def cleanup_repo_threads(self, *, repo_id: str) -> Dict[str, object]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(repo_id)
+        if not entry or entry.kind != "base":
+            raise ValueError(f"Base repo not found: {repo_id}")
+
+        repo_path = (self.hub_config.root / entry.path).resolve()
+        if not repo_path.exists():
+            raise ValueError(f"Repo path does not exist: {repo_path}")
+
+        archived_thread_ids = self._archive_unbound_repo_threads(
+            repo_id=repo_id,
+            repo_path=repo_path,
+        )
+        archived_count = len(archived_thread_ids)
+        if archived_count == 0:
+            message = f"No stale non-chat-bound threads found for {repo_id}."
+        elif archived_count == 1:
+            message = f"Archived 1 stale non-chat-bound thread for {repo_id}."
+        else:
+            message = (
+                f"Archived {archived_count} stale non-chat-bound threads for {repo_id}."
+            )
+        return {
+            "status": "ok",
+            "repo_id": repo_id,
+            "archived_thread_ids": archived_thread_ids,
+            "archived_count": archived_count,
+            "message": message,
         }
 
     def check_repo_removal(self, repo_id: str) -> Dict[str, object]:

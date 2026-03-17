@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -1111,6 +1112,16 @@ def build_hub_repo_routes(
             worktree_repo_id=payload.worktree_repo_id,
             archive_note=payload.archive_note,
         )
+
+    @router.post("/hub/repos/{repo_id}/cleanup-threads")
+    async def cleanup_repo_threads(repo_id: str):
+        try:
+            return await asyncio.to_thread(
+                context.supervisor.cleanup_repo_threads,
+                repo_id=repo_id,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/hub/repos/{repo_id}/run")
     async def run_repo(repo_id: str, payload: Optional[RunControlRequest] = None):
