@@ -115,6 +115,27 @@ def test_insert_with_title_creates_ticket(repo: Path) -> None:
     assert 'agent: "user"' in content
 
 
+def test_insert_rejects_unknown_agent_without_shifting(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    _run(repo, "create", "--title", "First", "--agent", "codex")
+    _run(repo, "create", "--title", "Second", "--agent", "codex")
+
+    res = _run(
+        repo, "insert", "--before", "1", "--title", "Inserted", "--agent", "qa-bot"
+    )
+    assert res.returncode == 1
+    assert "frontmatter.agent is invalid" in res.stderr
+
+    ticket_paths = sorted(
+        p.name for p in tickets.iterdir() if p.name.startswith("TICKET-")
+    )
+    assert ticket_paths == ["TICKET-001.md", "TICKET-002.md"]
+    assert "First" in (tickets / "TICKET-001.md").read_text(encoding="utf-8")
+    assert "Second" in (tickets / "TICKET-002.md").read_text(encoding="utf-8")
+
+
 def test_insert_without_title_warns_next_step(repo: Path) -> None:
     tickets = repo / ".codex-autorunner" / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)

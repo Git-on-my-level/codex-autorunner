@@ -322,6 +322,11 @@ def cmd_insert(
     if title and count != 1:
         sys.stderr.write("--title is only supported with --count 1.\\n")
         return 2
+    if title:
+        _normalized_agent, agent_error = _normalize_agent(agent)
+        if agent_error:
+            sys.stderr.write(agent_error + "\\n")
+            return 1
     anchor = before if before is not None else after + 1  # type: ignore[operator]
     if anchor is None or anchor < 1:
         sys.stderr.write("Anchor index must be >= 1.\\n")
