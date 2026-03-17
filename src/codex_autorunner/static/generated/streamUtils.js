@@ -8,6 +8,71 @@ export function parseMaybeJson(data) {
         return data;
     }
 }
+export function handleStreamEvent(event, rawData, handlers) {
+    const parsed = parseMaybeJson(rawData);
+    switch (event) {
+        case "status": {
+            const status = typeof parsed === "string" ? parsed : parsed.status || "";
+            handlers.onStatus?.(status);
+            break;
+        }
+        case "token": {
+            const token = typeof parsed === "string"
+                ? parsed
+                : parsed.token || parsed.text || rawData || "";
+            handlers.onToken?.(token);
+            break;
+        }
+        case "token_usage": {
+            if (typeof parsed === "object" && parsed !== null) {
+                const usage = parsed;
+                const percent = extractContextRemainingPercent(usage);
+                if (percent !== null) {
+                    handlers.onTokenUsage?.(percent, usage);
+                }
+            }
+            break;
+        }
+        case "update": {
+            const payload = typeof parsed === "object" && parsed !== null ? parsed : {};
+            handlers.onUpdate?.(payload);
+            break;
+        }
+        case "event":
+        case "app-server": {
+            handlers.onEvent?.(parsed);
+            break;
+        }
+        case "error": {
+            const message = typeof parsed === "object" && parsed !== null
+                ? (parsed.detail || parsed.error || rawData || "Stream error")
+                : rawData || "Stream error";
+            handlers.onError?.(message);
+            break;
+        }
+        case "interrupted": {
+            const message = typeof parsed === "object" && parsed !== null
+                ? (parsed.detail || rawData || "Stream interrupted")
+                : rawData || "Stream interrupted";
+            handlers.onInterrupted?.(message);
+            break;
+        }
+        case "done":
+        case "finish": {
+            handlers.onDone?.();
+            break;
+        }
+        default: {
+            if (typeof parsed === "object" && parsed !== null) {
+                const messageObj = parsed;
+                if (messageObj.method || messageObj.message) {
+                    handlers.onEvent?.(parsed);
+                }
+            }
+            break;
+        }
+    }
+}
 export function extractContextRemainingPercent(usage) {
     if (!usage || typeof usage !== "object")
         return null;

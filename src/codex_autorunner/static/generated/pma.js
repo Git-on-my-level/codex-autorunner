@@ -7,7 +7,7 @@ import { createDocChat, } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import { getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
-import { extractContextRemainingPercent } from "./streamUtils.js";
+import { handleStreamEvent } from "./streamUtils.js";
 import { initNotificationBell } from "./notificationBell.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
@@ -904,7 +904,7 @@ async function readPMAStream(res, finalizeOnClose = false) {
             if (dataLines.length === 0)
                 continue;
             const data = dataLines.join("\n");
-            handlePMAStreamEvent(event, data);
+            handleStreamEvent(event, data, pmaStreamHandlers);
         }
     }
     if (buffer.trim()) {
@@ -922,7 +922,7 @@ async function readPMAStream(res, finalizeOnClose = false) {
             }
         });
         if (dataLines.length) {
-            handlePMAStreamEvent(event, dataLines.join("\n"));
+            handleStreamEvent(event, dataLines.join("\n"), pmaStreamHandlers);
         }
     }
     if (finalizeOnClose && pmaChat && pmaChat.state.status === "running") {
@@ -932,126 +932,76 @@ async function readPMAStream(res, finalizeOnClose = false) {
         }
     }
 }
-function handlePMAStreamEvent(event, rawData) {
-    const parsed = parseMaybeJson(rawData);
-    switch (event) {
-        case "status": {
-            const status = typeof parsed === "string"
-                ? parsed
-                : parsed.status || "";
-            pmaChat.state.statusText = status;
-            pmaChat.render();
-            pmaChat.renderEvents();
-            break;
+const pmaStreamHandlers = {
+    onStatus(status) {
+        pmaChat.state.statusText = status;
+        pmaChat.render();
+        pmaChat.renderEvents();
+    },
+    onToken(token) {
+        pmaChat.state.streamText = (pmaChat.state.streamText || "") + token;
+        if (!pmaChat.state.statusText || pmaChat.state.statusText === "starting") {
+            pmaChat.state.statusText = "responding";
         }
-        case "token": {
-            const token = typeof parsed === "string"
-                ? parsed
-                : parsed.token ||
-                    parsed.text ||
-                    rawData ||
-                    "";
-            pmaChat.state.streamText = (pmaChat.state.streamText || "") + token;
-            // Force status to "responding" if we have tokens, so the stream loop picks it up
-            if (!pmaChat.state.statusText || pmaChat.state.statusText === "starting") {
-                pmaChat.state.statusText = "responding";
-            }
-            // Ensure we're in "running" state if receiving tokens
+        if (pmaChat.state.status !== "running") {
+            pmaChat.state.status = "running";
+        }
+        pmaChat.render();
+    },
+    onTokenUsage(percentRemaining) {
+        if (pmaChat) {
+            pmaChat.state.contextUsagePercent = percentRemaining;
+            pmaChat.render();
+        }
+    },
+    onUpdate(payload) {
+        if (payload.client_turn_id) {
+            clearPendingTurn();
+        }
+        if (payload.message) {
+            pmaChat.state.streamText = payload.message;
+        }
+        const summary = deriveDeliverySummary(payload);
+        if (summary) {
+            pendingDeliverySummary = summary;
+        }
+        pmaChat.render();
+    },
+    onEvent(event) {
+        if (pmaChat) {
             if (pmaChat.state.status !== "running") {
                 pmaChat.state.status = "running";
             }
+            if (!pmaChat.state.statusText || pmaChat.state.statusText === "starting") {
+                pmaChat.state.statusText = "working";
+            }
+            pmaChat.applyAppEvent(event);
+            pmaChat.renderEvents();
             pmaChat.render();
-            break;
         }
-        case "event":
-        case "app-server": {
-            if (pmaChat) {
-                // Ensure we're in "running" state if receiving events
-                if (pmaChat.state.status !== "running") {
-                    pmaChat.state.status = "running";
-                }
-                // If we are receiving events but still show "starting", bump status so UI
-                // reflects progress even before token streaming starts.
-                if (!pmaChat.state.statusText || pmaChat.state.statusText === "starting") {
-                    pmaChat.state.statusText = "working";
-                }
-                pmaChat.applyAppEvent(parsed);
-                pmaChat.renderEvents();
-                // Force a full render to update the inline thinking indicator
-                pmaChat.render();
-            }
-            break;
-        }
-        case "token_usage": {
-            // Token usage events - context window usage
-            if (typeof parsed === "object" && parsed !== null) {
-                const percentRemaining = extractContextRemainingPercent(parsed);
-                if (percentRemaining !== null && pmaChat) {
-                    pmaChat.state.contextUsagePercent = percentRemaining;
-                    pmaChat.render();
-                }
-            }
-            break;
-        }
-        case "error": {
-            const message = typeof parsed === "object" && parsed !== null
-                ? parsed.detail ||
-                    parsed.error ||
-                    rawData
-                : rawData || "PMA chat failed";
-            pendingDeliverySummary = null;
-            pmaChat.state.status = "error";
-            pmaChat.state.error = String(message);
-            pmaChat.addAssistantMessage(`Error: ${message}`, true);
-            pmaChat.render();
-            pmaChat.renderMessages();
-            throw new Error(String(message));
-        }
-        case "interrupted": {
-            const message = typeof parsed === "object" && parsed !== null
-                ? parsed.detail || rawData
-                : rawData || "PMA chat interrupted";
-            pendingDeliverySummary = null;
-            pmaChat.state.status = "interrupted";
-            pmaChat.state.error = "";
-            pmaChat.state.statusText = String(message);
-            pmaChat.addAssistantMessage("Request interrupted", true);
-            pmaChat.render();
-            pmaChat.renderMessages();
-            break;
-        }
-        case "update": {
-            const data = typeof parsed === "string" ? {} : parsed;
-            // If server echoes client_turn_id, we can clear pending when we receive the final payload.
-            if (data.client_turn_id) {
-                clearPendingTurn();
-            }
-            if (data.message) {
-                pmaChat.state.streamText = data.message;
-            }
-            const summary = deriveDeliverySummary(data);
-            if (summary) {
-                pendingDeliverySummary = summary;
-            }
-            pmaChat.render();
-            break;
-        }
-        case "done":
-        case "finish": {
-            void finalizePMAResponse(pmaChat.state.streamText || "");
-            break;
-        }
-        default:
-            if (typeof parsed === "object" && parsed !== null) {
-                const messageObj = parsed;
-                if (messageObj.method || messageObj.message) {
-                    pmaChat.applyAppEvent(parsed);
-                    pmaChat.renderEvents();
-                }
-            }
-            break;
-    }
-}
+    },
+    onError(message) {
+        pendingDeliverySummary = null;
+        pmaChat.state.status = "error";
+        pmaChat.state.error = message;
+        pmaChat.addAssistantMessage(`Error: ${message}`, true);
+        pmaChat.render();
+        pmaChat.renderMessages();
+        throw new Error(message);
+    },
+    onInterrupted(message) {
+        pendingDeliverySummary = null;
+        pmaChat.state.status = "interrupted";
+        pmaChat.state.error = "";
+        pmaChat.state.statusText = message;
+        pmaChat.addAssistantMessage("Request interrupted", true);
+        pmaChat.render();
+        pmaChat.renderMessages();
+    },
+    onDone() {
+        void finalizePMAResponse(pmaChat.state.streamText || "");
+    },
+};
 async function resumePendingTurn() {
     const pending = loadPendingTurn();
     if (!pending || !pmaChat)
@@ -1146,14 +1096,6 @@ function applyPMAResult(payload) {
     pendingDeliverySummary = summary;
     const responseText = (pmaChat.state.streamText || pmaChat.state.statusText || "Done");
     void finalizePMAResponse(responseText, { deliverySummary: summary });
-}
-function parseMaybeJson(data) {
-    try {
-        return JSON.parse(data);
-    }
-    catch {
-        return data;
-    }
 }
 async function interruptActiveTurn(options = {}) {
     try {

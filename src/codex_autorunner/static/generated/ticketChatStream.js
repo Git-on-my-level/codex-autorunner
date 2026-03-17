@@ -5,7 +5,7 @@
 import { resolvePath, getAuthToken } from "./utils.js";
 import { ticketChatState, renderTicketChat, clearTicketEvents, addUserMessage, addAssistantMessage, applyTicketChatResult, } from "./ticketChatActions.js";
 import { applyTicketEvent, renderTicketEvents, renderTicketMessages } from "./ticketChatEvents.js";
-import { extractContextRemainingPercent, readEventStream, parseMaybeJson } from "./streamUtils.js";
+import { readEventStream, handleStreamEvent } from "./streamUtils.js";
 export async function performTicketChatRequest(ticketIndex, message, signal, options = {}) {
     // Clear events from previous request and add user message to history
     clearTicketEvents();
@@ -54,7 +54,9 @@ export async function performTicketChatRequest(ticketIndex, message, signal, opt
     }
     const contentType = res.headers.get("content-type") || "";
     if (contentType.includes("text/event-stream")) {
-        await readEventStream(res, (event, data) => handleTicketStreamEvent(event, data));
+        await readEventStream(res, (event, data) => {
+            handleStreamEvent(event, data, ticketChatStreamHandlers);
+        });
     }
     else {
         // Non-streaming response
@@ -64,99 +66,50 @@ export async function performTicketChatRequest(ticketIndex, message, signal, opt
         applyTicketChatResult(responsePayload);
     }
 }
-function handleTicketStreamEvent(event, rawData) {
-    const parsed = parseMaybeJson(rawData);
-    switch (event) {
-        case "status": {
-            const status = typeof parsed === "string"
-                ? parsed
-                : parsed.status || "";
-            ticketChatState.statusText = status;
-            renderTicketChat();
-            renderTicketEvents();
-            break;
+const ticketChatStreamHandlers = {
+    onStatus(status) {
+        ticketChatState.statusText = status;
+        renderTicketChat();
+        renderTicketEvents();
+    },
+    onToken(token) {
+        ticketChatState.streamText = (ticketChatState.streamText || "") + token;
+        if (!ticketChatState.statusText || ticketChatState.statusText === "queued") {
+            ticketChatState.statusText = "responding";
         }
-        case "token": {
-            const token = typeof parsed === "string"
-                ? parsed
-                : parsed.token ||
-                    parsed.text ||
-                    rawData ||
-                    "";
-            ticketChatState.streamText = (ticketChatState.streamText || "") + token;
-            if (!ticketChatState.statusText || ticketChatState.statusText === "queued") {
-                ticketChatState.statusText = "responding";
-            }
-            renderTicketChat();
-            break;
-        }
-        case "update": {
-            applyTicketChatResult(parsed);
-            break;
-        }
-        case "event":
-        case "app-server": {
-            // App-server events (thinking, tool calls, etc.)
-            applyTicketEvent(parsed);
-            renderTicketEvents();
-            break;
-        }
-        case "token_usage": {
-            // Token usage events - context window usage
-            if (typeof parsed === "object" && parsed !== null) {
-                const percentRemaining = extractContextRemainingPercent(parsed);
-                if (percentRemaining !== null) {
-                    ticketChatState.contextUsagePercent = percentRemaining;
-                    renderTicketChat();
-                }
-            }
-            break;
-        }
-        case "error": {
-            const message = typeof parsed === "object" && parsed !== null
-                ? parsed.detail ||
-                    parsed.error ||
-                    rawData
-                : rawData || "Ticket chat failed";
-            ticketChatState.status = "error";
-            ticketChatState.error = String(message);
-            // Add error as assistant message
-            addAssistantMessage(`Error: ${message}`, true);
-            renderTicketChat();
-            renderTicketMessages();
-            throw new Error(String(message));
-        }
-        case "interrupted": {
-            const message = typeof parsed === "object" && parsed !== null
-                ? parsed.detail || rawData
-                : rawData || "Ticket chat interrupted";
-            ticketChatState.status = "interrupted";
-            ticketChatState.error = "";
-            ticketChatState.statusText = String(message);
-            // Add interrupted message
-            addAssistantMessage("Request interrupted", true);
-            renderTicketChat();
-            renderTicketMessages();
-            break;
-        }
-        case "done":
-        case "finish": {
-            ticketChatState.status = "done";
-            // Final render to ensure UI is up to date
-            renderTicketChat();
-            renderTicketMessages();
-            renderTicketEvents();
-            break;
-        }
-        default:
-            // Unknown event - try to parse as app-server event
-            if (typeof parsed === "object" && parsed !== null) {
-                const messageObj = parsed;
-                if (messageObj.method || messageObj.message) {
-                    applyTicketEvent(parsed);
-                    renderTicketEvents();
-                }
-            }
-            break;
-    }
-}
+        renderTicketChat();
+    },
+    onTokenUsage(percentRemaining) {
+        ticketChatState.contextUsagePercent = percentRemaining;
+        renderTicketChat();
+    },
+    onUpdate(payload) {
+        applyTicketChatResult(payload);
+    },
+    onEvent(event) {
+        applyTicketEvent(event);
+        renderTicketEvents();
+    },
+    onError(message) {
+        ticketChatState.status = "error";
+        ticketChatState.error = message;
+        addAssistantMessage(`Error: ${message}`, true);
+        renderTicketChat();
+        renderTicketMessages();
+        throw new Error(message);
+    },
+    onInterrupted(message) {
+        ticketChatState.status = "interrupted";
+        ticketChatState.error = "";
+        ticketChatState.statusText = message;
+        addAssistantMessage("Request interrupted", true);
+        renderTicketChat();
+        renderTicketMessages();
+    },
+    onDone() {
+        ticketChatState.status = "done";
+        renderTicketChat();
+        renderTicketMessages();
+        renderTicketEvents();
+    },
+};

@@ -17,7 +17,7 @@ import {
   refreshAgentControls,
 } from "./agentControls.js";
 import { createFileBoxWidget, type FileBoxListing } from "./fileboxUi.js";
-import { extractContextRemainingPercent } from "./streamUtils.js";
+import { handleStreamEvent, type StreamEventHandler } from "./streamUtils.js";
 
 import { initNotificationBell } from "./notificationBell.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
@@ -1013,7 +1013,7 @@ async function readPMAStream(res: Response, finalizeOnClose = false): Promise<vo
 
       if (dataLines.length === 0) continue;
       const data = dataLines.join("\n");
-      handlePMAStreamEvent(event, data);
+      handleStreamEvent(event, data, pmaStreamHandlers);
     }
   }
 
@@ -1030,7 +1030,7 @@ async function readPMAStream(res: Response, finalizeOnClose = false): Promise<vo
       }
     });
     if (dataLines.length) {
-      handlePMAStreamEvent(event, dataLines.join("\n"));
+      handleStreamEvent(event, dataLines.join("\n"), pmaStreamHandlers);
     }
   }
 
@@ -1042,139 +1042,83 @@ async function readPMAStream(res: Response, finalizeOnClose = false): Promise<vo
   }
 }
 
-function handlePMAStreamEvent(event: string, rawData: string): void {
-  const parsed = parseMaybeJson(rawData) as Record<string, unknown> | string;
+const pmaStreamHandlers: StreamEventHandler = {
+  onStatus(status) {
+    pmaChat!.state.statusText = status;
+    pmaChat!.render();
+    pmaChat!.renderEvents();
+  },
 
-  switch (event) {
-    case "status": {
-      const status =
-        typeof parsed === "string"
-          ? parsed
-          : ((parsed as Record<string, unknown>).status as string) || "";
-      pmaChat!.state.statusText = status;
-      pmaChat!.render();
-      pmaChat!.renderEvents();
-      break;
+  onToken(token) {
+    pmaChat!.state.streamText = (pmaChat!.state.streamText || "") + token;
+    if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "starting") {
+      pmaChat!.state.statusText = "responding";
     }
-
-    case "token": {
-      const token =
-        typeof parsed === "string"
-          ? parsed
-          : ((parsed as Record<string, unknown>).token as string) ||
-            ((parsed as Record<string, unknown>).text as string) ||
-            rawData ||
-            "";
-      pmaChat!.state.streamText = (pmaChat!.state.streamText || "") + token;
-      // Force status to "responding" if we have tokens, so the stream loop picks it up
-      if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "starting") {
-        pmaChat!.state.statusText = "responding";
-      }
-      // Ensure we're in "running" state if receiving tokens
-      if (pmaChat!.state.status !== "running") {
-          pmaChat!.state.status = "running";
-      }
-      pmaChat!.render();
-      break;
+    if (pmaChat!.state.status !== "running") {
+      pmaChat!.state.status = "running";
     }
+    pmaChat!.render();
+  },
 
-    case "event":
-    case "app-server": {
-      if (pmaChat) {
-        // Ensure we're in "running" state if receiving events
-        if (pmaChat!.state.status !== "running") {
-            pmaChat!.state.status = "running";
-        }
-        // If we are receiving events but still show "starting", bump status so UI
-        // reflects progress even before token streaming starts.
-        if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "starting") {
-          pmaChat!.state.statusText = "working";
-        }
-        pmaChat.applyAppEvent(parsed);
-        pmaChat.renderEvents();
-        // Force a full render to update the inline thinking indicator
-        pmaChat.render();
-      }
-      break;
+  onTokenUsage(percentRemaining) {
+    if (pmaChat) {
+      pmaChat.state.contextUsagePercent = percentRemaining;
+      pmaChat.render();
     }
+  },
 
-    case "token_usage": {
-      // Token usage events - context window usage
-      if (typeof parsed === "object" && parsed !== null) {
-        const percentRemaining = extractContextRemainingPercent(parsed);
-        if (percentRemaining !== null && pmaChat) {
-          pmaChat.state.contextUsagePercent = percentRemaining;
-          pmaChat.render();
-        }
-      }
-      break;
+  onUpdate(payload) {
+    if (payload.client_turn_id) {
+      clearPendingTurn();
     }
-
-    case "error": {
-      const message =
-        typeof parsed === "object" && parsed !== null
-          ? ((parsed as Record<string, unknown>).detail as string) ||
-            ((parsed as Record<string, unknown>).error as string) ||
-            rawData
-          : rawData || "PMA chat failed";
-      pendingDeliverySummary = null;
-      pmaChat!.state.status = "error";
-      pmaChat!.state.error = String(message);
-      pmaChat!.addAssistantMessage(`Error: ${message}`, true);
-      pmaChat!.render();
-      pmaChat!.renderMessages();
-      throw new Error(String(message));
+    if (payload.message) {
+      pmaChat!.state.streamText = payload.message as string;
     }
-
-    case "interrupted": {
-      const message =
-        typeof parsed === "object" && parsed !== null
-          ? ((parsed as Record<string, unknown>).detail as string) || rawData
-          : rawData || "PMA chat interrupted";
-      pendingDeliverySummary = null;
-      pmaChat!.state.status = "interrupted";
-      pmaChat!.state.error = "";
-      pmaChat!.state.statusText = String(message);
-      pmaChat!.addAssistantMessage("Request interrupted", true);
-      pmaChat!.render();
-      pmaChat!.renderMessages();
-      break;
+    const summary = deriveDeliverySummary(payload);
+    if (summary) {
+      pendingDeliverySummary = summary;
     }
+    pmaChat!.render();
+  },
 
-    case "update": {
-      const data = typeof parsed === "string" ? {} : (parsed as Record<string, unknown>);
-      // If server echoes client_turn_id, we can clear pending when we receive the final payload.
-      if (data.client_turn_id) {
-        clearPendingTurn();
+  onEvent(event) {
+    if (pmaChat) {
+      if (pmaChat.state.status !== "running") {
+        pmaChat.state.status = "running";
       }
-      if (data.message) {
-        pmaChat!.state.streamText = data.message as string;
+      if (!pmaChat.state.statusText || pmaChat.state.statusText === "starting") {
+        pmaChat.state.statusText = "working";
       }
-      const summary = deriveDeliverySummary(data);
-      if (summary) {
-        pendingDeliverySummary = summary;
-      }
-      pmaChat!.render();
-      break;
+      pmaChat.applyAppEvent(event);
+      pmaChat.renderEvents();
+      pmaChat.render();
     }
+  },
 
-    case "done":
-    case "finish": {
-      void finalizePMAResponse(pmaChat!.state.streamText || "");
-      break;
-    }
+  onError(message) {
+    pendingDeliverySummary = null;
+    pmaChat!.state.status = "error";
+    pmaChat!.state.error = message;
+    pmaChat!.addAssistantMessage(`Error: ${message}`, true);
+    pmaChat!.render();
+    pmaChat!.renderMessages();
+    throw new Error(message);
+  },
 
-    default:
-      if (typeof parsed === "object" && parsed !== null) {
-        const messageObj = parsed as Record<string, unknown>;
-        if (messageObj.method || messageObj.message) {
-          pmaChat!.applyAppEvent(parsed);
-          pmaChat!.renderEvents();
-        }
-      }
-      break;
-  }
-}
+  onInterrupted(message) {
+    pendingDeliverySummary = null;
+    pmaChat!.state.status = "interrupted";
+    pmaChat!.state.error = "";
+    pmaChat!.state.statusText = message;
+    pmaChat!.addAssistantMessage("Request interrupted", true);
+    pmaChat!.render();
+    pmaChat!.renderMessages();
+  },
+
+  onDone() {
+    void finalizePMAResponse(pmaChat!.state.streamText || "");
+  },
+};
 
 async function resumePendingTurn(): Promise<void> {
   const pending = loadPendingTurn();
@@ -1282,14 +1226,6 @@ function applyPMAResult(payload: unknown): void {
   pendingDeliverySummary = summary;
   const responseText = (pmaChat!.state.streamText || pmaChat!.state.statusText || "Done") as string;
   void finalizePMAResponse(responseText, { deliverySummary: summary });
-}
-
-function parseMaybeJson(data: string): unknown {
-  try {
-    return JSON.parse(data);
-  } catch {
-    return data;
-  }
 }
 
 type CancelRequestOptions = {
