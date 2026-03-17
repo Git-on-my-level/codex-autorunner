@@ -34,7 +34,7 @@ from .constants import (
 )
 from .event_decoder import parse_message_response as decode_message_response
 from .events import SSEEvent
-from .usage_decoder import extract_usage
+from .usage_decoder import extract_usage, extract_usage_field
 
 PermissionDecision = str
 PermissionHandler = Callable[[str, dict[str, Any]], Awaitable[PermissionDecision]]
@@ -450,141 +450,31 @@ def _permission_policy_reply(policy: str) -> str:
     return OPENCODE_PERMISSION_REJECT
 
 
-def _extract_usage_field(
-    payload: dict[str, Any], keys: tuple[str, ...]
-) -> Optional[int]:
-    for key in keys:
-        if key in payload:
-            value = coerce_int(payload.get(key))
-            if value is not None:
-                return value
-    return None
-
-
-def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
-    usage: dict[str, Any] = {}
-    total_tokens = coerce_int(tokens.get("total"))
-    if total_tokens is not None:
-        usage["totalTokens"] = total_tokens
-    input_tokens = coerce_int(tokens.get("input"))
-    if input_tokens is not None:
-        usage["inputTokens"] = input_tokens
-    output_tokens = coerce_int(tokens.get("output"))
-    if output_tokens is not None:
-        usage["outputTokens"] = output_tokens
-    reasoning_tokens = coerce_int(tokens.get("reasoning"))
-    if reasoning_tokens is not None:
-        usage["reasoningTokens"] = reasoning_tokens
-    cache = tokens.get("cache")
-    if isinstance(cache, dict):
-        cached_read = coerce_int(cache.get("read"))
-        if cached_read is not None:
-            usage["cachedInputTokens"] = cached_read
-        cached_write = coerce_int(cache.get("write"))
-        if cached_write is not None:
-            usage["cacheWriteTokens"] = cached_write
-    if "totalTokens" not in usage:
-        components = [
-            usage.get("inputTokens"),
-            usage.get("outputTokens"),
-            usage.get("reasoningTokens"),
-            usage.get("cachedInputTokens"),
-            usage.get("cacheWriteTokens"),
-        ]
-        numeric = [value for value in components if isinstance(value, int)]
-        if numeric:
-            usage["totalTokens"] = sum(numeric)
-    return usage or None
-
-
-def _extract_usage_payload(payload: Any) -> Optional[dict[str, Any]]:
-    decoded_usage = extract_usage(payload)
-    if decoded_usage is not None:
-        return decoded_usage
-    if not isinstance(payload, dict):
-        return None
-    containers = [payload]
-    part_containers: list[dict[str, Any]] = []
-
-    def _collect_part_containers(container: Any) -> None:
-        if not isinstance(container, dict):
-            return
-        part = container.get("part")
-        if isinstance(part, dict):
-            part_containers.append(part)
-        parts = container.get("parts")
-        if isinstance(parts, list):
-            part_containers.extend(entry for entry in parts if isinstance(entry, dict))
-
-    info = payload.get("info")
-    if isinstance(info, dict):
-        containers.append(info)
-        _collect_part_containers(info)
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        containers.append(properties)
-        _collect_part_containers(properties)
-        prop_info = properties.get("info")
-        if isinstance(prop_info, dict):
-            containers.append(prop_info)
-            _collect_part_containers(prop_info)
-    response = payload.get("response")
-    if isinstance(response, dict):
-        containers.append(response)
-        _collect_part_containers(response)
-    _collect_part_containers(payload)
-    containers.extend(part_containers)
-    for container in containers:
-        for key in (
-            "usage",
-            "token_usage",
-            "tokenUsage",
-            "usage_stats",
-            "usageStats",
-            "stats",
-        ):
-            usage = container.get(key)
-            if isinstance(usage, dict):
-                return usage
-        tokens = container.get("tokens")
-        if isinstance(tokens, dict):
-            flattened = _flatten_opencode_tokens(tokens)
-            if flattened:
-                return flattened
-    return None
-
-
 def _extract_total_tokens(usage: dict[str, Any]) -> Optional[int]:
-    decoded_usage = extract_usage(usage)
-    if decoded_usage is not None:
-        usage = decoded_usage
-    total = _extract_usage_field(usage, OPENCODE_USAGE_TOTAL_KEYS)
+    total = extract_usage_field(usage, OPENCODE_USAGE_TOTAL_KEYS)
     if total is not None:
         return total
-    input_tokens = _extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS) or 0
-    cached_tokens = _extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS) or 0
-    output_tokens = _extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS) or 0
-    reasoning_tokens = _extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS) or 0
+    input_tokens = extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS) or 0
+    cached_tokens = extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS) or 0
+    output_tokens = extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS) or 0
+    reasoning_tokens = extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS) or 0
     if input_tokens or cached_tokens or output_tokens or reasoning_tokens:
         return input_tokens + cached_tokens + output_tokens + reasoning_tokens
     return None
 
 
 def _extract_usage_details(usage: dict[str, Any]) -> dict[str, int]:
-    decoded_usage = extract_usage(usage)
-    if decoded_usage is not None:
-        usage = decoded_usage
     details: dict[str, int] = {}
-    input_tokens = _extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS)
+    input_tokens = extract_usage_field(usage, OPENCODE_USAGE_INPUT_KEYS)
     if input_tokens is not None:
         details["inputTokens"] = input_tokens
-    cached_tokens = _extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS)
+    cached_tokens = extract_usage_field(usage, OPENCODE_USAGE_CACHED_KEYS)
     if cached_tokens is not None:
         details["cachedInputTokens"] = cached_tokens
-    output_tokens = _extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS)
+    output_tokens = extract_usage_field(usage, OPENCODE_USAGE_OUTPUT_KEYS)
     if output_tokens is not None:
         details["outputTokens"] = output_tokens
-    reasoning_tokens = _extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS)
+    reasoning_tokens = extract_usage_field(usage, OPENCODE_USAGE_REASONING_KEYS)
     if reasoning_tokens is not None:
         details["reasoningTokens"] = reasoning_tokens
     return details
@@ -1016,9 +906,7 @@ async def collect_opencode_output_from_events(
         nonlocal last_usage_signature, latest_usage_snapshot
         if not is_primary_session:
             return
-        usage = _extract_usage_payload(payload)
-        if usage is None:
-            usage = extract_usage(payload)
+        usage = extract_usage(payload)
         if usage is None:
             return
         provider_id, model_id = _extract_model_ids(payload)
