@@ -415,6 +415,60 @@ def test_send_message_rejects_when_running_turn_exists_if_busy_reject(hub_env) -
     assert resp.json().get("managed_turn_id") == running_turn["managed_turn_id"]
 
 
+def test_send_message_reports_interrupt_failure_without_marking_turn_failed(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeClient:
+        async def turn_interrupt(
+            self, turn_id: str, *, thread_id: str | None = None
+        ) -> None:
+            _ = turn_id, thread_id
+            raise RuntimeError("backend interrupt exploded")
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    running_turn = store.create_turn(managed_thread_id, prompt="still running")
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_turn_backend_turn_id(running_turn["managed_turn_id"], "backend-turn-1")
+
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "blocked", "busy_policy": "interrupt"},
+        )
+
+    assert resp.status_code == 409
+    payload = resp.json()
+    assert payload["status"] == "error"
+    assert payload["send_state"] == "rejected"
+    assert payload["interrupt_state"] == "failed"
+    assert payload["active_turn_status"] == "running"
+    assert payload["active_managed_turn_id"] == running_turn["managed_turn_id"]
+    assert "still running" in payload["detail"].lower()
+
+    updated_turn = store.get_turn(managed_thread_id, running_turn["managed_turn_id"])
+    assert updated_turn is not None
+    assert updated_turn["status"] == "running"
+    assert updated_turn["finished_at"] is None
+
+
 def test_send_message_handles_not_active_race(hub_env, monkeypatch) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

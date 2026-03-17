@@ -61,6 +61,7 @@ class ZeroClawTurnState:
     raw_buffer: str = ""
     visible_length: int = 0
     published_events: list[str] = field(default_factory=list)
+    buffered_events: list[dict[str, str]] = field(default_factory=list)
     subscribers: list[asyncio.Queue[Optional[str]]] = field(default_factory=list)
     result: asyncio.Future[TerminalTurnResult] = field(
         default_factory=lambda: asyncio.get_running_loop().create_future()
@@ -185,6 +186,12 @@ class ZeroClawClient:
                 break
             yield next_event
 
+    def list_turn_events(self, turn_id: str) -> list[dict[str, str]]:
+        turn = self._turns.get(turn_id)
+        if turn is None:
+            raise ZeroClawClientError(f"Unknown ZeroClaw turn '{turn_id}'")
+        return [dict(entry) for entry in turn.buffered_events]
+
     async def close(self) -> None:
         if self._process is not None and self._process.returncode is None:
             self._process.terminate()
@@ -272,6 +279,12 @@ class ZeroClawClient:
                 {"message": {"method": "message.delta", "params": {"text": delta}}},
             )
             turn.published_events.append(event)
+            turn.buffered_events.append(
+                {
+                    "raw_event": event,
+                    "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            )
             for subscriber in list(turn.subscribers):
                 subscriber.put_nowait(event)
             turn.visible_length = len(visible)
@@ -287,6 +300,12 @@ class ZeroClawClient:
                 },
             )
             turn.published_events.append(completed_event)
+            turn.buffered_events.append(
+                {
+                    "raw_event": completed_event,
+                    "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            )
             for subscriber in list(turn.subscribers):
                 subscriber.put_nowait(completed_event)
             result = TerminalTurnResult(
