@@ -47,6 +47,7 @@
       "discord_chat_bound_thread_count": {"type": "integer"},
       "telegram_chat_bound_thread_count": {"type": "integer"},
       "non_pma_chat_bound_thread_count": {"type": "integer"},
+      "unbound_managed_thread_count": {"type": "integer"},
       "cleanup_blocked_by_chat_binding": {"type": "boolean"},
       "has_car_state": {"type": "boolean"},
       "resource_kind": {"type": "string", "enum": ["repo"]},

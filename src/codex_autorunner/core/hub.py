@@ -236,6 +236,7 @@ class RepoSnapshot:
     discord_chat_bound_thread_count: int = 0
     telegram_chat_bound_thread_count: int = 0
     non_pma_chat_bound_thread_count: int = 0
+    unbound_managed_thread_count: int = 0
     cleanup_blocked_by_chat_binding: bool = False
     has_car_state: bool = False
     resource_kind: str = "repo"
@@ -274,6 +275,7 @@ class RepoSnapshot:
             "discord_chat_bound_thread_count": self.discord_chat_bound_thread_count,
             "telegram_chat_bound_thread_count": self.telegram_chat_bound_thread_count,
             "non_pma_chat_bound_thread_count": self.non_pma_chat_bound_thread_count,
+            "unbound_managed_thread_count": self.unbound_managed_thread_count,
             "cleanup_blocked_by_chat_binding": self.cleanup_blocked_by_chat_binding,
             "has_car_state": self.has_car_state,
             "resource_kind": self.resource_kind,

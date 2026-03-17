@@ -10,7 +10,9 @@ const dom = new JSDOM(
           <div class="hub-panel-header-main">
             <button id="hub-repo-panel-summary" aria-controls="hub-repo-list" aria-expanded="true"></button>
             <span id="hub-repo-panel-state"></span>
-            <div class="hub-repo-controls"></div>
+            <div class="hub-repo-controls">
+              <button id="hub-cleanup-all-threads" type="button"></button>
+            </div>
           </div>
         </div>
         <div id="hub-repo-list"></div>
@@ -185,6 +187,7 @@ test("base repo cards show cleanup threads action", () => {
       effective_destination: { kind: "local" },
       mounted: false,
       mount_error: null,
+      unbound_managed_thread_count: 2,
       cleanup_blocked_by_chat_binding: false,
       ticket_flow: null,
       ticket_flow_display: null,
@@ -192,7 +195,10 @@ test("base repo cards show cleanup threads action", () => {
   ]);
 
   const text = document.getElementById("hub-repo-list")?.textContent || "";
-  assert.match(text, /Cleanup threads/);
+  assert.match(text, /Cleanup threads \(2\)/);
+  const cleanupAllText =
+    document.getElementById("hub-cleanup-all-threads")?.textContent || "";
+  assert.match(cleanupAllText, /Cleanup all \(2\)/);
 });
 
 test("repo cards hide duplicate chat-bound pma thread labels", () => {
@@ -264,7 +270,7 @@ test("repo cards hide duplicate chat-bound pma thread labels", () => {
 
   const text = document.getElementById("hub-repo-list")?.textContent || "";
   assert.match(text, /Personal Workspace \/ #car-1/);
-  assert.match(text, /ticket-flow/);
+  assert.match(text, /Ticket flow/);
   assert.doesNotMatch(text, /\bdiscord:1234567890\b/);
 });
 
@@ -349,9 +355,9 @@ test("repo cards collapse pma-managed threads into a compact summary row", () =>
 
   const text = document.getElementById("hub-repo-list")?.textContent || "";
   assert.match(text, /Personal Workspace \/ #car-1/);
-  assert.match(text, /ticket-flow/);
+  assert.match(text, /Ticket flow/);
   assert.match(text, /x2/);
-  assert.match(text, /pma:codex/);
+  assert.match(text, /Agent thread/);
   assert.doesNotMatch(text, /ticket-flow:codex/);
 });
 

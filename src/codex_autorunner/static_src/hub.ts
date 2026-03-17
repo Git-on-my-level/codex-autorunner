@@ -73,6 +73,7 @@ interface HubRepo {
   discord_chat_bound_thread_count?: number | null;
   telegram_chat_bound_thread_count?: number | null;
   non_pma_chat_bound_thread_count?: number | null;
+  unbound_managed_thread_count?: number | null;
   cleanup_blocked_by_chat_binding?: boolean;
   has_car_state?: boolean;
   resource_kind: "repo";
@@ -257,6 +258,27 @@ function isChatBoundWorktree(repo: HubRepo): boolean {
   return isCleanupBlockedByChatBinding(repo);
 }
 
+function unboundManagedThreadCount(repo: HubRepo): number {
+  return Math.max(0, Number(repo.unbound_managed_thread_count || 0));
+}
+
+function baseReposWithUnboundThreads(repos: HubRepo[]): HubRepo[] {
+  return repos.filter(
+    (repo) => (repo.kind || "base") === "base" && unboundManagedThreadCount(repo) > 0
+  );
+}
+
+function totalUnboundManagedThreadCount(repos: HubRepo[]): number {
+  return repos.reduce(
+    (total, repo) => total + unboundManagedThreadCount(repo),
+    0
+  );
+}
+
+function dirtyBaseReposWithUnboundThreads(repos: HubRepo[]): HubRepo[] {
+  return baseReposWithUnboundThreads(repos).filter((repo) => repo.is_clean === false);
+}
+
 const HUB_VIEW_PREFS_KEY = `car:hub-view-prefs:${HUB_BASE || "/"}`;
 const HUB_DEFAULT_VIEW_PREFS: HubViewPrefs = {
   flowFilter: "all",
@@ -301,6 +323,9 @@ const hubFlowFilterEl = document.getElementById(
 const hubSortOrderEl = document.getElementById(
   "hub-sort-order"
 ) as HTMLSelectElement | null;
+const hubCleanupAllThreadsBtn = document.getElementById(
+  "hub-cleanup-all-threads"
+) as HTMLButtonElement | null;
 const hubRepoPanelEl = document.getElementById("hub-repo-panel");
 const hubAgentPanelEl = document.getElementById("hub-agent-panel");
 const hubShellEl = document.getElementById("hub-shell");
@@ -689,6 +714,31 @@ async function pollHubJob(jobId: string, { timeoutMs = HUB_JOB_TIMEOUT_MS }: Pol
   }
 }
 
+function updateCleanupAllThreadsButton(repos: HubRepo[]): void {
+  if (!hubCleanupAllThreadsBtn) return;
+  const cleanupRepos = baseReposWithUnboundThreads(repos);
+  const totalThreads = totalUnboundManagedThreadCount(cleanupRepos);
+  const dirtyRepos = dirtyBaseReposWithUnboundThreads(repos);
+  hubCleanupAllThreadsBtn.textContent =
+    totalThreads > 0 ? `Cleanup all (${totalThreads})` : "Cleanup all";
+  hubCleanupAllThreadsBtn.disabled = totalThreads <= 0;
+  if (totalThreads <= 0) {
+    hubCleanupAllThreadsBtn.title =
+      "No stale non-chat-bound managed threads across base repos";
+    return;
+  }
+  const dirtySummary = dirtyRepos.length
+    ? ` Includes ${dirtyRepos.length} dirty repo${
+        dirtyRepos.length === 1 ? "" : "s"
+      }.`
+    : "";
+  hubCleanupAllThreadsBtn.title =
+    `Archive ${totalThreads} stale non-chat-bound managed thread${
+      totalThreads === 1 ? "" : "s"
+    } across ${cleanupRepos.length} base repo${cleanupRepos.length === 1 ? "" : "s"}.` +
+    dirtySummary;
+}
+
 interface StartHubJobOptions {
   body?: unknown;
   startedMessage?: string;
@@ -719,6 +769,7 @@ function formatTimeCompact(isoString: string | null): string {
 function renderSummary(repos: HubRepo[]): void {
   const running = repos.filter((r) => r.status === "running").length;
   const missing = repos.filter((r) => !r.exists_on_disk).length;
+  updateCleanupAllThreadsButton(repos);
   if (totalEl) totalEl.textContent = repos.length.toString();
   if (runningEl) runningEl.textContent = running.toString();
   if (missingEl) missingEl.textContent = missing.toString();
@@ -1096,9 +1147,20 @@ function buildActions(repo: HubRepo): RepoAction[] {
     });
     actions.push({
       key: "cleanup_repo_threads",
-      label: "Cleanup threads",
+      label:
+        unboundManagedThreadCount(repo) > 0
+          ? `Cleanup threads (${unboundManagedThreadCount(repo)})`
+          : "Cleanup threads",
       kind: "ghost",
-      title: "Archive stale non-chat-bound managed threads for this repo",
+      title:
+        unboundManagedThreadCount(repo) > 0
+          ? `Archive ${unboundManagedThreadCount(
+              repo
+            )} stale non-chat-bound managed thread${
+              unboundManagedThreadCount(repo) === 1 ? "" : "s"
+            } for this repo`
+          : "No stale non-chat-bound managed threads for this repo",
+      disabled: unboundManagedThreadCount(repo) <= 0,
     });
   }
   if (!missing && kind === "worktree") {
@@ -1576,11 +1638,53 @@ function isManagedPmaChannel(channel: HubChannelEntry): boolean {
   return channelSource(channel) === "pma_thread";
 }
 
-function channelDisplayLabel(channel: HubChannelEntry): string {
+function rawChannelDisplayLabel(channel: HubChannelEntry): string {
   if (typeof channel.display === "string" && channel.display.trim()) {
     return channel.display.trim();
   }
   return channel.key;
+}
+
+function titleCaseWord(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function channelDisplayLabel(channel: HubChannelEntry): string {
+  const rawLabel = rawChannelDisplayLabel(channel);
+  if (channelSource(channel) !== "pma_thread") {
+    return rawLabel;
+  }
+  const normalizedRaw = rawLabel.trim().toLowerCase();
+  const threadKind = String(
+    channel.provenance?.thread_kind || channel.meta?.thread_kind || ""
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    threadKind === "ticket_flow" ||
+    normalizedRaw === "ticket-flow" ||
+    normalizedRaw.startsWith("ticket-flow:")
+  ) {
+    return "Ticket flow";
+  }
+  if (
+    normalizedRaw.startsWith("pma:") ||
+    normalizedRaw === "pma" ||
+    threadKind === "interactive"
+  ) {
+    const agent = String(channel.provenance?.agent || channel.meta?.agent || "")
+      .trim()
+      .toLowerCase();
+    return agent ? `${titleCaseWord(agent)} thread` : "Agent thread";
+  }
+  if (normalizedRaw.startsWith("discord:")) {
+    return "Discord thread";
+  }
+  if (normalizedRaw.startsWith("telegram:")) {
+    return "Telegram thread";
+  }
+  return rawLabel;
 }
 
 function channelOwnerSummary(channel: HubChannelEntry): string {
@@ -1703,7 +1807,7 @@ function pmaChannelGroupKey(channel: HubChannelEntry): string {
   )
     .trim()
     .toLowerCase();
-  const display = channelDisplayLabel(channel);
+  const display = rawChannelDisplayLabel(channel);
   const normalizedDisplay = display.trim().toLowerCase();
   if (
     threadKind === "ticket_flow" ||
@@ -1717,15 +1821,15 @@ function pmaChannelGroupKey(channel: HubChannelEntry): string {
 
 function pmaChannelGroupLabel(channel: HubChannelEntry): string {
   const key = pmaChannelGroupKey(channel);
-  if (key === "ticket-flow") return "ticket-flow";
+  if (key === "ticket-flow") return "Ticket flow";
   return channelDisplayLabel(channel);
 }
 
-function isDuplicateChatBoundPmaGroup(
-  label: string,
+function isDuplicateChatBoundPmaChannel(
+  channel: HubChannelEntry,
   visibleChannels: HubChannelEntry[]
 ): boolean {
-  const normalizedLabel = label.trim().toLowerCase();
+  const normalizedLabel = rawChannelDisplayLabel(channel).trim().toLowerCase();
   if (
     !normalizedLabel ||
     (!normalizedLabel.startsWith("discord:") &&
@@ -1884,6 +1988,7 @@ function buildRepoGroups(repos: HubRepo[]): {
 function renderRepos(repos: HubRepo[]): void {
   if (!repoListEl) return;
   repoListEl.innerHTML = "";
+  updateCleanupAllThreadsButton(repos);
   const searchQuery = normalizedHubSearch();
   const repoChannels = channelsByRepoId(hubChannelEntries);
 
@@ -2084,8 +2189,10 @@ function renderRepos(repos: HubRepo[]): void {
     const visibleChannels = inlineChannels.filter(
       (channel) => !isManagedPmaChannel(channel)
     );
-    const pmaGroups = groupPmaChannels(pmaChannels).filter(
-      (group) => !isDuplicateChatBoundPmaGroup(group.label, visibleChannels)
+    const pmaGroups = groupPmaChannels(
+      pmaChannels.filter(
+        (channel) => !isDuplicateChatBoundPmaChannel(channel, visibleChannels)
+      )
     );
     const primaryChannel = visibleChannels[0] || null;
     const infoItems: string[] = [];
@@ -3238,12 +3345,12 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         flash(`Repo not found: ${repoId}`, "error");
         return;
       }
+      const cleanupCount = unboundManagedThreadCount(repo);
+      if (cleanupCount <= 0) {
+        flash(`No stale non-chat threads for ${repo.display_name || repoId}`, "success");
+        return;
+      }
       const displayName = repo.display_name || repoId;
-      const ok = await confirmModal(
-        `Clean up stale non-chat threads for "${displayName}"?\n\nCAR will archive unbound managed threads for this root repo. Discord and Telegram-bound threads will stay active.`,
-        { confirmText: "Cleanup threads" }
-      );
-      if (!ok) return;
       const response = (await api(
         `/hub/repos/${encodeURIComponent(repoId)}/cleanup-threads`,
         {
@@ -3292,6 +3399,50 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
   }
 }
 
+async function handleCleanupAllRepoThreads(): Promise<void> {
+  if (!hubCleanupAllThreadsBtn) return;
+  const cleanupRepos = baseReposWithUnboundThreads(hubData.repos || []);
+  const totalThreads = totalUnboundManagedThreadCount(cleanupRepos);
+  if (totalThreads <= 0) {
+    flash("No stale non-chat threads across base repos", "success");
+    return;
+  }
+  const dirtyRepos = dirtyBaseReposWithUnboundThreads(hubData.repos || []);
+  const dirtyWarning = dirtyRepos.length
+    ? `\n\nDirty repos:\n${dirtyRepos
+        .map((repo) => `- ${repo.display_name || repo.id}`)
+        .join(
+          "\n"
+        )}\n\nThese repos are dirty, but cleanup only archives unbound managed threads.`
+    : "";
+  const ok = await confirmModal(
+    `Clean up stale non-chat threads across ${cleanupRepos.length} base repo${
+      cleanupRepos.length === 1 ? "" : "s"
+    }?\n\nCAR will archive ${totalThreads} unbound managed thread${
+      totalThreads === 1 ? "" : "s"
+    }. Discord and Telegram-bound threads will stay active.${dirtyWarning}`,
+    { confirmText: "Cleanup all" }
+  );
+  if (!ok) return;
+
+  hubCleanupAllThreadsBtn.disabled = true;
+  try {
+    const response = (await api("/hub/repos/cleanup-threads", {
+      method: "POST",
+    })) as { message?: string } | null;
+    const message =
+      typeof response?.message === "string" && response.message.trim()
+        ? response.message.trim()
+        : "Cleaned up stale threads across base repos";
+    flash(message, "success");
+    await refreshHub();
+  } catch (err) {
+    flash((err as Error).message || "Bulk cleanup failed", "error");
+  } finally {
+    updateCleanupAllThreadsButton(hubData.repos || []);
+  }
+}
+
 function attachHubHandlers(): void {
   initHubSettings();
   const refreshBtn = document.getElementById("hub-refresh") as HTMLButtonElement | null;
@@ -3317,6 +3468,11 @@ function attachHubHandlers(): void {
   }
   if (hubUsageRefresh) {
     hubUsageRefresh.addEventListener("click", () => loadHubUsage());
+  }
+  if (hubCleanupAllThreadsBtn) {
+    hubCleanupAllThreadsBtn.addEventListener("click", () => {
+      void handleCleanupAllRepoThreads();
+    });
   }
   if (hubRepoSearchInput) {
     hubRepoSearchInput.addEventListener("input", () => {
