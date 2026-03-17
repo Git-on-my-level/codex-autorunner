@@ -2,6 +2,7 @@
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -74,6 +75,53 @@ def _resolve_hub_path(path: Optional[Path]) -> Path:
         if candidate.exists():
             return candidate.parent.parent.resolve()
     return Path.cwd()
+
+
+def _resolve_message_body(
+    *,
+    message: Optional[str],
+    message_file: Optional[Path],
+    message_stdin: bool,
+    option_hint: str,
+) -> str:
+    selected_inputs = sum(
+        1
+        for selected in (
+            message is not None,
+            message_file is not None,
+            message_stdin,
+        )
+        if selected
+    )
+    if selected_inputs != 1:
+        raise typer.BadParameter(
+            f"Provide exactly one of {option_hint}.",
+            param_hint="--message / --message-file / --message-stdin",
+        )
+
+    if message_file is not None:
+        try:
+            raw_message = message_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise typer.BadParameter(
+                f"Failed to read message file: {exc}",
+                param_hint="--message-file",
+            ) from exc
+    elif message_stdin:
+        raw_message = sys.stdin.read()
+    else:
+        raw_message = message or ""
+
+    if not raw_message.strip():
+        raise typer.BadParameter("Message cannot be empty.")
+    return raw_message
+
+
+def _echo_delivered_message(message: str) -> None:
+    typer.echo("delivered message:")
+    typer.echo(message, nl=False)
+    if not message.endswith("\n"):
+        typer.echo()
 
 
 def _request_json(
@@ -1263,8 +1311,14 @@ def pma_thread_send(
     managed_thread_id: str = typer.Option(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
-    message: str = typer.Option(
-        ..., "--message", help="User message to send", show_default=False
+    message: Optional[str] = typer.Option(
+        None, "--message", help="User message to send", show_default=False
+    ),
+    message_file: Optional[Path] = typer.Option(
+        None, "--message-file", help="Read the user message from a file"
+    ),
+    message_stdin: bool = typer.Option(
+        False, "--message-stdin", help="Read the user message from stdin"
     ),
     model: Optional[str] = typer.Option(None, "--model", help="Model override"),
     reasoning: Optional[str] = typer.Option(
@@ -1297,13 +1351,19 @@ def pma_thread_send(
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """Send a message to a managed PMA thread."""
+    message_body = _resolve_message_body(
+        message=message,
+        message_file=message_file,
+        message_stdin=message_stdin,
+        option_hint="--message, --message-file, or --message-stdin",
+    )
     normalized_notify_on = _normalize_notify_on(notify_on)
     should_defer = watch or normalized_notify_on == "terminal"
     normalized_if_busy = (if_busy or "").strip().lower() or "queue"
     if normalized_if_busy not in {"queue", "interrupt", "reject"}:
         raise typer.BadParameter("if-busy must be queue, interrupt, or reject")
     payload: dict[str, Any] = {
-        "message": message,
+        "message": message_body,
         "busy_policy": normalized_if_busy,
         "defer_execution": should_defer,
     }
@@ -1362,6 +1422,7 @@ def pma_thread_send(
             )
         return
 
+    delivered_message = str(data.get("delivered_message") or message_body)
     execution_state = str(data.get("execution_state") or "").strip().lower()
     if execution_state == "queued" or (should_defer and execution_state == "running"):
         line = (
@@ -1375,6 +1436,7 @@ def pma_thread_send(
         if queue_depth is not None:
             line += f" queue_depth={queue_depth}"
         typer.echo(line)
+        _echo_delivered_message(delivered_message)
         if watch:
             pma_thread_tail(
                 managed_thread_id=managed_thread_id,
@@ -1400,7 +1462,17 @@ def pma_thread_send(
                 typer.echo(excerpt)
         return
 
-    typer.echo(str(data.get("assistant_text") or ""))
+    line = (
+        f"send_state={send_state or 'accepted'} "
+        f"managed_turn_id={data.get('managed_turn_id') or ''} "
+        f"execution_state={execution_state or 'completed'}"
+    )
+    typer.echo(line.strip())
+    _echo_delivered_message(delivered_message)
+    assistant_text = str(data.get("assistant_text") or "")
+    if assistant_text:
+        typer.echo("\nassistant:")
+        typer.echo(assistant_text)
 
 
 @thread_app.command("turns")

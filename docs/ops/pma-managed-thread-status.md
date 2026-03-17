@@ -92,6 +92,9 @@ Managed-thread delivery is queue-first by default.
 
 - Sending a message to a busy thread creates a queued turn plus a durable
   orchestration queue record.
+- Prefer `car pma thread send --message-file <path>` or `--message-stdin` for
+  multiline or shell-sensitive prompts; the CLI now echoes the exact delivered
+  message after acceptance.
 - `busy_policy=interrupt` (or `car pma thread send --if-busy interrupt`) keeps
   interrupt as a first-class operation when the runtime supports it.
 - `busy_policy=reject` preserves the old fail-fast behavior for callers that

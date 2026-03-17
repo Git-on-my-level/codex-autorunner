@@ -114,6 +114,7 @@ First-turn routine:
      - `car pma thread spawn --agent codex --repo <repo_id> --name <label>`
      - `car pma thread spawn --resource-kind agent_workspace --resource-id <workspace_id> --name <label>`
      - `car pma thread send --id <managed_thread_id> --message "..." --watch`
+     - `car pma thread send --id <managed_thread_id> --message-file prompt.md --watch`
      - `car pma thread send --id <managed_thread_id> --message "..." --notify-on terminal --notify-lane <lane_id>`
      - `car pma thread status --id <managed_thread_id>`
      - `car pma thread compact --id <id> --summary "..."`
