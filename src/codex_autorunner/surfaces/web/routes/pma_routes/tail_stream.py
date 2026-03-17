@@ -172,6 +172,25 @@ def _tail_event_type_from_message(message: Any) -> str:
     return "progress"
 
 
+def _should_suppress_tail_event(message: Any) -> bool:
+    payload = coerce_dict(message)
+    method = str(payload.get("method") or "").strip().lower()
+    params = coerce_dict(payload.get("params"))
+    item = coerce_dict(params.get("item"))
+
+    if method in {
+        "item/agentmessage/delta",
+        "item/plan/delta",
+        "turn/plan/updated",
+    }:
+        return True
+    if method == "item/completed":
+        item_type = str(item.get("type") or "").strip().lower()
+        if item_type == "agentmessage":
+            return True
+    return False
+
+
 _NO_STREAM_AVAILABLE_IDLE_SECONDS = 15
 _LIKELY_HUNG_IDLE_SECONDS = 90
 
@@ -606,6 +625,8 @@ def _serialize_tail_event(
     if since_ms is not None and received_at_ms and received_at_ms < since_ms:
         return None
     message = coerce_dict(event.get("message"))
+    if _should_suppress_tail_event(message):
+        return None
     lines = [
         redact_text(str(line).strip())
         for line in formatter.format_event(message)
@@ -630,6 +651,13 @@ def _serialize_tail_event(
     if level == "debug":
         payload["raw"] = _redact_nested(message)
     return payload
+
+
+def _event_received_at_iso(event: dict[str, Any]) -> Optional[str]:
+    received_at_ms = int(event.get("received_at") or 0)
+    if received_at_ms <= 0:
+        return None
+    return iso_from_event_ms(received_at_ms)
 
 
 async def _build_managed_thread_tail_snapshot(
@@ -709,6 +737,7 @@ async def _build_managed_thread_tail_snapshot(
     )
     formatter = AppServerEventFormatter(redact_enabled=True)
     tail_events: list[dict[str, Any]] = []
+    raw_last_activity_at: Optional[str] = None
     if can_stream_codex:
         raw_events = await app_server_events.list_events(
             str(backend_thread_id),
@@ -717,6 +746,9 @@ async def _build_managed_thread_tail_snapshot(
             limit=limit,
         )
         for event in raw_events:
+            activity_at = _event_received_at_iso(event)
+            if activity_at:
+                raw_last_activity_at = activity_at
             serialized = _serialize_tail_event(
                 event,
                 level=level,
@@ -737,12 +769,32 @@ async def _build_managed_thread_tail_snapshot(
         )
 
     last_event_id = int(resume_after or 0)
+    last_activity_at: Optional[str] = raw_last_activity_at
     if tail_events:
         last_event_id = int(tail_events[-1].get("event_id") or last_event_id)
+        tail_last_activity_at = normalize_optional_text(
+            tail_events[-1].get("received_at")
+        )
+        raw_last_dt = parse_iso_datetime(raw_last_activity_at)
+        tail_last_dt = parse_iso_datetime(tail_last_activity_at)
+        if raw_last_dt is None:
+            last_activity_at = tail_last_activity_at
+        elif tail_last_dt is None:
+            last_activity_at = raw_last_activity_at
+        else:
+            last_activity_at = (
+                raw_last_activity_at
+                if raw_last_dt >= tail_last_dt
+                else tail_last_activity_at
+            )
     last_event_ms = tail_events[-1].get("received_at_ms") if tail_events else None
     idle_seconds: Optional[int] = None
     if turn_status == "running":
-        if isinstance(last_event_ms, (int, float)) and last_event_ms > 0:
+        if last_activity_at:
+            last_activity_dt = parse_iso_datetime(last_activity_at)
+            if last_activity_dt is not None:
+                idle_seconds = max(0, int((now_dt - last_activity_dt).total_seconds()))
+        elif isinstance(last_event_ms, (int, float)) and last_event_ms > 0:
             idle_seconds = max(
                 0, int((now_dt.timestamp() * 1000 - last_event_ms) / 1000)
             )
@@ -786,6 +838,7 @@ async def _build_managed_thread_tail_snapshot(
         "events": tail_events,
         "last_event_id": last_event_id,
         "last_event_at": tail_events[-1].get("received_at") if tail_events else None,
+        "last_activity_at": last_activity_at,
         "stream_available": stream_available,
         "phase": phase,
         "phase_source": phase_source,
@@ -1091,10 +1144,11 @@ def build_managed_thread_tail_routes(
                     if started_dt is not None:
                         elapsed = max(0, int((now - started_dt).total_seconds()))
                     idle = None
-                    if snapshot.get("last_event_at"):
-                        last_event_dt = parse_iso_datetime(
-                            snapshot.get("last_event_at")
-                        )
+                    activity_at = snapshot.get("last_activity_at") or snapshot.get(
+                        "last_event_at"
+                    )
+                    if activity_at:
+                        last_event_dt = parse_iso_datetime(activity_at)
                         if last_event_dt is not None:
                             idle = max(0, int((now - last_event_dt).total_seconds()))
                     phase, phase_source, guidance, last_tool = _derive_progress_phase(
@@ -1128,6 +1182,9 @@ def build_managed_thread_tail_routes(
                     formatter=formatter,
                     since_ms=since_ms,
                 )
+                activity_at = _event_received_at_iso(entry)
+                if activity_at:
+                    snapshot["last_activity_at"] = activity_at
                 if serialized is None:
                     continue
                 event_id = int(serialized.get("event_id") or 0)

@@ -123,6 +123,138 @@ def test_managed_thread_tail_snapshot_redacts_and_supports_cursor(hub_env) -> No
         assert [event["event_id"] for event in cursor_payload["events"]] == [2]
 
 
+def test_managed_thread_tail_snapshot_suppresses_noisy_agent_delta_events(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    managed_thread_id, _ = _seed_managed_thread_with_events(hub_env, app)
+
+    events = app.state.app_server_events
+
+    async def _seed() -> None:
+        await events.register_turn("backend-thread-1", "backend-turn-1")
+        await events.handle_notification(
+            {
+                "method": "item/agentMessage/delta",
+                "params": {
+                    "turnId": "backend-turn-1",
+                    "threadId": "backend-thread-1",
+                    "delta": [{"type": "output_text_delta", "text": "partial"}],
+                },
+            }
+        )
+        await events.handle_notification(
+            {
+                "method": "turn/plan/updated",
+                "params": {
+                    "turnId": "backend-turn-1",
+                    "threadId": "backend-thread-1",
+                    "plan": [{"text": "step"}],
+                },
+            }
+        )
+        await events.handle_notification(
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": "backend-turn-1",
+                    "threadId": "backend-thread-1",
+                    "item": {
+                        "type": "agentMessage",
+                        "content": [{"type": "output_text", "text": "done"}],
+                    },
+                },
+            }
+        )
+        await events.handle_notification(
+            {
+                "method": "item/completed",
+                "params": {
+                    "turnId": "backend-turn-1",
+                    "threadId": "backend-thread-1",
+                    "item": {"type": "tool", "name": "status-check"},
+                },
+            }
+        )
+
+    import asyncio
+
+    asyncio.run(_seed())
+
+    with TestClient(app) as client:
+        resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    summaries = [str(event.get("summary") or "") for event in payload["events"]]
+    assert summaries == ["tool: status-check"]
+
+
+def test_managed_thread_tail_snapshot_treats_suppressed_agent_delta_as_activity(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    managed_thread_id, _ = _seed_managed_thread_with_events(hub_env, app)
+
+    now = datetime.now(timezone.utc)
+    delta_received_at_ms = int((now - timedelta(seconds=5)).timestamp() * 1000)
+    tool_received_at_ms = int((now - timedelta(seconds=40)).timestamp() * 1000)
+
+    class FakeEvents:
+        async def list_events(
+            self,
+            thread_id: str,
+            turn_id: str,
+            *,
+            after_id: int = 0,
+            limit: int | None = None,
+        ):
+            _ = thread_id, turn_id, after_id, limit
+            return [
+                {
+                    "id": 1,
+                    "received_at": tool_received_at_ms,
+                    "message": {
+                        "method": "item/completed",
+                        "params": {
+                            "item": {"type": "tool", "name": "older-tool"},
+                        },
+                    },
+                },
+                {
+                    "id": 2,
+                    "received_at": delta_received_at_ms,
+                    "message": {
+                        "method": "item/agentMessage/delta",
+                        "params": {
+                            "delta": [
+                                {"type": "output_text_delta", "text": "still streaming"}
+                            ]
+                        },
+                    },
+                },
+            ]
+
+    app.state.app_server_events = FakeEvents()
+
+    with TestClient(app) as client:
+        resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert [str(event.get("summary") or "") for event in payload["events"]] == [
+        "tool: older-tool"
+    ]
+    assert payload["last_activity_at"] is not None
+    assert payload["idle_seconds"] is not None
+    assert int(payload["idle_seconds"]) < 15
+    assert payload["phase"] not in {"no_stream_available", "likely_hung"}
+    assert payload["activity"] == "running"
+    assert payload["active_turn_diagnostics"]["stalled"] is False
+
+
 def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
