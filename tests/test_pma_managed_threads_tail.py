@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes.pma_routes.tail_stream import (
+    _refresh_active_turn_diagnostics,
+)
 from tests.conftest import write_test_config
 
 pytestmark = pytest.mark.slow
@@ -210,6 +214,29 @@ def test_managed_thread_status_surfaces_attention_required_separately_from_failu
     assert payload["thread"]["operator_status"] == "reusable"
     assert payload["thread"]["is_reusable"] is True
     assert payload["turn"]["phase"] == "interrupted"
+
+
+def test_refresh_active_turn_diagnostics_recomputes_idle_without_events() -> None:
+    started_at = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat()
+    snapshot = {
+        "turn_status": "running",
+        "started_at": started_at,
+        "last_event_at": None,
+        "phase": "no_stream_available",
+        "guidance": "No stream is available yet.",
+        "events": [],
+        "active_turn_diagnostics": {
+            "managed_turn_id": "managed-turn-1",
+            "stalled": False,
+            "stall_reason": None,
+        },
+    }
+
+    refreshed = _refresh_active_turn_diagnostics(snapshot, turn_status="running")
+
+    assert refreshed is not None
+    assert refreshed["stalled"] is True
+    assert refreshed["stall_reason"] == "no_events_yet"
 
 
 def test_managed_thread_tail_stream_resumes_with_last_event_id(hub_env) -> None:

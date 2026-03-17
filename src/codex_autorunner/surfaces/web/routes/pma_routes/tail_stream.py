@@ -549,18 +549,26 @@ def _refresh_active_turn_diagnostics(
     resolved_status = (
         str(turn_status or snapshot.get("turn_status") or "").strip().lower()
     )
-    resolved_idle = (
-        idle_seconds
-        if idle_seconds is not None
-        else (
-            int(snapshot.get("idle_seconds"))
-            if isinstance(snapshot.get("idle_seconds"), int)
-            else None
-        )
-    )
     resolved_last_event_at = normalize_optional_text(
         last_event_at or snapshot.get("last_event_at")
     )
+    if idle_seconds is not None:
+        resolved_idle = max(0, int(idle_seconds))
+    else:
+        resolved_idle = None
+        last_event_dt = parse_iso_datetime(resolved_last_event_at)
+        if last_event_dt is not None:
+            resolved_idle = max(
+                0, int((datetime.now(timezone.utc) - last_event_dt).total_seconds())
+            )
+        else:
+            started_dt = parse_iso_datetime(snapshot.get("started_at"))
+            if started_dt is not None:
+                resolved_idle = max(
+                    0, int((datetime.now(timezone.utc) - started_dt).total_seconds())
+                )
+            elif isinstance(snapshot.get("idle_seconds"), (int, float)):
+                resolved_idle = max(0, int(snapshot.get("idle_seconds") or 0))
     stalled = bool(
         resolved_status == "running"
         and resolved_idle is not None
