@@ -11,6 +11,7 @@ import { handleStreamEvent } from "./streamUtils.js";
 import { initNotificationBell } from "./notificationBell.js";
 import { registerAutoRefresh } from "./autoRefresh.js";
 import { CONSTANTS } from "./constants.js";
+import { loadPendingTurn as loadCanonicalPendingTurn, savePendingTurn as saveCanonicalPendingTurn, clearPendingTurn as clearCanonicalPendingTurn, } from "./turnResume.js";
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -57,6 +58,15 @@ let isSavingDoc = false;
 let activeContextAutoPrune = null;
 let pendingDeliverySummary = null;
 let pmaRefreshCleanup = null;
+function loadPMAPendingTurn() {
+    return loadCanonicalPendingTurn(PMA_PENDING_TURN_KEY);
+}
+function savePMAPendingTurn(turn) {
+    saveCanonicalPendingTurn(PMA_PENDING_TURN_KEY, turn);
+}
+function clearPMAPendingTurn() {
+    clearCanonicalPendingTurn(PMA_PENDING_TURN_KEY);
+}
 function newClientTurnId() {
     // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
     try {
@@ -68,38 +78,6 @@ function newClientTurnId() {
         // ignore
     }
     return `pma-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-function loadPendingTurn() {
-    try {
-        const raw = localStorage.getItem(PMA_PENDING_TURN_KEY);
-        if (!raw)
-            return null;
-        const parsed = JSON.parse(raw);
-        if (!parsed || typeof parsed !== "object")
-            return null;
-        if (!parsed.clientTurnId || !parsed.message || !parsed.startedAtMs)
-            return null;
-        return parsed;
-    }
-    catch {
-        return null;
-    }
-}
-function savePendingTurn(turn) {
-    try {
-        localStorage.setItem(PMA_PENDING_TURN_KEY, JSON.stringify(turn));
-    }
-    catch {
-        // ignore
-    }
-}
-function clearPendingTurn() {
-    try {
-        localStorage.removeItem(PMA_PENDING_TURN_KEY);
-    }
-    catch {
-        // ignore
-    }
 }
 function loadPMAView() {
     const raw = localStorage.getItem(PMA_VIEW_KEY);
@@ -561,7 +539,7 @@ async function finalizePMAResponse(responseText, options = {}) {
     }
     finally {
         currentOutboxBaseline = null;
-        clearPendingTurn();
+        clearPMAPendingTurn();
         stopTurnEventsStream();
     }
     const trimmed = (responseText || "").trim();
@@ -759,7 +737,7 @@ async function sendMessage() {
     const model = elements.modelSelect?.value || getSelectedModel(agent);
     const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
     const clientTurnId = newClientTurnId();
-    savePendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
+    savePMAPendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
     currentController = new AbortController();
     pmaChat.state.controller = currentController;
     pmaChat.state.status = "running";
@@ -853,7 +831,7 @@ async function sendMessage() {
         pmaChat.addAssistantMessage(`Error: ${errorMsg}`, true);
         pmaChat.render();
         pmaChat.renderMessages();
-        clearPendingTurn();
+        clearPMAPendingTurn();
         stopTurnEventsStream();
         pendingDeliverySummary = null;
     }
@@ -956,7 +934,7 @@ const pmaStreamHandlers = {
     },
     onUpdate(payload) {
         if (payload.client_turn_id) {
-            clearPendingTurn();
+            clearPMAPendingTurn();
         }
         if (payload.message) {
             pmaChat.state.streamText = payload.message;
@@ -1003,7 +981,7 @@ const pmaStreamHandlers = {
     },
 };
 async function resumePendingTurn() {
-    const pending = loadPendingTurn();
+    const pending = loadPMAPendingTurn();
     if (!pending || !pmaChat)
         return;
     // Show a running indicator immediately.
@@ -1037,7 +1015,7 @@ async function resumePendingTurn() {
                 pmaChat.addAssistantMessage(`Error: ${detail}`, true);
                 pmaChat.render();
                 pmaChat.renderMessages();
-                clearPendingTurn();
+                clearPMAPendingTurn();
                 stopTurnEventsStream();
                 return;
             }
@@ -1048,7 +1026,7 @@ async function resumePendingTurn() {
                 pmaChat.addAssistantMessage("Request interrupted", true);
                 pmaChat.render();
                 pmaChat.renderMessages();
-                clearPendingTurn();
+                clearPMAPendingTurn();
                 stopTurnEventsStream();
                 return;
             }
@@ -1124,7 +1102,7 @@ async function cancelRequest(options = {}) {
         await interruptActiveTurn({ stopLane });
     }
     if (clearPending) {
-        clearPendingTurn();
+        clearPMAPendingTurn();
     }
     if (pmaChat) {
         pmaChat.state.controller = null;
@@ -1135,7 +1113,7 @@ async function cancelRequest(options = {}) {
     }
 }
 function resetThread() {
-    clearPendingTurn();
+    clearPMAPendingTurn();
     pendingDeliverySummary = null;
     stopTurnEventsStream();
     if (pmaChat) {
