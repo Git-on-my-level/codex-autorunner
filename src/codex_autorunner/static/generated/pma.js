@@ -9,6 +9,8 @@ import { getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentCont
 import { createFileBoxWidget } from "./fileboxUi.js";
 import { extractContextRemainingPercent } from "./streamUtils.js";
 import { initNotificationBell } from "./notificationBell.js";
+import { registerAutoRefresh } from "./autoRefresh.js";
+import { CONSTANTS } from "./constants.js";
 const pmaStyling = {
     eventClass: "chat-event",
     eventTitleClass: "chat-event-title",
@@ -54,7 +56,7 @@ const docsInfo = new Map();
 let isSavingDoc = false;
 let activeContextAutoPrune = null;
 let pendingDeliverySummary = null;
-let pmaRefreshIntervalId = null;
+let pmaRefreshCleanup = null;
 function newClientTurnId() {
     // crypto.randomUUID is not guaranteed everywhere; keep a safe fallback.
     try {
@@ -642,23 +644,26 @@ async function initPMA() {
     startPMARefreshLoop();
 }
 function startPMARefreshLoop() {
-    if (pmaRefreshIntervalId !== null)
+    if (pmaRefreshCleanup)
         return;
-    pmaRefreshIntervalId = window.setInterval(() => {
-        if (document.hidden)
-            return;
-        const shell = document.getElementById("pma-shell");
-        if (!shell || shell.classList.contains("hidden"))
-            return;
-        void loadPMAThreadInfo();
-        void fileBoxCtrl?.refresh();
-    }, 30000);
+    pmaRefreshCleanup = registerAutoRefresh("pma:refresh", {
+        callback: async () => {
+            const shell = document.getElementById("pma-shell");
+            if (!shell || shell.classList.contains("hidden"))
+                return;
+            await loadPMAThreadInfo();
+            await fileBoxCtrl?.refresh();
+        },
+        interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+        refreshOnActivation: true,
+        immediate: false,
+    });
 }
 function stopPMARefreshLoop() {
-    if (pmaRefreshIntervalId === null)
-        return;
-    clearInterval(pmaRefreshIntervalId);
-    pmaRefreshIntervalId = null;
+    if (pmaRefreshCleanup) {
+        pmaRefreshCleanup();
+        pmaRefreshCleanup = null;
+    }
 }
 export function setPMARefreshActive(active) {
     if (active) {

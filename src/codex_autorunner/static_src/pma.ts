@@ -20,6 +20,8 @@ import { createFileBoxWidget, type FileBoxListing } from "./fileboxUi.js";
 import { extractContextRemainingPercent } from "./streamUtils.js";
 
 import { initNotificationBell } from "./notificationBell.js";
+import { registerAutoRefresh } from "./autoRefresh.js";
+import { CONSTANTS } from "./constants.js";
 
 const pmaStyling: ChatStyling = {
   eventClass: "chat-event",
@@ -97,7 +99,7 @@ const docsInfo: Map<string, PMADocInfo> = new Map();
 let isSavingDoc = false;
 let activeContextAutoPrune: PMADocsResponse["active_context_auto_prune"] = null;
 let pendingDeliverySummary: PMADeliverySummary | null = null;
-let pmaRefreshIntervalId: ReturnType<typeof setInterval> | null = null;
+let pmaRefreshCleanup: (() => void) | null = null;
 type PMAView = "chat" | "memory";
 
 type PendingTurn = {
@@ -735,20 +737,25 @@ async function initPMA(): Promise<void> {
 }
 
 function startPMARefreshLoop(): void {
-  if (pmaRefreshIntervalId !== null) return;
-  pmaRefreshIntervalId = window.setInterval(() => {
-    if (document.hidden) return;
-    const shell = document.getElementById("pma-shell");
-    if (!shell || shell.classList.contains("hidden")) return;
-    void loadPMAThreadInfo();
-    void fileBoxCtrl?.refresh();
-  }, 30000);
+  if (pmaRefreshCleanup) return;
+  pmaRefreshCleanup = registerAutoRefresh("pma:refresh", {
+    callback: async () => {
+      const shell = document.getElementById("pma-shell");
+      if (!shell || shell.classList.contains("hidden")) return;
+      await loadPMAThreadInfo();
+      await fileBoxCtrl?.refresh();
+    },
+    interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+    refreshOnActivation: true,
+    immediate: false,
+  });
 }
 
 function stopPMARefreshLoop(): void {
-  if (pmaRefreshIntervalId === null) return;
-  clearInterval(pmaRefreshIntervalId);
-  pmaRefreshIntervalId = null;
+  if (pmaRefreshCleanup) {
+    pmaRefreshCleanup();
+    pmaRefreshCleanup = null;
+  }
 }
 
 export function setPMARefreshActive(active: boolean): void {
