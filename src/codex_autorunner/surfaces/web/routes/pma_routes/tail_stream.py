@@ -324,7 +324,10 @@ async def _list_zeroclaw_tail_events(
     list_events = getattr(supervisor, "list_turn_events", None)
     if not callable(list_events):
         return []
-    raw_entries = await list_events(Path(workspace_root), session_id, turn_id)
+    try:
+        raw_entries = await list_events(Path(workspace_root), session_id, turn_id)
+    except Exception:
+        return []
     start_after = int(resume_after or 0)
     serialized: list[dict[str, Any]] = []
     for index, entry in enumerate(raw_entries, start=1):

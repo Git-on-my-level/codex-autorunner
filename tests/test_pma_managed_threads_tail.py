@@ -358,3 +358,38 @@ def test_managed_thread_status_surfaces_zeroclaw_phase_and_last_tool(hub_env) ->
             "assistant_update",
             "tool_started",
         ]
+
+
+def test_managed_thread_status_degrades_when_zeroclaw_turn_buffer_is_missing(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    thread = store.create_thread("zeroclaw", hub_env.repo_root.resolve())
+    managed_thread_id = str(thread["managed_thread_id"])
+    turn = store.create_turn(managed_thread_id, prompt="zeroclaw prompt")
+    managed_turn_id = str(turn["managed_turn_id"])
+    store.set_thread_backend_id(managed_thread_id, "zeroclaw-session-1")
+    store.set_turn_backend_turn_id(managed_turn_id, "zeroclaw-turn-1")
+
+    class FakeZeroClawSupervisor:
+        async def list_turn_events(
+            self, workspace_root: Path, session_id: str, turn_id: str
+        ) -> list[dict[str, str]]:
+            _ = workspace_root, session_id, turn_id
+            raise RuntimeError("missing in-memory turn buffer")
+
+    app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
+
+    with TestClient(app) as client:
+        status_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/status")
+        assert status_resp.status_code == 200
+        status_payload = status_resp.json()
+        assert status_payload["recent_progress"] == []
+        assert status_payload["turn"]["last_tool"] is None
+
+        tail_resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail")
+        assert tail_resp.status_code == 200
+        tail_payload = tail_resp.json()
+        assert tail_payload["events"] == []
