@@ -7,7 +7,6 @@ import os
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from pathlib import Path
 from typing import (
     Any,
     AsyncIterator,
@@ -22,7 +21,7 @@ import httpx
 
 from ...core.coercion import coerce_int
 from ...core.logging_utils import log_event
-from ...core.utils import infer_home_from_workspace
+from ...core.utils import resolve_opencode_auth_path
 from .constants import (
     OPENCODE_CONTEXT_WINDOW_KEYS,
     OPENCODE_MODEL_CONTEXT_KEYS,
@@ -627,7 +626,7 @@ def _get_env_value(
 
 
 def _provider_has_auth(provider_id: str, workspace_root: str) -> bool:
-    auth_path = _find_opencode_auth_path(workspace_root)
+    auth_path = resolve_opencode_auth_path(workspace_root, env=os.environ)
     if auth_path is None or not auth_path.exists():
         return False
     try:
@@ -638,20 +637,6 @@ def _provider_has_auth(provider_id: str, workspace_root: str) -> bool:
         return False
     entry = payload.get(provider_id)
     return isinstance(entry, dict) and any(bool(value) for value in entry.values())
-
-
-def _find_opencode_auth_path(workspace_root: str) -> Optional[Path]:
-    data_home = os.getenv("XDG_DATA_HOME")
-    if not data_home:
-        home = os.getenv("HOME")
-        if not home:
-            inferred = infer_home_from_workspace(workspace_root)
-            if inferred is None:
-                return None
-            data_home = str(inferred / ".local" / "share")
-        else:
-            data_home = str(Path(home) / ".local" / "share")
-    return Path(data_home) / "opencode" / "auth.json"
 
 
 async def collect_opencode_output_from_events(

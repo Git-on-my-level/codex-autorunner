@@ -23,7 +23,11 @@ from ...core.managed_processes.registry import (
 from ...core.process_termination import terminate_record
 from ...core.state_roots import resolve_global_state_root
 from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
-from ...core.utils import infer_home_from_workspace, subprocess_env
+from ...core.utils import (
+    infer_home_from_workspace,
+    resolve_opencode_auth_path,
+    subprocess_env,
+)
 from ...integrations.app_server.env import _workspace_car_path_prefixes
 from ...workspace import canonical_workspace_root, workspace_id_for_path
 from .client import OpenCodeClient, OpenCodeProtocolError
@@ -1234,14 +1238,14 @@ class OpenCodeSupervisor:
                 if entry and entry not in merged:
                     merged.append(entry)
             env["PATH"] = os.pathsep.join(merged)
-        inferred_home = infer_home_from_workspace(workspace_root)
-        if inferred_home is None:
-            return env
-        inferred_auth = inferred_home / ".local" / "share" / "opencode" / "auth.json"
-        if not inferred_auth.exists():
+        inferred_auth = resolve_opencode_auth_path(workspace_root)
+        if inferred_auth is None or not inferred_auth.exists():
             return env
         env_auth = self._opencode_auth_path_for_env(env)
         if env_auth is not None and env_auth.exists():
+            return env
+        inferred_home = infer_home_from_workspace(workspace_root)
+        if inferred_home is None:
             return env
         env["HOME"] = str(inferred_home)
         env["XDG_DATA_HOME"] = str(inferred_home / ".local" / "share")
@@ -1261,13 +1265,7 @@ class OpenCodeSupervisor:
         return resolve_global_state_root().resolve()
 
     def _opencode_auth_path_for_env(self, env: dict[str, str]) -> Optional[Path]:
-        data_home = env.get("XDG_DATA_HOME")
-        if not data_home:
-            home = env.get("HOME")
-            if not home:
-                return None
-            data_home = str(Path(home) / ".local" / "share")
-        return Path(data_home) / "opencode" / "auth.json"
+        return resolve_opencode_auth_path(env=env)
 
     def _start_stdout_drain(self, handle: OpenCodeHandle) -> None:
         """
