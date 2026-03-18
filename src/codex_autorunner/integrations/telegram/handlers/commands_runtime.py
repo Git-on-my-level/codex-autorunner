@@ -373,13 +373,25 @@ class TelegramCommandHandlers(
         response_text = outcome.response
         if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
             response_text = f"{response_text}\n\n{metrics}"
-        response_sent = await self._deliver_turn_response(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            placeholder_id=outcome.placeholder_id,
-            response=response_text,
-        )
+        try:
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=outcome.placeholder_id,
+                response=response_text,
+                intermediate_response=outcome.intermediate_response,
+            )
+        except TypeError as exc:
+            if "intermediate_response" not in str(exc):
+                raise
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=outcome.placeholder_id,
+                response=response_text,
+            )
         if response_sent:
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             log_event(

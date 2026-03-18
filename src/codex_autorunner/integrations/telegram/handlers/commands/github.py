@@ -562,15 +562,31 @@ class GitHubCommands(SharedHelpers):
         )
         metrics_mode = self._metrics_mode()
         response_text = response
+        intermediate_response = ""
+        render_final_turn_progress = getattr(self, "_render_final_turn_progress", None)
+        if turn_context.turn_key is not None and callable(render_final_turn_progress):
+            intermediate_response = render_final_turn_progress(turn_context.turn_key)
         if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
             response_text = f"{response_text}\n\n{metrics}"
-        await self._deliver_turn_response(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            placeholder_id=turn_context.placeholder_id,
-            response=response_text,
-        )
+        try:
+            await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=turn_context.placeholder_id,
+                response=response_text,
+                intermediate_response=intermediate_response,
+            )
+        except TypeError as exc:
+            if "intermediate_response" not in str(exc):
+                raise
+            await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=turn_context.placeholder_id,
+                response=response_text,
+            )
         if metrics and metrics_mode == "separate":
             await self._send_turn_metrics(
                 chat_id=message.chat_id,

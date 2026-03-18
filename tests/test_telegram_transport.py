@@ -86,6 +86,72 @@ async def test_send_long_message_uses_markdown_document(parse_mode: str) -> None
     assert payload["document"] == long_text.encode("utf-8")
 
 
+@pytest.mark.anyio
+async def test_deliver_turn_response_sends_intermediate_separator_and_final() -> None:
+    transport = _DummyTransport(parse_mode=None)
+    calls: list[dict[str, object]] = []
+
+    async def _fake_send_message_with_outbox(
+        chat_id,
+        text,
+        *,
+        thread_id,
+        reply_to,
+        placeholder_id=None,
+        delete_placeholder_on_delivery=True,
+    ):  # type: ignore[no-untyped-def]
+        calls.append(
+            {
+                "chat_id": chat_id,
+                "text": text,
+                "thread_id": thread_id,
+                "reply_to": reply_to,
+                "placeholder_id": placeholder_id,
+                "delete_placeholder_on_delivery": delete_placeholder_on_delivery,
+            }
+        )
+        return True
+
+    transport._send_message_with_outbox = _fake_send_message_with_outbox  # type: ignore[assignment]
+
+    delivered = await transport._deliver_turn_response(
+        chat_id=123,
+        thread_id=456,
+        reply_to=789,
+        placeholder_id=321,
+        intermediate_response="intermediate output",
+        response="final output",
+    )
+
+    assert delivered is True
+    assert calls == [
+        {
+            "chat_id": 123,
+            "text": "intermediate output",
+            "thread_id": 456,
+            "reply_to": 789,
+            "placeholder_id": 321,
+            "delete_placeholder_on_delivery": True,
+        },
+        {
+            "chat_id": 123,
+            "text": "---",
+            "thread_id": 456,
+            "reply_to": None,
+            "placeholder_id": None,
+            "delete_placeholder_on_delivery": True,
+        },
+        {
+            "chat_id": 123,
+            "text": "final output",
+            "thread_id": 456,
+            "reply_to": None,
+            "placeholder_id": None,
+            "delete_placeholder_on_delivery": True,
+        },
+    ]
+
+
 @pytest.mark.parametrize("parse_mode", ["Markdown", "MarkdownV2"])
 def test_telegram_markdown_collapses_local_file_links(parse_mode: str) -> None:
     rendered = _format_telegram_markdown(

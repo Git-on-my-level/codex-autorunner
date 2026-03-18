@@ -91,6 +91,7 @@ DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 class DiscordMessageTurnResult:
     final_message: str
     preview_message_id: Optional[str] = None
+    intermediate_message: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
     elapsed_seconds: Optional[float] = None
 
@@ -521,6 +522,11 @@ async def handle_message_event(
     if isinstance(turn_result, DiscordMessageTurnResult):
         response_text = turn_result.final_message
         preview_message_id = turn_result.preview_message_id
+        intermediate_text = (
+            turn_result.intermediate_message.strip()
+            if isinstance(turn_result.intermediate_message, str)
+            else ""
+        )
         metrics_text = _format_turn_metrics(
             turn_result.token_usage,
             turn_result.elapsed_seconds,
@@ -533,26 +539,38 @@ async def handle_message_event(
     else:
         response_text = str(turn_result or "")
         preview_message_id = None
+        intermediate_text = ""
 
-    chunks = chunk_discord_message(
-        response_text or "(No response text returned.)",
-        max_len=service._config.max_message_length,
-        with_numbering=False,
-    )
-    if not chunks:
-        chunks = ["(No response text returned.)"]
-    for idx, chunk in enumerate(chunks, 1):
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": chunk},
-            record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
-        )
     if isinstance(preview_message_id, str) and preview_message_id:
         await service._delete_channel_message_safe(
             channel_id=channel_id,
             message_id=preview_message_id,
             record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
         )
+    if intermediate_text:
+        await _send_discord_turn_section(
+            service,
+            channel_id=channel_id,
+            text=intermediate_text,
+            record_prefix=f"turn:intermediate:{session_key}",
+            attachment_filename="intermediate-response.md",
+            attachment_caption=(
+                "Intermediate output too long; attached as intermediate-response.md."
+            ),
+        )
+        await service._send_channel_message_safe(
+            channel_id,
+            {"content": "---"},
+            record_id=f"turn:separator:{session_key}:{uuid.uuid4().hex[:8]}",
+        )
+    await _send_discord_turn_section(
+        service,
+        channel_id=channel_id,
+        text=response_text or "(No response text returned.)",
+        record_prefix=f"turn:final:{session_key}",
+        attachment_filename="final-response.md",
+        attachment_caption="Final response too long; attached as final-response.md.",
+    )
     if pending_compact_seed is not None:
         await service._store.clear_pending_compact_seed(channel_id=channel_id)
     await service._flush_outbox_files(
@@ -1518,12 +1536,58 @@ async def _run_discord_orchestrated_turn_for_message(
     )
     if finalized["status"] != "ok":
         raise RuntimeError(str(finalized.get("error") or public_execution_error))
+    intermediate_message = render_progress_text(
+        tracker,
+        max_length=max_progress_len,
+        now=time.monotonic(),
+        render_mode="final",
+    )
     return DiscordMessageTurnResult(
         final_message=str(finalized.get("assistant_text") or ""),
         preview_message_id=progress_message_id,
+        intermediate_message=intermediate_message,
         token_usage=cast(Optional[dict[str, Any]], finalized.get("token_usage")),
         elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),
     )
+
+
+async def _send_discord_turn_section(
+    service: Any,
+    *,
+    channel_id: str,
+    text: str,
+    record_prefix: str,
+    attachment_filename: str,
+    attachment_caption: str,
+) -> None:
+    chunks = chunk_discord_message(
+        text,
+        max_len=service._config.max_message_length,
+        with_numbering=False,
+    )
+    if (
+        service._config.message_overflow == "document"
+        and len(chunks) > 3
+        and text.strip()
+    ):
+        try:
+            await service._rest.create_channel_message_with_attachment(
+                channel_id=channel_id,
+                data=text.encode("utf-8"),
+                filename=attachment_filename,
+                caption=attachment_caption,
+            )
+            return
+        except Exception:
+            pass
+    if not chunks:
+        chunks = ["(No response text returned.)"]
+    for idx, chunk in enumerate(chunks, 1):
+        await service._send_channel_message_safe(
+            channel_id,
+            {"content": chunk},
+            record_id=f"{record_prefix}:{idx}:{uuid.uuid4().hex[:8]}",
+        )
 
 
 async def run_managed_thread_turn_for_message(

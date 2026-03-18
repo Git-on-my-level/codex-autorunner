@@ -41,6 +41,17 @@ _ACTIVE_PROGRESS_LABELS = {"working", "queued", "running", "review"}
 
 
 class TelegramNotificationHandlers:
+    def _render_final_turn_progress(self, turn_key: tuple[str, str]) -> str:
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return ""
+        return render_progress_text(
+            tracker,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
+            now=time.monotonic(),
+            render_mode="final",
+        )
+
     def _cache_token_usage(
         self,
         token_usage: dict[str, Any],

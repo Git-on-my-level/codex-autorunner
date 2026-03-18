@@ -160,6 +160,7 @@ class _TurnRunResult:
     token_usage: Optional[dict[str, Any]]
     transcript_message_id: Optional[int]
     transcript_text: Optional[str]
+    intermediate_response: str = ""
 
 
 @dataclass
@@ -1084,6 +1085,7 @@ async def _run_telegram_managed_thread_turn(
         else None
     )
     registered_turn_key: Optional[tuple[str, str]] = None
+    intermediate_response = ""
     if turn_key is not None:
         from ...types import TurnContext
 
@@ -1132,6 +1134,11 @@ async def _run_telegram_managed_thread_turn(
         )
     finally:
         if registered_turn_key is not None:
+            render_final_turn_progress = getattr(
+                handlers, "_render_final_turn_progress", None
+            )
+            if callable(render_final_turn_progress):
+                intermediate_response = render_final_turn_progress(registered_turn_key)
             handlers._turn_contexts.pop(registered_turn_key, None)
             handlers._clear_thinking_preview(registered_turn_key)
             handlers._clear_turn_progress(registered_turn_key)
@@ -1258,6 +1265,7 @@ async def _run_telegram_managed_thread_turn(
         token_usage=cast(Optional[dict[str, Any]], finalized.get("token_usage")),
         transcript_message_id=transcript_message_id,
         transcript_text=transcript_text,
+        intermediate_response=intermediate_response,
     )
 
 
@@ -2717,6 +2725,7 @@ class ExecutionCommands(SharedHelpers):
         turn_handle = None
         turn_key: Optional[TurnKey] = None
         turn_started_at: Optional[float] = None
+        turn_delivery_state: dict[str, str] = {}
 
         def _is_missing_thread_error(exc: Exception) -> bool:
             if not isinstance(exc, CodexAppServerResponseError):
@@ -3155,6 +3164,13 @@ class ExecutionCommands(SharedHelpers):
         finally:
             if turn_handle is not None:
                 if turn_key is not None:
+                    render_final_turn_progress = getattr(
+                        self, "_render_final_turn_progress", None
+                    )
+                    if callable(render_final_turn_progress):
+                        turn_delivery_state["intermediate_response"] = (
+                            render_final_turn_progress(turn_key)
+                        )
                     self._turn_contexts.pop(turn_key, None)
                     self._clear_thinking_preview(turn_key)
                     self._clear_turn_progress(turn_key)
@@ -3237,6 +3253,7 @@ class ExecutionCommands(SharedHelpers):
             token_usage=token_usage,
             transcript_message_id=transcript_message_id,
             transcript_text=transcript_text,
+            intermediate_response=turn_delivery_state.get("intermediate_response", ""),
         )
 
     def _prepare_turn_prompt(
