@@ -68,6 +68,89 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _merge_assistant_stream(current: str, incoming: str) -> str:
+    if not incoming:
+        return current
+    if not current:
+        return incoming
+    if incoming == current:
+        return current
+    if len(incoming) > len(current) and incoming.startswith(current):
+        return incoming
+    max_overlap = min(len(current), max(len(incoming) - 1, 0))
+    for overlap in range(max_overlap, 0, -1):
+        if current[-overlap:] == incoming[:overlap]:
+            return f"{current}{incoming[overlap:]}"
+    return f"{current}{incoming}"
+
+
+def _runtime_message_properties(params: dict[str, Any]) -> dict[str, Any]:
+    return _coerce_dict(params.get("properties"))
+
+
+def _runtime_message_part(params: dict[str, Any]) -> dict[str, Any]:
+    properties = _runtime_message_properties(params)
+    part = properties.get("part")
+    if isinstance(part, dict):
+        return part
+    part = params.get("part")
+    if isinstance(part, dict):
+        return part
+    return {}
+
+
+def _runtime_message_id(params: dict[str, Any]) -> Optional[str]:
+    properties = _runtime_message_properties(params)
+    info = _coerce_dict(properties.get("info"))
+    for key in ("id", "messageID", "messageId", "message_id"):
+        value = info.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    part = _runtime_message_part(params)
+    for key in ("messageID", "messageId", "message_id"):
+        value = part.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _runtime_message_role(params: dict[str, Any]) -> Optional[str]:
+    properties = _runtime_message_properties(params)
+    info = _coerce_dict(properties.get("info"))
+    role = info.get("role") or params.get("role")
+    if not isinstance(role, str):
+        return None
+    normalized = role.strip().lower()
+    return normalized or None
+
+
+def _runtime_message_delta(params: dict[str, Any]) -> Optional[str]:
+    for key in ("delta", "text", "output"):
+        value = params.get(key)
+        if isinstance(value, str):
+            text = value.strip()
+            if text:
+                return text
+        if isinstance(value, dict):
+            nested = value.get("text")
+            if isinstance(nested, str):
+                text = nested.strip()
+                if text:
+                    return text
+    properties = _runtime_message_properties(params)
+    delta = _coerce_dict(properties.get("delta"))
+    delta_text = delta.get("text")
+    if isinstance(delta_text, str):
+        text = delta_text.strip()
+        if text:
+            return text
+    return None
+
+
 async def _iter_sse_lines(raw_event: str) -> AsyncIterator[str]:
     for line in raw_event.splitlines():
         yield line
@@ -80,6 +163,10 @@ class _RuntimeEventSummary:
     log_lines: list[str] = field(default_factory=list)
     token_usage: Optional[dict[str, Any]] = None
     streamed_live: bool = False
+    message_roles: dict[str, str] = field(default_factory=dict)
+    pending_stream_by_message: dict[str, str] = field(default_factory=dict)
+    pending_stream_no_id: str = ""
+    message_roles_seen: bool = False
 
 
 def _final_run_event(
@@ -340,6 +427,14 @@ class DefaultAgentPool:
         if not isinstance(params, dict):
             params = {}
 
+        def _emit_assistant_delta(delta_text: str) -> None:
+            summary.assistant_parts.append(delta_text)
+            if emit_event is not None:
+                emit_event(
+                    FlowEventType.AGENT_STREAM_DELTA,
+                    {"delta": delta_text, "turn_id": turn_id},
+                )
+
         usage_raw = params.get("tokenUsage") or params.get("usage")
         if isinstance(usage_raw, dict):
             usage = dict(usage_raw)
@@ -364,7 +459,25 @@ class DefaultAgentPool:
                         )
             return
 
-        delta = _normalize_optional_text(params.get("delta"))
+        if method in {"message.updated", "message.completed"}:
+            message_id = _runtime_message_id(params)
+            role = _runtime_message_role(params)
+            if message_id and role:
+                summary.message_roles[message_id] = role
+                summary.message_roles_seen = True
+                if role == "assistant":
+                    pending = summary.pending_stream_by_message.pop(message_id, "")
+                    if pending:
+                        _emit_assistant_delta(pending)
+                    if summary.pending_stream_no_id:
+                        pending_no_id = summary.pending_stream_no_id
+                        summary.pending_stream_no_id = ""
+                        _emit_assistant_delta(pending_no_id)
+                elif role == "user":
+                    summary.pending_stream_by_message.pop(message_id, None)
+                    summary.pending_stream_no_id = ""
+
+        delta = _runtime_message_delta(params)
         if delta is None:
             return
 
@@ -373,20 +486,43 @@ class DefaultAgentPool:
         )
         if delta_type is None:
             lowered = method.lower()
-            if method in {"outputDelta", "item/agentMessage/delta"}:
+            if method in {"outputDelta", "item/agentMessage/delta", "message.delta"}:
                 delta_type = "assistant_stream"
+            elif method == "message.part.updated":
+                part = _runtime_message_part(params)
+                part_type = str(part.get("type") or "").strip().lower()
+                if part_type in {"", "text"}:
+                    message_id = _runtime_message_id(params)
+                    role = summary.message_roles.get(message_id or "")
+                    if role == "user":
+                        return
+                    if role == "assistant":
+                        delta_type = "assistant_stream"
+                    elif message_id:
+                        summary.pending_stream_by_message[message_id] = (
+                            _merge_assistant_stream(
+                                summary.pending_stream_by_message.get(message_id, ""),
+                                delta,
+                            )
+                        )
+                        return
+                    elif not summary.message_roles_seen:
+                        delta_type = "assistant_stream"
+                    else:
+                        summary.pending_stream_no_id = _merge_assistant_stream(
+                            summary.pending_stream_no_id,
+                            delta,
+                        )
+                        return
+                elif part_type == "reasoning":
+                    delta_type = "thinking"
             elif "reasoning" in lowered:
                 delta_type = "thinking"
             elif lowered.endswith("outputdelta"):
                 delta_type = "log_line"
 
         if delta_type in {"assistant_stream", "assistant_message"}:
-            summary.assistant_parts.append(delta)
-            if emit_event is not None:
-                emit_event(
-                    FlowEventType.AGENT_STREAM_DELTA,
-                    {"delta": delta, "turn_id": turn_id},
-                )
+            _emit_assistant_delta(delta)
             return
 
         if delta_type == "log_line":
