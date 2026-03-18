@@ -50,6 +50,7 @@ class RuntimeThreadRunEventState:
     assistant_message_text: str = ""
     token_usage: Optional[dict[str, Any]] = None
     last_error_message: Optional[str] = None
+    completed_seen: bool = False
     message_roles: dict[str, str] = field(default_factory=dict)
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
     pending_stream_no_id: str = ""
@@ -173,6 +174,26 @@ def terminal_run_event_from_outcome(
     return Failed(
         timestamp=now_iso(),
         error_message=_public_terminal_error_message(outcome),
+    )
+
+
+def recover_post_completion_outcome(
+    outcome: RuntimeThreadOutcome,
+    state: RuntimeThreadRunEventState,
+) -> RuntimeThreadOutcome:
+    """Prefer a streamed completion over a later transport error."""
+
+    if outcome.status != "error" or not state.completed_seen:
+        return outcome
+    assistant_text = outcome.assistant_text or state.best_assistant_text()
+    if not isinstance(assistant_text, str) or not assistant_text.strip():
+        return outcome
+    return RuntimeThreadOutcome(
+        status="ok",
+        assistant_text=assistant_text,
+        error=None,
+        backend_thread_id=outcome.backend_thread_id,
+        backend_turn_id=outcome.backend_turn_id,
     )
 
 
@@ -381,12 +402,14 @@ def _normalize_message_event(
         return [Failed(timestamp=now_iso(), error_message=str(error_message))]
 
     if method in {"turn/completed", "session.idle"}:
+        state.completed_seen = True
         return []
 
     if method == "session.status":
         status = _coerce_dict(params.get("status"))
         status_type = str(status.get("type") or status.get("status") or "").strip()
         if status_type.lower() == "idle":
+            state.completed_seen = True
             return []
         return []
 
@@ -881,6 +904,7 @@ def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
 __all__ = [
     "RuntimeThreadRunEventState",
     "normalize_runtime_thread_raw_event",
+    "recover_post_completion_outcome",
     "terminal_run_event_from_outcome",
     "_extract_output_delta",
     "_output_delta_type_for_method",

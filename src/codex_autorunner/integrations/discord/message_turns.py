@@ -26,6 +26,7 @@ from ...core.orchestration import (
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
+    recover_post_completion_outcome,
     terminal_run_event_from_outcome,
 )
 from ...core.orchestration.runtime_threads import (
@@ -622,8 +623,15 @@ def _note_runtime_event_state(
     if isinstance(run_event, TokenUsage) and isinstance(run_event.usage, dict):
         event_state.token_usage = dict(run_event.usage)
         return
-    if isinstance(run_event, Completed) and isinstance(run_event.final_message, str):
-        event_state.note_message_text(run_event.final_message)
+    if isinstance(run_event, Completed):
+        event_state.completed_seen = True
+        if isinstance(run_event.final_message, str):
+            event_state.note_message_text(run_event.final_message)
+        return
+    if isinstance(run_event, Failed):
+        error_message = str(run_event.error_message or "").strip()
+        if error_message:
+            event_state.last_error_message = error_message
 
 
 def _build_managed_thread_input_items(
@@ -1080,6 +1088,16 @@ async def _finalize_discord_thread_execution(
             stream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await stream_task
+
+    recovered_outcome = recover_post_completion_outcome(outcome, event_state)
+    if recovered_outcome is not outcome:
+        service._logger.warning(
+            "Discord runtime turn recovered from post-completion error: thread=%s turn=%s error=%s",
+            managed_thread_id,
+            managed_turn_id,
+            outcome.error,
+        )
+        outcome = recovered_outcome
 
     if on_progress_event is not None:
         with contextlib.suppress(Exception):

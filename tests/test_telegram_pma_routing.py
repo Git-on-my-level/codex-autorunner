@@ -22,6 +22,7 @@ from codex_autorunner.core.orchestration.runtime_threads import (
 )
 from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
+    CodexAppServerDisconnected,
     CodexAppServerResponseError,
 )
 from codex_autorunner.integrations.telegram.adapter import (
@@ -1573,6 +1574,159 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
     assert len(edited_texts) >= 2
     assert len(set(edited_texts)) >= 2
     assert "telegram managed final reply" in handler._sent
+
+    remaining_tasks = list(handler._spawned_tasks)
+    for task in remaining_tasks:
+        if not task.done():
+            task.cancel()
+    for task in remaining_tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.anyio
+async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    stream_finished = asyncio.Event()
+
+    class _FakeHarness:
+        display_name = "Fake"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="telegram-backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id="telegram-backend-turn-1",
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            await stream_finished.wait()
+            raise CodexAppServerDisconnected("Reconnecting... 2/5")
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "item/agentMessage/delta",
+                        "params": {"delta": "telegram completed reply survives"},
+                    }
+                },
+            )
+            yield format_sse(
+                "app-server",
+                {
+                    "message": {
+                        "method": "turn/completed",
+                        "params": {"status": "completed"},
+                    }
+                },
+            )
+            stream_finished.set()
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="stream this telegram prompt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    assert "telegram completed reply survives" in handler._sent
+    assert not any("turn failed" in sent.lower() for sent in handler._sent)
+    assert not any("disconnected" in sent.lower() for sent in handler._sent)
 
     remaining_tasks = list(handler._spawned_tasks)
     for task in remaining_tasks:
