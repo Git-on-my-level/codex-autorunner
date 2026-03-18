@@ -115,30 +115,64 @@ def flatten_usage(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Flatten OpenCode token usage into standard format."""
     usage: dict[str, Any] = {}
 
-    total_tokens = coerce_int(tokens.get("total"))
+    total_tokens = (
+        coerce_int(tokens.get("total"))
+        or coerce_int(tokens.get("totalTokens"))
+        or coerce_int(tokens.get("total_tokens"))
+    )
     if total_tokens is not None:
         usage["totalTokens"] = total_tokens
 
-    input_tokens = coerce_int(tokens.get("input"))
+    input_tokens = (
+        coerce_int(tokens.get("input"))
+        or coerce_int(tokens.get("inputTokens"))
+        or coerce_int(tokens.get("input_tokens"))
+    )
     if input_tokens is not None:
         usage["inputTokens"] = input_tokens
 
-    output_tokens = coerce_int(tokens.get("output"))
+    output_tokens = (
+        coerce_int(tokens.get("output"))
+        or coerce_int(tokens.get("outputTokens"))
+        or coerce_int(tokens.get("output_tokens"))
+    )
     if output_tokens is not None:
         usage["outputTokens"] = output_tokens
 
-    reasoning_tokens = coerce_int(tokens.get("reasoning"))
+    reasoning_tokens = (
+        coerce_int(tokens.get("reasoning"))
+        or coerce_int(tokens.get("reasoningTokens"))
+        or coerce_int(tokens.get("reasoning_tokens"))
+    )
     if reasoning_tokens is not None:
         usage["reasoningTokens"] = reasoning_tokens
 
-    cache = tokens.get("cache")
-    if isinstance(cache, dict):
-        cached_read = coerce_int(cache.get("read"))
-        if cached_read is not None:
-            usage["cachedInputTokens"] = cached_read
-        cached_write = coerce_int(cache.get("write"))
-        if cached_write is not None:
-            usage["cacheWriteTokens"] = cached_write
+    cached_read = (
+        coerce_int(tokens.get("cachedRead"))
+        or coerce_int(tokens.get("cached_read"))
+        or coerce_int(tokens.get("cachedInputTokens"))
+        or coerce_int(tokens.get("cached_input_tokens"))
+        or coerce_int(tokens.get("cached_tokens"))
+    )
+    if cached_read is None:
+        cache = tokens.get("cache")
+        if isinstance(cache, dict):
+            cached_read = coerce_int(cache.get("read"))
+    if cached_read is not None:
+        usage["cachedInputTokens"] = cached_read
+
+    cached_write = (
+        coerce_int(tokens.get("cachedWrite"))
+        or coerce_int(tokens.get("cached_write"))
+        or coerce_int(tokens.get("cacheWriteTokens"))
+        or coerce_int(tokens.get("cache_write_tokens"))
+    )
+    if cached_write is None:
+        cache = tokens.get("cache")
+        if isinstance(cache, dict):
+            cached_write = coerce_int(cache.get("write"))
+    if cached_write is not None:
+        usage["cacheWriteTokens"] = cached_write
 
     if "totalTokens" not in usage:
         components = [
@@ -155,7 +189,7 @@ def flatten_usage(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
     return usage or None
 
 
-def _extract_usage_field(usage: dict[str, Any], keys: tuple[str, ...]) -> Optional[int]:
+def extract_usage_field(usage: dict[str, Any], keys: tuple[str, ...]) -> Optional[int]:
     """Extract a usage field by checking multiple key variations."""
     for key in keys:
         if key in usage:
@@ -163,3 +197,6 @@ def _extract_usage_field(usage: dict[str, Any], keys: tuple[str, ...]) -> Option
             if value is not None:
                 return value
     return None
+
+
+_extract_usage_field = extract_usage_field

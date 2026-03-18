@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import codex_autorunner.routes.system as system
+import codex_autorunner.surfaces.web.routes.system as system
 
 
 @pytest.mark.parametrize(

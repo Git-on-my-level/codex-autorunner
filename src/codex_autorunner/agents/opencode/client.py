@@ -586,21 +586,44 @@ class OpenCodeClient:
         directory: Optional[str] = None,
         ready_event: Optional[asyncio.Event] = None,
         paths: Optional[Iterable[str]] = None,
+        session_id: Optional[str] = None,
     ) -> AsyncIterator[SSEEvent]:
+        """Stream SSE events from OpenCode server.
+
+        Args:
+            directory: Workspace directory for session filtering
+            ready_event: Event to signal when stream is ready
+            paths: Custom list of endpoint paths to try (overrides defaults)
+            session_id: Session ID to use session-scoped endpoint first
+
+        Yields:
+            Normalized SSEEvent objects from the server.
+
+        The endpoint negotiation strategy is:
+        1. If paths provided, use those
+        2. If session_id provided, try /session/{session_id}/event first
+        3. Fall back to global endpoints (/global/event, /event) based on API shape
+        """
         params = self._dir_params(directory)
 
         if paths is not None:
             event_paths = list(paths)
         else:
+            base_paths: list[str]
             profile = await self.detect_api_shape()
             if profile.supports_global_endpoints:
-                event_paths = (
+                base_paths = (
                     ["/event", "/global/event"]
                     if directory
                     else ["/global/event", "/event"]
                 )
             else:
-                event_paths = ["/event"]
+                base_paths = ["/event"]
+
+            if session_id:
+                event_paths = [f"/session/{session_id}/event"] + base_paths
+            else:
+                event_paths = base_paths
 
         last_error: Optional[BaseException] = None
         for path in event_paths:

@@ -24,6 +24,8 @@
     "python:function:src/codex_autorunner/integrations/discord/rendering.py:45:format_bold",
     "python:function:src/codex_autorunner/integrations/discord/rendering.py:52:format_italic",
     "python:function:src/codex_autorunner/integrations/github/service.py:257:parse_pr_input",
+    "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:19:_flatten_opencode_tokens",
+    "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:138:log_stream",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:171:jsonl_event_stream",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:217:state_stream"

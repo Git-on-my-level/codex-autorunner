@@ -1,3 +1,16 @@
+/**
+ * Canonical Chat History Storage
+ *
+ * This module provides the canonical localStorage contract for chat message history
+ * across all chat surfaces (ticket, contextspace, PMA).
+ *
+ * Namespace conventions (keyPrefix in ChatStorageConfig):
+ * - Ticket chat: `car-ticket-chat-` + target (e.g., `car-ticket-chat-ticket:123`)
+ * - Contextspace: `car-contextspace-chat-` + target (e.g., `car-contextspace-chat-contextspace:active_context`)
+ * - PMA: `car.pma.` + target (e.g., `car.pma.pma`)
+ *
+ * Version field enables safe schema migrations - loading returns empty if version mismatches.
+ */
 export interface ChatStorageConfig {
   keyPrefix: string;
   maxMessages: number;

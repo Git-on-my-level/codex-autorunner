@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
+from ....core.coercion import coerce_int
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import (
@@ -107,7 +108,6 @@ from ..types import (
     ModelPickerState,
     SelectionState,
 )
-from .utils import _coerce_int
 
 if TYPE_CHECKING:
     from ..state import TelegramTopicRecord
@@ -314,13 +314,13 @@ class TelegramCommandHandlers(
                 limit = model_entry.get("limit") or model_entry.get("limits")
                 if isinstance(limit, dict):
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(limit.get(key))
+                        value = coerce_int(limit.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
                 if context_window is None:
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(model_entry.get(key))
+                        value = coerce_int(model_entry.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
@@ -328,7 +328,7 @@ class TelegramCommandHandlers(
                 limit = provider.get("limit") or provider.get("limits")
                 if isinstance(limit, dict):
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(limit.get(key))
+                        value = coerce_int(limit.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break

@@ -8,6 +8,99 @@ export function parseMaybeJson(data: string): unknown {
   }
 }
 
+export interface StreamEventHandler {
+  onStatus?(status: string): void;
+  onToken?(token: string): void;
+  onTokenUsage?(percentRemaining: number, usage: Record<string, unknown>): void;
+  onUpdate?(payload: Record<string, unknown>): void;
+  onEvent?(event: unknown): void;
+  onError?(message: string): void;
+  onInterrupted?(message: string): void;
+  onDone?(): void;
+}
+
+export function handleStreamEvent(
+  event: string,
+  rawData: string,
+  handlers: StreamEventHandler
+): void {
+  const parsed = parseMaybeJson(rawData) as Record<string, unknown> | string;
+
+  switch (event) {
+    case "status": {
+      const status = typeof parsed === "string" ? parsed : (parsed.status as string) || "";
+      handlers.onStatus?.(status);
+      break;
+    }
+
+    case "token": {
+      const token =
+        typeof parsed === "string"
+          ? parsed
+          : (parsed.token as string) || (parsed.text as string) || rawData || "";
+      handlers.onToken?.(token);
+      break;
+    }
+
+    case "token_usage": {
+      if (typeof parsed === "object" && parsed !== null) {
+        const usage = parsed as Record<string, unknown>;
+        const percent = extractContextRemainingPercent(usage);
+        if (percent !== null) {
+          handlers.onTokenUsage?.(percent, usage);
+        }
+      }
+      break;
+    }
+
+    case "update": {
+      const payload = typeof parsed === "object" && parsed !== null ? parsed : {};
+      handlers.onUpdate?.(payload);
+      break;
+    }
+
+    case "event":
+    case "app-server": {
+      handlers.onEvent?.(parsed);
+      break;
+    }
+
+    case "error": {
+      const message =
+        typeof parsed === "object" && parsed !== null
+          ? ((parsed.detail as string) || (parsed.error as string) || rawData || "Stream error")
+          : rawData || "Stream error";
+      handlers.onError?.(message);
+      break;
+    }
+
+    case "interrupted": {
+      const message =
+        typeof parsed === "object" && parsed !== null
+          ? ((parsed.detail as string) || rawData || "Stream interrupted")
+          : rawData || "Stream interrupted";
+      handlers.onInterrupted?.(message);
+      break;
+    }
+
+    case "done":
+    case "finish": {
+      handlers.onDone?.();
+      break;
+    }
+
+    default: {
+      if (typeof parsed === "object" && parsed !== null) {
+        const messageObj = parsed as Record<string, unknown>;
+        if (messageObj.method || messageObj.message) {
+          handlers.onEvent?.(parsed);
+        }
+      }
+      break;
+    }
+  }
+}
+
 export function extractContextRemainingPercent(usage: unknown): number | null {
   if (!usage || typeof usage !== "object") return null;
   const payload = usage as Record<string, unknown>;

@@ -34,6 +34,7 @@ let globalPauseReason = null;
  */
 export function registerAutoRefresh(id, options) {
     const { callback, tabId = null, interval = CONSTANTS.UI?.AUTO_REFRESH_INTERVAL || 15000, refreshOnActivation = true, immediate = false, } = options;
+    unregisterAutoRefresh(id);
     const refresher = {
         callback,
         tabId,
@@ -50,7 +51,16 @@ export function registerAutoRefresh(id, options) {
     if (immediate && globallyEnabled) {
         void doRefresh(id, refresher, { reason: "manual" });
     }
-    return () => unregisterAutoRefresh(id);
+    return () => {
+        if (refreshers.get(id) !== refresher) {
+            if (refresher.timerId) {
+                clearInterval(refresher.timerId);
+                refresher.timerId = null;
+            }
+            return;
+        }
+        unregisterAutoRefresh(id);
+    };
 }
 /**
  * Unregister a refresher.
@@ -60,6 +70,7 @@ export function unregisterAutoRefresh(id) {
     if (refresher) {
         if (refresher.timerId) {
             clearInterval(refresher.timerId);
+            refresher.timerId = null;
         }
         refreshers.delete(id);
     }
