@@ -327,33 +327,34 @@ def test_cross_process_lock_prevents_duplicate_spawn(tmp_path: Path) -> None:
     )
     p1.start()
     p2.start()
+    try:
+        results: list[dict[str, Any]] = []
+        for _ in range(2):
+            try:
+                item = queue.get(timeout=30)
+            except Empty as exc:
+                raise AssertionError("worker did not report result in time") from exc
+            results.append(item)
 
-    results: list[dict[str, Any]] = []
-    for _ in range(2):
-        try:
-            item = queue.get(timeout=30)
-        except Empty as exc:
-            p1.terminate()
-            p2.terminate()
-            p1.join(timeout=1)
-            p2.join(timeout=1)
-            raise AssertionError("worker did not report result in time") from exc
-        results.append(item)
+        p1.join(timeout=30)
+        p2.join(timeout=30)
+        if p1.exitcode != 0:
+            raise AssertionError(f"first worker exited with code {p1.exitcode}")
+        if p2.exitcode != 0:
+            raise AssertionError(f"second worker exited with code {p2.exitcode}")
 
-    p1.join(timeout=30)
-    p2.join(timeout=30)
-    if p1.exitcode != 0:
-        raise AssertionError(f"first worker exited with code {p1.exitcode}")
-    if p2.exitcode != 0:
-        raise AssertionError(f"second worker exited with code {p2.exitcode}")
+        errors = [entry for entry in results if "error" in entry]
+        if errors:
+            raise AssertionError(f"worker errors: {errors}")
 
-    errors = [entry for entry in results if "error" in entry]
-    if errors:
-        raise AssertionError(f"worker errors: {errors}")
-
-    assert _wait_for_marker(marker_path, minimum=1) == 1
-    workspace_id = _workspace_id(workspace)
-    base_urls = {entry["base_url"] for entry in results if "base_url" in entry}
-    assert len(base_urls) == 1
-    assert any(entry.get("pid") is not None for entry in results if "pid" in entry)
-    assert read_process_record(workspace, "opencode", workspace_id) is None
+        assert _wait_for_marker(marker_path, minimum=1) == 1
+        workspace_id = _workspace_id(workspace)
+        base_urls = {entry["base_url"] for entry in results if "base_url" in entry}
+        assert len(base_urls) == 1
+        assert any(entry.get("pid") is not None for entry in results if "pid" in entry)
+        assert read_process_record(workspace, "opencode", workspace_id) is None
+    finally:
+        for proc in (p1, p2):
+            if proc.is_alive():
+                proc.terminate()
+            proc.join(timeout=5)

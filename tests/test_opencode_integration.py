@@ -14,6 +14,8 @@ from codex_autorunner.agents.opencode.supervisor import (
     OpenCodeSupervisor,
     OpenCodeSupervisorError,
 )
+from codex_autorunner.core.managed_processes.registry import read_process_record
+from codex_autorunner.workspace import canonical_workspace_root, workspace_id_for_path
 
 
 def get_opencode_bin() -> Optional[str]:
@@ -25,6 +27,37 @@ def get_opencode_bin() -> Optional[str]:
 
 
 pytestmark = pytest.mark.integration
+
+
+def _workspace_id(workspace_root: Path) -> str:
+    return workspace_id_for_path(canonical_workspace_root(workspace_root))
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+async def _assert_process_gone(pid: int, *, timeout: float = 10.0) -> None:
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        if not _pid_is_running(pid):
+            return
+        if loop.time() >= deadline:
+            pytest.fail(f"process {pid} still running after cleanup")
+        await asyncio.sleep(0.1)
+
+
+def _assert_registry_removed(workspace_root: Path, pid: int) -> None:
+    workspace_id = _workspace_id(workspace_root)
+    assert read_process_record(workspace_root, "opencode", workspace_id) is None
+    assert read_process_record(workspace_root, "opencode", str(pid)) is None
 
 
 @pytest.fixture(autouse=True)
@@ -143,15 +176,40 @@ async def test_supervisor_max_handles_eviction(
         ws.mkdir()
         (ws / ".git").mkdir()
 
-    _client1 = await supervisor.get_client(workspace1)
+    client1 = await supervisor.get_client(workspace1)
+    handle1 = supervisor._handles[_workspace_id(workspace1)]
+    assert handle1.process is not None and handle1.process.pid is not None
+    pid1 = handle1.process.pid
+
     _client2 = await supervisor.get_client(workspace2)
+    handle2 = supervisor._handles[_workspace_id(workspace2)]
+    assert handle2.process is not None and handle2.process.pid is not None
+    pid2 = handle2.process.pid
+
     _client3 = await supervisor.get_client(workspace3)
+    handle3 = supervisor._handles[_workspace_id(workspace3)]
+    assert handle3.process is not None and handle3.process.pid is not None
+    pid3 = handle3.process.pid
 
     # This should evict client1 (LRU)
     _client4 = await supervisor.get_client(workspace4)
+    handle4 = supervisor._handles[_workspace_id(workspace4)]
+    assert handle4.process is not None and handle4.process.pid is not None
+    pid4 = handle4.process.pid
 
-    # Verify by trying to close all - client1 should already be closed
+    assert _workspace_id(workspace1) not in supervisor._handles
+    await _assert_process_gone(pid1)
+    _assert_registry_removed(workspace1, pid1)
+
+    await client1.close()
     await supervisor.close_all()
+    for workspace_root, pid in (
+        (workspace2, pid2),
+        (workspace3, pid3),
+        (workspace4, pid4),
+    ):
+        await _assert_process_gone(pid)
+        _assert_registry_removed(workspace_root, pid)
 
 
 @pytest.mark.asyncio

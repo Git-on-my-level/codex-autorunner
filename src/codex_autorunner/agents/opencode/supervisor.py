@@ -450,11 +450,13 @@ class OpenCodeSupervisor:
             workspace_root=str(workspace_root),
             server_scope=self._server_scope,
         )
-        for handle in handles_to_close:
+        for handle_to_close in handles_to_close:
             await self._close_handle(
-                handle,
+                handle_to_close,
                 reason=(
-                    "max_handles" if handle.workspace_id == evicted_id else "idle_ttl"
+                    "max_handles"
+                    if handle_to_close.workspace_id == evicted_id
+                    else "idle_ttl"
                 ),
             )
         return handle
