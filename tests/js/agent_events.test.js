@@ -165,3 +165,46 @@ test("parses OpenCode reasoning and tool parts", () => {
   assert.match(tool.event.detail, /pwd/);
   assert.match(tool.event.detail, /running/);
 });
+
+test("replaces cumulative OpenCode text snapshots when delta is absent", () => {
+  resetOpenCodeEventState();
+
+  parseAppServerEvent({
+    id: "role-1",
+    received_at: 1000,
+    message: {
+      method: "message.updated",
+      params: {
+        properties: {
+          info: {
+            id: "assistant-1",
+            role: "assistant",
+          },
+        },
+      },
+    },
+  });
+
+  const snapshot = parseAppServerEvent({
+    id: "part-1",
+    received_at: 1001,
+    message: {
+      method: "message.part.updated",
+      params: {
+        properties: {
+          part: {
+            id: "part-text-1",
+            messageID: "assistant-1",
+            type: "text",
+            text: "hello world",
+          },
+        },
+      },
+    },
+  });
+
+  assert.ok(snapshot);
+  assert.equal(snapshot.event.itemId, "assistant-1");
+  assert.equal(snapshot.event.summary, "hello world");
+  assert.equal(snapshot.mergeStrategy, "replace");
+});

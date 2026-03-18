@@ -357,7 +357,11 @@ export function parseAppServerEvent(payload) {
                 itemId: parsedItemId || null,
                 method,
             };
-            return delta && parsedItemId ? { event, mergeStrategy: "append" } : { event };
+            if (!parsedItemId)
+                return { event };
+            if (delta)
+                return { event, mergeStrategy: "append" };
+            return { event, mergeStrategy: "replace" };
         }
         if (partType === "reasoning") {
             const delta = extractOpenCodeDeltaText(params);

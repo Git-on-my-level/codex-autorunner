@@ -27,7 +27,7 @@ export interface AgentEvent {
 
 export interface ParsedAgentEvent {
   event: AgentEvent;
-  mergeStrategy?: "append" | "newline";
+  mergeStrategy?: "append" | "newline" | "replace";
 }
 
 interface CommandItem {
@@ -440,7 +440,9 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
         itemId: parsedItemId || null,
         method,
       };
-      return delta && parsedItemId ? { event, mergeStrategy: "append" } : { event };
+      if (!parsedItemId) return { event };
+      if (delta) return { event, mergeStrategy: "append" };
+      return { event, mergeStrategy: "replace" };
     }
 
     if (partType === "reasoning") {

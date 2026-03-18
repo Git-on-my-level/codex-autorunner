@@ -467,6 +467,9 @@ function addLiveOutputEvent(parsed) {
         else if (mergeStrategy === "newline") {
             existing.summary = `${existing.summary || ""}\n\n`;
         }
+        else if (mergeStrategy === "replace") {
+            existing.summary = event.summary;
+        }
         existing.time = event.time;
         return;
     }

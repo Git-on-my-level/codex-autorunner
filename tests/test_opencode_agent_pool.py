@@ -321,6 +321,96 @@ async def test_run_turn_mirrors_opencode_text_parts_after_assistant_role_resolut
 
 
 @pytest.mark.asyncio
+async def test_run_turn_preserves_whitespace_in_opencode_text_part_deltas(
+    tmp_path: Path,
+):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="Debug of OpenCode  \n",
+                raw_events=[
+                    _message(
+                        "message.updated",
+                        {
+                            "properties": {
+                                "info": {
+                                    "id": "assistant-1",
+                                    "role": "assistant",
+                                }
+                            }
+                        },
+                    ),
+                    _message(
+                        "message.part.updated",
+                        {
+                            "properties": {
+                                "part": {
+                                    "id": "part-1",
+                                    "messageID": "assistant-1",
+                                    "type": "text",
+                                    "text": "Debug",
+                                },
+                                "delta": "Debug",
+                            }
+                        },
+                    ),
+                    _message(
+                        "message.part.updated",
+                        {
+                            "properties": {
+                                "part": {
+                                    "id": "part-1",
+                                    "messageID": "assistant-1",
+                                    "type": "text",
+                                    "text": "Debug of",
+                                },
+                                "delta": " of",
+                            }
+                        },
+                    ),
+                    _message(
+                        "message.part.updated",
+                        {
+                            "properties": {
+                                "part": {
+                                    "id": "part-1",
+                                    "messageID": "assistant-1",
+                                    "type": "text",
+                                    "text": "Debug of OpenCode  \n",
+                                },
+                                "delta": " OpenCode  \n",
+                            }
+                        },
+                    ),
+                ],
+            )
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
+
+    emitted = []
+
+    def _emit(event_type: FlowEventType, payload: dict):
+        emitted.append((event_type, payload))
+
+    await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="main prompt",
+            workspace_root=tmp_path,
+            emit_event=_emit,
+        )
+    )
+
+    mirrored = [
+        payload["delta"]
+        for event_type, payload in emitted
+        if event_type == FlowEventType.AGENT_STREAM_DELTA
+    ]
+    assert mirrored == ["Debug", " of", " OpenCode  \n"]
+
+
+@pytest.mark.asyncio
 async def test_run_turn_does_not_mirror_opencode_user_text_parts(tmp_path: Path):
     harness = _FakeHarness(
         [

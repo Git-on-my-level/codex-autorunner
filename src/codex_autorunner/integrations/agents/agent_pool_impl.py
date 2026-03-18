@@ -132,27 +132,23 @@ def _runtime_message_delta(params: dict[str, Any]) -> Optional[str]:
     for key in ("delta", "text", "output"):
         value = params.get(key)
         if isinstance(value, str):
-            text = value.strip()
-            if text:
-                return text
+            if value != "":
+                return value
         if isinstance(value, dict):
             nested = value.get("text")
             if isinstance(nested, str):
-                text = nested.strip()
-                if text:
-                    return text
+                if nested != "":
+                    return nested
     properties = _runtime_message_properties(params)
     delta_raw = properties.get("delta")
     if isinstance(delta_raw, str):
-        text = delta_raw.strip()
-        if text:
-            return text
+        if delta_raw != "":
+            return delta_raw
     delta = _coerce_dict(delta_raw)
     delta_text = delta.get("text")
     if isinstance(delta_text, str):
-        text = delta_text.strip()
-        if text:
-            return text
+        if delta_text != "":
+            return delta_text
     return None
 
 
