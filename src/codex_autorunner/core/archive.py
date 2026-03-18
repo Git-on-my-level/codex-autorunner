@@ -824,6 +824,7 @@ def archive_worktree_snapshot(
     head_sha: Optional[str] = None,
     source_path: Optional[Path | str] = None,
     profile: ArchiveProfile = "portable",
+    include_flow_store_in_portable: bool = False,
     retention_policy: Optional[WorktreeArchiveRetentionPolicy] = None,
 ) -> ArchiveResult:
     base_repo_root = base_repo_root.resolve()
@@ -850,7 +851,7 @@ def archive_worktree_snapshot(
     entries = build_common_car_archive_entries(
         source_root,
         snapshot_root,
-        include_flow_store=profile == "full",
+        include_flow_store=profile == "full" or include_flow_store_in_portable,
         include_config=True,
         include_runtime_state=profile == "full",
         include_logs=profile == "full",

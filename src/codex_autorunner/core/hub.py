@@ -1352,6 +1352,7 @@ class HubSupervisor:
         archive_note: Optional[str] = None,
         force: bool = False,
         archive_profile: Optional[str] = None,
+        include_flow_store_in_portable: bool = False,
     ):
         from .archive import ArchiveResult
 
@@ -1406,6 +1407,7 @@ class HubSupervisor:
                 head_sha=head_sha,
                 source_path=entry.path,
                 profile=profile,
+                include_flow_store_in_portable=include_flow_store_in_portable,
                 retention_policy=retention_policy,
             )
         except Exception as exc:
@@ -1850,6 +1852,7 @@ class HubSupervisor:
                 archive_note=archive_note,
                 force=force_archive,
                 archive_profile=archive_profile,
+                include_flow_store_in_portable=True,
             )
 
         repos_by_id = {repo.id: repo for repo in manifest.repos}

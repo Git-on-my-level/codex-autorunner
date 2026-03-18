@@ -88,6 +88,24 @@ def test_archive_snapshot_copies_curated_paths(tmp_path: Path) -> None:
     assert '"status": "complete"' in meta
 
 
+def test_archive_snapshot_portable_cleanup_can_keep_flow_store(tmp_path: Path) -> None:
+    base_repo, worktree_repo = _setup_worktree(tmp_path)
+
+    result = archive_worktree_snapshot(
+        base_repo_root=base_repo,
+        base_repo_id="base",
+        worktree_repo_root=worktree_repo,
+        worktree_repo_id="worktree",
+        branch="feature/archive-viewer",
+        worktree_of="base",
+        include_flow_store_in_portable=True,
+    )
+
+    assert (result.snapshot_path / "flows.db").exists()
+    assert not (result.snapshot_path / "state" / "state.sqlite3").exists()
+    assert not (result.snapshot_path / "logs" / "codex-autorunner.log").exists()
+
+
 def test_archive_snapshot_skips_symlink_escape(tmp_path: Path) -> None:
     base_repo, worktree_repo = _setup_worktree(tmp_path)
     car_root = worktree_repo / ".codex-autorunner"

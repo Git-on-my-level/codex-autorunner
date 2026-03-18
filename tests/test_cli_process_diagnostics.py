@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import types
 from pathlib import Path
 
+import typer
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
@@ -17,6 +19,7 @@ from codex_autorunner.core.force_attestation import (
     FORCE_ATTESTATION_REQUIRED_PHRASE,
 )
 from codex_autorunner.core.managed_processes import ReapSummary
+from codex_autorunner.surfaces.cli.commands import cleanup as cleanup_cmd
 
 runner = CliRunner()
 
@@ -141,6 +144,23 @@ def test_cleanup_processes_force_requires_attestation(repo: Path) -> None:
 
 def test_cleanup_archives_uses_repo_retention_policy(monkeypatch, repo: Path) -> None:
     captured: dict[str, object] = {}
+    cleanup_app = typer.Typer()
+    cleanup_cmd.register_cleanup_commands(
+        cleanup_app,
+        require_repo_config=lambda _repo, _hub: types.SimpleNamespace(
+            repo_root=repo,
+            config=types.SimpleNamespace(
+                pma=types.SimpleNamespace(
+                    worktree_archive_max_snapshots_per_repo=7,
+                    worktree_archive_max_age_days=21,
+                    worktree_archive_max_total_bytes=123456,
+                    run_archive_max_entries=9,
+                    run_archive_max_age_days=11,
+                    run_archive_max_total_bytes=654321,
+                )
+            ),
+        ),
+    )
 
     def _fake_prune_worktrees(path: Path, *, policy, preserve_paths=(), dry_run=False):
         captured["worktrees_path"] = path
@@ -168,9 +188,8 @@ def test_cleanup_archives_uses_repo_retention_policy(monkeypatch, repo: Path) ->
     )
 
     result = runner.invoke(
-        app,
+        cleanup_app,
         [
-            "cleanup",
             "archives",
             "--repo",
             str(repo),
@@ -184,6 +203,16 @@ def test_cleanup_archives_uses_repo_retention_policy(monkeypatch, repo: Path) ->
         == repo / ".codex-autorunner" / "archive" / "worktrees"
     )
     assert captured["runs_path"] == repo / ".codex-autorunner" / "archive" / "runs"
+    assert captured["worktrees_policy"] == cleanup_cmd.WorktreeArchiveRetentionPolicy(
+        max_snapshots_per_repo=7,
+        max_age_days=21,
+        max_total_bytes=123456,
+    )
+    assert captured["runs_policy"] == cleanup_cmd.RunArchiveRetentionPolicy(
+        max_entries=9,
+        max_age_days=11,
+        max_total_bytes=654321,
+    )
     assert captured["worktrees_dry_run"] is True
     assert captured["runs_dry_run"] is True
     assert "Dry run: worktrees:" in result.stdout
