@@ -95,6 +95,38 @@ def _compact_part_state_summary(value: Any) -> Optional[Dict[str, Any]]:
     return summary or None
 
 
+def _compact_delta_summary(value: Any) -> Optional[Any]:
+    if isinstance(value, str):
+        return _truncate_text(value)
+    delta = _coerce_dict(value)
+    if not delta:
+        return None
+    text = _truncate_text(delta.get("text"))
+    if text is None:
+        return None
+    return {"text": text}
+
+
+def _extract_delta_text(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        return _truncate_text(value)
+    delta = _coerce_dict(value)
+    if not delta:
+        return None
+    return _truncate_text(delta.get("text"))
+
+
+def _compact_tool_input_container(value: Any) -> Optional[Dict[str, str]]:
+    container = _coerce_dict(value)
+    if not container:
+        return None
+    for key in ("command", "cmd", "script", "input"):
+        text = _truncate_text(container.get(key))
+        if text:
+            return {key: text}
+    return None
+
+
 def _compact_part_summary(
     part: Dict[str, Any], preview: Optional[str]
 ) -> Dict[str, Any]:
@@ -122,6 +154,11 @@ def _compact_part_summary(
         text = _truncate_text(part.get(key))
         if text:
             summary[key] = text
+            break
+    for key in ("args", "arguments", "params"):
+        compact_container = _compact_tool_input_container(part.get(key))
+        if compact_container:
+            summary[key] = compact_container
             break
     if preview and str(summary.get("type") or "").strip().lower() in {
         "",
@@ -172,12 +209,12 @@ def _extract_preview_from_message(method: str, params: Dict[str, Any]) -> Option
     if method == "message.part.updated":
         part_type = str(part.get("type") or "").strip().lower()
         if part_type in {"", "text", "reasoning"}:
-            return _truncate_text(
-                params.get("delta")
-                or params.get("text")
-                or params.get("output")
-                or properties.get("delta")
-                or part.get("text")
+            return (
+                _truncate_text(part.get("text"))
+                or _extract_delta_text(params.get("delta"))
+                or _extract_delta_text(params.get("text"))
+                or _extract_delta_text(params.get("output"))
+                or _extract_delta_text(properties.get("delta"))
             )
         tool_preview = _first_non_empty_str(
             part.get("command"),
@@ -251,13 +288,15 @@ def _build_compact_app_server_params(
             properties_summary["diff_count"] = len(diff)
         if preview and "status" not in summary:
             summary["status"] = "diff updated"
-    delta_preview = None
     if method == "message.part.updated":
-        delta_preview = _truncate_text(
-            params.get("delta") or params.get("text") or params.get("output")
+        delta_summary = _compact_delta_summary(
+            params.get("delta")
+            or params.get("text")
+            or params.get("output")
+            or properties.get("delta")
         )
-    if delta_preview:
-        summary["delta"] = delta_preview
+        if delta_summary is not None:
+            properties_summary["delta"] = delta_summary
     if properties_summary:
         summary["properties"] = properties_summary
     error_summary = _compact_error_summary(params.get("error"))

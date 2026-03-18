@@ -70,6 +70,71 @@ def test_create_event_compacts_high_volume_app_server_tool_updates(tmp_path) -> 
     assert len(json.dumps(event.data)) < len(json.dumps(original))
 
 
+def test_create_event_preserves_properties_delta_object_for_replay(tmp_path) -> None:
+    store = FlowStore(tmp_path / "flows.db")
+    store.initialize()
+    run_id = _create_run(store)
+
+    event = store.create_event(
+        event_id="evt-delta-object",
+        run_id=run_id,
+        event_type=FlowEventType.APP_SERVER_EVENT,
+        data={
+            "message": {
+                "method": "message.part.updated",
+                "params": {
+                    "properties": {
+                        "info": {"id": "message-2", "role": "assistant"},
+                        "part": {
+                            "id": "part-2",
+                            "messageID": "message-2",
+                            "type": "text",
+                            "text": "hello there",
+                        },
+                        "delta": {"text": " there"},
+                    }
+                },
+            }
+        },
+    )
+
+    properties = event.data["message"]["params"]["properties"]
+    assert properties["delta"] == {"text": " there"}
+    assert properties["part"]["text"] == "hello there"
+
+
+def test_create_event_preserves_args_based_tool_input_for_replay(tmp_path) -> None:
+    store = FlowStore(tmp_path / "flows.db")
+    store.initialize()
+    run_id = _create_run(store)
+
+    event = store.create_event(
+        event_id="evt-tool-args",
+        run_id=run_id,
+        event_type=FlowEventType.APP_SERVER_EVENT,
+        data={
+            "message": {
+                "method": "message.part.updated",
+                "params": {
+                    "properties": {
+                        "part": {
+                            "id": "part-3",
+                            "type": "tool",
+                            "tool": "bash",
+                            "args": {"command": "pwd"},
+                            "state": {"status": "running"},
+                        }
+                    }
+                },
+            }
+        },
+    )
+
+    part = event.data["message"]["params"]["properties"]["part"]
+    assert part["args"] == {"command": "pwd"}
+    assert event.data["preview"] == "pwd"
+
+
 def test_create_event_compacts_session_diff_to_counts_and_status(tmp_path) -> None:
     store = FlowStore(tmp_path / "flows.db")
     store.initialize()
