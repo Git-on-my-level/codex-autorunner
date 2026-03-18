@@ -51,8 +51,11 @@ from .....integrations.discord.state import OutboxRecord as DiscordOutboxRecord
 from .....integrations.telegram.state import OutboxRecord as TelegramOutboxRecord
 from .....integrations.telegram.state import TelegramStateStore, parse_topic_key
 from ...schemas import PmaManagedThreadMessageRequest
+from ...services.pma.managed_thread_followup import (
+    ManagedThreadAutomationClient,
+    ManagedThreadAutomationUnavailable,
+)
 from .automation_adapter import (
-    call_store_create_with_payload,
     first_callable,
     get_automation_store,
     normalize_optional_text,
@@ -474,55 +477,6 @@ async def _notify_hub_automation_transition(
         logger.exception("Failed immediate PMA automation processing")
 
 
-def _build_terminal_notify_subscription_payload(
-    *,
-    managed_thread_id: str,
-    lane_id: Optional[str],
-    notify_once: bool,
-    idempotency_key: Optional[str],
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "event_types": ["managed_thread_completed", "managed_thread_failed"],
-        "thread_id": managed_thread_id,
-        "lane_id": lane_id,
-        "notify_once": notify_once,
-        "metadata": {"notify_once": notify_once},
-    }
-    if idempotency_key:
-        payload["idempotency_key"] = idempotency_key
-    return payload
-
-
-async def register_managed_thread_terminal_notify(
-    request: Request,
-    *,
-    managed_thread_id: str,
-    lane_id: Optional[str],
-    notify_once: bool,
-    idempotency_key: Optional[str],
-) -> Optional[dict[str, Any]]:
-    store = await get_automation_store(request, None)
-    if store is None:
-        return None
-    created = await call_store_create_with_payload(
-        store,
-        (
-            "create_subscription",
-            "add_subscription",
-            "upsert_subscription",
-        ),
-        _build_terminal_notify_subscription_payload(
-            managed_thread_id=managed_thread_id,
-            lane_id=lane_id,
-            notify_once=notify_once,
-            idempotency_key=idempotency_key,
-        ),
-    )
-    if isinstance(created, dict) and "subscription" in created:
-        return created
-    return {"subscription": created}
-
-
 def build_managed_thread_runtime_routes(
     router: APIRouter,
     get_runtime_state,
@@ -771,17 +725,23 @@ def build_managed_thread_runtime_routes(
 
         notification: Optional[dict[str, Any]] = None
         if notify_on == "terminal":
-            notification = await register_managed_thread_terminal_notify(
-                request,
-                managed_thread_id=managed_thread_id,
-                lane_id=notify_lane,
-                notify_once=notify_once,
-                idempotency_key=(
-                    f"managed-thread-send-notify:{managed_turn_id}"
-                    if notify_once
-                    else None
-                ),
-            )
+            automation_client = ManagedThreadAutomationClient(request, lambda: None)
+            try:
+                notification = await automation_client.create_terminal_followup(
+                    managed_thread_id=managed_thread_id,
+                    lane_id=notify_lane,
+                    notify_once=notify_once,
+                    idempotency_key=(
+                        f"managed-thread-send-notify:{managed_turn_id}"
+                        if notify_once
+                        else None
+                    ),
+                    required=True,
+                )
+            except ManagedThreadAutomationUnavailable as exc:
+                raise HTTPException(
+                    status_code=503, detail="Automation action unavailable"
+                ) from exc
 
         def _managed_thread_task_pool() -> set[asyncio.Task[Any]]:
             task_pool = getattr(request.app.state, "pma_managed_thread_tasks", None)
@@ -1240,5 +1200,4 @@ def build_managed_thread_runtime_routes(
 __all__ = [
     "build_managed_thread_runtime_routes",
     "notify_managed_thread_terminal_transition",
-    "register_managed_thread_terminal_notify",
 ]

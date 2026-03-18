@@ -26,6 +26,11 @@ from ...schemas import (
     PmaManagedThreadCreateRequest,
     PmaManagedThreadResumeRequest,
 )
+from ...services.pma.managed_thread_followup import (
+    ManagedThreadAutomationClient,
+    ManagedThreadAutomationUnavailable,
+    resolve_managed_thread_followup_policy,
+)
 from .automation_adapter import (
     call_store_action_with_id,
     call_store_create_with_payload,
@@ -117,18 +122,6 @@ def _resolve_workspace_from_input(hub_root: Path, workspace_root: str) -> Path:
     if not _is_within_root(workspace, hub_root):
         raise HTTPException(status_code=400, detail="workspace_root is invalid")
     return workspace
-
-
-def _normalize_notify_on(value: Any) -> Optional[str]:
-    normalized = normalize_optional_text(value)
-    if normalized is None:
-        return None
-    notify_on = normalized.lower()
-    if notify_on != "terminal":
-        raise HTTPException(
-            status_code=400, detail="notify_on must be 'terminal' when provided"
-        )
-    return notify_on
 
 
 def _normalize_resource_owner(
@@ -293,68 +286,6 @@ def build_managed_thread_orchestration_service(request: Request):
         harness_factory=_make_harness,
         pma_thread_store=PmaThreadStore(request.app.state.config.root),
     )
-
-
-def _build_terminal_notify_subscription_payload(
-    *,
-    managed_thread_id: str,
-    lane_id: Optional[str],
-    notify_once: bool,
-    idempotency_key: Optional[str],
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "event_types": ["managed_thread_completed", "managed_thread_failed"],
-        "thread_id": managed_thread_id,
-        "lane_id": lane_id,
-        "notify_once": notify_once,
-        "metadata": {"notify_once": notify_once},
-    }
-    if idempotency_key:
-        payload["idempotency_key"] = idempotency_key
-    return payload
-
-
-async def register_managed_thread_terminal_notify(
-    request: Request,
-    *,
-    managed_thread_id: str,
-    lane_id: Optional[str],
-    notify_once: bool,
-    idempotency_key: Optional[str],
-    get_runtime_state,
-    required: bool = True,
-) -> Optional[dict[str, Any]]:
-    store = await get_automation_store(request, get_runtime_state(), required=required)
-    if store is None:
-        return None
-    try:
-        created = await call_store_create_with_payload(
-            store,
-            (
-                "create_subscription",
-                "add_subscription",
-                "upsert_subscription",
-            ),
-            _build_terminal_notify_subscription_payload(
-                managed_thread_id=managed_thread_id,
-                lane_id=lane_id,
-                notify_once=notify_once,
-                idempotency_key=idempotency_key,
-            ),
-        )
-    except HTTPException:
-        if required:
-            raise
-        return None
-    except TypeError as exc:
-        if required:
-            raise HTTPException(
-                status_code=503, detail="Automation action unavailable"
-            ) from exc
-        return None
-    if isinstance(created, dict) and "subscription" in created:
-        return created
-    return {"subscription": created}
 
 
 def build_automation_routes(
@@ -554,44 +485,25 @@ def build_managed_thread_crud_routes(
     get_runtime_state,
 ) -> None:
     """Build managed-thread CRUD routes (create, list, get, compact, resume, archive)."""
-    from ...services.pma.common import pma_config_from_raw
-
-    def _get_pma_config(request: Request) -> dict[str, Any]:
-        raw = getattr(request.app.state.config, "raw", {})
-        return pma_config_from_raw(raw)
 
     @router.post("/threads")
     async def create_managed_thread(
         request: Request, payload: PmaManagedThreadCreateRequest
     ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
-        defaults = _get_pma_config(request)
-        payload_fields = set(getattr(payload, "model_fields_set", set()))
+        pma_config = request.app.state.config.pma
         agent_id = normalize_optional_text(payload.agent)
         resource_kind, resource_id, resolved_repo_id = _normalize_resource_owner(
             resource_kind=payload.resource_kind,
             resource_id=payload.resource_id,
         )
         workspace_root = normalize_optional_text(payload.workspace_root)
-        notify_on = _normalize_notify_on(payload.notify_on)
-        terminal_followup = payload.terminal_followup
-        if terminal_followup is False and notify_on == "terminal":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "terminal_followup=false cannot be combined with "
-                    "notify_on='terminal'"
-                ),
-            )
-        if notify_on is None:
-            if terminal_followup is False:
-                notify_on = None
-            elif terminal_followup is True or defaults.get(
-                "managed_thread_terminal_followup_default", True
-            ):
-                notify_on = "terminal"
-        notify_lane = normalize_optional_text(payload.notify_lane)
-        notify_once = bool(payload.notify_once)
+        followup_policy = resolve_managed_thread_followup_policy(
+            payload,
+            default_terminal_followup=(
+                pma_config.managed_thread_terminal_followup_default
+            ),
+        )
 
         owner_present = resource_kind is not None and resource_id is not None
         if owner_present == bool(workspace_root):
@@ -672,24 +584,27 @@ def build_managed_thread_crud_routes(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         notification: Optional[dict[str, Any]] = None
-        if notify_on == "terminal":
-            explicit_notify_requested = any(
-                field in payload_fields
-                for field in ("notify_on", "notify_lane", "notify_once")
-            )
-            notification = await register_managed_thread_terminal_notify(
+        if followup_policy.event_mode == "terminal":
+            automation_client = ManagedThreadAutomationClient(
                 request,
-                managed_thread_id=thread.thread_target_id,
-                lane_id=notify_lane,
-                notify_once=notify_once,
-                idempotency_key=(
-                    f"managed-thread-notify:{thread.thread_target_id}"
-                    if notify_once
-                    else None
-                ),
-                get_runtime_state=get_runtime_state,
-                required=explicit_notify_requested or terminal_followup is True,
+                get_runtime_state,
             )
+            try:
+                notification = await automation_client.create_terminal_followup(
+                    managed_thread_id=thread.thread_target_id,
+                    lane_id=followup_policy.lane_id,
+                    notify_once=followup_policy.notify_once,
+                    idempotency_key=(
+                        f"managed-thread-notify:{thread.thread_target_id}"
+                        if followup_policy.notify_once
+                        else None
+                    ),
+                    required=followup_policy.required,
+                )
+            except ManagedThreadAutomationUnavailable as exc:
+                raise HTTPException(
+                    status_code=503, detail="Automation action unavailable"
+                ) from exc
         response: dict[str, Any] = {"thread": _serialize_thread_target(thread)}
         if notification is not None:
             response["notification"] = notification
@@ -752,7 +667,7 @@ def build_managed_thread_crud_routes(
         summary = (payload.summary or "").strip()
         if not summary:
             raise HTTPException(status_code=400, detail="summary is required")
-        max_text_chars = int(_get_pma_config(request).get("max_text_chars", 0) or 0)
+        max_text_chars = int(request.app.state.config.pma.max_text_chars or 0)
         if max_text_chars > 0 and len(summary) > max_text_chars:
             raise HTTPException(
                 status_code=400,
