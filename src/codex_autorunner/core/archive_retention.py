@@ -108,6 +108,10 @@ def _load_meta_created_at(snapshot_dir: Path) -> Optional[datetime]:
     return _coerce_created_at(payload.get("created_at"))
 
 
+def _has_snapshot_meta(snapshot_dir: Path) -> bool:
+    return (snapshot_dir / "META.json").is_file()
+
+
 def _fallback_created_at(path: Path) -> datetime:
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
@@ -227,6 +231,8 @@ def prune_worktree_archive_root(
             if path.is_dir()
         ]
         for snapshot_dir in snapshots:
+            if not _has_snapshot_meta(snapshot_dir):
+                continue
             created_at = _load_meta_created_at(snapshot_dir) or _fallback_created_at(
                 snapshot_dir
             )

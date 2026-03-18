@@ -44,6 +44,27 @@ CAR_STATE_PATHS = (
     "lock",
     "workspace",
 )
+PORTABLE_ARCHIVE_PATHS = frozenset(
+    {
+        "tickets",
+        "contextspace",
+        "workspace",
+        "runs",
+        "flows",
+        "github_context",
+    }
+)
+PORTABLE_RESET_ARCHIVE_EXTRA_PATHS = frozenset(
+    {
+        "state.sqlite3",
+        "app_server_threads.json",
+        "app_server_workspaces",
+        "filebox",
+        "codex-autorunner.log",
+        "codex-server.log",
+        "lock",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -366,20 +387,17 @@ def _car_state_archive_entries(
     dirty_paths: Iterable[str],
     *,
     profile: ArchiveProfile = "portable",
+    include_reset_extras: bool = False,
 ) -> list[ArchiveEntrySpec]:
     if profile not in {"portable", "full"}:
         raise ValueError(f"Unsupported archive profile: {profile}")
     entries: list[ArchiveEntrySpec] = []
-    selected = set(dirty_paths)
+    dirty_set = set(dirty_paths)
+    selected = set(dirty_set)
     if profile == "portable":
-        selected &= {
-            "tickets",
-            "contextspace",
-            "workspace",
-            "runs",
-            "flows",
-            "github_context",
-        }
+        selected &= PORTABLE_ARCHIVE_PATHS
+        if include_reset_extras:
+            selected |= dirty_set & PORTABLE_RESET_ARCHIVE_EXTRA_PATHS
     if "tickets" in selected:
         entries.append(
             ArchiveEntrySpec(
@@ -988,6 +1006,7 @@ def archive_workspace_car_state(
         snapshot_root,
         dirty_paths,
         profile=profile,
+        include_reset_extras=True,
     )
 
     try:

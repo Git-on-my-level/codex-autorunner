@@ -27,6 +27,7 @@ from codex_autorunner.core.hub import HubSupervisor, RepoStatus
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
+from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.integrations.agents.backend_orchestrator import (
     build_backend_orchestrator,
 )
@@ -768,7 +769,15 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
     dispatch_dir = base_car / "runs" / "run-1" / "dispatch"
     dispatch_dir.mkdir(parents=True, exist_ok=True)
     (dispatch_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    (base_car / "filebox" / "outbox").mkdir(parents=True, exist_ok=True)
+    (base_car / "filebox" / "outbox" / "reply.txt").write_text(
+        "artifact", encoding="utf-8"
+    )
     (base_car / "codex-autorunner.log").write_text("log", encoding="utf-8")
+    save_state(
+        base_car / "state.sqlite3",
+        RunnerState(1, "idle", None, None, None),
+    )
     store = PmaThreadStore(hub_root)
     created = store.create_thread("codex", base.path, repo_id=base.id)
 
@@ -790,12 +799,16 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
     payload = archive_resp.json()
     assert "tickets" in payload["archived_paths"]
     assert "runs" in payload["archived_paths"]
-    assert "codex-autorunner.log" not in payload["archived_paths"]
+    assert "filebox" in payload["archived_paths"]
+    assert "state.sqlite3" in payload["archived_paths"]
+    assert "codex-autorunner.log" in payload["archived_paths"]
 
     snapshot_root = Path(payload["snapshot_path"])
     assert (snapshot_root / "tickets" / "TICKET-123-demo.md").exists()
     assert (snapshot_root / "runs" / "run-1" / "dispatch" / "DISPATCH.md").exists()
-    assert not (snapshot_root / "logs" / "codex-autorunner.log").exists()
+    assert (snapshot_root / "filebox" / "outbox" / "reply.txt").exists()
+    assert (snapshot_root / "state" / "state.sqlite3").exists()
+    assert (snapshot_root / "logs" / "codex-autorunner.log").exists()
     assert (base_car / "contextspace" / "active_context.md").read_text(
         encoding="utf-8"
     ) == ""

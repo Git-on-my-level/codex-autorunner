@@ -34,6 +34,12 @@ def _setup_worktree(tmp_path: Path) -> tuple[Path, Path]:
     _write(car_root / "flows.db", "flows-db")
     _write(car_root / "config.yml", "version: 2\n")
     _write(car_root / "state.sqlite3", "state")
+    _write(car_root / "app_server_threads.json", '{"threads": 1}\n')
+    _write(
+        car_root / "app_server_workspaces" / "workspace-1" / "meta.json",
+        '{"workspace": "demo"}\n',
+    )
+    _write(car_root / "filebox" / "outbox" / "reply.txt", "artifact")
     _write(car_root / "codex-autorunner.log", "log-a")
     _write(car_root / "codex-server.log", "log-b")
     _write(car_root / "github_context" / "issue.md", "issue context")
@@ -200,10 +206,6 @@ def test_has_car_state_ignores_seeded_defaults(tmp_path: Path) -> None:
 
 def test_archive_workspace_car_state_resets_runtime_state(tmp_path: Path) -> None:
     base_repo, worktree_repo = _setup_worktree(tmp_path)
-    _write(
-        worktree_repo / ".codex-autorunner" / "filebox" / "outbox" / "reply.txt",
-        "artifact",
-    )
 
     result = archive_workspace_car_state(
         base_repo_root=base_repo,
@@ -218,7 +220,12 @@ def test_archive_workspace_car_state_resets_runtime_state(tmp_path: Path) -> Non
     assert "contextspace" in result.archived_paths
     assert "runs" in result.archived_paths
     assert "flows" in result.archived_paths
-    assert "filebox" not in result.archived_paths
+    assert "state.sqlite3" in result.archived_paths
+    assert "app_server_threads.json" in result.archived_paths
+    assert "app_server_workspaces" in result.archived_paths
+    assert "filebox" in result.archived_paths
+    assert "codex-autorunner.log" in result.archived_paths
+    assert "codex-server.log" in result.archived_paths
     assert "config.yml" in result.archived_paths
     assert (result.snapshot_path / "tickets" / "TICKET-001.md").exists()
     assert (
@@ -227,7 +234,14 @@ def test_archive_workspace_car_state_resets_runtime_state(tmp_path: Path) -> Non
     assert (result.snapshot_path / "contextspace" / "active_context.md").read_text(
         encoding="utf-8"
     ) == "hello"
-    assert not (result.snapshot_path / "filebox").exists()
+    assert (result.snapshot_path / "state" / "state.sqlite3").exists()
+    assert (result.snapshot_path / "state" / "app_server_threads.json").exists()
+    assert (
+        result.snapshot_path / "app_server_workspaces" / "workspace-1" / "meta.json"
+    ).exists()
+    assert (result.snapshot_path / "filebox" / "outbox" / "reply.txt").exists()
+    assert (result.snapshot_path / "logs" / "codex-autorunner.log").exists()
+    assert (result.snapshot_path / "logs" / "codex-server.log").exists()
 
     tickets_dir = worktree_repo / ".codex-autorunner" / "tickets"
     assert (tickets_dir / "AGENTS.md").exists()
@@ -245,10 +259,6 @@ def test_archive_workspace_car_state_full_profile_keeps_runtime_state(
     tmp_path: Path,
 ) -> None:
     base_repo, worktree_repo = _setup_worktree(tmp_path)
-    _write(
-        worktree_repo / ".codex-autorunner" / "filebox" / "outbox" / "reply.txt",
-        "artifact",
-    )
 
     result = archive_workspace_car_state(
         base_repo_root=base_repo,

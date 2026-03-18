@@ -96,6 +96,42 @@ def test_prune_worktree_archive_root_preserves_requested_snapshot(
     assert not newer.exists()
 
 
+def test_prune_worktree_archive_root_ignores_incomplete_snapshot_without_meta(
+    tmp_path: Path,
+) -> None:
+    archive_root = tmp_path / "archive" / "worktrees"
+    older = _write_snapshot(
+        archive_root,
+        "repo-a",
+        "20260101T000000Z--repo-a--1111111",
+        created_at="2026-01-01T00:00:00Z",
+        payload="old",
+    )
+    newer = _write_snapshot(
+        archive_root,
+        "repo-a",
+        "20260102T000000Z--repo-a--2222222",
+        created_at="2026-01-02T00:00:00Z",
+        payload="new",
+    )
+    in_progress = archive_root / "repo-a" / "20260103T000000Z--repo-a--3333333"
+    _write(in_progress / "tickets" / "TICKET-999.md", "partial")
+
+    summary = prune_worktree_archive_root(
+        archive_root,
+        policy=WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=1,
+            max_age_days=365,
+            max_total_bytes=1_000_000,
+        ),
+    )
+
+    assert summary.pruned == 1
+    assert not older.exists()
+    assert newer.exists()
+    assert in_progress.exists()
+
+
 def test_prune_run_archive_root_respects_total_bytes(tmp_path: Path) -> None:
     archive_root = tmp_path / "archive" / "runs"
     old_run = archive_root / "run-old"
