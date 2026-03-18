@@ -276,6 +276,30 @@ class PmaManagedThreadCreateRequest(Payload):
         default=None,
         validation_alias=AliasChoices("context_profile", "contextProfile"),
     )
+    notify_on_explicit: bool = Field(default=False, exclude=True)
+    terminal_followup_explicit: bool = Field(default=False, exclude=True)
+    notify_lane_explicit: bool = Field(default=False, exclude=True)
+    notify_once_explicit: bool = Field(default=False, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _capture_followup_intent(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        payload["notify_on_explicit"] = any(
+            key in value for key in ("notify_on", "notifyOn")
+        )
+        payload["terminal_followup_explicit"] = any(
+            key in value for key in ("terminal_followup", "terminalFollowup")
+        )
+        payload["notify_lane_explicit"] = any(
+            key in value for key in ("notify_lane", "notifyLane")
+        )
+        payload["notify_once_explicit"] = any(
+            key in value for key in ("notify_once", "notifyOnce")
+        )
+        return payload
 
 
 class SessionSettingsRequest(Payload):
