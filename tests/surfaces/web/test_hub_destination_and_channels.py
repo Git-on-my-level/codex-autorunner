@@ -21,6 +21,7 @@ from codex_autorunner.core.config import (
 from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.integrations.agents.backend_orchestrator import (
@@ -926,6 +927,32 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
         repo_work.path,
         repo_id="work",
     )
+    extra_ticket_flow_thread = pma_store.create_thread(
+        "opencode",
+        repo_work.path,
+        repo_id="work",
+        name="ticket-flow:opencode",
+        metadata={"thread_kind": "ticket_flow", "run_id": "run-extra"},
+    )
+    binding_store = OrchestrationBindingStore(hub_root)
+    binding_store.upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-pma",
+        thread_target_id=discord_pma_thread["managed_thread_id"],
+        agent_id="opencode",
+        repo_id="work",
+        mode="pma",
+        metadata={"channel_id": "chan-pma", "pma_enabled": True},
+    )
+    binding_store.upsert_binding(
+        surface_kind="telegram",
+        surface_key=scoped_key,
+        thread_target_id=telegram_pma_thread["managed_thread_id"],
+        agent_id="codex",
+        repo_id="work",
+        mode="pma",
+        metadata={"topic_key": scoped_key, "pma_enabled": True},
+    )
 
     _write_usage_rows(
         repo_work.path / ".codex-autorunner" / "usage" / "opencode_turn_usage.jsonl",
@@ -1014,6 +1041,7 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
         discord_pma["provenance"]["managed_thread_id"]
         != discord_pma["active_thread_id"]
     )
+    assert f"pma_thread:{discord_pma_thread['managed_thread_id']}" not in rows
 
     telegram_pma = rows["telegram:-200:9"]
     assert telegram_pma["active_thread_id"] == "telegram-pma-thread"
@@ -1028,6 +1056,14 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
         telegram_pma["provenance"]["managed_thread_id"]
         != telegram_pma["active_thread_id"]
     )
+    assert f"pma_thread:{telegram_pma_thread['managed_thread_id']}" not in rows
+
+    extra_pma_key = f"pma_thread:{extra_ticket_flow_thread['managed_thread_id']}"
+    assert extra_pma_key in rows
+    extra_pma = rows[extra_pma_key]
+    assert extra_pma["display"] == "ticket-flow:opencode"
+    assert extra_pma["provenance"]["thread_kind"] == "ticket_flow"
+    assert extra_pma["provenance"]["run_id"] == "run-extra"
 
     telegram_final = rows["telegram:-300:11"]
     assert telegram_final["active_thread_id"] == "tg-direct-thread"
