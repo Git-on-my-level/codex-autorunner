@@ -322,24 +322,30 @@ async def register_managed_thread_terminal_notify(
     notify_once: bool,
     idempotency_key: Optional[str],
     get_runtime_state,
+    required: bool = True,
 ) -> Optional[dict[str, Any]]:
-    store = await get_automation_store(request, get_runtime_state())
+    store = await get_automation_store(request, get_runtime_state(), required=required)
     if store is None:
         return None
-    created = await call_store_create_with_payload(
-        store,
-        (
-            "create_subscription",
-            "add_subscription",
-            "upsert_subscription",
-        ),
-        _build_terminal_notify_subscription_payload(
-            managed_thread_id=managed_thread_id,
-            lane_id=lane_id,
-            notify_once=notify_once,
-            idempotency_key=idempotency_key,
-        ),
-    )
+    try:
+        created = await call_store_create_with_payload(
+            store,
+            (
+                "create_subscription",
+                "add_subscription",
+                "upsert_subscription",
+            ),
+            _build_terminal_notify_subscription_payload(
+                managed_thread_id=managed_thread_id,
+                lane_id=lane_id,
+                notify_once=notify_once,
+                idempotency_key=idempotency_key,
+            ),
+        )
+    except HTTPException:
+        if required:
+            raise
+        return None
     if isinstance(created, dict) and "subscription" in created:
         return created
     return {"subscription": created}
@@ -553,6 +559,7 @@ def build_managed_thread_crud_routes(
         request: Request, payload: PmaManagedThreadCreateRequest
     ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
+        defaults = _get_pma_config(request)
         agent_id = normalize_optional_text(payload.agent)
         resource_kind, resource_id, resolved_repo_id = _normalize_resource_owner(
             resource_kind=payload.resource_kind,
@@ -560,6 +567,22 @@ def build_managed_thread_crud_routes(
         )
         workspace_root = normalize_optional_text(payload.workspace_root)
         notify_on = _normalize_notify_on(payload.notify_on)
+        terminal_followup = payload.terminal_followup
+        if terminal_followup is False and notify_on == "terminal":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "terminal_followup=false cannot be combined with "
+                    "notify_on='terminal'"
+                ),
+            )
+        if notify_on is None:
+            if terminal_followup is False:
+                notify_on = None
+            elif terminal_followup is True or defaults.get(
+                "managed_thread_terminal_followup_default", True
+            ):
+                notify_on = "terminal"
         notify_lane = normalize_optional_text(payload.notify_lane)
         notify_once = bool(payload.notify_once)
 
@@ -654,6 +677,7 @@ def build_managed_thread_crud_routes(
                     else None
                 ),
                 get_runtime_state=get_runtime_state,
+                required=payload.notify_on == "terminal" or terminal_followup is True,
             )
         response: dict[str, Any] = {"thread": _serialize_thread_target(thread)}
         if notification is not None:

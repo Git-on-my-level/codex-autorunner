@@ -23,6 +23,13 @@ def _disable_pma(hub_root: Path) -> None:
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
+def _set_default_terminal_followup(hub_root: Path, enabled: bool) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["managed_thread_terminal_followup_default"] = enabled
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+
 def _repo_owner(hub_env) -> dict[str, str]:
     return {"resource_kind": "repo", "resource_id": hub_env.repo_id}
 
@@ -58,6 +65,15 @@ def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     assert thread["status_terminal"] is False
     assert thread["context_profile"] == "car_ambient"
     assert thread["managed_thread_id"]
+    notification = resp.json().get("notification") or {}
+    subscription = notification.get("subscription") or {}
+    assert subscription.get("thread_id") == thread["managed_thread_id"]
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(
+        thread_id=thread["managed_thread_id"]
+    )
+    assert len(subscriptions) == 1
 
 
 def test_create_managed_thread_with_workspace_root(hub_env) -> None:
@@ -449,6 +465,53 @@ def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) 
         thread_id=thread["managed_thread_id"]
     )
     assert len(subscriptions) == 1
+
+
+def test_create_managed_thread_terminal_followup_false_opts_out(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "terminal_followup": False,
+            },
+        )
+        assert create_resp.status_code == 200
+        payload = create_resp.json()
+        thread = payload["thread"]
+        assert "notification" not in payload
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(
+        thread_id=thread["managed_thread_id"]
+    )
+    assert subscriptions == []
+
+
+def test_create_managed_thread_respects_config_disabled_default_followup(
+    hub_env,
+) -> None:
+    _set_default_terminal_followup(hub_env.hub_root, False)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        payload = create_resp.json()
+        thread = payload["thread"]
+        assert "notification" not in payload
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(
+        thread_id=thread["managed_thread_id"]
+    )
+    assert subscriptions == []
 
 
 def test_managed_thread_routes_respect_pma_enabled_flag(hub_env) -> None:

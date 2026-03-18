@@ -21,6 +21,7 @@ def test_pma_config_from_raw_uses_defaults_for_missing_values() -> None:
         "default_agent": None,
         "model": None,
         "reasoning": None,
+        "managed_thread_terminal_followup_default": True,
         "active_context_max_lines": 200,
         "max_text_chars": 10_000,
     }
@@ -42,6 +43,7 @@ def test_pma_config_from_raw_normalizes_and_coerces_values() -> None:
     assert config["default_agent"] == "codex"
     assert config["model"] == "gpt-test"
     assert config["reasoning"] == "high"
+    assert config["managed_thread_terminal_followup_default"] is True
     assert config["active_context_max_lines"] == 350
     assert config["max_text_chars"] == 1200
 

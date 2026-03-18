@@ -253,6 +253,10 @@ class PmaManagedThreadCreateRequest(Payload):
     notify_on: Optional[Literal["terminal"]] = Field(
         default=None, validation_alias=AliasChoices("notify_on", "notifyOn")
     )
+    terminal_followup: Optional[bool] = Field(
+        default=None,
+        validation_alias=AliasChoices("terminal_followup", "terminalFollowup"),
+    )
     notify_lane: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("notify_lane", "notifyLane")
     )

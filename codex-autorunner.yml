@@ -226,6 +226,9 @@ pma:
   model: null
   # Optional reasoning effort for compatible agents (null = agent default).
   reasoning: null
+  # New managed PMA threads arm one safe terminal follow-up subscription by default.
+  # Set false to require explicit opt-in at thread creation time.
+  managed_thread_terminal_followup_default: true
   # Max characters loaded from PMA docs (AGENTS/active_context/context_log tail).
   # Lower values reduce prompt-injection surface and keep prompts lean.
   docs_max_chars: 12000

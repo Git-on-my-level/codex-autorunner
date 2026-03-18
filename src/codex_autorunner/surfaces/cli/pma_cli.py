@@ -1123,6 +1123,11 @@ def pma_thread_spawn(
         "--notify-on",
         help="Auto-subscribe for lifecycle events (supported: terminal)",
     ),
+    terminal_followup: Optional[bool] = typer.Option(
+        None,
+        "--terminal-followup/--no-terminal-followup",
+        help="Override the default terminal follow-up subscription for new threads",
+    ),
     notify_lane: Optional[str] = typer.Option(
         None, "--notify-lane", help="Lane id used for terminal notifications"
     ),
@@ -1202,6 +1207,10 @@ def pma_thread_spawn(
 
     try:
         normalized_notify_on = _normalize_notify_on(notify_on)
+        if terminal_followup is False and normalized_notify_on == "terminal":
+            raise typer.BadParameter(
+                "--no-terminal-followup cannot be combined with --notify-on terminal"
+            )
         data = _request_json(
             "POST",
             _build_pma_url(config, "/threads"),
@@ -1214,6 +1223,7 @@ def pma_thread_spawn(
                 "backend_thread_id": backend_id,
                 "context_profile": normalized_context_profile,
                 "notify_on": normalized_notify_on,
+                "terminal_followup": terminal_followup,
                 "notify_lane": notify_lane,
                 "notify_once": notify_once,
             },
