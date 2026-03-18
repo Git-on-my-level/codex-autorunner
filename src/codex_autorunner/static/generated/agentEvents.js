@@ -123,33 +123,73 @@ function extractCommand(item, params) {
         return command.trim();
     return "";
 }
-function extractFiles(payload) {
+function extractFiles(payload, limit = Number.POSITIVE_INFINITY) {
     const files = [];
     const addEntry = (entry) => {
+        if (files.length >= limit)
+            return true;
         if (typeof entry === "string" && entry.trim()) {
             files.push(entry.trim());
-            return;
+            return files.length >= limit;
         }
         if (entry && typeof entry === "object") {
             const entryObj = entry;
             const path = entryObj.path || entryObj.file || entryObj.name;
             if (typeof path === "string" && path.trim()) {
                 files.push(path.trim());
+                return files.length >= limit;
             }
         }
+        return false;
     };
     if (!payload || typeof payload !== "object")
         return files;
     for (const key of ["files", "fileChanges", "paths"]) {
         const value = payload[key];
-        if (Array.isArray(value)) {
-            value.forEach(addEntry);
+        if (!Array.isArray(value))
+            continue;
+        for (const entry of value) {
+            if (addEntry(entry))
+                return files;
         }
     }
     for (const key of ["path", "file", "name"]) {
-        addEntry(payload[key]);
+        if (addEntry(payload[key]))
+            return files;
     }
     return files;
+}
+function extractCompactPreview(payload) {
+    if (!payload || typeof payload !== "object")
+        return "";
+    const preview = payload.preview;
+    return typeof preview === "string" ? preview.trim() : "";
+}
+function summarizeFileChanges(files, totalCount) {
+    const hasTotalCount = typeof totalCount === "number" && Number.isFinite(totalCount);
+    const visibleCount = hasTotalCount && totalCount > 4 ? 4 : Math.min(files.length, 4);
+    const visible = files.slice(0, visibleCount).filter((value) => value.trim());
+    if (visible.length) {
+        const effectiveTotal = hasTotalCount ? totalCount : files.length;
+        const remaining = Math.max(effectiveTotal - visible.length, 0);
+        return {
+            summary: remaining > 0 ? `${visible.join(", ")} +${remaining} more` : visible.join(", "),
+            detail: hasTotalCount && totalCount > visible.length ? `${totalCount} file changes` : "",
+        };
+    }
+    if (hasTotalCount) {
+        return {
+            summary: totalCount === 1 ? "1 file change" : `${totalCount} file changes`,
+            detail: "",
+        };
+    }
+    return { summary: "File changes", detail: "" };
+}
+function parseLegacyDiffEntryCount(value) {
+    const match = value.match(/^(\d+)\s+diff entries?$/i);
+    if (!match)
+        return null;
+    return Number.parseInt(match[1] || "", 10);
 }
 function extractErrorMessage(params) {
     if (!params || typeof params !== "object")
@@ -222,6 +262,46 @@ export function parseAppServerEvent(payload) {
     const receivedAt = payload && typeof payload === "object"
         ? payload.received_at || payload.receivedAt || Date.now()
         : Date.now();
+    if (method === "session.diff") {
+        const properties = asRecord(params.properties) || {};
+        const diffEntries = Array.isArray(properties.diff) ? properties.diff : null;
+        const rawDiffCount = properties.diff_count;
+        let diffCount = typeof rawDiffCount === "number" ? rawDiffCount : null;
+        if (diffCount == null) {
+            const compactFiles = Array.isArray(properties.files) ? properties.files.length : null;
+            diffCount = diffEntries?.length ?? compactFiles;
+        }
+        const filePayload = diffEntries ? { files: diffEntries } : properties;
+        const files = extractFiles(filePayload, 10);
+        const fallbackPreview = extractCompactPreview(payload) ||
+            (typeof params.message === "string" ? params.message.trim() : "") ||
+            (typeof params.status === "string" ? params.status.trim() : "");
+        const { summary: fileSummary, detail } = summarizeFileChanges(files, diffCount);
+        let summary = fileSummary;
+        if (!files.length && fallbackPreview) {
+            const legacyDiffCount = parseLegacyDiffEntryCount(fallbackPreview);
+            const effectiveDiffCount = diffCount ?? legacyDiffCount;
+            if (effectiveDiffCount !== null && legacyDiffCount !== null) {
+                summary = effectiveDiffCount === 1 ? "1 file change" : `${effectiveDiffCount} file changes`;
+            }
+            else if (fallbackPreview !== "diff updated") {
+                summary = fallbackPreview;
+            }
+        }
+        return {
+            event: {
+                id: payload?.id || `${Date.now()}`,
+                title: "File change",
+                summary,
+                detail,
+                kind: "file",
+                isSignificant: true,
+                time: receivedAt,
+                itemId,
+                method,
+            },
+        };
+    }
     // Handle reasoning/thinking deltas - accumulate into existing event
     if (method === "item/reasoning/summaryTextDelta") {
         const delta = params.delta || "";

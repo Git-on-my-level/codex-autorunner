@@ -208,3 +208,143 @@ test("replaces cumulative OpenCode text snapshots when delta is absent", () => {
   assert.equal(snapshot.event.summary, "hello world");
   assert.equal(snapshot.mergeStrategy, "replace");
 });
+test("parses compacted session.diff payloads as file events", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-1",
+    received_at: 1004,
+    preview: "src/a.py, src/b.py, src/c.py, src/d.py +2 more files",
+    message: {
+      method: "session.diff",
+      params: {
+        message: "src/a.py, src/b.py, src/c.py, src/d.py +2 more files",
+        properties: {
+          diff_count: 6,
+          files: [
+            { path: "src/a.py" },
+            { path: "src/b.py" },
+            { path: "src/c.py" },
+            { path: "src/d.py" },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "file");
+  assert.equal(parsed.event.title, "File change");
+  assert.equal(parsed.event.summary, "src/a.py, src/b.py, src/c.py, src/d.py +2 more");
+  assert.equal(parsed.event.detail, "6 file changes");
+});
+
+test("falls back from legacy diff updated statuses to semantic file text", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-legacy",
+    received_at: 1005,
+    preview: "2 diff entries",
+    message: {
+      method: "session.diff",
+      params: {
+        status: "diff updated",
+        properties: {
+          diff_count: 2,
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "file");
+  assert.equal(parsed.event.summary, "2 file changes");
+  assert.equal(parsed.event.detail, "");
+});
+
+test("parses legacy diff entry previews without diff_count", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-legacy-preview-only",
+    received_at: 1005.1,
+    preview: "7 diff entries",
+    message: {
+      method: "session.diff",
+      params: {
+        status: "diff updated",
+        properties: {},
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "file");
+  assert.equal(parsed.event.summary, "7 file changes");
+  assert.equal(parsed.event.detail, "");
+});
+
+test("renders empty session.diff as zero file changes", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-empty",
+    received_at: 1005.25,
+    preview: "0 file changes",
+    message: {
+      method: "session.diff",
+      params: {
+        message: "0 file changes",
+        properties: {
+          diff_count: 0,
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "file");
+  assert.equal(parsed.event.summary, "0 file changes");
+  assert.equal(parsed.event.detail, "");
+});
+
+test("prefers raw session.diff file paths over noisy legacy text", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-raw-text",
+    received_at: 1005.5,
+    message: {
+      method: "session.diff",
+      params: {
+        message: "raw diff payload that should not be shown",
+        status: "diff updated",
+        properties: {
+          diff: [{ path: "src/alpha.ts" }, { path: "src/beta.ts" }],
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "file");
+  assert.equal(parsed.event.summary, "src/alpha.ts, src/beta.ts");
+  assert.equal(parsed.event.detail, "");
+});
+
+test("caps raw session.diff file extraction work for large payloads", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "diff-raw-large",
+    received_at: 1006,
+    message: {
+      method: "session.diff",
+      params: {
+        properties: {
+          diff: Array.from({ length: 50 }, (_, index) => ({ path: `src/${index}.ts` })),
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.summary, "src/0.ts, src/1.ts, src/2.ts, src/3.ts +46 more");
+  assert.equal(parsed.event.detail, "50 file changes");
+});
+

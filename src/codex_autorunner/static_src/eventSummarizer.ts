@@ -31,9 +31,15 @@ function normalizeText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function truncateText(value: string, maxLength: number): string {
+const TRUNCATION_MARKER = " ... ";
+
+function truncateTextMiddle(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
-  return `${value.slice(0, maxLength).trim()}…`;
+  if (maxLength <= TRUNCATION_MARKER.length) return value.slice(0, maxLength).trim();
+  const keep = maxLength - TRUNCATION_MARKER.length;
+  const head = Math.floor((keep + 1) / 2);
+  const tail = Math.floor(keep / 2);
+  return `${value.slice(0, head).trimEnd()}${TRUNCATION_MARKER}${value.slice(value.length - tail).trimStart()}`;
 }
 
 function formatElapsed(seconds: number): string {
@@ -51,7 +57,7 @@ function deriveHeaderLabel(events: AgentEvent[]): string {
   const lastError = [...events].reverse().find((evt) => evt.kind === "error");
   if (lastError) return "error";
   const lastStatus = [...events].reverse().find((evt) => evt.kind === "status" && evt.summary);
-  if (lastStatus?.summary) return lastStatus.summary;
+  if (lastStatus?.summary) return truncateTextMiddle(lastStatus.summary, COMPACT_MAX_TEXT_LENGTH);
   return "working";
 }
 
@@ -91,7 +97,7 @@ function eventToAction(event: AgentEvent, maxTextLength: number): CompactAction 
     status = "update";
   }
 
-  const text = label === "output" ? rawText : truncateText(rawText, maxTextLength);
+  const text = label === "output" ? rawText : truncateTextMiddle(rawText, maxTextLength);
   const icon = label === "thinking" ? STATUS_ICONS.thinking : STATUS_ICONS[status] || STATUS_ICONS.running;
 
   return { icon, label, text, status };

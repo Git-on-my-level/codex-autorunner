@@ -9,6 +9,8 @@ _COMPACT_APP_SERVER_METHODS = frozenset(
     {"message.part.updated", "message.updated", "session.diff"}
 )
 _APP_SERVER_PREVIEW_CHARS = 2048
+_APP_SERVER_PREVIEW_MARKER = " ... "
+_COMPACT_FILE_LIMIT = 10
 
 
 def normalize_persisted_event_data(
@@ -37,7 +39,13 @@ def _truncate_text(value: Any, limit: int = _APP_SERVER_PREVIEW_CHARS) -> Option
         return None
     if len(value) <= limit:
         return value
-    return value[:limit]
+    if limit <= len(_APP_SERVER_PREVIEW_MARKER):
+        return value[:limit]
+    keep = limit - len(_APP_SERVER_PREVIEW_MARKER)
+    head = (keep + 1) // 2
+    tail = keep // 2
+    suffix = value[-tail:] if tail else ""
+    return f"{value[:head]}{_APP_SERVER_PREVIEW_MARKER}{suffix}"
 
 
 def _first_non_empty_str(*values: Any) -> Optional[str]:
@@ -120,6 +128,61 @@ def _compact_tool_input_container(value: Any) -> Optional[dict[str, str]]:
     return None
 
 
+def _compact_file_entries(value: Any) -> Optional[list[dict[str, Any] | str]]:
+    entries = value if isinstance(value, list) else []
+    if not entries:
+        return None
+    compact_entries: list[dict[str, Any] | str] = []
+    for entry in entries[:_COMPACT_FILE_LIMIT]:
+        if isinstance(entry, str):
+            compact_entries.append(_truncate_text(entry) or entry)
+            continue
+        if isinstance(entry, dict):
+            compact_entry = _pick_summary_fields(
+                entry, ("path", "file", "name", "status")
+            )
+            if compact_entry:
+                compact_entries.append(compact_entry)
+    return compact_entries or None
+
+
+def _collect_file_labels(value: Any, limit: int = _COMPACT_FILE_LIMIT) -> list[str]:
+    entries = value if isinstance(value, list) else []
+    labels: list[str] = []
+    for entry in entries:
+        if len(labels) >= limit:
+            break
+        if isinstance(entry, str):
+            text = _truncate_text(entry)
+            if text:
+                labels.append(text)
+            continue
+        if isinstance(entry, dict):
+            text = _first_non_empty_str(
+                entry.get("path"), entry.get("file"), entry.get("name")
+            )
+            if text:
+                labels.append(_truncate_text(text) or text)
+    return labels
+
+
+def _file_change_preview(value: Any) -> Optional[str]:
+    entries = value if isinstance(value, list) else []
+    if not entries:
+        return None
+    labels = _collect_file_labels(entries)
+    if labels:
+        remaining = max(0, len(entries) - len(labels))
+        summary = ", ".join(labels)
+        if remaining:
+            suffix = " file" if remaining == 1 else " files"
+            summary = f"{summary} +{remaining} more{suffix}"
+        return _truncate_text(summary) or summary
+    count = len(entries)
+    noun = "file change" if count == 1 else "file changes"
+    return f"{count} {noun}"
+
+
 def _compact_part_summary(
     part: dict[str, Any], preview: Optional[str]
 ) -> dict[str, Any]:
@@ -162,20 +225,9 @@ def _compact_part_summary(
     state_summary = _compact_part_state_summary(part.get("state"))
     if state_summary:
         summary["state"] = state_summary
-    files = part.get("files")
-    if isinstance(files, list):
-        compact_files: list[dict[str, Any] | str] = []
-        for entry in files[:10]:
-            if isinstance(entry, str):
-                compact_files.append(entry)
-            elif isinstance(entry, dict):
-                compact_entry = _pick_summary_fields(
-                    entry, ("path", "file", "name", "status")
-                )
-                if compact_entry:
-                    compact_files.append(compact_entry)
-        if compact_files:
-            summary["files"] = compact_files
+    compact_files = _compact_file_entries(part.get("files"))
+    if compact_files:
+        summary["files"] = compact_files
     return summary
 
 
@@ -237,7 +289,12 @@ def _extract_preview_from_message(method: str, params: dict[str, Any]) -> Option
     if method == "session.diff":
         diff = properties.get("diff")
         if isinstance(diff, list):
-            return f"{len(diff)} diff entries"
+            preview = _file_change_preview(diff)
+            if preview:
+                return preview
+            count = len(diff)
+            noun = "file change" if count == 1 else "file changes"
+            return f"{count} {noun}"
         return _truncate_text(params.get("message") or params.get("status"))
     return None
 
@@ -279,8 +336,11 @@ def _build_compact_app_server_params(
         diff = properties.get("diff")
         if isinstance(diff, list):
             properties_summary["diff_count"] = len(diff)
-        if preview and "status" not in summary:
-            summary["status"] = "diff updated"
+            compact_files = _compact_file_entries(diff)
+            if compact_files:
+                properties_summary["files"] = compact_files
+        if preview:
+            summary["message"] = preview
     if method == "message.part.updated":
         delta_summary = _compact_delta_summary(
             params.get("delta")
