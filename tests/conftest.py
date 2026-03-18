@@ -11,8 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,15 +25,63 @@ import yaml
 
 DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
 _OPENCODE_PROCESS_KIND = "opencode"
-_PYTEST_TEMP_ROOT = (
-    Path(__file__).resolve().parents[1] / ".codex-autorunner" / "pytest-tmp"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_PYTEST_RUNTIME_ROOT = _REPO_ROOT / ".codex-autorunner" / "pytest-runtime"
+_PYTEST_TEMP_ROOT = _PYTEST_RUNTIME_ROOT / "tmp"
+_PYTEST_OPENCODE_STATE_ROOT = _PYTEST_RUNTIME_ROOT / "opencode-state"
+_PYTEST_RUN_TOKEN = os.environ.setdefault(
+    "CAR_PYTEST_RUN_TOKEN", f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
 )
 os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
 
 
+def _pytest_process_token() -> str:
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker_id:
+        return worker_id
+    return f"pid-{os.getpid()}"
+
+
+def _pytest_temp_env_root() -> Path:
+    return _PYTEST_TEMP_ROOT / _PYTEST_RUN_TOKEN / _pytest_process_token()
+
+
 def _pytest_global_state_root() -> Path:
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "local")
-    return _PYTEST_TEMP_ROOT / f"global-state-{worker_id}"
+    return _PYTEST_OPENCODE_STATE_ROOT / _PYTEST_RUN_TOKEN / _pytest_process_token()
+
+
+def _prepare_repo_local_tmpdir() -> None:
+    temp_root = _pytest_temp_env_root()
+    temp_root.mkdir(parents=True, exist_ok=True)
+    for key in ("TMPDIR", "TMP", "TEMP"):
+        os.environ[key] = str(temp_root)
+    tempfile.tempdir = None
+
+
+def _prune_old_runtime_dirs(
+    root: Path, *, keep: set[str], max_age_seconds: int
+) -> None:
+    if not root.exists():
+        return
+    cutoff = time.time() - max_age_seconds
+    for path in root.iterdir():
+        if path.name in keep:
+            continue
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+
+
+_prepare_repo_local_tmpdir()
+_prune_old_runtime_dirs(
+    _PYTEST_TEMP_ROOT, keep={_PYTEST_RUN_TOKEN}, max_age_seconds=86400
+)
+_prune_old_runtime_dirs(
+    _PYTEST_OPENCODE_STATE_ROOT, keep={_PYTEST_RUN_TOKEN}, max_age_seconds=86400
+)
 
 
 _ORIGINAL_UNRAISABLE_HOOK = sys.unraisablehook
@@ -209,7 +261,7 @@ def _force_reap_attestation(root: Path) -> dict[str, str]:
     }
 
 
-def _reap_opencode_processes(roots: set[Path]) -> list[str]:
+def _reap_opencode_processes(roots: set[Path], *, force: bool) -> list[str]:
     from codex_autorunner.core.managed_processes import (
         list_process_records,
         reap_managed_processes,
@@ -223,11 +275,11 @@ def _reap_opencode_processes(roots: set[Path]) -> list[str]:
             continue
         if not records:
             continue
-        reap_managed_processes(
-            root,
-            force=True,
-            force_attestation=_force_reap_attestation(root),
-        )
+        reap_kwargs: dict[str, object] = {}
+        if force:
+            reap_kwargs["force"] = True
+            reap_kwargs["force_attestation"] = _force_reap_attestation(root)
+        reap_managed_processes(root, **reap_kwargs)
         try:
             remaining = list_process_records(root, _OPENCODE_PROCESS_KIND)
         except ValueError:
@@ -301,16 +353,23 @@ def _cleanup_codex_app_server_clients() -> None:
 @pytest.fixture(scope="session", autouse=True)
 def _cleanup_opencode_processes_session() -> None:
     """
-    Bound OpenCode managed-process state to pytest temp roots and reap leftovers.
+    Reap stale prior-run OpenCode records and fail if this run leaks any.
     """
-    _reap_opencode_processes(_iter_opencode_registry_roots(_PYTEST_TEMP_ROOT))
-    yield
-    failures = _reap_opencode_processes(
-        _iter_opencode_registry_roots(_PYTEST_TEMP_ROOT)
+    prior_state_roots = (
+        {
+            path
+            for path in _PYTEST_OPENCODE_STATE_ROOT.iterdir()
+            if path.is_dir() and path.name != _PYTEST_RUN_TOKEN
+        }
+        if _PYTEST_OPENCODE_STATE_ROOT.exists()
+        else set()
     )
+    _reap_opencode_processes(prior_state_roots, force=False)
+    yield
+    failures = _reap_opencode_processes({_pytest_global_state_root()}, force=True)
     if failures:
         raise AssertionError(
-            "Leaked OpenCode managed processes remained under pytest temp roots: "
+            "Leaked OpenCode managed processes remained after the test session: "
             + "; ".join(failures)
         )
 
@@ -345,7 +404,7 @@ def _cleanup_opencode_processes_per_test(request: pytest.FixtureRequest) -> None
     tmp_path = request.node.funcargs.get("tmp_path")
     if tmp_path is not None:
         roots.update(_iter_opencode_registry_roots(tmp_path))
-    failures = _reap_opencode_processes(roots)
+    failures = _reap_opencode_processes(roots, force=True)
     if failures:
         pytest.fail(
             "Leaked OpenCode managed processes remained after test teardown: "

@@ -93,7 +93,6 @@ codex_autorunner = ["static_src/*", "static_src/**/*"]
 completions = true
 
 [tool.pytest.ini_options]
-addopts = "--basetemp=.codex-autorunner/pytest-tmp"
 cache_dir = ".codex-autorunner/pytest-cache"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
