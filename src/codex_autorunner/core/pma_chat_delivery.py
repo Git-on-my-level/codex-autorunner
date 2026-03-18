@@ -5,6 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ..manifest import load_manifest
 from .chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
     TELEGRAM_STATE_FILE_DEFAULT,
@@ -53,6 +54,41 @@ def _binding_matches_workspace(binding_workspace: Any, workspace_root: Path) -> 
         return False
 
 
+def _repo_id_by_workspace_path(hub_root: Path) -> dict[str, str]:
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    if not manifest_path.exists():
+        return {}
+    try:
+        loaded = load_manifest(manifest_path, hub_root)
+    except Exception:
+        return {}
+    mapping: dict[str, str] = {}
+    for repo in loaded.repos:
+        try:
+            workspace_path = canonicalize_path(hub_root / repo.path)
+        except Exception:
+            continue
+        mapping[str(workspace_path)] = repo.id
+    return mapping
+
+
+def _resolve_repo_id(
+    *,
+    repo_id: Any,
+    workspace_path: Any,
+    repo_id_by_workspace: dict[str, str],
+) -> Optional[str]:
+    normalized_repo_id = _normalize_optional_text(repo_id)
+    if normalized_repo_id:
+        return normalized_repo_id
+    if not isinstance(workspace_path, str) or not workspace_path.strip():
+        return None
+    try:
+        return repo_id_by_workspace.get(str(canonicalize_path(Path(workspace_path))))
+    except Exception:
+        return None
+
+
 async def notify_preferred_bound_chat_for_workspace(
     *,
     hub_root: Path,
@@ -69,6 +105,7 @@ async def notify_preferred_bound_chat_for_workspace(
         raw_config = load_hub_config(hub_root).raw
     except Exception:
         raw_config = {}
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
     preferred_source = preferred_non_pma_chat_notification_source_for_workspace(
         hub_root=hub_root,
         raw_config=raw_config,
@@ -107,7 +144,11 @@ async def notify_preferred_bound_chat_for_workspace(
                     binding.get("workspace_path"), workspace_root
                 ):
                     continue
-                binding_repo_id = _normalize_optional_text(binding.get("repo_id"))
+                binding_repo_id = _resolve_repo_id(
+                    repo_id=binding.get("repo_id"),
+                    workspace_path=binding.get("workspace_path"),
+                    repo_id_by_workspace=repo_id_by_workspace,
+                )
                 if normalized_repo_id and binding_repo_id not in {
                     None,
                     normalized_repo_id,
@@ -171,16 +212,24 @@ async def notify_preferred_bound_chat_for_workspace(
             topic = topics[surface_key]
             if bool(getattr(topic, "pma_enabled", False)):
                 continue
+            try:
+                chat_id, thread_id, scope = parse_topic_key(surface_key)
+            except Exception:
+                continue
+            base_key = f"{chat_id}:{thread_id or 'root'}"
+            current_scope = await telegram_store.get_topic_scope(base_key)
+            if scope != current_scope:
+                continue
             if not _binding_matches_workspace(
                 getattr(topic, "workspace_path", None), workspace_root
             ):
                 continue
-            binding_repo_id = _normalize_optional_text(getattr(topic, "repo_id", None))
+            binding_repo_id = _resolve_repo_id(
+                repo_id=getattr(topic, "repo_id", None),
+                workspace_path=getattr(topic, "workspace_path", None),
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
             if normalized_repo_id and binding_repo_id not in {None, normalized_repo_id}:
-                continue
-            try:
-                chat_id, thread_id, _scope = parse_topic_key(surface_key)
-            except Exception:
                 continue
             digest = hashlib.sha256(
                 f"{correlation_id}:bound:{chat_id}:{thread_id or 'root'}".encode(
@@ -227,6 +276,7 @@ async def notify_primary_pma_chat_for_repo(
         raw_config = load_hub_config(hub_root).raw
     except Exception:
         raw_config = {}
+    repo_id_by_workspace = _repo_id_by_workspace_path(hub_root)
 
     created_at = now_iso()
     discord_candidates: list[tuple[str, str]] = []
@@ -249,9 +299,22 @@ async def notify_primary_pma_chat_for_repo(
         for binding in await discord_store.list_bindings():
             if not bool(binding.get("pma_enabled")):
                 continue
-            binding_repo_id = _normalize_optional_text(binding.get("repo_id"))
+            binding_repo_id = _resolve_repo_id(
+                repo_id=binding.get("repo_id"),
+                workspace_path=binding.get("workspace_path"),
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
+            prev_binding_repo_id = _resolve_repo_id(
+                repo_id=binding.get("pma_prev_repo_id"),
+                workspace_path=binding.get("pma_prev_workspace_path"),
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
             prev_repo_id = _normalize_optional_text(binding.get("pma_prev_repo_id"))
-            if normalized_repo_id not in {binding_repo_id, prev_repo_id}:
+            if normalized_repo_id not in {
+                binding_repo_id,
+                prev_repo_id,
+                prev_binding_repo_id,
+            }:
                 continue
             channel_id = _normalize_optional_text(binding.get("channel_id"))
             updated_at = _normalize_optional_text(binding.get("updated_at")) or ""
@@ -310,15 +373,32 @@ async def notify_primary_pma_chat_for_repo(
             topic = topics[surface_key]
             if not bool(getattr(topic, "pma_enabled", False)):
                 continue
-            binding_repo_id = _normalize_optional_text(getattr(topic, "repo_id", None))
+            try:
+                chat_id, thread_id, scope = parse_topic_key(surface_key)
+            except Exception:
+                continue
+            base_key = f"{chat_id}:{thread_id or 'root'}"
+            current_scope = await telegram_store.get_topic_scope(base_key)
+            if scope != current_scope:
+                continue
+            binding_repo_id = _resolve_repo_id(
+                repo_id=getattr(topic, "repo_id", None),
+                workspace_path=getattr(topic, "workspace_path", None),
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
+            prev_binding_repo_id = _resolve_repo_id(
+                repo_id=getattr(topic, "pma_prev_repo_id", None),
+                workspace_path=getattr(topic, "pma_prev_workspace_path", None),
+                repo_id_by_workspace=repo_id_by_workspace,
+            )
             prev_repo_id = _normalize_optional_text(
                 getattr(topic, "pma_prev_repo_id", None)
             )
-            if normalized_repo_id not in {binding_repo_id, prev_repo_id}:
-                continue
-            try:
-                chat_id, thread_id, _scope = parse_topic_key(surface_key)
-            except Exception:
+            if normalized_repo_id not in {
+                binding_repo_id,
+                prev_repo_id,
+                prev_binding_repo_id,
+            }:
                 continue
             digest = hashlib.sha256(
                 f"{correlation_id}:pma:{chat_id}:{thread_id or 'root'}".encode("utf-8")
