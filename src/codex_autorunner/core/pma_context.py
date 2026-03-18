@@ -101,6 +101,7 @@ First-turn routine:
 2) BRANCH A - Run Dispatches (paused runs needing attention):
    - If hub_snapshot.inbox has entries (any next_action value), handle them first.
    - These are paused/blocked/dead ticket flow runs that need user attention.
+   - Ticket flow requires a clean commit after each completed ticket. If a ticket is done but the repo is still dirty, or ownership of remaining changes is ambiguous, escalate to the user instead of guessing a reply.
    - next_action values indicate the type of attention needed:
      - reply_and_resume: Paused run with a dispatch question - summarize and answer it.
      - inspect_and_resume: Run state needs attention - review blocking_reason and propose action.

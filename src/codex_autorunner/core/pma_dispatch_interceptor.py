@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .config import load_repo_config
 from .lifecycle_events import LifecycleEvent, LifecycleEventType
+from .pma_chat_delivery import (
+    notify_preferred_bound_chat_for_workspace,
+    notify_primary_pma_chat_for_repo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,7 @@ class InterceptionResult:
     reason: str
     reply: Optional[str] = None
     escalated: bool = False
+    notified: bool = False
 
 
 def default_dispatch_rules() -> list[DispatchInterceptRule]:
@@ -179,33 +185,70 @@ class PmaDispatchInterceptor:
 
                 can_resume = await _can_auto_resume_run(repo_root, run_id)
                 if not can_resume:
+                    notified = await self._notify_escalation(
+                        repo_root=repo_root,
+                        repo_id=repo_id,
+                        run_id=run_id,
+                        reason=(
+                            "PMA could not resolve the paused ticket-flow dispatch "
+                            "automatically because the run cannot be resumed safely."
+                        ),
+                    )
                     return InterceptionResult(
                         action="escalate",
                         reason="Run cannot be auto-resumed",
                         escalated=True,
+                        notified=notified,
                     )
 
                 success = await _write_reply(repo_root, run_id, matched_rule.reply)
                 if success:
+                    notified = await self._notify_auto_resolved(
+                        repo_root=repo_root,
+                        repo_id=repo_id,
+                        run_id=run_id,
+                        reply=matched_rule.reply,
+                    )
                     result = InterceptionResult(
                         action="auto_resolved",
                         reason=matched_rule.description,
                         reply=matched_rule.reply,
+                        notified=notified,
                     )
                     if self._on_intercept:
                         self._on_intercept(event_id, result)
                     return result
                 else:
+                    notified = await self._notify_escalation(
+                        repo_root=repo_root,
+                        repo_id=repo_id,
+                        run_id=run_id,
+                        reason=(
+                            "PMA matched the paused dispatch but failed to persist the "
+                            "auto-reply, so the dispatch was escalated for user attention."
+                        ),
+                    )
                     return InterceptionResult(
                         action="escalate",
                         reason="Failed to write reply",
                         escalated=True,
+                        notified=notified,
                     )
 
+            notified = await self._notify_escalation(
+                repo_root=repo_root,
+                repo_id=repo_id,
+                run_id=run_id,
+                reason=(
+                    "PMA could not auto-resolve the paused ticket-flow dispatch and "
+                    "escalated it for user attention."
+                ),
+            )
             return InterceptionResult(
                 action="escalate",
                 reason="Dispatch does not match any auto-resolve rule",
                 escalated=True,
+                notified=notified,
             )
 
         except Exception as exc:
@@ -218,6 +261,69 @@ class PmaDispatchInterceptor:
             )
         finally:
             self._processing.discard(event_id)
+
+    async def _notify_auto_resolved(
+        self,
+        *,
+        repo_root: Path,
+        repo_id: Optional[str],
+        run_id: str,
+        reply: str,
+    ) -> bool:
+        correlation_id = f"dispatch-auto:{run_id}:{uuid.uuid4().hex[:12]}"
+        message = (
+            "PMA handled the paused ticket-flow dispatch automatically.\n"
+            f"run_id: {run_id}\n\n"
+            f"{reply.strip()}\n\n"
+            "No user response is needed."
+        )
+        try:
+            outcome = await notify_preferred_bound_chat_for_workspace(
+                hub_root=self._hub_root,
+                workspace_root=repo_root,
+                repo_id=repo_id,
+                message=message,
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            self._logger.exception(
+                "Failed to notify bound chat for auto-resolved dispatch run_id=%s",
+                run_id,
+            )
+            return False
+        return int(outcome.get("published", 0)) > 0
+
+    async def _notify_escalation(
+        self,
+        *,
+        repo_root: Path,
+        repo_id: Optional[str],
+        run_id: str,
+        reason: str,
+    ) -> bool:
+        correlation_id = f"dispatch-escalation:{run_id}:{uuid.uuid4().hex[:12]}"
+        message = (
+            "PMA escalated a paused ticket-flow dispatch for user attention.\n"
+            f"run_id: {run_id}\n"
+            f"repo: {repo_id or repo_root}\n\n"
+            f"Reason: {reason.strip()}\n\n"
+            "If the completed ticket leaves the repo dirty or ownership is ambiguous, "
+            "the flow should stop and ask the user instead of guessing."
+        )
+        try:
+            outcome = await notify_primary_pma_chat_for_repo(
+                hub_root=self._hub_root,
+                repo_id=repo_id,
+                message=message,
+                correlation_id=correlation_id,
+            )
+        except Exception:
+            self._logger.exception(
+                "Failed to notify PMA chat for escalated dispatch run_id=%s",
+                run_id,
+            )
+            return False
+        return int(outcome.get("published", 0)) > 0
 
 
 __all__ = [
