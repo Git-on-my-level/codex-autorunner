@@ -138,6 +138,17 @@ def _copy_file(src: Path, dest: Path, stats: dict[str, int]) -> None:
     stats["total_bytes"] += dest.stat().st_size
 
 
+def _copy_sqlite_sidecars(src: Path, dest: Path, stats: dict[str, int]) -> None:
+    if not (src.name.endswith(".sqlite3") or src.name.endswith(".db")):
+        return
+    for suffix in SQLITE_SIDE_SUFFIXES:
+        sidecar_src = src.with_name(f"{src.name}{suffix}")
+        if not sidecar_src.exists() or not sidecar_src.is_file():
+            continue
+        sidecar_dest = dest.with_name(f"{dest.name}{suffix}")
+        _copy_file(sidecar_src, sidecar_dest, stats)
+
+
 def _copy_tree(
     src_dir: Path,
     dest_dir: Path,
@@ -216,6 +227,7 @@ def _copy_entry(
 
     if src.is_file():
         _copy_file(src, dest, stats)
+        _copy_sqlite_sidecars(src, dest, stats)
         return True
 
     return False
@@ -587,9 +599,7 @@ def _remove_with_sidecars(path: Path) -> None:
                 sidecar.unlink()
 
 
-def _reset_car_state(worktree_root: Path) -> tuple[str, ...]:
-    from ..bootstrap import seed_repo_files
-
+def _planned_reset_car_state_paths(worktree_root: Path) -> tuple[str, ...]:
     car_root = worktree_root / ".codex-autorunner"
     reset_paths: list[str] = []
     seen: set[str] = set()
@@ -600,9 +610,19 @@ def _reset_car_state(worktree_root: Path) -> tuple[str, ...]:
             target = car_root / rel_path
             if not target.exists() and not target.is_symlink():
                 continue
-            _remove_with_sidecars(target)
             reset_paths.append(rel_path)
             seen.add(rel_path)
+    return tuple(reset_paths)
+
+
+def _reset_car_state(worktree_root: Path) -> tuple[str, ...]:
+    from ..bootstrap import seed_repo_files
+
+    car_root = worktree_root / ".codex-autorunner"
+    reset_paths = list(_planned_reset_car_state_paths(worktree_root))
+    for rel_path in reset_paths:
+        target = car_root / rel_path
+        _remove_with_sidecars(target)
     seed_repo_files(worktree_root, force=False, git_required=False)
     return tuple(reset_paths)
 
@@ -1059,6 +1079,7 @@ def archive_workspace_car_state(
     source_root = worktree_repo_root / ".codex-autorunner"
     created_at = now_iso()
     meta_path = staging_root / "META.json"
+    planned_reset_paths = _planned_reset_car_state_paths(worktree_repo_root)
 
     try:
         entries = _build_car_state_archive_entries(
@@ -1069,7 +1090,6 @@ def archive_workspace_car_state(
             include_config=True,
         )
         execution = execute_archive_entries(entries, worktree_root=worktree_repo_root)
-        reset_paths = _reset_car_state(worktree_repo_root)
         flow_run_count, latest_flow_run_id = _flow_summary(staging_root / "flows")
         status: ArchiveStatus = "complete" if not execution.missing_paths else "partial"
         execution_summary: dict[str, object] = {
@@ -1078,7 +1098,7 @@ def archive_workspace_car_state(
             "flow_run_count": flow_run_count,
             "latest_flow_run_id": latest_flow_run_id,
             "archived_paths": list(execution.copied_paths),
-            "reset_paths": list(reset_paths),
+            "reset_paths": list(planned_reset_paths),
         }
         meta = _build_meta(
             snapshot_id=snapshot_id,
@@ -1101,6 +1121,7 @@ def archive_workspace_car_state(
         )
         atomic_write(meta_path, json.dumps(meta, indent=2) + "\n")
         _finalize_snapshot_root(staging_root, final_snapshot_root)
+        reset_paths = _reset_car_state(worktree_repo_root)
         if retention_policy is not None:
             try:
                 prune_worktree_archive_root(
@@ -1112,6 +1133,22 @@ def archive_workspace_car_state(
                 logger.warning(
                     "Failed to prune worktree archives under %s",
                     base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    exc_info=True,
+                )
+        if reset_paths != planned_reset_paths:
+            final_meta = dict(meta)
+            final_summary = dict(execution_summary)
+            final_summary["reset_paths"] = list(reset_paths)
+            final_meta["summary"] = final_summary
+            try:
+                atomic_write(
+                    final_snapshot_root / "META.json",
+                    json.dumps(final_meta, indent=2) + "\n",
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to refresh reset_paths in archive metadata for %s",
+                    final_snapshot_root,
                     exc_info=True,
                 )
     except Exception as exc:

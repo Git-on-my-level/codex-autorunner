@@ -93,6 +93,8 @@ def test_archive_snapshot_copies_curated_paths(tmp_path: Path) -> None:
 
 def test_cleanup_archive_intent_preserves_flow_store(tmp_path: Path) -> None:
     base_repo, worktree_repo = _setup_worktree(tmp_path)
+    _write(worktree_repo / ".codex-autorunner" / "flows.db-wal", "wal-data")
+    _write(worktree_repo / ".codex-autorunner" / "flows.db-shm", "shm-data")
 
     result = archive_worktree_snapshot(
         base_repo_root=base_repo,
@@ -105,6 +107,12 @@ def test_cleanup_archive_intent_preserves_flow_store(tmp_path: Path) -> None:
     )
 
     assert (result.snapshot_path / "flows.db").exists()
+    assert (result.snapshot_path / "flows.db-wal").read_text(encoding="utf-8") == (
+        "wal-data"
+    )
+    assert (result.snapshot_path / "flows.db-shm").read_text(encoding="utf-8") == (
+        "shm-data"
+    )
     assert not (result.snapshot_path / "state" / "state.sqlite3").exists()
     assert not (result.snapshot_path / "logs" / "codex-autorunner.log").exists()
 
@@ -227,6 +235,8 @@ def test_has_car_state_ignores_seeded_defaults(tmp_path: Path) -> None:
 
 def test_archive_workspace_car_state_resets_runtime_state(tmp_path: Path) -> None:
     base_repo, worktree_repo = _setup_worktree(tmp_path)
+    _write(worktree_repo / ".codex-autorunner" / "flows.db-wal", "wal-data")
+    _write(worktree_repo / ".codex-autorunner" / "flows.db-shm", "shm-data")
 
     result = archive_workspace_car_state(
         base_repo_root=base_repo,
@@ -257,6 +267,12 @@ def test_archive_workspace_car_state_resets_runtime_state(tmp_path: Path) -> Non
         encoding="utf-8"
     ) == "hello"
     assert (result.snapshot_path / "flows.db").exists()
+    assert (result.snapshot_path / "flows.db-wal").read_text(encoding="utf-8") == (
+        "wal-data"
+    )
+    assert (result.snapshot_path / "flows.db-shm").read_text(encoding="utf-8") == (
+        "shm-data"
+    )
     assert (result.snapshot_path / "state" / "state.sqlite3").exists()
     assert (result.snapshot_path / "state" / "app_server_threads.json").exists()
     assert (
@@ -330,6 +346,41 @@ def test_archive_snapshot_stages_transactionally_until_finalize(
     assert not (
         worktree_archive_root / "20260103T000000Z--feature-three--3333333"
     ).exists()
+    assert list(worktree_archive_root.glob(".*.tmp-*")) == []
+
+
+def test_archive_workspace_car_state_preserves_live_state_if_finalize_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_repo, worktree_repo = _setup_worktree(tmp_path)
+
+    def _fail_finalize(staging_root: Path, final_snapshot_root: Path) -> None:
+        _ = staging_root, final_snapshot_root
+        raise RuntimeError("finalize failed")
+
+    monkeypatch.setattr(archive_module, "_finalize_snapshot_root", _fail_finalize)
+
+    with pytest.raises(RuntimeError, match="finalize failed"):
+        archive_workspace_car_state(
+            base_repo_root=base_repo,
+            base_repo_id="base",
+            worktree_repo_root=worktree_repo,
+            worktree_repo_id="worktree",
+            branch="feature/archive-viewer",
+            worktree_of="base",
+            snapshot_id="20260104T000000Z--feature-four--4444444",
+            head_sha="4444444",
+        )
+
+    worktree_archive_root = (
+        base_repo / ".codex-autorunner" / "archive" / "worktrees" / "worktree"
+    )
+    assert not (
+        worktree_archive_root / "20260104T000000Z--feature-four--4444444"
+    ).exists()
+    assert (worktree_repo / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
+    assert (worktree_repo / ".codex-autorunner" / "flows.db").exists()
+    assert (worktree_repo / ".codex-autorunner" / "runs" / "run-1").exists()
     assert list(worktree_archive_root.glob(".*.tmp-*")) == []
 
 
