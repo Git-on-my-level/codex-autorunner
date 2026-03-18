@@ -187,7 +187,7 @@ function renderList(
 
   const snapshotSection = `
     <div class="archive-list-section">
-      <div class="archive-list-header muted small">Worktree snapshots</div>
+      <div class="archive-list-header muted small">Workspace snapshots</div>
       ${snapshotHtml || `<div class="archive-list-empty muted small">No snapshots.</div>`}
     </div>
   `;

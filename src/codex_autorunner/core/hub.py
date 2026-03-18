@@ -1907,45 +1907,51 @@ class HubSupervisor:
             "latest_flow_run_id": result.latest_flow_run_id,
         }
 
-    def archive_worktree_state(
+    def archive_repo_state(
         self,
         *,
-        worktree_repo_id: str,
+        repo_id: str,
         archive_note: Optional[str] = None,
     ) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(worktree_repo_id)
-        if not entry or entry.kind != "worktree":
-            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
-        if not entry.worktree_of:
-            raise ValueError("Worktree repo is missing worktree_of metadata")
-        base = manifest.get(entry.worktree_of)
-        if not base or base.kind != "base":
-            raise ValueError(f"Base repo not found: {entry.worktree_of}")
+        entry = manifest.get(repo_id)
+        if not entry:
+            raise ValueError(f"Repo not found: {repo_id}")
 
-        base_path = (self.hub_config.root / base.path).resolve()
-        worktree_path = (self.hub_config.root / entry.path).resolve()
-        if not worktree_path.exists():
-            raise ValueError(f"Worktree path does not exist: {worktree_path}")
+        repo_path = (self.hub_config.root / entry.path).resolve()
+        if not repo_path.exists():
+            raise ValueError(f"Repo path does not exist: {repo_path}")
 
-        runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
+        base_path = repo_path
+        base_repo_id = entry.id
+        worktree_of = entry.worktree_of or entry.id
+        if entry.kind == "worktree":
+            if not entry.worktree_of:
+                raise ValueError("Worktree repo is missing worktree_of metadata")
+            base = manifest.get(entry.worktree_of)
+            if not base or base.kind != "base":
+                raise ValueError(f"Base repo not found: {entry.worktree_of}")
+            base_path = (self.hub_config.root / base.path).resolve()
+            base_repo_id = base.id
+
+        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
         if runner:
             runner.stop()
 
-        branch_name = entry.branch or git_branch(worktree_path) or "unknown"
+        branch_name = entry.branch or git_branch(repo_path) or "unknown"
         result = archive_workspace_car_state(
             base_repo_root=base_path,
-            base_repo_id=base.id,
-            worktree_repo_root=worktree_path,
-            worktree_repo_id=worktree_repo_id,
+            base_repo_id=base_repo_id,
+            worktree_repo_root=repo_path,
+            worktree_repo_id=repo_id,
             branch=branch_name,
-            worktree_of=entry.worktree_of,
+            worktree_of=worktree_of,
             note=archive_note,
             source_path=entry.path,
         )
         self._archive_bound_pma_threads(
-            worktree_repo_id=worktree_repo_id,
-            worktree_path=worktree_path,
+            worktree_repo_id=repo_id,
+            worktree_path=repo_path,
         )
         return {
             "snapshot_id": result.snapshot_id,
@@ -1959,6 +1965,21 @@ class HubSupervisor:
             "archived_paths": list(result.archived_paths),
             "reset_paths": list(result.reset_paths),
         }
+
+    def archive_worktree_state(
+        self,
+        *,
+        worktree_repo_id: str,
+        archive_note: Optional[str] = None,
+    ) -> Dict[str, object]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(worktree_repo_id)
+        if not entry or entry.kind != "worktree":
+            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
+        return self.archive_repo_state(
+            repo_id=worktree_repo_id,
+            archive_note=archive_note,
+        )
 
     def cleanup_repo_threads(self, *, repo_id: str) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)

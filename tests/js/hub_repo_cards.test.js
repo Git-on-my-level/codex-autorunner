@@ -160,7 +160,7 @@ test("worktree cards show archive state action when CAR state is present", () =>
   assert.match(text, /Cleanup/);
 });
 
-test("base repo cards show cleanup threads action", () => {
+test("base repo cards show archive state and cleanup threads actions", () => {
   __hubTest.setHubChannelEntries([]);
   __hubTest.renderRepos([
     {
@@ -189,12 +189,14 @@ test("base repo cards show cleanup threads action", () => {
       mount_error: null,
       unbound_managed_thread_count: 2,
       cleanup_blocked_by_chat_binding: false,
+      has_car_state: true,
       ticket_flow: null,
       ticket_flow_display: null,
     },
   ]);
 
   const text = document.getElementById("hub-repo-list")?.textContent || "";
+  assert.match(text, /Archive state/);
   assert.match(text, /Cleanup threads \(2\)/);
   const cleanupAllText =
     document.getElementById("hub-cleanup-all-threads")?.textContent || "";

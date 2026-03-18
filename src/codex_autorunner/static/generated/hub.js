@@ -799,6 +799,14 @@ function buildActions(repo) {
             title: "Repository settings",
         });
     }
+    if (!missing && repo.has_car_state) {
+        actions.push({
+            key: "archive_state",
+            label: "Archive state",
+            kind: "ghost",
+            title: "Archive CAR runtime state and reset this workspace for fresh work",
+        });
+    }
     if (!missing && kind === "base") {
         actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
         const clean = repo.is_clean;
@@ -827,14 +835,6 @@ function buildActions(repo) {
     }
     if (!missing && kind === "worktree") {
         const cleanupBlockedByChatBinding = isCleanupBlockedByChatBinding(repo);
-        if (repo.has_car_state) {
-            actions.push({
-                key: "archive_state",
-                label: "Archive state",
-                kind: "ghost",
-                title: "Archive CAR runtime state and reset the worktree for fresh work",
-            });
-        }
         actions.push({
             key: "cleanup_worktree",
             label: "Cleanup",
@@ -2680,14 +2680,15 @@ async function handleRepoAction(repoId, action) {
             if (!repo || !repo.has_car_state)
                 return;
             const displayName = repo.display_name || repoId;
-            const ok = await confirmModal(`Archive worktree state "${displayName}"?\n\nCAR will archive tickets, dispatches, contextspace, and other dirty runtime state for later viewing in the Archive tab. The worktree and chat bindings will remain active for fresh work.`, { confirmText: "Archive state" });
+            const subject = repo.kind === "worktree" ? "worktree" : "repo";
+            const ok = await confirmModal(`Archive ${subject} state "${displayName}"?\n\nCAR will archive runs, dispatches, tickets, contextspace, logs, and other dirty runtime state for later viewing in the Archive tab. Git state is not touched, and active chat bindings remain available for fresh work.`, { confirmText: "Archive state" });
             if (!ok)
                 return;
-            await api("/hub/worktrees/archive-state", {
+            await api("/hub/repos/archive-state", {
                 method: "POST",
-                body: { worktree_repo_id: repoId, archive_note: null },
+                body: { repo_id: repoId, archive_note: null },
             });
-            flash(`Archived state for worktree: ${repoId}`, "success");
+            flash(`Archived state for ${subject}: ${repoId}`, "success");
             await refreshHub();
             return;
         }

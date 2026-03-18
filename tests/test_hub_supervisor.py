@@ -741,6 +741,79 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
     assert thread["lifecycle_status"] == "archived"
 
 
+@pytest.mark.slow
+def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_state(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    base_car = base.path / ".codex-autorunner"
+    (base_car / "tickets" / "TICKET-123-demo.md").write_text(
+        "demo ticket", encoding="utf-8"
+    )
+    (base_car / "contextspace" / "active_context.md").write_text(
+        "active context", encoding="utf-8"
+    )
+    dispatch_dir = base_car / "runs" / "run-1" / "dispatch"
+    dispatch_dir.mkdir(parents=True, exist_ok=True)
+    (dispatch_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    (base_car / "codex-autorunner.log").write_text("log", encoding="utf-8")
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", base.path, repo_id=base.id)
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    repos_resp = client.get("/hub/repos")
+    assert repos_resp.status_code == 200
+    base_payload = next(
+        item for item in repos_resp.json()["repos"] if item["id"] == base.id
+    )
+    assert base_payload["has_car_state"] is True
+
+    archive_resp = client.post(
+        "/hub/repos/archive-state",
+        json={"repo_id": base.id},
+    )
+    assert archive_resp.status_code == 200
+    payload = archive_resp.json()
+    assert "tickets" in payload["archived_paths"]
+    assert "runs" in payload["archived_paths"]
+    assert "codex-autorunner.log" in payload["archived_paths"]
+
+    snapshot_root = Path(payload["snapshot_path"])
+    assert (snapshot_root / "tickets" / "TICKET-123-demo.md").exists()
+    assert (snapshot_root / "runs" / "run-1" / "dispatch" / "DISPATCH.md").exists()
+    assert (snapshot_root / "logs" / "codex-autorunner.log").read_text(
+        encoding="utf-8"
+    ) == "log"
+    assert (base_car / "contextspace" / "active_context.md").read_text(
+        encoding="utf-8"
+    ) == ""
+    assert not (base_car / "tickets" / "TICKET-123-demo.md").exists()
+    assert not (base_car / "runs").exists()
+
+    repos_after_resp = client.get("/hub/repos")
+    assert repos_after_resp.status_code == 200
+    base_after = next(
+        item for item in repos_after_resp.json()["repos"] if item["id"] == base.id
+    )
+    assert base_after["has_car_state"] is False
+    thread = store.get_thread(created["managed_thread_id"])
+    assert thread is not None
+    assert thread["lifecycle_status"] == "archived"
+
+
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))

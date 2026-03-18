@@ -198,8 +198,8 @@ class HubWorktreeService:
         )
         try:
             result = await asyncio.to_thread(
-                self._context.supervisor.archive_worktree_state,
-                worktree_repo_id=str(worktree_repo_id),
+                self._context.supervisor.archive_repo_state,
+                repo_id=str(worktree_repo_id),
                 archive_note=archive_note,
             )
         except Exception as exc:

@@ -192,6 +192,13 @@ class HubArchiveWorktreeRequest(Payload):
     )
 
 
+class HubArchiveRepoStateRequest(Payload):
+    repo_id: str = Field(validation_alias=AliasChoices("repo_id", "repoId"))
+    archive_note: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    )
+
+
 class HubArchiveWorktreeResponse(ResponseModel):
     snapshot_id: str
     snapshot_path: str
@@ -214,6 +221,10 @@ class HubArchiveWorktreeStateResponse(ResponseModel):
     latest_flow_run_id: Optional[str]
     archived_paths: list[str]
     reset_paths: list[str]
+
+
+class HubArchiveRepoStateResponse(HubArchiveWorktreeStateResponse):
+    pass
 
 
 class AppServerThreadResetRequest(Payload):

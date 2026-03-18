@@ -38,6 +38,8 @@ from ....integrations.telegram.state import topic_key
 from ....manifest import Manifest, load_manifest
 from ..app_state import HubAppContext
 from ..schemas import (
+    HubArchiveRepoStateRequest,
+    HubArchiveRepoStateResponse,
     HubArchiveWorktreeRequest,
     HubArchiveWorktreeResponse,
     HubArchiveWorktreeStateResponse,
@@ -1112,6 +1114,22 @@ def build_hub_repo_routes(
             worktree_repo_id=payload.worktree_repo_id,
             archive_note=payload.archive_note,
         )
+
+    @router.post(
+        "/hub/repos/archive-state",
+        response_model=HubArchiveRepoStateResponse,
+    )
+    async def archive_repo_state(payload: HubArchiveRepoStateRequest):
+        try:
+            result = await asyncio.to_thread(
+                context.supervisor.archive_repo_state,
+                repo_id=payload.repo_id,
+                archive_note=payload.archive_note,
+            )
+            enricher.invalidate_runtime_caches()
+            return result
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.post("/hub/repos/{repo_id}/cleanup-threads")
     async def cleanup_repo_threads(repo_id: str):
