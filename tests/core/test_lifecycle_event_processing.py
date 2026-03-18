@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from codex_autorunner.core.config import load_hub_config
@@ -546,5 +547,59 @@ def test_drain_automation_wakeups_requests_lane_worker_start(tmp_path: Path) -> 
         drained = supervisor.drain_pma_automation_wakeups()
         assert drained == 1
         assert started_lanes == ["pma:lane-next"]
+    finally:
+        supervisor.shutdown()
+
+
+def test_drain_automation_wakeups_from_thread_without_event_loop(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    _write_hub_config(
+        hub_root,
+        dispatch_interception=False,
+        extra_lines=["  reactive_enabled: false"],
+    )
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor._stop_lifecycle_event_processor()
+
+    try:
+        store = supervisor.get_pma_automation_store()
+        _, deduped = store.enqueue_wakeup(
+            source="lifecycle_subscription",
+            lane_id="pma:default",
+            repo_id="repo-1",
+            run_id="run-1",
+            from_state="running",
+            to_state="failed",
+            reason="flow_failed",
+            timestamp="2026-01-01T00:00:00Z",
+            idempotency_key="wakeup-threaded-drain",
+        )
+        assert deduped is False
+
+        drained: list[int] = []
+        errors: list[BaseException] = []
+
+        def _drain() -> None:
+            try:
+                drained.append(supervisor.drain_pma_automation_wakeups())
+            except BaseException as exc:  # pragma: no cover - characterization only
+                errors.append(exc)
+
+        thread = threading.Thread(target=_drain, name="lifecycle-event-processor")
+        thread.start()
+        thread.join(timeout=1.0)
+
+        assert thread.is_alive() is False
+        assert errors == []
+        assert drained == [1]
+
+        items = _read_queue_items(hub_root)
+        assert len(items) == 1
+        wake_up = (items[0].get("payload") or {}).get("wake_up") or {}
+        assert wake_up.get("repo_id") == "repo-1"
+        assert wake_up.get("run_id") == "run-1"
+        assert wake_up.get("source") == "lifecycle_subscription"
     finally:
         supervisor.shutdown()
