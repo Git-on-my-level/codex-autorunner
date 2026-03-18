@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
-from types import SimpleNamespace
 
 from codex_autorunner.surfaces.web.schemas import PmaManagedThreadCreateRequest
 from codex_autorunner.surfaces.web.services.pma.common import (
