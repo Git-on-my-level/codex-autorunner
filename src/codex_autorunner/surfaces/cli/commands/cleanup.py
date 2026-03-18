@@ -6,12 +6,11 @@ from typing import Callable, Optional
 import typer
 
 from ....core.archive_retention import (
-    RunArchiveRetentionPolicy,
-    WorktreeArchiveRetentionPolicy,
     prune_run_archive_root,
     prune_worktree_archive_root,
+    resolve_run_archive_retention_policy,
+    resolve_worktree_archive_retention_policy,
 )
-from ....core.config import DEFAULT_HUB_CONFIG
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.managed_processes import reap_managed_processes
 from ....core.report_retention import (
@@ -126,30 +125,11 @@ def register_cleanup_commands(
         if scope_value not in {"worktrees", "runs", "both"}:
             raise typer.BadParameter("scope must be one of: worktrees, runs, both")
 
-        defaults = DEFAULT_HUB_CONFIG.get("pma", {})
-        pma = engine.config.pma
-
         outputs: list[str] = []
         if scope_value in {"worktrees", "both"}:
             worktree_summary = prune_worktree_archive_root(
                 engine.repo_root / ".codex-autorunner" / "archive" / "worktrees",
-                policy=WorktreeArchiveRetentionPolicy(
-                    max_snapshots_per_repo=getattr(
-                        pma,
-                        "worktree_archive_max_snapshots_per_repo",
-                        defaults.get("worktree_archive_max_snapshots_per_repo", 10),
-                    ),
-                    max_age_days=getattr(
-                        pma,
-                        "worktree_archive_max_age_days",
-                        defaults.get("worktree_archive_max_age_days", 30),
-                    ),
-                    max_total_bytes=getattr(
-                        pma,
-                        "worktree_archive_max_total_bytes",
-                        defaults.get("worktree_archive_max_total_bytes", 1_000_000_000),
-                    ),
-                ),
+                policy=resolve_worktree_archive_retention_policy(engine.config.pma),
                 dry_run=dry_run,
             )
             outputs.append(
@@ -160,23 +140,7 @@ def register_cleanup_commands(
         if scope_value in {"runs", "both"}:
             run_summary = prune_run_archive_root(
                 engine.repo_root / ".codex-autorunner" / "archive" / "runs",
-                policy=RunArchiveRetentionPolicy(
-                    max_entries=getattr(
-                        pma,
-                        "run_archive_max_entries",
-                        defaults.get("run_archive_max_entries", 200),
-                    ),
-                    max_age_days=getattr(
-                        pma,
-                        "run_archive_max_age_days",
-                        defaults.get("run_archive_max_age_days", 30),
-                    ),
-                    max_total_bytes=getattr(
-                        pma,
-                        "run_archive_max_total_bytes",
-                        defaults.get("run_archive_max_total_bytes", 1_000_000_000),
-                    ),
-                ),
+                policy=resolve_run_archive_retention_policy(engine.config.pma),
                 dry_run=dry_run,
             )
             outputs.append(

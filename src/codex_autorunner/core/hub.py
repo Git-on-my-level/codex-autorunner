@@ -31,8 +31,9 @@ from .archive import (
     archive_workspace_car_state,
     archive_worktree_snapshot,
     build_snapshot_id,
+    resolve_worktree_archive_intent,
 )
-from .archive_retention import WorktreeArchiveRetentionPolicy
+from .archive_retention import resolve_worktree_archive_retention_policy
 from .chat_bindings import repo_has_active_non_pma_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .destinations import (
@@ -1352,7 +1353,7 @@ class HubSupervisor:
         archive_note: Optional[str] = None,
         force: bool = False,
         archive_profile: Optional[str] = None,
-        include_flow_store_in_portable: bool = False,
+        cleanup: bool = False,
     ):
         from .archive import ArchiveResult
 
@@ -1389,10 +1390,9 @@ class HubSupervisor:
             ArchiveProfile,
             archive_profile or self.hub_config.pma.worktree_archive_profile,
         )
-        retention_policy = WorktreeArchiveRetentionPolicy(
-            max_snapshots_per_repo=self.hub_config.pma.worktree_archive_max_snapshots_per_repo,
-            max_age_days=self.hub_config.pma.worktree_archive_max_age_days,
-            max_total_bytes=self.hub_config.pma.worktree_archive_max_total_bytes,
+        intent = resolve_worktree_archive_intent(profile=profile, cleanup=cleanup)
+        retention_policy = resolve_worktree_archive_retention_policy(
+            self.hub_config.pma
         )
         try:
             result: ArchiveResult = archive_worktree_snapshot(
@@ -1406,8 +1406,7 @@ class HubSupervisor:
                 snapshot_id=snapshot_id,
                 head_sha=head_sha,
                 source_path=entry.path,
-                profile=profile,
-                include_flow_store_in_portable=include_flow_store_in_portable,
+                intent=intent,
                 retention_policy=retention_policy,
             )
         except Exception as exc:
@@ -1852,7 +1851,7 @@ class HubSupervisor:
                 archive_note=archive_note,
                 force=force_archive,
                 archive_profile=archive_profile,
-                include_flow_store_in_portable=True,
+                cleanup=True,
             )
 
         repos_by_id = {repo.id: repo for repo in manifest.repos}
@@ -2012,10 +2011,6 @@ class HubSupervisor:
         )
 
         branch_name = entry.branch or git_branch(repo_path) or "unknown"
-        profile = cast(
-            ArchiveProfile,
-            archive_profile or self.hub_config.pma.worktree_archive_profile,
-        )
         result = archive_workspace_car_state(
             base_repo_root=base_path,
             base_repo_id=base_repo_id,
@@ -2025,11 +2020,9 @@ class HubSupervisor:
             worktree_of=worktree_of,
             note=archive_note,
             source_path=entry.path,
-            profile=profile,
-            retention_policy=WorktreeArchiveRetentionPolicy(
-                max_snapshots_per_repo=self.hub_config.pma.worktree_archive_max_snapshots_per_repo,
-                max_age_days=self.hub_config.pma.worktree_archive_max_age_days,
-                max_total_bytes=self.hub_config.pma.worktree_archive_max_total_bytes,
+            intent="reset_car_state",
+            retention_policy=resolve_worktree_archive_retention_policy(
+                self.hub_config.pma
             ),
         )
         self._archive_bound_pma_threads(

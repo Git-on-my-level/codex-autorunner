@@ -7,7 +7,11 @@ import typer
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
-from codex_autorunner.core.archive_retention import ArchivePruneSummary
+from codex_autorunner.core.archive_retention import (
+    ArchivePruneSummary,
+    RunArchiveRetentionPolicy,
+    WorktreeArchiveRetentionPolicy,
+)
 from codex_autorunner.core.config import ConfigError
 from codex_autorunner.core.diagnostics.process_snapshot import (
     ProcessCategory,
@@ -203,12 +207,12 @@ def test_cleanup_archives_uses_repo_retention_policy(monkeypatch, repo: Path) ->
         == repo / ".codex-autorunner" / "archive" / "worktrees"
     )
     assert captured["runs_path"] == repo / ".codex-autorunner" / "archive" / "runs"
-    assert captured["worktrees_policy"] == cleanup_cmd.WorktreeArchiveRetentionPolicy(
+    assert captured["worktrees_policy"] == WorktreeArchiveRetentionPolicy(
         max_snapshots_per_repo=7,
         max_age_days=21,
         max_total_bytes=123456,
     )
-    assert captured["runs_policy"] == cleanup_cmd.RunArchiveRetentionPolicy(
+    assert captured["runs_policy"] == RunArchiveRetentionPolicy(
         max_entries=9,
         max_age_days=11,
         max_total_bytes=654321,

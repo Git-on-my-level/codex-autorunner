@@ -75,7 +75,8 @@ def test_archive_snapshots_list_and_detail(tmp_path: Path) -> None:
     assert res.status_code == 200
     payload = res.json()
     snapshot_ids = {item["snapshot_id"] for item in payload["snapshots"]}
-    assert {"snap-no-meta", "snap-with-meta"} <= snapshot_ids
+    assert "snap-with-meta" in snapshot_ids
+    assert "snap-no-meta" not in snapshot_ids
 
     detail = client.get(
         "/api/archive/snapshots/snap-no-meta", params={"worktree_repo_id": "wt1"}

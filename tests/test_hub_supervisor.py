@@ -914,7 +914,7 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     assert fake_runner.stop_calls == 1
     assert fake_runner.reconcile_calls >= 2
     assert len(archived) == 1
-    assert archived[0]["profile"] == "portable"
+    assert archived[0]["intent"] == "reset_car_state"
 
 
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):

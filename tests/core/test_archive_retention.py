@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 from codex_autorunner.core.archive_retention import (
     RunArchiveRetentionPolicy,
     WorktreeArchiveRetentionPolicy,
     prune_run_archive_root,
     prune_worktree_archive_root,
+    resolve_run_archive_retention_policy,
+    resolve_worktree_archive_retention_policy,
 )
 
 
@@ -156,3 +159,37 @@ def test_prune_run_archive_root_respects_total_bytes(tmp_path: Path) -> None:
     assert summary.pruned == 1
     assert not old_run.exists()
     assert new_run.exists()
+
+
+def test_resolve_worktree_archive_retention_policy_accepts_parsed_config_objects() -> (
+    None
+):
+    policy = resolve_worktree_archive_retention_policy(
+        SimpleNamespace(
+            worktree_archive_max_snapshots_per_repo=7,
+            worktree_archive_max_age_days=14,
+            worktree_archive_max_total_bytes=42,
+        )
+    )
+
+    assert policy == WorktreeArchiveRetentionPolicy(
+        max_snapshots_per_repo=7,
+        max_age_days=14,
+        max_total_bytes=42,
+    )
+
+
+def test_resolve_run_archive_retention_policy_accepts_mapping_defaults() -> None:
+    policy = resolve_run_archive_retention_policy(
+        {
+            "run_archive_max_entries": "12",
+            "run_archive_max_age_days": None,
+            "run_archive_max_total_bytes": "256",
+        }
+    )
+
+    assert policy == RunArchiveRetentionPolicy(
+        max_entries=12,
+        max_age_days=30,
+        max_total_bytes=256,
+    )

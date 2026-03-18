@@ -14,8 +14,12 @@ from ..archive import (
     build_common_car_archive_entries,
     execute_archive_entries,
 )
-from ..archive_retention import RunArchiveRetentionPolicy, prune_run_archive_root
-from ..config import DEFAULT_HUB_CONFIG, ConfigError, load_repo_config
+from ..archive_retention import (
+    RunArchiveRetentionPolicy,
+    prune_run_archive_root,
+    resolve_run_archive_retention_policy,
+)
+from ..config import ConfigError, load_repo_config
 from ..pma_thread_store import PmaThreadStore
 from .models import FlowRunStatus
 from .store import FlowStore
@@ -42,26 +46,10 @@ def _get_durable_writes(repo_root: Path) -> bool:
 def _get_run_archive_retention_policy(
     repo_root: Path,
 ) -> Optional[RunArchiveRetentionPolicy]:
-    defaults = DEFAULT_HUB_CONFIG.get("pma", {})
     try:
-        raw = load_repo_config(repo_root).raw
+        return resolve_run_archive_retention_policy(load_repo_config(repo_root).pma)
     except ConfigError:
-        raw = {}
-    pma = raw.get("pma") if isinstance(raw, dict) else {}
-    if not isinstance(pma, dict):
-        pma = {}
-
-    def _value(name: str, fallback: int) -> int:
-        try:
-            return max(0, int(pma.get(name, defaults.get(name, fallback))))
-        except (TypeError, ValueError):
-            return fallback
-
-    return RunArchiveRetentionPolicy(
-        max_entries=_value("run_archive_max_entries", 200),
-        max_age_days=_value("run_archive_max_age_days", 30),
-        max_total_bytes=_value("run_archive_max_total_bytes", 1_000_000_000),
-    )
+        return resolve_run_archive_retention_policy({})
 
 
 def _next_archive_dir(base_dir: Path) -> Path:

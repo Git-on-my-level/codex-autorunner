@@ -5,7 +5,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 
 @dataclass(frozen=True)
@@ -20,6 +20,14 @@ class RunArchiveRetentionPolicy:
     max_entries: int
     max_age_days: int
     max_total_bytes: int
+
+
+DEFAULT_WORKTREE_ARCHIVE_MAX_SNAPSHOTS_PER_REPO = 10
+DEFAULT_WORKTREE_ARCHIVE_MAX_AGE_DAYS = 30
+DEFAULT_WORKTREE_ARCHIVE_MAX_TOTAL_BYTES = 1_000_000_000
+DEFAULT_RUN_ARCHIVE_MAX_ENTRIES = 200
+DEFAULT_RUN_ARCHIVE_MAX_AGE_DAYS = 30
+DEFAULT_RUN_ARCHIVE_MAX_TOTAL_BYTES = 1_000_000_000
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,67 @@ class _ArchiveEntry:
     created_at: datetime
     size_bytes: int
     preserve: bool
+
+
+def _coerce_nonnegative_int(value: object, default: int) -> int:
+    if isinstance(value, bool):
+        return int(value)
+    if not isinstance(value, (int, float, str, bytes, bytearray)):
+        return default
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _policy_config_value(config: object, name: str, default: int) -> int:
+    if isinstance(config, Mapping):
+        value = config.get(name, default)
+    else:
+        value = getattr(config, name, default)
+    return _coerce_nonnegative_int(value, default)
+
+
+def resolve_worktree_archive_retention_policy(
+    config: object,
+) -> WorktreeArchiveRetentionPolicy:
+    return WorktreeArchiveRetentionPolicy(
+        max_snapshots_per_repo=_policy_config_value(
+            config,
+            "worktree_archive_max_snapshots_per_repo",
+            DEFAULT_WORKTREE_ARCHIVE_MAX_SNAPSHOTS_PER_REPO,
+        ),
+        max_age_days=_policy_config_value(
+            config,
+            "worktree_archive_max_age_days",
+            DEFAULT_WORKTREE_ARCHIVE_MAX_AGE_DAYS,
+        ),
+        max_total_bytes=_policy_config_value(
+            config,
+            "worktree_archive_max_total_bytes",
+            DEFAULT_WORKTREE_ARCHIVE_MAX_TOTAL_BYTES,
+        ),
+    )
+
+
+def resolve_run_archive_retention_policy(config: object) -> RunArchiveRetentionPolicy:
+    return RunArchiveRetentionPolicy(
+        max_entries=_policy_config_value(
+            config,
+            "run_archive_max_entries",
+            DEFAULT_RUN_ARCHIVE_MAX_ENTRIES,
+        ),
+        max_age_days=_policy_config_value(
+            config,
+            "run_archive_max_age_days",
+            DEFAULT_RUN_ARCHIVE_MAX_AGE_DAYS,
+        ),
+        max_total_bytes=_policy_config_value(
+            config,
+            "run_archive_max_total_bytes",
+            DEFAULT_RUN_ARCHIVE_MAX_TOTAL_BYTES,
+        ),
+    )
 
 
 def _coerce_created_at(raw: object) -> Optional[datetime]:

@@ -226,6 +226,8 @@ def _iter_snapshots(repo_root: Path) -> list[ArchiveSnapshotSummary]:
             if not snapshot_dir.is_dir():
                 continue
             meta = _load_meta(snapshot_dir / "META.json")
+            if meta is None:
+                continue
             snapshots.append(_snapshot_summary(snapshot_dir, worktree_id, meta))
     snapshots.sort(
         key=lambda item: (item.created_at or "", item.snapshot_id), reverse=True

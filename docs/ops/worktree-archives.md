@@ -3,13 +3,27 @@
 ## Overview
 When a hub-managed worktree is cleaned up, CAR snapshots the worktree's
 `.codex-autorunner/` artifacts into the base repo. The default cleanup archive
-is a portable review snapshot: tickets, contextspace docs, runs/dispatch
-history, flow artifacts, GitHub issue/PR context, and lightweight metadata stay
-available for later review in the Archive UI without copying the live flow DB
-or other bulky runtime state.
+is a cleanup snapshot: tickets, contextspace docs, runs/dispatch history, flow
+artifacts, the live `flows.db`, GitHub issue/PR context, and lightweight
+metadata stay available for later review in the Archive UI without copying the
+full runtime state unless you opt into a full archive profile.
 
 Archives are local runtime data and are not meant to be committed. The
 base repo's `.codex-autorunner/` folder is gitignored.
+
+## Archive intents
+CAR archive behavior is now modeled by explicit intents instead of profile
+exceptions:
+
+- `review_snapshot`: non-destructive snapshot for manual review
+- `cleanup_snapshot`: destructive worktree-cleanup snapshot that always keeps
+  reviewable flow state, including `flows.db`
+- `reset_car_state`: destructive CAR-state archive that preserves every CAR
+  path it is about to reset
+
+The configured `portable` vs `full` profile only chooses how much additional
+runtime-only state a review or cleanup snapshot keeps. It no longer decides
+whether destructive flows preserve required review artifacts.
 
 ## Storage layout
 Snapshots are stored under the base repo:
@@ -29,20 +43,23 @@ Snapshots are stored under the base repo:
           config.yml
 ```
 
-`META.json` is written last and contains the snapshot status plus summary
-fields such as `file_count`, `total_bytes`, `flow_run_count`, and
-`latest_flow_run_id`.
+Snapshots are staged into a temporary directory first. `META.json` is written
+in the staging directory, and the snapshot becomes visible only after an
+atomic rename into the final snapshot path. This keeps in-progress snapshots
+out of archive listings and retention pruning.
 
 ## Cleanup behavior
 - Worktree cleanup archives by default (`archive=true`).
 - Cleanup snapshots use the `portable` archive profile by default. Set
   `pma.worktree_archive_profile: full` when you intentionally want a forensic
-  snapshot that also copies `flows.db`, runner state, and logs.
+  cleanup snapshot that also copies runner state and logs in addition to the
+  default reviewable flow state.
 - If archiving fails, cleanup stops unless `force_archive=true` is passed.
   Use force only when you accept losing the archive for that worktree.
 - Partial snapshots can happen when some paths are missing. In that case
   the snapshot `status` is `partial` and `META.json` lists `missing_paths`.
-- Failures still write `META.json` with `status=failed` and an `error`.
+- Failed staging directories are cleaned up instead of being published as
+  visible snapshots.
 
 ## Viewing archives in the UI
 Open the repo web UI and select the **Archive** tab. You can:
