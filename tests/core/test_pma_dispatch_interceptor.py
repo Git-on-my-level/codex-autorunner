@@ -111,6 +111,44 @@ async def test_interceptor_notifies_bound_discord_chat_on_auto_resolve(
 
 
 @pytest.mark.anyio
+async def test_interceptor_auto_resolve_notice_is_idempotent_for_same_event(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    _enable_discord(tmp_path)
+    run_id = str(uuid.uuid4())
+    _set_run_status(workspace, run_id, FlowRunStatus.PAUSED)
+    _create_dispatch(workspace, run_id, "continue")
+
+    store = DiscordStateStore(tmp_path / ".codex-autorunner" / "discord_state.sqlite3")
+    await store.initialize()
+    try:
+        await store.upsert_binding(
+            channel_id="discord-bound",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-1",
+        )
+        event = LifecycleEvent(
+            event_type=LifecycleEventType.DISPATCH_CREATED,
+            repo_id="repo-1",
+            run_id=run_id,
+            event_id="evt-stable-1",
+        )
+
+        interceptor = PmaDispatchInterceptor(hub_root=tmp_path, supervisor=None)
+        first = await interceptor.process_dispatch_event(event, workspace)
+        second = await interceptor.process_dispatch_event(event, workspace)
+
+        assert first is not None and first.action == "auto_resolved"
+        assert second is not None and second.action == "auto_resolved"
+        outbox = await store.list_outbox()
+        assert len(outbox) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_interceptor_notifies_primary_pma_discord_chat_on_escalation(
     tmp_path: Path,
 ) -> None:

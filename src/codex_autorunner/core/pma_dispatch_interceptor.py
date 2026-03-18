@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import re
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -186,6 +185,7 @@ class PmaDispatchInterceptor:
                 can_resume = await _can_auto_resume_run(repo_root, run_id)
                 if not can_resume:
                     notified = await self._notify_escalation(
+                        event_id=event_id,
                         repo_root=repo_root,
                         repo_id=repo_id,
                         run_id=run_id,
@@ -204,6 +204,7 @@ class PmaDispatchInterceptor:
                 success = await _write_reply(repo_root, run_id, matched_rule.reply)
                 if success:
                     notified = await self._notify_auto_resolved(
+                        event_id=event_id,
                         repo_root=repo_root,
                         repo_id=repo_id,
                         run_id=run_id,
@@ -220,6 +221,7 @@ class PmaDispatchInterceptor:
                     return result
                 else:
                     notified = await self._notify_escalation(
+                        event_id=event_id,
                         repo_root=repo_root,
                         repo_id=repo_id,
                         run_id=run_id,
@@ -236,6 +238,7 @@ class PmaDispatchInterceptor:
                     )
 
             notified = await self._notify_escalation(
+                event_id=event_id,
                 repo_root=repo_root,
                 repo_id=repo_id,
                 run_id=run_id,
@@ -265,12 +268,13 @@ class PmaDispatchInterceptor:
     async def _notify_auto_resolved(
         self,
         *,
+        event_id: str,
         repo_root: Path,
         repo_id: Optional[str],
         run_id: str,
         reply: str,
     ) -> bool:
-        correlation_id = f"dispatch-auto:{run_id}:{uuid.uuid4().hex[:12]}"
+        correlation_id = f"dispatch-auto:{event_id}"
         message = (
             "PMA handled the paused ticket-flow dispatch automatically.\n"
             f"run_id: {run_id}\n\n"
@@ -296,12 +300,13 @@ class PmaDispatchInterceptor:
     async def _notify_escalation(
         self,
         *,
+        event_id: str,
         repo_root: Path,
         repo_id: Optional[str],
         run_id: str,
         reason: str,
     ) -> bool:
-        correlation_id = f"dispatch-escalation:{run_id}:{uuid.uuid4().hex[:12]}"
+        correlation_id = f"dispatch-escalation:{event_id}"
         message = (
             "PMA escalated a paused ticket-flow dispatch for user attention.\n"
             f"run_id: {run_id}\n"

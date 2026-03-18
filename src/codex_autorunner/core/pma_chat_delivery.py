@@ -115,9 +115,9 @@ async def notify_preferred_bound_chat_for_workspace(
         return {"targets": 0, "published": 0}
 
     created_at = now_iso()
-    targets = 0
-    published = 0
-    if preferred_source == "discord":
+    normalized_repo_id = _normalize_optional_text(repo_id)
+
+    async def _notify_discord() -> dict[str, int]:
         from ..integrations.discord.rendering import (
             chunk_discord_message,
             format_discord_message,
@@ -125,6 +125,8 @@ async def notify_preferred_bound_chat_for_workspace(
         from ..integrations.discord.state import DiscordStateStore
         from ..integrations.discord.state import OutboxRecord as DiscordOutboxRecord
 
+        targets = 0
+        published = 0
         store = DiscordStateStore(
             _resolve_state_path(
                 hub_root,
@@ -136,7 +138,6 @@ async def notify_preferred_bound_chat_for_workspace(
         try:
             bindings = await store.list_bindings()
             channels: list[str] = []
-            normalized_repo_id = _normalize_optional_text(repo_id)
             for binding in bindings:
                 if bool(binding.get("pma_enabled")):
                     continue
@@ -192,72 +193,89 @@ async def notify_preferred_bound_chat_for_workspace(
             await store.close()
         return {"targets": targets, "published": published}
 
-    from ..integrations.telegram.state import (
-        OutboxRecord as TelegramOutboxRecord,
-    )
-    from ..integrations.telegram.state import TelegramStateStore, parse_topic_key
-
-    telegram_store = TelegramStateStore(
-        _resolve_state_path(
-            hub_root,
-            raw_config,
-            section="telegram_bot",
-            default_state_file=TELEGRAM_STATE_FILE_DEFAULT,
+    async def _notify_telegram() -> dict[str, int]:
+        from ..integrations.telegram.state import (
+            OutboxRecord as TelegramOutboxRecord,
         )
-    )
-    try:
-        topics = await telegram_store.list_topics()
-        normalized_repo_id = _normalize_optional_text(repo_id)
-        for surface_key in sorted(topics):
-            topic = topics[surface_key]
-            if bool(getattr(topic, "pma_enabled", False)):
-                continue
-            try:
-                chat_id, thread_id, scope = parse_topic_key(surface_key)
-            except Exception:
-                continue
-            base_key = f"{chat_id}:{thread_id or 'root'}"
-            current_scope = await telegram_store.get_topic_scope(base_key)
-            if scope != current_scope:
-                continue
-            if not _binding_matches_workspace(
-                getattr(topic, "workspace_path", None), workspace_root
-            ):
-                continue
-            binding_repo_id = _resolve_repo_id(
-                repo_id=getattr(topic, "repo_id", None),
-                workspace_path=getattr(topic, "workspace_path", None),
-                repo_id_by_workspace=repo_id_by_workspace,
+        from ..integrations.telegram.state import TelegramStateStore, parse_topic_key
+
+        targets = 0
+        published = 0
+        telegram_store = TelegramStateStore(
+            _resolve_state_path(
+                hub_root,
+                raw_config,
+                section="telegram_bot",
+                default_state_file=TELEGRAM_STATE_FILE_DEFAULT,
             )
-            if normalized_repo_id and binding_repo_id not in {None, normalized_repo_id}:
-                continue
-            digest = hashlib.sha256(
-                f"{correlation_id}:bound:{chat_id}:{thread_id or 'root'}".encode(
-                    "utf-8"
+        )
+        try:
+            topics = await telegram_store.list_topics()
+            for surface_key in sorted(topics):
+                topic = topics[surface_key]
+                if bool(getattr(topic, "pma_enabled", False)):
+                    continue
+                try:
+                    chat_id, thread_id, scope = parse_topic_key(surface_key)
+                except Exception:
+                    continue
+                base_key = f"{chat_id}:{thread_id or 'root'}"
+                current_scope = await telegram_store.get_topic_scope(base_key)
+                if scope != current_scope:
+                    continue
+                if not _binding_matches_workspace(
+                    getattr(topic, "workspace_path", None), workspace_root
+                ):
+                    continue
+                binding_repo_id = _resolve_repo_id(
+                    repo_id=getattr(topic, "repo_id", None),
+                    workspace_path=getattr(topic, "workspace_path", None),
+                    repo_id_by_workspace=repo_id_by_workspace,
                 )
-            ).hexdigest()[:24]
-            record_id = f"pma-notice:{digest}"
-            if await telegram_store.get_outbox(record_id) is not None:
-                continue
-            await telegram_store.enqueue_outbox(
-                TelegramOutboxRecord(
-                    record_id=record_id,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    reply_to_message_id=None,
-                    placeholder_message_id=None,
-                    text=text,
-                    created_at=created_at,
-                    operation="send",
-                    message_id=None,
-                    outbox_key=f"pma-notice:{correlation_id}:{surface_key}:send",
+                if normalized_repo_id and binding_repo_id not in {
+                    None,
+                    normalized_repo_id,
+                }:
+                    continue
+                digest = hashlib.sha256(
+                    f"{correlation_id}:bound:{chat_id}:{thread_id or 'root'}".encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:24]
+                record_id = f"pma-notice:{digest}"
+                if await telegram_store.get_outbox(record_id) is not None:
+                    continue
+                await telegram_store.enqueue_outbox(
+                    TelegramOutboxRecord(
+                        record_id=record_id,
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        reply_to_message_id=None,
+                        placeholder_message_id=None,
+                        text=text,
+                        created_at=created_at,
+                        operation="send",
+                        message_id=None,
+                        outbox_key=f"pma-notice:{correlation_id}:{surface_key}:send",
+                    )
                 )
-            )
-            targets += 1
-            published += 1
-    finally:
-        await telegram_store.close()
-    return {"targets": targets, "published": published}
+                targets += 1
+                published += 1
+        finally:
+            await telegram_store.close()
+        return {"targets": targets, "published": published}
+
+    notify_by_source = {"discord": _notify_discord, "telegram": _notify_telegram}
+    ordered_sources = [preferred_source] + [
+        source for source in ("discord", "telegram") if source != preferred_source
+    ]
+    last_outcome = {"targets": 0, "published": 0}
+    for source in ordered_sources:
+        outcome = await notify_by_source[source]()
+        if outcome.get("targets", 0) > 0:
+            return outcome
+        last_outcome = outcome
+    return last_outcome
 
 
 async def notify_primary_pma_chat_for_repo(

@@ -320,3 +320,63 @@ async def test_notify_preferred_bound_chat_skips_stale_telegram_scope(
         assert not await telegram_store.list_outbox()
     finally:
         await telegram_store.close()
+
+
+@pytest.mark.anyio
+async def test_notify_preferred_bound_chat_falls_back_when_preferred_surface_mismatches_repo(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub(tmp_path)
+    workspace = (hub_root / "worktrees" / "repo-e").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_manifest(hub_root, "repo-e", workspace)
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    telegram_store = TelegramStateStore(
+        hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        await discord_store.upsert_binding(
+            channel_id="repo-e-discord",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-e",
+        )
+        _set_discord_binding_updated_at(
+            hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+            "repo-e-discord",
+            "2026-03-18T10:00:01Z",
+        )
+
+        await telegram_store.bind_topic(
+            topic_key(5001, 6002),
+            str(workspace),
+            repo_id="other-repo",
+        )
+        _set_telegram_topic_updated_at(
+            hub_root / ".codex-autorunner" / "telegram_state.sqlite3",
+            topic_key(5001, 6002),
+            "2026-03-18T10:00:10Z",
+        )
+
+        outcome = await notify_preferred_bound_chat_for_workspace(
+            hub_root=hub_root,
+            workspace_root=workspace,
+            repo_id="repo-e",
+            message="Fallback to discord",
+            correlation_id="corr-5",
+        )
+
+        assert outcome["targets"] == 1
+        assert outcome["published"] == 1
+        outbox = await discord_store.list_outbox()
+        assert any(
+            record.channel_id == "repo-e-discord"
+            and record.payload_json.get("content") == "Fallback to discord"
+            for record in outbox
+        )
+    finally:
+        await discord_store.close()
+        await telegram_store.close()
