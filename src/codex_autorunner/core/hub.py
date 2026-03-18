@@ -11,7 +11,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, cast
 
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
@@ -27,10 +27,12 @@ from ..manifest import (
 )
 from ..tickets.outbox import set_lifecycle_emitter
 from .archive import (
+    ArchiveProfile,
     archive_workspace_car_state,
     archive_worktree_snapshot,
     build_snapshot_id,
 )
+from .archive_retention import WorktreeArchiveRetentionPolicy
 from .chat_bindings import repo_has_active_non_pma_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .destinations import (
@@ -1349,6 +1351,7 @@ class HubSupervisor:
         worktree_repo_id: str,
         archive_note: Optional[str] = None,
         force: bool = False,
+        archive_profile: Optional[str] = None,
     ):
         from .archive import ArchiveResult
 
@@ -1381,6 +1384,15 @@ class HubSupervisor:
             worktree_repo_id,
             snapshot_id,
         )
+        profile = cast(
+            ArchiveProfile,
+            archive_profile or self.hub_config.pma.worktree_archive_profile,
+        )
+        retention_policy = WorktreeArchiveRetentionPolicy(
+            max_snapshots_per_repo=self.hub_config.pma.worktree_archive_max_snapshots_per_repo,
+            max_age_days=self.hub_config.pma.worktree_archive_max_age_days,
+            max_total_bytes=self.hub_config.pma.worktree_archive_max_total_bytes,
+        )
         try:
             result: ArchiveResult = archive_worktree_snapshot(
                 base_repo_root=base_path,
@@ -1393,6 +1405,8 @@ class HubSupervisor:
                 snapshot_id=snapshot_id,
                 head_sha=head_sha,
                 source_path=entry.path,
+                profile=profile,
+                retention_policy=retention_policy,
             )
         except Exception as exc:
             logger.exception(
@@ -1770,6 +1784,7 @@ class HubSupervisor:
         archive_note: Optional[str] = None,
         force: bool = False,
         force_attestation: Optional[Mapping[str, object]] = None,
+        archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
         if self.hub_config.pma.cleanup_require_archive and not archive:
             raise ValueError(
@@ -1834,6 +1849,7 @@ class HubSupervisor:
                 worktree_repo_id=worktree_repo_id,
                 archive_note=archive_note,
                 force=force_archive,
+                archive_profile=archive_profile,
             )
 
         repos_by_id = {repo.id: repo for repo in manifest.repos}
@@ -1918,6 +1934,7 @@ class HubSupervisor:
         *,
         worktree_repo_id: str,
         archive_note: Optional[str] = None,
+        archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         entry = manifest.get(worktree_repo_id)
@@ -1939,6 +1956,7 @@ class HubSupervisor:
             worktree_repo_id=worktree_repo_id,
             archive_note=archive_note,
             force=False,
+            archive_profile=archive_profile,
         )
         self._archive_bound_pma_threads(
             worktree_repo_id=worktree_repo_id,
@@ -1962,6 +1980,7 @@ class HubSupervisor:
         *,
         repo_id: str,
         archive_note: Optional[str] = None,
+        archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         entry = manifest.get(repo_id)
@@ -1990,6 +2009,10 @@ class HubSupervisor:
         )
 
         branch_name = entry.branch or git_branch(repo_path) or "unknown"
+        profile = cast(
+            ArchiveProfile,
+            archive_profile or self.hub_config.pma.worktree_archive_profile,
+        )
         result = archive_workspace_car_state(
             base_repo_root=base_path,
             base_repo_id=base_repo_id,
@@ -1999,6 +2022,12 @@ class HubSupervisor:
             worktree_of=worktree_of,
             note=archive_note,
             source_path=entry.path,
+            profile=profile,
+            retention_policy=WorktreeArchiveRetentionPolicy(
+                max_snapshots_per_repo=self.hub_config.pma.worktree_archive_max_snapshots_per_repo,
+                max_age_days=self.hub_config.pma.worktree_archive_max_age_days,
+                max_total_bytes=self.hub_config.pma.worktree_archive_max_total_bytes,
+            ),
         )
         self._archive_bound_pma_threads(
             worktree_repo_id=repo_id,
@@ -2022,6 +2051,7 @@ class HubSupervisor:
         *,
         worktree_repo_id: str,
         archive_note: Optional[str] = None,
+        archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         entry = manifest.get(worktree_repo_id)
@@ -2030,6 +2060,7 @@ class HubSupervisor:
         return self.archive_repo_state(
             repo_id=worktree_repo_id,
             archive_note=archive_note,
+            archive_profile=archive_profile,
         )
 
     def cleanup_repo_threads(self, *, repo_id: str) -> Dict[str, object]:

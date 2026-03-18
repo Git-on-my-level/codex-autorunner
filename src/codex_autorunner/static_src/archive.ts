@@ -302,7 +302,6 @@ function renderArtifactSection(
   const latestFlow = formatSummaryString(summaryValue(summary, "latest_flow_run_id"));
   const runsPresent = pathPresence(meta, "runs");
   const flowsPresent = pathPresence(meta, "flows");
-  const flowsDbPresent = pathPresence(meta, "flows.db");
 
   return `
     <div class="archive-summary-block">
@@ -315,10 +314,6 @@ function renderArtifactSection(
         <div class="archive-meta-row">
           <div class="archive-meta-label muted small">Flows present</div>
           <div class="archive-meta-value">${escapeHtml(flowsPresent)}</div>
-        </div>
-        <div class="archive-meta-row">
-          <div class="archive-meta-label muted small">Flows DB present</div>
-          <div class="archive-meta-value">${escapeHtml(flowsDbPresent)}</div>
         </div>
         <div class="archive-meta-row">
           <div class="archive-meta-label muted small">Flow run count</div>

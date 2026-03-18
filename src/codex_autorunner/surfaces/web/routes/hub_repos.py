@@ -1092,6 +1092,7 @@ def build_hub_repo_routes(
             force_attestation=payload.force_attestation,
             force_archive=payload.force_archive,
             archive_note=payload.archive_note,
+            archive_profile=payload.archive_profile,
         )
 
     @router.post("/hub/jobs/worktrees/cleanup", response_model=HubJobResponse)
@@ -1103,6 +1104,7 @@ def build_hub_repo_routes(
         return await worktree.archive_worktree(
             worktree_repo_id=payload.worktree_repo_id,
             archive_note=payload.archive_note,
+            archive_profile=payload.archive_profile,
         )
 
     @router.post(
@@ -1113,6 +1115,7 @@ def build_hub_repo_routes(
         return await worktree.archive_worktree_state(
             worktree_repo_id=payload.worktree_repo_id,
             archive_note=payload.archive_note,
+            archive_profile=payload.archive_profile,
         )
 
     @router.post(
@@ -1125,6 +1128,7 @@ def build_hub_repo_routes(
                 context.supervisor.archive_repo_state,
                 repo_id=payload.repo_id,
                 archive_note=payload.archive_note,
+                archive_profile=payload.archive_profile,
             )
             enricher.invalidate_runtime_caches()
             return result

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from dataclasses import dataclass
@@ -10,12 +11,19 @@ from typing import Iterable, Literal, Optional
 
 from ..manifest import load_manifest
 from ..workspace import workspace_id_for_path
+from .archive_retention import (
+    WorktreeArchiveRetentionPolicy,
+    prune_worktree_archive_root,
+)
 from .git_utils import git_branch, git_head_sha
 from .state import load_state, now_iso
 from .utils import atomic_write
 
 ArchiveStatus = Literal["complete", "partial", "failed"]
 ArchiveMode = Literal["copy", "move"]
+ArchiveProfile = Literal["portable", "full"]
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONTEXTSPACE_DOCS = frozenset({"active_context.md", "decisions.md", "spec.md"})
 DEFAULT_TICKETS_FILES = frozenset({"AGENTS.md"})
@@ -356,9 +364,22 @@ def _car_state_archive_entries(
     source_root: Path,
     snapshot_root: Path,
     dirty_paths: Iterable[str],
+    *,
+    profile: ArchiveProfile = "portable",
 ) -> list[ArchiveEntrySpec]:
+    if profile not in {"portable", "full"}:
+        raise ValueError(f"Unsupported archive profile: {profile}")
     entries: list[ArchiveEntrySpec] = []
     selected = set(dirty_paths)
+    if profile == "portable":
+        selected &= {
+            "tickets",
+            "contextspace",
+            "workspace",
+            "runs",
+            "flows",
+            "github_context",
+        }
     if "tickets" in selected:
         entries.append(
             ArchiveEntrySpec(
@@ -367,7 +388,7 @@ def _car_state_archive_entries(
                 dest=snapshot_root / "tickets",
             )
         )
-    if "contextspace" in selected:
+    if "contextspace" in selected or "workspace" in selected:
         entries.append(
             ArchiveEntrySpec(
                 label="contextspace",
@@ -463,14 +484,14 @@ def _car_state_archive_entries(
                 dest=snapshot_root / "state" / "lock",
             )
         )
-    if "workspace" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="workspace",
-                source=source_root / "workspace",
-                dest=snapshot_root / "workspace",
-            )
+    entries.append(
+        ArchiveEntrySpec(
+            label="config.yml",
+            source=source_root / "config.yml",
+            dest=snapshot_root / "config" / "config.yml",
+            required=False,
         )
+    )
     return entries
 
 
@@ -581,10 +602,11 @@ def build_common_car_archive_entries(
     dest_root: Path,
     *,
     include_contextspace: bool = True,
-    include_flow_store: bool = True,
-    include_repo_state: bool = True,
-    include_logs: bool = True,
-    include_github_context: bool = True,
+    include_flow_store: bool = False,
+    include_config: bool = False,
+    include_runtime_state: bool = False,
+    include_logs: bool = False,
+    include_github_context: bool = False,
 ) -> list[ArchiveEntrySpec]:
     entries: list[ArchiveEntrySpec] = []
     if include_contextspace:
@@ -603,14 +625,17 @@ def build_common_car_archive_entries(
                 dest=dest_root / "flows.db",
             )
         )
-    if include_repo_state:
+    if include_config:
+        entries.append(
+            ArchiveEntrySpec(
+                label="config.yml",
+                source=source_root / "config.yml",
+                dest=dest_root / "config" / "config.yml",
+            )
+        )
+    if include_runtime_state:
         entries.extend(
             [
-                ArchiveEntrySpec(
-                    label="config.yml",
-                    source=source_root / "config.yml",
-                    dest=dest_root / "config" / "config.yml",
-                ),
                 ArchiveEntrySpec(
                     label="state.sqlite3",
                     source=source_root / "state.sqlite3",
@@ -780,6 +805,8 @@ def archive_worktree_snapshot(
     snapshot_id: Optional[str] = None,
     head_sha: Optional[str] = None,
     source_path: Optional[Path | str] = None,
+    profile: ArchiveProfile = "portable",
+    retention_policy: Optional[WorktreeArchiveRetentionPolicy] = None,
 ) -> ArchiveResult:
     base_repo_root = base_repo_root.resolve()
     worktree_repo_root = worktree_repo_root.resolve()
@@ -800,7 +827,17 @@ def archive_worktree_snapshot(
     created_at = now_iso()
     meta_path = snapshot_root / "META.json"
     summary: dict[str, object] = {}
-    entries = build_common_car_archive_entries(source_root, snapshot_root)
+    if profile not in {"portable", "full"}:
+        raise ValueError(f"Unsupported archive profile: {profile}")
+    entries = build_common_car_archive_entries(
+        source_root,
+        snapshot_root,
+        include_flow_store=profile == "full",
+        include_config=True,
+        include_runtime_state=profile == "full",
+        include_logs=profile == "full",
+        include_github_context=True,
+    )
     entries.extend(
         [
             ArchiveEntrySpec(
@@ -851,6 +888,19 @@ def archive_worktree_snapshot(
             note=note,
         )
         atomic_write(meta_path, json.dumps(meta, indent=2) + "\n")
+        if retention_policy is not None:
+            try:
+                prune_worktree_archive_root(
+                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    policy=retention_policy,
+                    preserve_paths=(snapshot_root,),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to prune worktree archives under %s",
+                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    exc_info=True,
+                )
     except Exception as exc:
         summary = {
             "file_count": 0,
@@ -906,9 +956,13 @@ def archive_workspace_car_state(
     snapshot_id: Optional[str] = None,
     head_sha: Optional[str] = None,
     source_path: Optional[Path | str] = None,
+    profile: ArchiveProfile = "portable",
+    retention_policy: Optional[WorktreeArchiveRetentionPolicy] = None,
 ) -> ArchivedCarStateResult:
     base_repo_root = base_repo_root.resolve()
     worktree_repo_root = worktree_repo_root.resolve()
+    if profile not in {"portable", "full"}:
+        raise ValueError(f"Unsupported archive profile: {profile}")
     dirty_paths = dirty_car_state_paths(worktree_repo_root)
     if not dirty_paths:
         raise ValueError("No CAR state to archive. Workspace is already clean.")
@@ -929,7 +983,12 @@ def archive_workspace_car_state(
     source_root = worktree_repo_root / ".codex-autorunner"
     created_at = now_iso()
     meta_path = snapshot_root / "META.json"
-    entries = _car_state_archive_entries(source_root, snapshot_root, dirty_paths)
+    entries = _car_state_archive_entries(
+        source_root,
+        snapshot_root,
+        dirty_paths,
+        profile=profile,
+    )
 
     try:
         execution = execute_archive_entries(entries, worktree_root=worktree_repo_root)
@@ -963,6 +1022,19 @@ def archive_workspace_car_state(
             note=note,
         )
         atomic_write(meta_path, json.dumps(meta, indent=2) + "\n")
+        if retention_policy is not None:
+            try:
+                prune_worktree_archive_root(
+                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    policy=retention_policy,
+                    preserve_paths=(snapshot_root,),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to prune worktree archives under %s",
+                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    exc_info=True,
+                )
     except Exception as exc:
         failed_summary: dict[str, object] = {
             "file_count": 0,

@@ -675,6 +675,7 @@ REPO_SHARED_KEYS = {
     "server",
     "app_server",
     "opencode",
+    "pma",
     "telegram_bot",
     "discord_bot",
     "terminal",
@@ -715,6 +716,13 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         # Worktree cleanup policies
         "cleanup_require_archive": True,
         "cleanup_auto_delete_orphans": False,
+        "worktree_archive_profile": "portable",
+        "worktree_archive_max_snapshots_per_repo": 10,
+        "worktree_archive_max_age_days": 30,
+        "worktree_archive_max_total_bytes": 1_000_000_000,
+        "run_archive_max_entries": 200,
+        "run_archive_max_age_days": 30,
+        "run_archive_max_total_bytes": 1_000_000_000,
     },
     "templates": {
         "enabled": True,
@@ -893,6 +901,13 @@ class PmaConfig:
     # Worktree cleanup policies
     cleanup_require_archive: bool = True
     cleanup_auto_delete_orphans: bool = False
+    worktree_archive_profile: str = "portable"
+    worktree_archive_max_snapshots_per_repo: int = 10
+    worktree_archive_max_age_days: int = 30
+    worktree_archive_max_total_bytes: int = 1_000_000_000
+    run_archive_max_entries: int = 200
+    run_archive_max_age_days: int = 30
+    run_archive_max_total_bytes: int = 1_000_000_000
 
 
 @dataclasses.dataclass
@@ -1004,6 +1019,7 @@ class RepoConfig:
     update_linux_service_names: Dict[str, str]
     app_server: AppServerConfig
     opencode: OpenCodeConfig
+    pma: PmaConfig
     usage: UsageConfig
     server_host: str
     server_port: int
@@ -1929,6 +1945,41 @@ def _parse_pma_config(
             defaults.get("cleanup_auto_delete_orphans", False),
         )
     )
+    worktree_archive_profile = (
+        str(
+            cfg.get(
+                "worktree_archive_profile",
+                defaults.get("worktree_archive_profile", "portable"),
+            )
+        )
+        .strip()
+        .lower()
+    )
+    if worktree_archive_profile not in {"portable", "full"}:
+        worktree_archive_profile = "portable"
+
+    def _parse_nonnegative_int(name: str, fallback: int) -> int:
+        raw = cfg.get(name, defaults.get(name, fallback))
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = fallback
+        return max(0, value)
+
+    worktree_archive_max_snapshots_per_repo = _parse_nonnegative_int(
+        "worktree_archive_max_snapshots_per_repo", 10
+    )
+    worktree_archive_max_age_days = _parse_nonnegative_int(
+        "worktree_archive_max_age_days", 30
+    )
+    worktree_archive_max_total_bytes = _parse_nonnegative_int(
+        "worktree_archive_max_total_bytes", 1_000_000_000
+    )
+    run_archive_max_entries = _parse_nonnegative_int("run_archive_max_entries", 200)
+    run_archive_max_age_days = _parse_nonnegative_int("run_archive_max_age_days", 30)
+    run_archive_max_total_bytes = _parse_nonnegative_int(
+        "run_archive_max_total_bytes", 1_000_000_000
+    )
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
@@ -1949,6 +2000,13 @@ def _parse_pma_config(
         reactive_origin_blocklist=reactive_origin_blocklist,
         cleanup_require_archive=cleanup_require_archive,
         cleanup_auto_delete_orphans=cleanup_auto_delete_orphans,
+        worktree_archive_profile=worktree_archive_profile,
+        worktree_archive_max_snapshots_per_repo=worktree_archive_max_snapshots_per_repo,
+        worktree_archive_max_age_days=worktree_archive_max_age_days,
+        worktree_archive_max_total_bytes=worktree_archive_max_total_bytes,
+        run_archive_max_entries=run_archive_max_entries,
+        run_archive_max_age_days=run_archive_max_age_days,
+        run_archive_max_total_bytes=run_archive_max_total_bytes,
     )
 
 
@@ -2443,6 +2501,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_REPO_CONFIG.get("opencode")
         ),
+        pma=_parse_pma_config(cfg.get("pma"), root, DEFAULT_HUB_CONFIG.get("pma")),
         usage=_parse_usage_config(
             cfg.get("usage"), root, DEFAULT_REPO_CONFIG.get("usage")
         ),

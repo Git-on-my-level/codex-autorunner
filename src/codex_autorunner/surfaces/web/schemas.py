@@ -181,6 +181,9 @@ class HubCleanupWorktreeRequest(Payload):
     archive_note: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
     )
+    archive_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
+    )
 
 
 class HubArchiveWorktreeRequest(Payload):
@@ -190,12 +193,18 @@ class HubArchiveWorktreeRequest(Payload):
     archive_note: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
     )
+    archive_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
+    )
 
 
 class HubArchiveRepoStateRequest(Payload):
     repo_id: str = Field(validation_alias=AliasChoices("repo_id", "repoId"))
     archive_note: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    )
+    archive_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
     )
 
 

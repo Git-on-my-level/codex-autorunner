@@ -5,7 +5,7 @@ import logging
 import random
 from contextlib import asynccontextmanager
 from io import BytesIO
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -287,7 +287,7 @@ class DiscordRestClient:
         filename: str,
         caption: Optional[str] = None,
     ) -> dict[str, Any]:
-        form_data = {
+        form_data: dict[str, Any] = {
             "files[0]": (filename, BytesIO(data)),
         }
         payload: dict[str, Any] = {}
@@ -297,9 +297,12 @@ class DiscordRestClient:
             import json
 
             form_data["payload_json"] = json.dumps(payload)
-        return await self._upload_multipart(
-            f"/channels/{channel_id}/messages",
-            form_data,
+        return cast(
+            dict[str, Any],
+            await self._upload_multipart(
+                f"/channels/{channel_id}/messages",
+                form_data,
+            ),
         )
 
     async def _upload_multipart(

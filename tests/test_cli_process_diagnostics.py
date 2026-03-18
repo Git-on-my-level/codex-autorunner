@@ -5,6 +5,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
+from codex_autorunner.core.archive_retention import ArchivePruneSummary
 from codex_autorunner.core.config import ConfigError
 from codex_autorunner.core.diagnostics.process_snapshot import (
     ProcessCategory,
@@ -136,6 +137,57 @@ def test_cleanup_processes_force_requires_attestation(repo: Path) -> None:
     assert result.exit_code == 1, result.output
     error_text = result.output or str(result.exception)
     assert FORCE_ATTESTATION_REQUIRED_ERROR in error_text
+
+
+def test_cleanup_archives_uses_repo_retention_policy(monkeypatch, repo: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_prune_worktrees(path: Path, *, policy, preserve_paths=(), dry_run=False):
+        captured["worktrees_path"] = path
+        captured["worktrees_policy"] = policy
+        captured["worktrees_dry_run"] = dry_run
+        return ArchivePruneSummary(
+            kept=4, pruned=1, bytes_before=100, bytes_after=40, pruned_paths=()
+        )
+
+    def _fake_prune_runs(path: Path, *, policy, preserve_paths=(), dry_run=False):
+        captured["runs_path"] = path
+        captured["runs_policy"] = policy
+        captured["runs_dry_run"] = dry_run
+        return ArchivePruneSummary(
+            kept=9, pruned=2, bytes_before=200, bytes_after=60, pruned_paths=()
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_worktree_archive_root",
+        _fake_prune_worktrees,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_run_archive_root",
+        _fake_prune_runs,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "cleanup",
+            "archives",
+            "--repo",
+            str(repo),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        captured["worktrees_path"]
+        == repo / ".codex-autorunner" / "archive" / "worktrees"
+    )
+    assert captured["runs_path"] == repo / ".codex-autorunner" / "archive" / "runs"
+    assert captured["worktrees_dry_run"] is True
+    assert captured["runs_dry_run"] is True
+    assert "Dry run: worktrees:" in result.stdout
+    assert "runs:" in result.stdout
 
 
 def test_doctor_processes_skips_opencode_lifecycle_when_repo_config_missing(

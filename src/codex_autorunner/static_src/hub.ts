@@ -3322,7 +3322,7 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         ? repoId.split("--").pop()
         : repoId;
       const ok = await confirmModal(
-        `Clean up worktree "${displayName}"?\n\nCAR will archive its runtime files for later viewing in the Archive tab, then remove the worktree directory and branch.`,
+        `Clean up worktree "${displayName}"?\n\nCAR will archive a review snapshot for the Archive tab, then remove the worktree directory and branch. The default snapshot keeps tickets, contextspace, runs, flow artifacts, and lightweight metadata.`,
         { confirmText: "Archive & remove" }
       );
       if (!ok) return;
@@ -3371,7 +3371,7 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
       const displayName = repo.display_name || repoId;
       const subject = repo.kind === "worktree" ? "worktree" : "repo";
       const ok = await confirmModal(
-        `Archive ${subject} state "${displayName}"?\n\nCAR will archive runs, dispatches, tickets, contextspace, logs, and other dirty runtime state for later viewing in the Archive tab. Git state is not touched, and active chat bindings remain available for fresh work.`,
+        `Archive ${subject} state "${displayName}"?\n\nCAR will archive reviewable runtime artifacts for later viewing in the Archive tab before resetting local CAR state. Git state is not touched, and active chat bindings remain available for fresh work.`,
         { confirmText: "Archive state" }
       );
       if (!ok) return;

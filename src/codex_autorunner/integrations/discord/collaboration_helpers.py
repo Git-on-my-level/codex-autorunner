@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Optional
+from typing import Optional, cast
 
 from ..chat.collaboration_policy import (
     CollaborationEvaluationContext,
@@ -27,10 +27,13 @@ def evaluate_collaboration_summary(
 ) -> tuple[object, object]:
     evaluator = getattr(service, "_evaluate_channel_collaboration_summary", None)
     if callable(evaluator):
-        return evaluator(
-            channel_id=channel_id,
-            guild_id=guild_id,
-            user_id=user_id,
+        return cast(
+            tuple[object, object],
+            evaluator(
+                channel_id=channel_id,
+                guild_id=guild_id,
+                user_id=user_id,
+            ),
         )
 
     policy = getattr(service, "_collaboration_policy", None)

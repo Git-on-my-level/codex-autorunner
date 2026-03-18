@@ -204,6 +204,11 @@ def register_worktree_commands(
         archive_note: Optional[str] = typer.Option(
             None, "--archive-note", help="Optional archive note"
         ),
+        archive_profile: Optional[str] = typer.Option(
+            None,
+            "--archive-profile",
+            help="Override the configured archive profile for the cleanup snapshot (portable or full).",
+        ),
     ):
         """Cleanup a worktree repo and optionally delete branches.
 
@@ -222,6 +227,7 @@ def register_worktree_commands(
                 "force_archive": force_archive,
                 "archive_note": archive_note,
                 "force": force,
+                "archive_profile": archive_profile,
             }
             force_attestation_payload: Optional[dict[str, str]] = None
             if force or force_archive:
@@ -263,6 +269,11 @@ def register_worktree_commands(
         archive_note: Optional[str] = typer.Option(
             None, "--archive-note", help="Optional archive note"
         ),
+        archive_profile: Optional[str] = typer.Option(
+            None,
+            "--archive-profile",
+            help="Override the configured archive profile for the cleanup snapshot (portable or full).",
+        ),
     ):
         """Archive and cleanup a worktree (canonical lifecycle command).
 
@@ -281,6 +292,7 @@ def register_worktree_commands(
                 "force_archive": force_archive,
                 "archive_note": archive_note,
                 "force": force,
+                "archive_profile": archive_profile,
             }
             force_attestation_payload: Optional[dict[str, str]] = None
             if force or force_archive:

@@ -193,6 +193,7 @@ def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> Non
         force_archive=False,
         archive_note=None,
         force=False,
+        archive_profile=None,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["delete_branch"] = delete_branch
@@ -201,6 +202,7 @@ def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> Non
         calls["force_archive"] = force_archive
         calls["archive_note"] = archive_note
         calls["force"] = force
+        calls["archive_profile"] = archive_profile
 
     monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
 
@@ -221,6 +223,7 @@ def test_cli_hub_worktree_cleanup_calls_supervisor(tmp_path, monkeypatch) -> Non
     assert calls["worktree_repo_id"] == "wt-1"
     assert calls["archive"] is False
     assert calls["force"] is False
+    assert calls["archive_profile"] is None
 
 
 def test_cli_hub_worktree_cleanup_archives_by_default(tmp_path, monkeypatch) -> None:
@@ -240,10 +243,12 @@ def test_cli_hub_worktree_cleanup_archives_by_default(tmp_path, monkeypatch) -> 
         force_archive=False,
         archive_note=None,
         force=False,
+        archive_profile=None,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["archive"] = archive
         calls["force"] = force
+        calls["archive_profile"] = archive_profile
 
     monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
 
@@ -263,6 +268,7 @@ def test_cli_hub_worktree_cleanup_archives_by_default(tmp_path, monkeypatch) -> 
     assert calls["worktree_repo_id"] == "wt-1"
     assert calls["archive"] is True
     assert calls["force"] is False
+    assert calls["archive_profile"] is None
 
 
 def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> None:
@@ -283,10 +289,12 @@ def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> 
         archive_note=None,
         force=False,
         force_attestation=None,
+        archive_profile=None,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["force"] = force
         calls["force_attestation"] = force_attestation
+        calls["archive_profile"] = archive_profile
 
     monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
 
@@ -313,6 +321,7 @@ def test_cli_hub_worktree_cleanup_forwards_force_flag(tmp_path, monkeypatch) -> 
         "user_request": "cleanup active worktree",
         "target_scope": "hub.worktree.cleanup:wt-1",
     }
+    assert calls["archive_profile"] is None
 
 
 def test_cli_hub_worktree_cleanup_force_requires_attestation(tmp_path) -> None:
@@ -354,6 +363,7 @@ def test_cli_hub_worktree_cleanup_prints_docker_cleanup_status(
         force_archive=False,
         archive_note=None,
         force=False,
+        archive_profile=None,
     ):
         _ = (
             self,
@@ -364,6 +374,7 @@ def test_cli_hub_worktree_cleanup_prints_docker_cleanup_status(
             force_archive,
             archive_note,
             force,
+            archive_profile,
         )
         return {
             "status": "ok",
@@ -414,6 +425,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
         archive_note=None,
         force=False,
         force_attestation=None,
+        archive_profile=None,
     ):
         calls["worktree_repo_id"] = worktree_repo_id
         calls["delete_branch"] = delete_branch
@@ -423,6 +435,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
         calls["archive_note"] = archive_note
         calls["force"] = force
         calls["force_attestation"] = force_attestation
+        calls["archive_profile"] = archive_profile
         calls["has_backend_orchestrator_builder"] = (
             self._backend_orchestrator_builder is not None
         )
@@ -457,6 +470,7 @@ def test_cli_hub_worktree_archive_uses_cleanup_with_archive(
     assert calls["force_archive"] is True
     assert calls["archive_note"] == "save state"
     assert calls["force"] is True
+    assert calls["archive_profile"] is None
     assert calls["force_attestation"] == {
         "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
         "user_request": "archive forced worktree",
@@ -482,6 +496,7 @@ def test_cli_hub_worktree_archive_surfaces_failure_reason_cleanly(
         force_archive=False,
         archive_note=None,
         force=False,
+        archive_profile=None,
     ):
         raise ValueError(
             f"Worktree {worktree_repo_id} has uncommitted changes; commit or stash before archiving"
@@ -507,6 +522,39 @@ def test_cli_hub_worktree_archive_surfaces_failure_reason_cleanly(
         in result.output
     )
     assert "Traceback" not in result.output
+
+
+def test_cli_hub_worktree_archive_forwards_archive_profile(
+    tmp_path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    calls: dict[str, object] = {}
+
+    def _fake_cleanup(self, **kwargs):
+        calls.update(kwargs)
+
+    monkeypatch.setattr(HubSupervisor, "cleanup_worktree", _fake_cleanup)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "hub",
+            "worktree",
+            "archive",
+            "wt-1",
+            "--path",
+            str(hub_root),
+            "--archive-profile",
+            "full",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls["archive_profile"] == "full"
 
 
 def test_cli_hub_worktree_setup_posts_commands_payload(tmp_path, monkeypatch) -> None:
