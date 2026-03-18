@@ -9,6 +9,7 @@ Ensure tests always import the in-repo code.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -26,12 +27,11 @@ import yaml
 DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
 _OPENCODE_PROCESS_KIND = "opencode"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_PYTEST_RUNTIME_ROOT = _REPO_ROOT / ".codex-autorunner" / "pytest-runtime"
-_PYTEST_TEMP_ROOT = _PYTEST_RUNTIME_ROOT / "tmp"
-_PYTEST_OPENCODE_STATE_ROOT = _PYTEST_RUNTIME_ROOT / "opencode-state"
-_PYTEST_RUN_TOKEN = os.environ.setdefault(
-    "CAR_PYTEST_RUN_TOKEN", f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
-)
+_PYTEST_RUNTIME_KEY = hashlib.sha1(str(_REPO_ROOT).encode("utf-8")).hexdigest()[:10]
+_PYTEST_RUNTIME_ROOT = Path("/tmp") / f"cp-{_PYTEST_RUNTIME_KEY}"
+_PYTEST_TEMP_ROOT = _PYTEST_RUNTIME_ROOT / "t"
+_PYTEST_OPENCODE_STATE_ROOT = _REPO_ROOT / ".codex-autorunner" / "pytest-opencode-state"
+_PYTEST_RUN_TOKEN = os.environ.setdefault("CAR_PYTEST_RUN_TOKEN", uuid.uuid4().hex[:8])
 os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
 
 
@@ -39,7 +39,7 @@ def _pytest_process_token() -> str:
     worker_id = os.environ.get("PYTEST_XDIST_WORKER")
     if worker_id:
         return worker_id
-    return f"pid-{os.getpid()}"
+    return f"p{os.getpid():x}"
 
 
 def _pytest_temp_env_root() -> Path:
