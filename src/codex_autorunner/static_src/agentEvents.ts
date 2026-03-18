@@ -83,6 +83,13 @@ const openCodePendingTextByMessage: Record<string, string> = {};
 let openCodePendingTextNoId = "";
 let openCodeMessageRolesSeen = false;
 
+export function resetOpenCodeEventState(): void {
+  Object.keys(openCodeMessageRoles).forEach((key) => delete openCodeMessageRoles[key]);
+  Object.keys(openCodePendingTextByMessage).forEach((key) => delete openCodePendingTextByMessage[key]);
+  openCodePendingTextNoId = "";
+  openCodeMessageRolesSeen = false;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
@@ -134,6 +141,7 @@ function extractOpenCodeDeltaText(params: PayloadParams | null | undefined): str
   if (typeof params.output === "string") return params.output;
 
   const properties = extractOpenCodeProperties(params);
+  if (typeof properties.delta === "string" && properties.delta) return properties.delta;
   const delta = asRecord(properties.delta);
   const deltaText = delta?.text;
   if (typeof deltaText === "string" && deltaText) return deltaText;
@@ -418,8 +426,8 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
         }
       }
       const parsedItemId =
-        (typeof part?.id === "string" && part.id) ||
         openCodeMessageId ||
+        (typeof part?.id === "string" && part.id) ||
         itemId;
       const event: AgentEvent = {
         id: (payload as EventPayload)?.id || `${Date.now()}`,

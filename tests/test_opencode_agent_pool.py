@@ -276,7 +276,7 @@ async def test_run_turn_mirrors_opencode_text_parts_after_assistant_role_resolut
                                     "type": "text",
                                     "text": "hello",
                                 },
-                                "delta": {"text": "hello"},
+                                "delta": "hello",
                             }
                         },
                     ),
@@ -337,7 +337,7 @@ async def test_run_turn_does_not_mirror_opencode_user_text_parts(tmp_path: Path)
                                     "type": "text",
                                     "text": "user prompt",
                                 },
-                                "delta": {"text": "user prompt"},
+                                "delta": "user prompt",
                             }
                         },
                     ),

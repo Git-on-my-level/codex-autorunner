@@ -142,7 +142,12 @@ def _runtime_message_delta(params: dict[str, Any]) -> Optional[str]:
                 if text:
                     return text
     properties = _runtime_message_properties(params)
-    delta = _coerce_dict(properties.get("delta"))
+    delta_raw = properties.get("delta")
+    if isinstance(delta_raw, str):
+        text = delta_raw.strip()
+        if text:
+            return text
+    delta = _coerce_dict(delta_raw)
     delta_text = delta.get("text")
     if isinstance(delta_text, str):
         text = delta_text.strip()

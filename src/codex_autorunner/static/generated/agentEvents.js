@@ -7,6 +7,12 @@ const openCodeMessageRoles = {};
 const openCodePendingTextByMessage = {};
 let openCodePendingTextNoId = "";
 let openCodeMessageRolesSeen = false;
+export function resetOpenCodeEventState() {
+    Object.keys(openCodeMessageRoles).forEach((key) => delete openCodeMessageRoles[key]);
+    Object.keys(openCodePendingTextByMessage).forEach((key) => delete openCodePendingTextByMessage[key]);
+    openCodePendingTextNoId = "";
+    openCodeMessageRolesSeen = false;
+}
 function asRecord(value) {
     return value && typeof value === "object" ? value : null;
 }
@@ -59,6 +65,8 @@ function extractOpenCodeDeltaText(params) {
     if (typeof params.output === "string")
         return params.output;
     const properties = extractOpenCodeProperties(params);
+    if (typeof properties.delta === "string" && properties.delta)
+        return properties.delta;
     const delta = asRecord(properties.delta);
     const deltaText = delta?.text;
     if (typeof deltaText === "string" && deltaText)
@@ -335,8 +343,8 @@ export function parseAppServerEvent(payload) {
                     return null;
                 }
             }
-            const parsedItemId = (typeof part?.id === "string" && part.id) ||
-                openCodeMessageId ||
+            const parsedItemId = openCodeMessageId ||
+                (typeof part?.id === "string" && part.id) ||
                 itemId;
             const event = {
                 id: payload?.id || `${Date.now()}`,

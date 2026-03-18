@@ -1,4 +1,4 @@
-import { parseAppServerEvent, type ParsedAgentEvent, type AgentEvent } from "./agentEvents.js";
+import { parseAppServerEvent, resetOpenCodeEventState, type ParsedAgentEvent, type AgentEvent } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { saveChatHistory, loadChatHistory, type ChatStorageConfig } from "./docChatStorage.js";
 import { renderMarkdown } from "./messages.js";
@@ -236,6 +236,7 @@ export function createDocChat(config: ChatConfig): DocChatInstance {
     state.events = [];
     state.totalEvents = 0;
     state.eventItemIndex = {};
+    resetOpenCodeEventState();
   }
 
   function applyAppEvent(payload: unknown): void {

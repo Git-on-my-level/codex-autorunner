@@ -16,7 +16,7 @@ import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
-import { parseAppServerEvent, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
+import { parseAppServerEvent, resetOpenCodeEventState, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
 import { preserveScroll } from "./preserve.js";
@@ -794,6 +794,7 @@ function clearLiveOutput(): void {
   if (outputEl) outputEl.textContent = "";
   liveOutputEvents = [];
   liveOutputEventIndex = {};
+  resetOpenCodeEventState();
   scheduleLiveOutputRender();
 }
 

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-const { parseAppServerEvent } = await import(
+const { parseAppServerEvent, resetOpenCodeEventState } = await import(
   "../../src/codex_autorunner/static/generated/agentEvents.js"
 );
 
 test("buffers OpenCode assistant text parts until role resolution", () => {
+  resetOpenCodeEventState();
   const partFirst = parseAppServerEvent({
     id: "part-1",
     received_at: 1000,
@@ -19,9 +20,7 @@ test("buffers OpenCode assistant text parts until role resolution", () => {
             type: "text",
             text: "Working through the ticket",
           },
-          delta: {
-            text: "Working through the ticket",
-          },
+          delta: "Working through the ticket",
         },
       },
     },
@@ -50,9 +49,33 @@ test("buffers OpenCode assistant text parts until role resolution", () => {
   assert.equal(roleUpdate.event.title, "Agent");
   assert.equal(roleUpdate.event.summary, "Working through the ticket");
   assert.equal(roleUpdate.event.itemId, "assistant-1");
+
+  const continued = parseAppServerEvent({
+    id: "part-2",
+    received_at: 1002,
+    message: {
+      method: "message.part.updated",
+      params: {
+        properties: {
+          part: {
+            id: "part-text-2",
+            messageID: "assistant-1",
+            type: "text",
+            text: "Working through the ticket still",
+          },
+          delta: " still",
+        },
+      },
+    },
+  });
+
+  assert.ok(continued);
+  assert.equal(continued.event.itemId, "assistant-1");
+  assert.equal(continued.mergeStrategy, "append");
 });
 
 test("ignores OpenCode user text parts after role resolution", () => {
+  resetOpenCodeEventState();
   parseAppServerEvent({
     id: "role-user-1",
     received_at: 1000,
@@ -82,9 +105,7 @@ test("ignores OpenCode user text parts after role resolution", () => {
             type: "text",
             text: "Please fix this",
           },
-          delta: {
-            text: "Please fix this",
-          },
+          delta: "Please fix this",
         },
       },
     },
@@ -94,6 +115,7 @@ test("ignores OpenCode user text parts after role resolution", () => {
 });
 
 test("parses OpenCode reasoning and tool parts", () => {
+  resetOpenCodeEventState();
   const reasoning = parseAppServerEvent({
     id: "reasoning-1",
     received_at: 1002,
@@ -105,9 +127,7 @@ test("parses OpenCode reasoning and tool parts", () => {
             id: "reason-1",
             type: "reasoning",
           },
-          delta: {
-            text: "Tracing the event pipeline",
-          },
+          delta: "Tracing the event pipeline",
         },
       },
     },
