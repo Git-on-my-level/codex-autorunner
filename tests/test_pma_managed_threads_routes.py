@@ -514,6 +514,52 @@ def test_create_managed_thread_respects_config_disabled_default_followup(
     assert subscriptions == []
 
 
+def test_create_managed_thread_with_explicit_notify_lane_requires_subscription(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    class PartialAutomationStore:
+        def create_subscription(self) -> None:
+            return None
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: PartialAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "notify_lane": "pma:lane-next",
+            },
+        )
+
+    assert create_resp.status_code == 503
+
+
+def test_create_managed_thread_default_followup_ignores_partial_automation_store(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    class PartialAutomationStore:
+        def create_subscription(self) -> None:
+            return None
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: PartialAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+
+    assert create_resp.status_code == 200
+    payload = create_resp.json()
+    assert "notification" not in payload
+
+
 def test_managed_thread_routes_respect_pma_enabled_flag(hub_env) -> None:
     _disable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

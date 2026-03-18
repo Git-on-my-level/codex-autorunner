@@ -346,6 +346,12 @@ async def register_managed_thread_terminal_notify(
         if required:
             raise
         return None
+    except TypeError as exc:
+        if required:
+            raise HTTPException(
+                status_code=503, detail="Automation action unavailable"
+            ) from exc
+        return None
     if isinstance(created, dict) and "subscription" in created:
         return created
     return {"subscription": created}
@@ -560,6 +566,7 @@ def build_managed_thread_crud_routes(
     ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
         defaults = _get_pma_config(request)
+        payload_fields = set(getattr(payload, "model_fields_set", set()))
         agent_id = normalize_optional_text(payload.agent)
         resource_kind, resource_id, resolved_repo_id = _normalize_resource_owner(
             resource_kind=payload.resource_kind,
@@ -666,6 +673,10 @@ def build_managed_thread_crud_routes(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         notification: Optional[dict[str, Any]] = None
         if notify_on == "terminal":
+            explicit_notify_requested = any(
+                field in payload_fields
+                for field in ("notify_on", "notify_lane", "notify_once")
+            )
             notification = await register_managed_thread_terminal_notify(
                 request,
                 managed_thread_id=thread.thread_target_id,
@@ -677,7 +688,7 @@ def build_managed_thread_crud_routes(
                     else None
                 ),
                 get_runtime_state=get_runtime_state,
-                required=payload.notify_on == "terminal" or terminal_followup is True,
+                required=explicit_notify_requested or terminal_followup is True,
             )
         response: dict[str, Any] = {"thread": _serialize_thread_target(thread)}
         if notification is not None:
