@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi import HTTPException
+from types import SimpleNamespace
 
 from codex_autorunner.surfaces.web.schemas import PmaManagedThreadCreateRequest
 from codex_autorunner.surfaces.web.services.pma.common import (
@@ -10,6 +11,8 @@ from codex_autorunner.surfaces.web.services.pma.common import (
     pma_config_from_raw,
 )
 from codex_autorunner.surfaces.web.services.pma.managed_thread_followup import (
+    ManagedThreadAutomationClient,
+    ManagedThreadAutomationUnavailable,
     resolve_managed_thread_followup_policy,
 )
 
@@ -164,3 +167,65 @@ def test_resolve_managed_thread_followup_policy_rejects_conflicting_opt_out() ->
 
     assert exc_info.value.status_code == 400
     assert "terminal_followup=false" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_managed_thread_automation_client_preserves_required_store_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    client = ManagedThreadAutomationClient(request, lambda: None)
+
+    async def _fake_get_store(_request, _runtime_state, *, required):
+        assert required is True
+        return object()
+
+    async def _fake_create(_store, _method_names, _payload):
+        raise HTTPException(status_code=409, detail="lane already subscribed")
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        _fake_get_store,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.call_store_create_with_payload",
+        _fake_create,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await client.create_terminal_followup(
+            managed_thread_id="thread-1",
+            lane_id="lane-1",
+            notify_once=True,
+            idempotency_key=None,
+            required=True,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "lane already subscribed"
+
+
+@pytest.mark.asyncio
+async def test_managed_thread_automation_client_normalizes_required_unavailable_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    client = ManagedThreadAutomationClient(request, lambda: None)
+
+    async def _fake_get_store(_request, _runtime_state, *, required):
+        assert required is True
+        raise HTTPException(status_code=503, detail="Automation action unavailable")
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        _fake_get_store,
+    )
+
+    with pytest.raises(ManagedThreadAutomationUnavailable):
+        await client.create_terminal_followup(
+            managed_thread_id="thread-1",
+            lane_id="lane-1",
+            notify_once=True,
+            idempotency_key=None,
+            required=True,
+        )

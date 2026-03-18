@@ -124,9 +124,11 @@ class ManagedThreadAutomationClient:
         except HTTPException as exc:
             if not required:
                 return None
-            raise ManagedThreadAutomationUnavailable(
-                "Automation action unavailable"
-            ) from exc
+            if exc.status_code in {503}:
+                raise ManagedThreadAutomationUnavailable(
+                    "Automation action unavailable"
+                ) from exc
+            raise
         except TypeError as exc:
             if not required:
                 return None
