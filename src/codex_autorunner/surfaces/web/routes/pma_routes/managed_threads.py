@@ -26,17 +26,17 @@ from ...schemas import (
     PmaManagedThreadCreateRequest,
     PmaManagedThreadResumeRequest,
 )
+from ...services.pma.managed_thread_followup import (
+    ManagedThreadAutomationClient,
+    ManagedThreadAutomationUnavailable,
+    resolve_managed_thread_followup_policy,
+)
 from .automation_adapter import (
     call_store_action_with_id,
     call_store_create_with_payload,
     call_store_list,
     get_automation_store,
     normalize_optional_text,
-)
-from ...services.pma.managed_thread_followup import (
-    ManagedThreadAutomationClient,
-    ManagedThreadAutomationUnavailable,
-    resolve_managed_thread_followup_policy,
 )
 
 if TYPE_CHECKING:

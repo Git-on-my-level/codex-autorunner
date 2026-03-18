@@ -5,12 +5,12 @@ from typing import Any, Literal, Optional
 
 from fastapi import HTTPException, Request
 
-from ...schemas import PmaManagedThreadCreateRequest
-from ...services.pma.common import normalize_optional_text
 from ...routes.pma_routes.automation_adapter import (
     call_store_create_with_payload,
     get_automation_store,
 )
+from ...schemas import PmaManagedThreadCreateRequest
+from ...services.pma.common import normalize_optional_text
 
 
 @dataclass(frozen=True)
