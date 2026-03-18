@@ -1186,8 +1186,14 @@ class HubChannelService:
                                 if isinstance(surface_binding, dict)
                                 else None
                             )
+                            binding_mode = (
+                                str(surface_binding.get("mode") or "").strip().lower()
+                                if isinstance(surface_binding, dict)
+                                else ""
+                            )
                             if (
-                                isinstance(thread_target_id, str)
+                                binding_mode == "pma"
+                                and isinstance(thread_target_id, str)
                                 and thread_target_id.strip()
                             ):
                                 managed_thread_id = thread_target_id.strip()
@@ -1210,7 +1216,6 @@ class HubChannelService:
                             provenance = row.get("provenance")
                             if isinstance(provenance, dict):
                                 provenance["managed_thread_id"] = managed_thread_id
-                            represented_managed_thread_ids.add(managed_thread_id)
                     elif source in {"discord", "telegram"}:
                         row["provenance"] = {
                             "source": source,
@@ -1239,6 +1244,13 @@ class HubChannelService:
                                 active_thread_id = resolved
                     if isinstance(active_thread_id, str) and active_thread_id:
                         row["active_thread_id"] = active_thread_id
+                        managed_thread_id = (
+                            row.get("provenance", {}).get("managed_thread_id")
+                            if isinstance(row.get("provenance"), dict)
+                            else None
+                        )
+                        if isinstance(managed_thread_id, str) and managed_thread_id:
+                            represented_managed_thread_ids.add(managed_thread_id)
 
                     run_data: dict[str, Any] = {}
                     if isinstance(workspace_path, str) and workspace_path:

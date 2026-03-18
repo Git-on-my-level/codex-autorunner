@@ -1182,6 +1182,138 @@ def test_hub_channel_directory_route_includes_pma_managed_threads(
     assert filtered_rows[0]["key"] == pma_key
 
 
+def test_hub_channel_directory_route_ignores_repo_mode_binding_for_pma_rows(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("work")
+
+    store = ChannelDirectoryStore(hub_root)
+    store.record_seen("discord", "chan-pma", None, "PMA / #ops", {})
+
+    _write_discord_binding_rows(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-pma",
+                "guild_id": None,
+                "workspace_path": str(repo.path),
+                "repo_id": "work",
+                "pma_enabled": 1,
+                "agent": "opencode",
+                "updated_at": "2026-01-01T00:00:02Z",
+            }
+        ],
+    )
+    _write_app_server_threads(
+        repo.path / ".codex-autorunner" / "app_server_threads.json",
+        threads={PMA_OPENCODE_KEY: "discord-pma-thread"},
+    )
+
+    pma_store = PmaThreadStore(hub_root)
+    stale_repo_thread = pma_store.create_thread(
+        "opencode",
+        repo.path,
+        repo_id="work",
+        name="repo-thread",
+    )
+    live_pma_thread = pma_store.create_thread(
+        "opencode",
+        repo.path,
+        repo_id="work",
+        name="discord:chan-pma",
+    )
+    OrchestrationBindingStore(hub_root).upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-pma",
+        thread_target_id=stale_repo_thread["managed_thread_id"],
+        agent_id="opencode",
+        repo_id="work",
+        mode="repo",
+        metadata={"channel_id": "chan-pma", "pma_enabled": False},
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/chat/channels")
+    assert response.status_code == 200
+    rows = {entry["key"]: entry for entry in response.json()["entries"]}
+
+    channel_row = rows["discord:chan-pma"]
+    assert channel_row["active_thread_id"] == "discord-pma-thread"
+    assert channel_row["source"] == "pma_thread"
+    assert (
+        channel_row["provenance"]["managed_thread_id"]
+        == live_pma_thread["managed_thread_id"]
+    )
+    assert (
+        channel_row["provenance"]["managed_thread_id"]
+        != stale_repo_thread["managed_thread_id"]
+    )
+
+
+def test_hub_channel_directory_route_keeps_standalone_pending_pma_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("work")
+
+    store = ChannelDirectoryStore(hub_root)
+    store.record_seen("discord", "chan-pma-pending", None, "PMA / #pending", {})
+
+    _write_discord_binding_rows(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-pma-pending",
+                "guild_id": None,
+                "workspace_path": str(repo.path),
+                "repo_id": "work",
+                "pma_enabled": 1,
+                "agent": "opencode",
+                "updated_at": "2026-01-01T00:00:02Z",
+            }
+        ],
+    )
+
+    pma_thread = PmaThreadStore(hub_root).create_thread(
+        "opencode",
+        repo.path,
+        repo_id="work",
+        name="discord:chan-pma-pending",
+    )
+    OrchestrationBindingStore(hub_root).upsert_binding(
+        surface_kind="discord",
+        surface_key="chan-pma-pending",
+        thread_target_id=pma_thread["managed_thread_id"],
+        agent_id="opencode",
+        repo_id="work",
+        mode="pma",
+        metadata={"channel_id": "chan-pma-pending", "pma_enabled": True},
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/chat/channels")
+    assert response.status_code == 200
+    rows = {entry["key"]: entry for entry in response.json()["entries"]}
+
+    channel_row = rows["discord:chan-pma-pending"]
+    assert channel_row["source"] == "pma_thread"
+    assert channel_row.get("active_thread_id") is None
+    assert channel_row["channel_status"] == "clean"
+    assert (
+        channel_row["provenance"]["managed_thread_id"]
+        == pma_thread["managed_thread_id"]
+    )
+
+    standalone_key = f"pma_thread:{pma_thread['managed_thread_id']}"
+    assert standalone_key in rows
+    standalone_row = rows[standalone_key]
+    assert standalone_row["source"] == "pma_thread"
+    assert standalone_row["active_thread_id"] == pma_thread["managed_thread_id"]
+
+
 def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     index_html = (
