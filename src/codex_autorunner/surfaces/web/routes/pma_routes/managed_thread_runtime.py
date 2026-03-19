@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -24,6 +25,10 @@ from .....core.chat_bindings import (
 from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
 from .....core.orchestration import MessageRequest
 from .....core.orchestration.bindings import OrchestrationBindingStore
+from .....core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_raw_event,
+)
 from .....core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
@@ -34,6 +39,7 @@ from .....core.orchestration.runtime_threads import (
     begin_runtime_thread_execution,
 )
 from .....core.orchestration.service import BusyInterruptFailedError
+from .....core.orchestration.turn_timeline import persist_turn_timeline
 from .....core.pma_context import format_pma_discoverability_preamble
 from .....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
@@ -41,6 +47,7 @@ from .....core.pma_thread_store import (
     PmaThreadStore,
 )
 from .....core.pma_transcripts import PmaTranscriptStore
+from .....core.ports.run_event import Completed, Failed, RunEvent
 from .....core.time_utils import now_iso
 from .....integrations.discord.rendering import (
     chunk_discord_message,
@@ -192,6 +199,67 @@ def _interrupt_failure_payload(
         "error": detail,
         **delivery_payload,
     }
+
+
+def _build_managed_thread_turn_metadata(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    thread_row: dict[str, Any],
+    backend_thread_id: str,
+    backend_turn_id: Optional[str],
+    workspace_root: Optional[Path],
+    model: Optional[str],
+    reasoning: Optional[str],
+    status: str,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "repo_id": thread_row.get("repo_id"),
+        "resource_kind": thread_row.get("resource_kind"),
+        "resource_id": thread_row.get("resource_id"),
+        "agent": thread_row.get("agent"),
+        "backend_thread_id": backend_thread_id,
+        "backend_turn_id": backend_turn_id,
+        "model": model,
+        "reasoning": reasoning,
+        "status": status,
+    }
+    if workspace_root is not None:
+        metadata["workspace_root"] = str(workspace_root)
+    return metadata
+
+
+def _persist_managed_thread_timeline(
+    *,
+    hub_root: Path,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    thread_row: dict[str, Any],
+    metadata: dict[str, Any],
+    events: list[RunEvent],
+    log_status: str,
+) -> None:
+    try:
+        persist_turn_timeline(
+            hub_root,
+            execution_id=managed_turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=normalize_optional_text(thread_row.get("repo_id")),
+            resource_kind=normalize_optional_text(thread_row.get("resource_kind")),
+            resource_id=normalize_optional_text(thread_row.get("resource_id")),
+            metadata=metadata,
+            events=events,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist %s managed-thread timeline (managed_thread_id=%s, managed_turn_id=%s)",
+            log_status,
+            managed_thread_id,
+            managed_turn_id,
+        )
 
 
 async def deliver_bound_chat_assistant_output(
@@ -764,6 +832,31 @@ def build_managed_thread_runtime_routes(
                 or stored_backend_id
                 or ""
             )
+            timeline_state = RuntimeThreadRunEventState()
+            timeline_events: list[RunEvent] = []
+            stream_task: Optional[asyncio.Task[None]] = None
+            live_backend_turn_id = str(started.execution.backend_id or "")
+            if (
+                started.harness.supports("event_streaming")
+                and current_backend_thread_id
+                and live_backend_turn_id
+            ):
+
+                async def _collect_timeline() -> None:
+                    async for raw_event in started.harness.stream_events(
+                        started.workspace_root,
+                        current_backend_thread_id,
+                        live_backend_turn_id,
+                    ):
+                        timeline_events.extend(
+                            await normalize_runtime_thread_raw_event(
+                                raw_event,
+                                timeline_state,
+                                timestamp=now_iso(),
+                            )
+                        )
+
+                stream_task = asyncio.create_task(_collect_timeline())
             try:
                 outcome = await await_runtime_thread_outcome(
                     started,
@@ -784,6 +877,19 @@ def build_managed_thread_runtime_routes(
                     backend_thread_id=current_backend_thread_id,
                     backend_turn_id=started.execution.backend_id,
                 )
+            finally:
+                if stream_task is not None:
+                    stream_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await stream_task
+            if not timeline_events and outcome.raw_events:
+                for raw_event in outcome.raw_events:
+                    timeline_events.extend(
+                        await normalize_runtime_thread_raw_event(
+                            raw_event,
+                            timeline_state,
+                        )
+                    )
 
             finalized_thread = service.get_thread_target(managed_thread_id)
             resolved_backend_thread_id = (
@@ -794,22 +900,31 @@ def build_managed_thread_runtime_routes(
                 or backend_thread_id
             )
             if outcome.status == "ok":
-                transcript_metadata = {
-                    "managed_thread_id": managed_thread_id,
-                    "managed_turn_id": current_turn_id,
-                    "repo_id": current_thread_row.get("repo_id"),
-                    "resource_kind": current_thread_row.get("resource_kind"),
-                    "resource_id": current_thread_row.get("resource_id"),
-                    "workspace_root": str(started.workspace_root),
-                    "agent": current_thread_row.get("agent"),
-                    "backend_thread_id": resolved_backend_thread_id,
-                    "backend_turn_id": outcome.backend_turn_id,
-                    "model": started.request.model,
-                    "reasoning": started.request.reasoning,
-                    "status": "ok",
-                }
+                timeline_events.append(
+                    Completed(timestamp=now_iso(), final_message=outcome.assistant_text)
+                )
+                transcript_metadata = _build_managed_thread_turn_metadata(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=current_turn_id,
+                    thread_row=current_thread_row,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id,
+                    workspace_root=started.workspace_root,
+                    model=started.request.model,
+                    reasoning=started.request.reasoning,
+                    status="ok",
+                )
                 transcript_turn_id: Optional[str] = None
                 try:
+                    _persist_managed_thread_timeline(
+                        hub_root=hub_root,
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=current_turn_id,
+                        thread_row=current_thread_row,
+                        metadata=dict(transcript_metadata),
+                        events=timeline_events,
+                        log_status="ok",
+                    )
                     transcripts.write_transcript(
                         turn_id=current_turn_id,
                         metadata=transcript_metadata,
@@ -901,6 +1016,28 @@ def build_managed_thread_runtime_routes(
                 }
 
             if outcome.status == "interrupted":
+                timeline_events.append(
+                    Failed(timestamp=now_iso(), error_message="PMA chat interrupted")
+                )
+                _persist_managed_thread_timeline(
+                    hub_root=hub_root,
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=current_turn_id,
+                    thread_row=current_thread_row,
+                    metadata=_build_managed_thread_turn_metadata(
+                        managed_thread_id=managed_thread_id,
+                        managed_turn_id=current_turn_id,
+                        thread_row=current_thread_row,
+                        backend_thread_id=resolved_backend_thread_id,
+                        backend_turn_id=outcome.backend_turn_id,
+                        workspace_root=started.workspace_root,
+                        model=started.request.model,
+                        reasoning=started.request.reasoning,
+                        status="interrupted",
+                    ),
+                    events=timeline_events,
+                    log_status="interrupted",
+                )
                 try:
                     service.record_execution_interrupted(
                         managed_thread_id, current_turn_id
@@ -927,6 +1064,26 @@ def build_managed_thread_runtime_routes(
                 }
 
             detail = _sanitize_managed_thread_result_error(outcome.error)
+            timeline_events.append(Failed(timestamp=now_iso(), error_message=detail))
+            _persist_managed_thread_timeline(
+                hub_root=hub_root,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=current_turn_id,
+                thread_row=current_thread_row,
+                metadata=_build_managed_thread_turn_metadata(
+                    managed_thread_id=managed_thread_id,
+                    managed_turn_id=current_turn_id,
+                    thread_row=current_thread_row,
+                    backend_thread_id=resolved_backend_thread_id,
+                    backend_turn_id=outcome.backend_turn_id,
+                    workspace_root=started.workspace_root,
+                    model=started.request.model,
+                    reasoning=started.request.reasoning,
+                    status="error",
+                ),
+                events=timeline_events,
+                log_status="failed",
+            )
             try:
                 service.record_execution_result(
                     managed_thread_id,

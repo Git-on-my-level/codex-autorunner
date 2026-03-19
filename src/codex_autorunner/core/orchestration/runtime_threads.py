@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal, Optional
@@ -36,6 +35,7 @@ class RuntimeThreadOutcome:
     error: Optional[str]
     backend_thread_id: str
     backend_turn_id: Optional[str]
+    raw_events: tuple[Any, ...] = ()
 
 
 async def begin_runtime_thread_execution(
@@ -171,6 +171,7 @@ async def await_runtime_thread_outcome(
                 error=RUNTIME_THREAD_TIMEOUT_ERROR,
                 backend_thread_id=backend_thread_id,
                 backend_turn_id=backend_turn_id,
+                raw_events=(),
             )
         if interrupt_task is not None and interrupt_task in done:
             await execution.harness.interrupt(
@@ -184,6 +185,7 @@ async def await_runtime_thread_outcome(
                 error=RUNTIME_THREAD_INTERRUPTED_ERROR,
                 backend_thread_id=backend_thread_id,
                 backend_turn_id=backend_turn_id,
+                raw_events=(),
             )
 
         result = await collector_task
@@ -194,6 +196,7 @@ async def await_runtime_thread_outcome(
             error=execution_error_message,
             backend_thread_id=backend_thread_id,
             backend_turn_id=backend_turn_id,
+            raw_events=(),
         )
     finally:
         cleanup_tasks: list[asyncio.Task[Any]] = [timeout_task]
@@ -203,17 +206,16 @@ async def await_runtime_thread_outcome(
             cleanup_tasks.append(interrupt_task)
         for task in cleanup_tasks:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        if cleanup_tasks:
+            await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
-    status = (result.status or "").strip().lower()
-    if result.errors:
+    status = str(getattr(result, "status", "") or "").strip().lower()
+    assistant_text = str(getattr(result, "assistant_text", "") or "")
+    errors = tuple(getattr(result, "errors", ()) or ())
+    raw_events = tuple(getattr(result, "raw_events", ()) or ())
+    if errors:
         detail = next(
-            (
-                str(error or "").strip()
-                for error in result.errors
-                if str(error or "").strip()
-            ),
+            (str(error or "").strip() for error in errors if str(error or "").strip()),
             "",
         )
         return RuntimeThreadOutcome(
@@ -222,6 +224,7 @@ async def await_runtime_thread_outcome(
             error=detail or execution_error_message,
             backend_thread_id=backend_thread_id,
             backend_turn_id=backend_turn_id,
+            raw_events=raw_events,
         )
     if status in {"interrupted", "cancelled", "canceled", "aborted"}:
         return RuntimeThreadOutcome(
@@ -230,6 +233,7 @@ async def await_runtime_thread_outcome(
             error=RUNTIME_THREAD_INTERRUPTED_ERROR,
             backend_thread_id=backend_thread_id,
             backend_turn_id=backend_turn_id,
+            raw_events=raw_events,
         )
     if status and status not in {"ok", "completed", "complete", "done", "success"}:
         return RuntimeThreadOutcome(
@@ -238,13 +242,15 @@ async def await_runtime_thread_outcome(
             error=execution_error_message,
             backend_thread_id=backend_thread_id,
             backend_turn_id=backend_turn_id,
+            raw_events=raw_events,
         )
     return RuntimeThreadOutcome(
         status="ok",
-        assistant_text=result.assistant_text,
+        assistant_text=assistant_text,
         error=None,
         backend_thread_id=backend_thread_id,
         backend_turn_id=backend_turn_id,
+        raw_events=raw_events,
     )
 
 

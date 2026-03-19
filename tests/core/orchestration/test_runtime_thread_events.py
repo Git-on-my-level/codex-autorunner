@@ -15,6 +15,7 @@ from codex_autorunner.core.ports.run_event import (
     RunNotice,
     TokenUsage,
     ToolCall,
+    ToolResult,
 )
 from codex_autorunner.core.sse import format_sse
 
@@ -347,6 +348,70 @@ async def test_normalize_runtime_thread_raw_event_maps_opencode_tool_parts_to_to
     assert isinstance(output[0], ToolCall)
     assert output[0].tool_name == "bash"
     assert output[0].tool_input == {"input": "pwd"}
+
+
+async def test_normalize_runtime_thread_raw_event_maps_codex_tool_end_to_tool_result() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "item/toolCall/end",
+                    "params": {
+                        "name": "shell",
+                        "result": {"stdout": "/tmp"},
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], ToolResult)
+    assert output[0].tool_name == "shell"
+    assert output[0].status == "completed"
+    assert output[0].result == {"stdout": "/tmp"}
+
+
+async def test_normalize_runtime_thread_raw_event_maps_opencode_tool_completion_to_tool_result() -> (
+    None
+):
+    state = RuntimeThreadRunEventState(opencode_tool_status={"tool-1": "running"})
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "tool-1",
+                                "type": "tool",
+                                "tool": "bash",
+                                "input": "pwd",
+                                "state": {"status": "completed", "exitCode": 0},
+                            }
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 2
+    assert isinstance(output[0], ToolResult)
+    assert output[0].tool_name == "bash"
+    assert output[0].status == "completed"
+    assert isinstance(output[1], OutputDelta)
+    assert output[1].content == "exit 0"
 
 
 async def test_normalize_runtime_thread_raw_event_maps_opencode_patch_parts_to_log_lines() -> (

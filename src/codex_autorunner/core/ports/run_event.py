@@ -47,6 +47,15 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class ToolResult:
+    timestamp: str
+    tool_name: str
+    status: str
+    result: Any = None
+    error: Any = None
+
+
+@dataclass(frozen=True)
 class ApprovalRequested:
     timestamp: str
     request_id: str
@@ -84,6 +93,7 @@ RunEvent = Union[
     Started,
     OutputDelta,
     ToolCall,
+    ToolResult,
     ApprovalRequested,
     TokenUsage,
     RunNotice,
@@ -106,6 +116,7 @@ __all__ = [
     "Started",
     "OutputDelta",
     "ToolCall",
+    "ToolResult",
     "ApprovalRequested",
     "TokenUsage",
     "RunNotice",

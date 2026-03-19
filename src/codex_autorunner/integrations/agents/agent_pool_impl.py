@@ -15,12 +15,23 @@ from ...core.orchestration import (
     MessageRequest,
     build_harness_backed_orchestration_service,
 )
+from ...core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_message_payload,
+)
 from ...core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     begin_next_queued_runtime_thread_execution,
 )
+from ...core.orchestration.turn_timeline import persist_turn_timeline
 from ...core.pma_thread_store import PmaThreadStore
-from ...core.ports.run_event import Completed, Failed, is_terminal_run_event, now_iso
+from ...core.ports.run_event import (
+    Completed,
+    Failed,
+    RunEvent,
+    is_terminal_run_event,
+    now_iso,
+)
 from ...core.sse import parse_sse_lines
 from ...core.state import RunnerState
 from ...manifest import ManifestError, load_manifest
@@ -168,6 +179,10 @@ class _RuntimeEventSummary:
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
     pending_stream_no_id: str = ""
     message_roles_seen: bool = False
+    timeline_state: RuntimeThreadRunEventState = field(
+        default_factory=RuntimeThreadRunEventState
+    )
+    timeline_events: list[RunEvent] = field(default_factory=list)
 
 
 def _final_run_event(
@@ -416,7 +431,15 @@ class DefaultAgentPool:
         emit_event: Optional[EmitEventFn],
         turn_id: str,
         summary: _RuntimeEventSummary,
+        timestamp: Optional[str] = None,
     ) -> None:
+        summary.timeline_events.extend(
+            normalize_runtime_thread_message_payload(
+                {"message": message},
+                summary.timeline_state,
+                timestamp=timestamp,
+            )
+        )
         if emit_event is not None:
             emit_event(
                 FlowEventType.APP_SERVER_EVENT,
@@ -554,6 +577,7 @@ class DefaultAgentPool:
                         emit_event=emit_event,
                         turn_id=backend_turn_id,
                         summary=summary,
+                        timestamp=now_iso(),
                     )
                     summary.streamed_live = True
         except Exception:
@@ -600,6 +624,7 @@ class DefaultAgentPool:
                             emit_event=emitter,
                             turn_id=backend_turn_id or execution_id,
                             summary=summary,
+                            timestamp=now_iso(),
                         )
             assistant_text = (
                 _normalize_optional_text(result.assistant_text)
@@ -708,8 +733,46 @@ class DefaultAgentPool:
             assistant_text=final_text,
             error=final_error,
         )
+        summary.timeline_events.append(terminal_event)
         if not is_terminal_run_event(terminal_event):
             raise RuntimeError("Delegated runtime execution did not finalize cleanly")
+
+        thread_row = self._thread_store.get_thread(thread_id) or {}
+        thread_metadata = (
+            thread_row.get("metadata")
+            if isinstance(thread_row.get("metadata"), dict)
+            else {}
+        )
+        try:
+            persist_turn_timeline(
+                self._hub_root,
+                execution_id=execution_id,
+                target_kind="thread_target",
+                target_id=thread_id,
+                repo_id=(
+                    _normalize_optional_text(thread_row.get("repo_id")) or self._repo_id
+                ),
+                run_id=_normalize_optional_text(thread_metadata.get("run_id")),
+                resource_kind=_normalize_optional_text(thread_row.get("resource_kind")),
+                resource_id=_normalize_optional_text(thread_row.get("resource_id")),
+                metadata={
+                    "agent": started.thread.agent_id,
+                    "execution_id": execution_id,
+                    "thread_target_id": thread_id,
+                    "backend_thread_id": backend_thread_id or None,
+                    "backend_turn_id": final_turn_id or None,
+                    "model": started.request.model,
+                    "reasoning": started.request.reasoning,
+                    "request_kind": started.request.kind,
+                },
+                events=summary.timeline_events,
+            )
+        except Exception:
+            _logger.exception(
+                "Failed to persist delegated turn timeline (thread=%s execution=%s)",
+                thread_id,
+                execution_id,
+            )
 
         self._complete_execution(
             execution_id,

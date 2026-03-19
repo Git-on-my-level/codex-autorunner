@@ -287,6 +287,12 @@ class PmaManagedThreadCreateRequest(Payload):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
+        repo_id = payload.pop("repo_id", None)
+        if repo_id is None:
+            repo_id = payload.pop("repoId", None)
+        if repo_id is not None:
+            payload.setdefault("resource_kind", "repo")
+            payload.setdefault("resource_id", repo_id)
         payload["notify_on_explicit"] = any(
             key in value for key in ("notify_on", "notifyOn")
         )

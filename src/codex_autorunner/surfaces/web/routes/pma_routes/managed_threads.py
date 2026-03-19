@@ -16,6 +16,7 @@ from .....core.managed_thread_status import derive_managed_thread_operator_statu
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.models import ThreadTarget
+from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_thread_store import PmaThreadStore
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
@@ -808,7 +809,13 @@ def build_managed_thread_crud_routes(
         turn = store.get_turn(managed_thread_id, managed_turn_id)
         if turn is None:
             raise HTTPException(status_code=404, detail="Managed turn not found")
-        return {"turn": turn}
+        return {
+            "turn": turn,
+            "timeline": list_turn_timeline(
+                request.app.state.config.root,
+                execution_id=managed_turn_id,
+            ),
+        }
 
     @router.get("/bindings")
     def list_bindings(

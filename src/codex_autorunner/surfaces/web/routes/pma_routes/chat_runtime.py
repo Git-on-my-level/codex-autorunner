@@ -16,6 +16,15 @@ from .....core.orchestration import (
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
 )
+from .....core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_message,
+    normalize_runtime_thread_raw_event,
+)
+from .....core.orchestration.turn_timeline import (
+    iso_from_epoch_millis,
+    persist_turn_timeline,
+)
 from .....core.pma_audit import PmaActionType
 from .....core.pma_context import (
     PMA_MAX_TEXT,
@@ -27,6 +36,7 @@ from .....core.pma_lifecycle import PmaLifecycleRouter
 from .....core.pma_queue import QueueItemState
 from .....core.pma_state import PmaStateStore
 from .....core.pma_transcripts import PmaTranscriptStore
+from .....core.ports.run_event import Completed, RunEvent
 from .....core.time_utils import now_iso
 from .....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from .....integrations.github.context_injection import maybe_inject_github_context
@@ -171,6 +181,25 @@ def _build_transcript_metadata(
     return metadata
 
 
+def _persist_timeline(
+    *,
+    hub_root: Path,
+    execution_id: str,
+    metadata: dict[str, Any],
+    events: list[RunEvent],
+) -> int:
+    return persist_turn_timeline(
+        hub_root,
+        execution_id=execution_id,
+        target_kind="lane",
+        target_id=str(metadata.get("lane_id") or "").strip() or "pma:default",
+        repo_id=_normalize_optional_text(metadata.get("repo_id")),
+        run_id=_normalize_optional_text(metadata.get("run_id")),
+        metadata=metadata,
+        events=events,
+    )
+
+
 async def _persist_transcript(
     *,
     hub_root: Path,
@@ -182,6 +211,7 @@ async def _persist_transcript(
     reasoning: Optional[str],
     duration_ms: Optional[int],
     finished_at: str,
+    timeline_events: Optional[list[RunEvent]] = None,
 ) -> Optional[dict[str, Any]]:
 
     store = PmaTranscriptStore(hub_root)
@@ -197,6 +227,16 @@ async def _persist_transcript(
         finished_at=finished_at,
     )
     try:
+        timeline_event_count = 0
+        if timeline_events:
+            timeline_event_count = _persist_timeline(
+                hub_root=hub_root,
+                execution_id=metadata["turn_id"],
+                metadata=metadata,
+                events=timeline_events,
+            )
+            if timeline_event_count:
+                metadata["timeline_event_count"] = timeline_event_count
         pointer = store.write_transcript(
             turn_id=metadata["turn_id"],
             metadata=metadata,
@@ -223,6 +263,7 @@ async def _finalize_result(
     lifecycle_event: Optional[dict[str, Any]] = None,
     model: Optional[str] = None,
     reasoning: Optional[str] = None,
+    timeline_events: Optional[list[RunEvent]] = None,
 ) -> None:
 
     async with await runtime.get_pma_lock():
@@ -257,6 +298,7 @@ async def _finalize_result(
         reasoning=reasoning,
         duration_ms=duration_ms,
         finished_at=finished_at,
+        timeline_events=timeline_events,
     )
     if transcript_pointer is not None:
         runtime.pma_last_result = dict(runtime.pma_last_result or {})
@@ -436,6 +478,9 @@ async def _execute_app_server(
         sandbox_policy="dangerFullAccess",
         **turn_kwargs,
     )
+    register_turn = getattr(events, "register_turn", None)
+    if callable(register_turn):
+        await register_turn(thread_id, handle.turn_id)
     codex_harness = CodexHarness(supervisor, events)
     if on_meta is not None:
         try:
@@ -485,6 +530,36 @@ async def _execute_app_server(
 
     output = "\n".join(getattr(turn_result, "agent_messages", []) or []).strip()
     raw_events = getattr(turn_result, "raw_events", []) or []
+    timeline_events: list[RunEvent] = []
+    list_events = getattr(events, "list_events", None)
+    if callable(list_events):
+        try:
+            buffered = await list_events(thread_id, handle.turn_id)
+        except Exception:
+            buffered = []
+        state = RuntimeThreadRunEventState()
+        for entry in buffered:
+            if not isinstance(entry, dict):
+                continue
+            message = entry.get("message")
+            if not isinstance(message, dict):
+                continue
+            params = message.get("params")
+            timeline_events.extend(
+                normalize_runtime_thread_message(
+                    str(message.get("method") or ""),
+                    params if isinstance(params, dict) else {},
+                    state,
+                    timestamp=iso_from_epoch_millis(entry.get("received_at")),
+                )
+            )
+    if not timeline_events and raw_events:
+        state = RuntimeThreadRunEventState()
+        for raw_event in raw_events:
+            timeline_events.extend(
+                await normalize_runtime_thread_raw_event(raw_event, state)
+            )
+    timeline_events.append(Completed(timestamp=now_iso(), final_message=output))
     return {
         "status": "ok",
         "message": output,
@@ -492,6 +567,7 @@ async def _execute_app_server(
         "backend_thread_id": thread_id,
         "turn_id": handle.turn_id,
         "raw_events": raw_events,
+        "timeline_events": timeline_events,
     }
 
 
@@ -549,6 +625,30 @@ async def _execute_opencode(
     await supervisor.mark_turn_started(hub_root)
 
     ready_event = asyncio.Event()
+    timeline_state = RuntimeThreadRunEventState()
+    timeline_events: list[RunEvent] = []
+
+    async def _timeline_part_handler(
+        part_type: str,
+        part: dict[str, Any],
+        delta_text: Optional[str],
+    ) -> None:
+        params: dict[str, Any] = {"part": dict(part or {})}
+        if delta_text:
+            params["delta"] = {"text": delta_text}
+        timeline_events.extend(
+            normalize_runtime_thread_message(
+                "message.part.updated",
+                params,
+                timeline_state,
+                timestamp=now_iso(),
+            )
+        )
+        if part_handler is not None:
+            maybe = part_handler(part_type, part, delta_text)
+            if asyncio.iscoroutine(maybe):
+                await maybe
+
     output_task = asyncio.create_task(
         collect_opencode_output(
             client,
@@ -559,7 +659,7 @@ async def _execute_opencode(
             question_policy="auto_first_option",
             should_stop=interrupt_event.is_set,
             ready_event=ready_event,
-            part_handler=part_handler,
+            part_handler=_timeline_part_handler,
             stall_timeout_seconds=stall_timeout_seconds,
         )
     )
@@ -614,12 +714,16 @@ async def _execute_opencode(
 
     if output_result.error:
         raise HTTPException(status_code=502, detail=output_result.error)
+    timeline_events.append(
+        Completed(timestamp=now_iso(), final_message=output_result.text)
+    )
     return {
         "status": "ok",
         "message": output_result.text,
         "thread_id": session_id,
         "backend_thread_id": session_id,
         "turn_id": build_turn_id(session_id),
+        "timeline_events": timeline_events,
     }
 
 
@@ -654,6 +758,12 @@ async def _execute_queue_item(
         persist: bool = True,
     ) -> dict[str, Any]:
         payload_result = dict(result_payload or {})
+        timeline_events = (
+            payload_result.get("timeline_events")
+            if isinstance(payload_result.get("timeline_events"), list)
+            else None
+        )
+        payload_result.pop("timeline_events", None)
         if automation_trigger:
             try:
                 payload_result.update(
@@ -695,6 +805,7 @@ async def _execute_queue_item(
                 lifecycle_event=lifecycle_event,
                 model=model,
                 reasoning=reasoning,
+                timeline_events=timeline_events,
             )
         return payload_result
 

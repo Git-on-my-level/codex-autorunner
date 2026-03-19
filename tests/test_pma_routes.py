@@ -61,6 +61,7 @@ def _install_fake_successful_chat_supervisor(
     *,
     turn_id: str,
     message: str = "assistant text",
+    raw_events: Optional[list[dict]] = None,
 ) -> None:
     class FakeTurnHandle:
         def __init__(self) -> None:
@@ -71,7 +72,11 @@ def _install_fake_successful_chat_supervisor(
             return type(
                 "Result",
                 (),
-                {"agent_messages": [message], "raw_events": [], "errors": []},
+                {
+                    "agent_messages": [message],
+                    "raw_events": list(raw_events or []),
+                    "errors": [],
+                },
             )()
 
     class FakeClient:
@@ -455,6 +460,63 @@ def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
     assert history_entry.json()["content"].strip() == (
         "User:\npersist transcript\n\nAssistant:\nassistant transcript payload"
     )
+
+
+def test_pma_history_detail_includes_turn_timeline(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    _install_fake_successful_chat_supervisor(
+        app,
+        turn_id="turn-timeline",
+        message="assistant transcript payload",
+        raw_events=[
+            {
+                "message": {
+                    "method": "item/reasoning/summaryTextDelta",
+                    "params": {"itemId": "reason-1", "delta": "inspect state"},
+                }
+            },
+            {
+                "message": {
+                    "method": "item/toolCall/start",
+                    "params": {
+                        "item": {
+                            "toolCall": {
+                                "name": "shell",
+                                "input": {"cmd": "pwd"},
+                            }
+                        }
+                    },
+                }
+            },
+            {
+                "message": {
+                    "method": "item/toolCall/end",
+                    "params": {
+                        "name": "shell",
+                        "result": {"stdout": "/tmp"},
+                    },
+                }
+            },
+        ],
+    )
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "persist transcript"})
+    assert resp.status_code == 200
+
+    history_entry = client.get("/hub/pma/history/turn-timeline")
+    assert history_entry.status_code == 200
+    payload = history_entry.json()
+    assert [item["event_type"] for item in payload["timeline"]] == [
+        "run_notice",
+        "tool_call",
+        "tool_result",
+        "turn_completed",
+    ]
+    assert payload["timeline"][0]["event"]["message"] == "inspect state"
+    assert payload["timeline"][1]["event"]["tool_input"] == {"cmd": "pwd"}
+    assert payload["timeline"][2]["event"]["result"] == {"stdout": "/tmp"}
 
 
 def test_pma_chat_github_injection_uses_raw_user_message(
