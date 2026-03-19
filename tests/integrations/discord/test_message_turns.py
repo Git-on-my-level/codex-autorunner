@@ -2561,15 +2561,19 @@ async def test_message_create_streaming_turn_accumulates_segmented_intermediate_
     )
     try:
         await service.run_forever()
+        progress_contents = [
+            str(msg["payload"].get("content", ""))
+            for msg in rest.edited_channel_messages
+        ]
         sent_contents = [
             str(msg["payload"].get("content", "")) for msg in rest.channel_messages
         ]
         assert any(
             "intermediate output one" in content
             and "intermediate output two" in content
-            for content in sent_contents
+            for content in progress_contents
         )
-        assert "---" in sent_contents
+        assert "---" not in sent_contents
         assert any("done from streaming turn" in content for content in sent_contents)
     finally:
         await store.close()
@@ -2621,22 +2625,28 @@ async def test_message_create_streaming_turn_final_progress_omits_duplicate_term
     )
     try:
         await service.run_forever()
+        progress_contents = [
+            str(msg["payload"].get("content", ""))
+            for msg in rest.edited_channel_messages
+        ]
         sent_contents = [
             str(msg["payload"].get("content", "")) for msg in rest.channel_messages
         ]
         intermediate_messages = [
-            content for content in sent_contents if "intermediate output one" in content
+            content
+            for content in progress_contents
+            if "intermediate output one" in content
         ]
         assert intermediate_messages
         assert all(final_text not in content for content in intermediate_messages)
-        assert "---" in sent_contents
+        assert "---" not in sent_contents
         assert any(final_text in content for content in sent_contents)
     finally:
         await store.close()
 
 
 @pytest.mark.anyio
-async def test_message_create_turn_sends_intermediate_and_final_as_separate_attachments_when_long(
+async def test_message_create_turn_sends_only_final_attachment_when_long(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2673,10 +2683,9 @@ async def test_message_create_turn_sends_intermediate_and_final_as_separate_atta
 
     try:
         await service.run_forever()
-        assert len(rest.attachment_messages) == 2
-        assert rest.attachment_messages[0]["filename"] == "intermediate-response.md"
-        assert rest.attachment_messages[1]["filename"] == "final-response.md"
-        assert any(
+        assert len(rest.attachment_messages) == 1
+        assert rest.attachment_messages[0]["filename"] == "final-response.md"
+        assert not any(
             msg["payload"].get("content", "") == "---" for msg in rest.channel_messages
         )
     finally:

@@ -232,38 +232,6 @@ class TelegramMessageTransport:
         intermediate_response: Optional[str] = None,
         delete_placeholder_on_delivery: bool = True,
     ) -> bool:
-        intermediate_text = (
-            intermediate_response.strip()
-            if isinstance(intermediate_response, str)
-            else ""
-        )
-        if intermediate_text:
-            delivered = await self._send_message_with_outbox(
-                chat_id,
-                intermediate_text,
-                thread_id=thread_id,
-                reply_to=reply_to,
-                placeholder_id=placeholder_id,
-                delete_placeholder_on_delivery=False,
-            )
-            if not delivered:
-                return False
-            separator_sent = await self._send_message_with_outbox(
-                chat_id,
-                "---",
-                thread_id=thread_id,
-                reply_to=None,
-            )
-            if not separator_sent:
-                return False
-            return await self._send_message_with_outbox(
-                chat_id,
-                response,
-                thread_id=thread_id,
-                reply_to=None,
-                placeholder_id=placeholder_id,
-                delete_placeholder_on_delivery=delete_placeholder_on_delivery,
-            )
         return await self._send_message_with_outbox(
             chat_id,
             response,

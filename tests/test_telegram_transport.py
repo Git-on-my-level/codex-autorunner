@@ -87,7 +87,7 @@ async def test_send_long_message_uses_markdown_document(parse_mode: str) -> None
 
 
 @pytest.mark.anyio
-async def test_deliver_turn_response_sends_intermediate_separator_and_final() -> None:
+async def test_deliver_turn_response_sends_only_final_output() -> None:
     transport = _DummyTransport(parse_mode=None)
     calls: list[dict[str, object]] = []
 
@@ -127,25 +127,9 @@ async def test_deliver_turn_response_sends_intermediate_separator_and_final() ->
     assert calls == [
         {
             "chat_id": 123,
-            "text": "intermediate output",
-            "thread_id": 456,
-            "reply_to": 789,
-            "placeholder_id": 321,
-            "delete_placeholder_on_delivery": False,
-        },
-        {
-            "chat_id": 123,
-            "text": "---",
-            "thread_id": 456,
-            "reply_to": None,
-            "placeholder_id": None,
-            "delete_placeholder_on_delivery": True,
-        },
-        {
-            "chat_id": 123,
             "text": "final output",
             "thread_id": 456,
-            "reply_to": None,
+            "reply_to": 789,
             "placeholder_id": 321,
             "delete_placeholder_on_delivery": True,
         },

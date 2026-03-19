@@ -523,11 +523,6 @@ async def handle_message_event(
     if isinstance(turn_result, DiscordMessageTurnResult):
         response_text = turn_result.final_message
         preview_message_id = turn_result.preview_message_id
-        intermediate_text = (
-            turn_result.intermediate_message.strip()
-            if isinstance(turn_result.intermediate_message, str)
-            else ""
-        )
         metrics_text = _format_turn_metrics(
             turn_result.token_usage,
             turn_result.elapsed_seconds,
@@ -540,29 +535,12 @@ async def handle_message_event(
     else:
         response_text = str(turn_result or "")
         preview_message_id = None
-        intermediate_text = ""
 
     if isinstance(preview_message_id, str) and preview_message_id:
         await service._delete_channel_message_safe(
             channel_id=channel_id,
             message_id=preview_message_id,
             record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
-        )
-    if intermediate_text:
-        await _send_discord_turn_section(
-            service,
-            channel_id=channel_id,
-            text=intermediate_text,
-            record_prefix=f"turn:intermediate:{session_key}",
-            attachment_filename="intermediate-response.md",
-            attachment_caption=(
-                "Intermediate output too long; attached as intermediate-response.md."
-            ),
-        )
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": "---"},
-            record_id=f"turn:separator:{session_key}:{uuid.uuid4().hex[:8]}",
         )
     await _send_discord_turn_section(
         service,
