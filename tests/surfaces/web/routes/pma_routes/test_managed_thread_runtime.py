@@ -458,7 +458,10 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
         {
             "message": {
                 "method": "item/toolCall/end",
-                "params": {"name": "shell", "result": {"stdout": str(hub_env.repo_root)}},
+                "params": {
+                    "name": "shell",
+                    "result": {"stdout": str(hub_env.repo_root)},
+                },
             }
         },
     )
@@ -543,7 +546,9 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
         )
 
     assert response.status_code == 200
-    timeline = list_turn_timeline(hub_env.hub_root, execution_id="managed-turn-raw-events")
+    timeline = list_turn_timeline(
+        hub_env.hub_root, execution_id="managed-turn-raw-events"
+    )
     assert [entry["event_type"] for entry in timeline] == [
         "tool_call",
         "tool_result",
