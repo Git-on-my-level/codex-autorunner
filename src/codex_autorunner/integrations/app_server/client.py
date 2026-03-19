@@ -139,6 +139,7 @@ class TurnResult:
     agent_messages: list[str]
     errors: list[str]
     raw_events: list[Dict[str, Any]]
+    commentary_messages: list[str] = field(default_factory=list)
 
 
 class TurnHandle:
@@ -161,6 +162,8 @@ class _TurnState:
     thread_id: Optional[str]
     future: asyncio.Future["TurnResult"]
     agent_messages: list[str] = field(default_factory=list)
+    commentary_messages: list[str] = field(default_factory=list)
+    final_answer_messages: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     raw_events: list[Dict[str, Any]] = field(default_factory=list)
     status: Optional[str] = None
@@ -652,9 +655,13 @@ class CodexAppServerClient:
             state.last_event_at = now
             return
 
-        status, agent_messages, errors = snapshot
+        status, agent_messages, commentary_messages, final_answer_messages, errors = (
+            snapshot
+        )
         if agent_messages:
             state.agent_messages = agent_messages
+            state.commentary_messages = commentary_messages
+            state.final_answer_messages = final_answer_messages
             # Resume snapshots include full message bodies, so older streaming
             # deltas from before recovery are stale once we adopt them.
             state.agent_message_deltas.clear()
@@ -1541,6 +1548,14 @@ class CodexAppServerClient:
             target.agent_messages = list(source.agent_messages)
         else:
             target.agent_messages.extend(source.agent_messages)
+        if not target.commentary_messages:
+            target.commentary_messages = list(source.commentary_messages)
+        else:
+            target.commentary_messages.extend(source.commentary_messages)
+        if not target.final_answer_messages:
+            target.final_answer_messages = list(source.final_answer_messages)
+        else:
+            target.final_answer_messages.extend(source.final_answer_messages)
         if source.agent_message_deltas:
             target.agent_message_deltas.update(source.agent_message_deltas)
         if not target.raw_events:
@@ -1575,6 +1590,7 @@ class CodexAppServerClient:
             status=state.status,
             final_message=_final_message_for_result(state, policy=self._output_policy),
             agent_messages=_agent_messages_for_result(state),
+            commentary_messages=list(state.commentary_messages),
             errors=list(state.errors),
             raw_events=list(state.raw_events),
         )
@@ -1644,6 +1660,7 @@ class CodexAppServerClient:
             item_id = params.get("itemId") if isinstance(params, dict) else None
             delta_text: Optional[str] = None
             text = _extract_agent_message_text(item)
+            phase = _extract_agent_message_phase(item)
             if isinstance(item_id, str):
                 delta_text = state.agent_message_deltas.pop(item_id, None)
             elif text:
@@ -1652,7 +1669,7 @@ class CodexAppServerClient:
                 )
             if not text:
                 text = delta_text
-            _append_agent_message(state.agent_messages, text)
+            _append_agent_message_for_phase(state, text, phase=phase)
         review_text = _extract_review_text(item)
         if review_text and review_text != text:
             _append_agent_message(state.agent_messages, review_text)
@@ -2181,6 +2198,21 @@ def _append_agent_message(messages: list[str], candidate: Optional[str]) -> None
     messages.append(candidate)
 
 
+def _append_agent_message_for_phase(
+    state: _TurnState,
+    candidate: Optional[str],
+    *,
+    phase: Optional[str],
+) -> None:
+    if not candidate:
+        return
+    _append_agent_message(state.agent_messages, candidate)
+    if phase == "commentary":
+        _append_agent_message(state.commentary_messages, candidate)
+    elif phase == "final_answer":
+        _append_agent_message(state.final_answer_messages, candidate)
+
+
 def _record_raw_event(state: _TurnState, message: Dict[str, Any]) -> None:
     state.raw_events.append(message)
     _trim_raw_events(state)
@@ -2240,6 +2272,19 @@ def _normalize_output_policy(policy: Optional[str]) -> str:
 
 
 def _final_message_for_result(state: _TurnState, *, policy: str) -> str:
+    final_answers = [
+        msg.strip()
+        for msg in state.final_answer_messages
+        if isinstance(msg, str) and msg.strip()
+    ]
+    if final_answers:
+        if policy == "all_agent_messages":
+            return "\n\n".join(
+                msg.strip()
+                for msg in _agent_messages_for_result(state)
+                if isinstance(msg, str) and msg.strip()
+            )
+        return final_answers[-1]
     messages = _agent_messages_for_result(state)
     cleaned = [msg.strip() for msg in messages if isinstance(msg, str) and msg.strip()]
     if not cleaned:
@@ -2314,6 +2359,18 @@ def _extract_agent_message_text(item: Any) -> Optional[str]:
                 parts.append(candidate)
         if parts:
             return "".join(parts)
+    return None
+
+
+def _extract_agent_message_phase(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return None
+    phase = item.get("phase")
+    if not isinstance(phase, str):
+        return None
+    normalized = phase.strip().lower()
+    if normalized in {"commentary", "final_answer"}:
+        return normalized
     return None
 
 

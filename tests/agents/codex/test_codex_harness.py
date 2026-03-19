@@ -59,7 +59,7 @@ async def test_codex_harness_wait_for_turn_returns_plain_text_terminal_result() 
     result = await harness.wait_for_turn(Path("."), "thread-1", "turn-1")
 
     assert result.status == "completed"
-    assert result.assistant_text == "first line\n\nsecond line"
+    assert result.assistant_text == "fallback message"
     assert result.errors == []
     assert result.raw_events == [{"method": "message.completed"}]
     assert ("thread-1", "turn-1") not in harness._turn_handles  # type: ignore[attr-defined]

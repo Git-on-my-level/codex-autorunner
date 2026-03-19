@@ -267,7 +267,9 @@ async def execute_app_server(
         errors = turn_result.errors
         raise FileChatError(errors[-1] if errors else "App-server error")
 
-    output = "\n".join(getattr(turn_result, "agent_messages", []) or []).strip()
+    output = str(getattr(turn_result, "final_message", "") or "").strip()
+    if not output:
+        output = "\n".join(getattr(turn_result, "agent_messages", []) or []).strip()
     agent_message = parse_agent_message(output)
     raw_events = getattr(turn_result, "raw_events", []) or []
     return {

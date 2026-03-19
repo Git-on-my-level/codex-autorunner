@@ -224,6 +224,41 @@ def _extract_message_role(params: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _normalize_message_phase(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"commentary", "final_answer"}:
+        return normalized
+    return None
+
+
+def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
+    phase = _normalize_message_phase(params.get("phase"))
+    if phase:
+        return phase
+    info = _extract_message_info(params)
+    phase = _normalize_message_phase(info.get("phase"))
+    if phase:
+        return phase
+    properties = params.get("properties")
+    if isinstance(properties, dict):
+        phase = _normalize_message_phase(properties.get("phase"))
+        if phase:
+            return phase
+    message = params.get("message")
+    if isinstance(message, dict):
+        phase = _normalize_message_phase(message.get("phase"))
+        if phase:
+            return phase
+    item = params.get("item")
+    if isinstance(item, dict):
+        phase = _normalize_message_phase(item.get("phase"))
+        if phase:
+            return phase
+    return None
+
+
 def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
     properties = params.get("properties")
     part = properties.get("part") if isinstance(properties, dict) else None
@@ -253,6 +288,8 @@ def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any
 def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[str]]:
     output_text = ""
     completed_message: Optional[str] = None
+    completed_final_message: Optional[str] = None
+    commentary_message: Optional[str] = None
     errors: list[str] = []
     message_roles: dict[str, str] = {}
     pending_by_message: dict[str, str] = {}
@@ -325,6 +362,20 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
         if pending_no_id and not message_roles_seen:
             output_text = _merge_stream(output_text, pending_no_id)
 
+    def _record_completed_message(text: str, phase: Optional[str]) -> None:
+        nonlocal commentary_message
+        nonlocal completed_final_message
+        nonlocal completed_message
+        if not text:
+            return
+        if phase == "final_answer":
+            completed_final_message = text
+            return
+        if phase == "commentary":
+            commentary_message = text
+            return
+        completed_message = text
+
     for payload in payloads:
         method, params = _unwrap_harness_payload(payload)
         method_lower = method.lower()
@@ -349,7 +400,7 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
                 else:
                     role = _extract_message_role(params)
                     if role != "user":
-                        completed_message = text
+                        _record_completed_message(text, _extract_message_phase(params))
             continue
 
         if method == "item/agentMessage/delta" or method == "turn/streamDelta":
@@ -369,7 +420,7 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             if isinstance(item, dict) and item.get("type") == "agentMessage":
                 text = _extract_completed_text(params)
                 if text:
-                    completed_message = text
+                    _record_completed_message(text, _extract_message_phase(params))
             continue
 
         if method in {"turn/error", "error"}:
@@ -379,7 +430,13 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
 
     if not completed_message:
         _flush_fallback_pending()
-    assistant_text = (completed_message or output_text).strip()
+    assistant_text = (
+        completed_final_message
+        or completed_message
+        or output_text
+        or commentary_message
+        or ""
+    ).strip()
     return assistant_text, errors
 
 
