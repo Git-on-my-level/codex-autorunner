@@ -526,6 +526,42 @@ async def test_send_message_chunks_long_text() -> None:
 
 
 @pytest.mark.anyio
+async def test_send_chat_action_posts_typing_payload() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json={"ok": True, "result": True})
+    )
+    http_client = httpx.AsyncClient(transport=transport)
+    client = TelegramBotClient("test-token", client=http_client)
+    calls: list[dict[str, object]] = []
+
+    async def fake_request(self, method: str, payload: dict[str, object]) -> object:
+        calls.append({"method": method, "payload": payload})
+        return True
+
+    client._request = types.MethodType(fake_request, client)
+    try:
+        ok = await client.send_chat_action(
+            123,
+            action="typing",
+            message_thread_id=55,
+        )
+    finally:
+        await client.close()
+
+    assert ok is True
+    assert calls == [
+        {
+            "method": "sendChatAction",
+            "payload": {
+                "chat_id": 123,
+                "action": "typing",
+                "message_thread_id": 55,
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_request_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"count": 0}
 

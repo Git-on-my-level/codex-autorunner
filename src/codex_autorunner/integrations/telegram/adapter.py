@@ -1172,6 +1172,27 @@ class TelegramBotClient:
         result = await self._request_multipart("sendDocument", data, files)
         return result if isinstance(result, dict) else {}
 
+    async def send_chat_action(
+        self,
+        chat_id: Union[int, str],
+        *,
+        action: str = "typing",
+        message_thread_id: Optional[int] = None,
+    ) -> bool:
+        log_event(
+            self._logger,
+            logging.DEBUG,
+            "telegram.send_chat_action",
+            chat_id=chat_id,
+            thread_id=message_thread_id,
+            action=action,
+        )
+        payload: dict[str, Any] = {"chat_id": chat_id, "action": action}
+        if message_thread_id is not None:
+            payload["message_thread_id"] = message_thread_id
+        result = await self._request("sendChatAction", payload)
+        return bool(result) if isinstance(result, bool) else False
+
     async def get_me(self) -> dict[str, Any]:
         log_event(self._logger, logging.DEBUG, "telegram.request", method="getMe")
         result = await self._request("getMe", {})

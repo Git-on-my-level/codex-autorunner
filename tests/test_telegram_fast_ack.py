@@ -67,6 +67,7 @@ class _ServiceStub:
         self._pending_review_custom: dict = {}
         self._pending_approvals: dict = {}
         self._turn_contexts: dict = {}
+        self.timeline: list[str] = []
 
     def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
@@ -123,6 +124,16 @@ class _ServiceStub:
             reply_to_message_id=reply_to,
         )
         return response["message_id"]
+
+    async def _begin_typing_indicator(
+        self, _chat_id: int, _thread_id: Optional[int]
+    ) -> None:
+        self.timeline.append("typing_begin")
+
+    async def _end_typing_indicator(
+        self, _chat_id: int, _thread_id: Optional[int]
+    ) -> None:
+        self.timeline.append("typing_end")
 
     async def _handle_message(self, _message: TelegramMessage) -> None:
         pass
@@ -198,7 +209,9 @@ async def test_fast_ack_sent_when_topic_has_current_turn() -> None:
 
 
 @pytest.mark.anyio
-async def test_fast_ack_sent_when_topic_queue_has_depth() -> None:
+async def test_fast_ack_sent_when_topic_queue_has_depth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     topics = {}
     store = SimpleNamespace(_topics=topics)
 
@@ -206,7 +219,7 @@ async def test_fast_ack_sent_when_topic_queue_has_depth() -> None:
     handler = _ServiceStub(router)
 
     runtime = router.runtime_for("10:11")
-    await runtime.queue._queue.put(("work", None))
+    monkeypatch.setattr(runtime.queue, "pending", lambda: 1)
 
     message = _message(message_id=1, thread_id=11)
     update = SimpleNamespace(update_id=1, message=message, callback=None)
@@ -255,3 +268,47 @@ async def test_fast_ack_not_sent_when_topic_is_idle() -> None:
 
     assert len(handler._bot.sent_messages) == 0
     assert (10, 1) not in handler._queued_placeholder_map
+
+
+@pytest.mark.anyio
+async def test_dispatch_message_wraps_handler_with_typing_indicator() -> None:
+    topics = {}
+    store = SimpleNamespace(_topics=topics)
+    router = TopicRouter(store)
+    handler = _ServiceStub(router)
+
+    async def _recording_handle(_message: TelegramMessage) -> None:
+        handler.timeline.append("handle_start")
+        await asyncio.sleep(0)
+        handler.timeline.append("handle_end")
+
+    handler._handle_message = _recording_handle  # type: ignore[assignment]
+    message = TelegramMessage(
+        update_id=1,
+        message_id=1,
+        chat_id=10,
+        thread_id=None,
+        from_user_id=2,
+        text="hello",
+        date=None,
+        is_topic_message=False,
+    )
+    update = SimpleNamespace(update_id=1, message=message, callback=None)
+    context = SimpleNamespace(
+        chat_id=10,
+        user_id=2,
+        thread_id=None,
+        message_id=1,
+        is_topic=False,
+        is_edited=False,
+        topic_key=None,
+    )
+
+    await _dispatch_message(handler, update, context)
+
+    assert handler.timeline == [
+        "typing_begin",
+        "handle_start",
+        "handle_end",
+        "typing_end",
+    ]
