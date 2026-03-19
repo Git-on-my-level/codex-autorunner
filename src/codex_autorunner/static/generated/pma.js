@@ -450,7 +450,7 @@ function getElements() {
 const decoder = new TextDecoder();
 function escapeMarkdownLinkText(text) {
     // Keep this ES2019-compatible (no String.prototype.replaceAll).
-    return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+    return text.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
 function formatOutboxAttachments(listing, names) {
     if (!listing || !names.length)

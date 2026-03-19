@@ -535,7 +535,7 @@ const decoder = new TextDecoder();
 
 function escapeMarkdownLinkText(text: string): string {
   // Keep this ES2019-compatible (no String.prototype.replaceAll).
-  return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+  return text.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
 
 function formatOutboxAttachments(listing: FileBoxListing | null, names: string[]): string {
