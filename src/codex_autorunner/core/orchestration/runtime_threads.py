@@ -12,6 +12,22 @@ RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
 _INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
 RUNTIME_THREAD_TIMEOUT_ERROR = "Runtime thread timed out"
 RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"
+_SUCCESSFUL_COMPLETION_STATUSES = frozenset(
+    {"ok", "completed", "complete", "done", "success"}
+)
+
+
+def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
+    for raw_event in raw_events:
+        if not isinstance(raw_event, dict):
+            continue
+        message = raw_event.get("message")
+        if not isinstance(message, dict):
+            continue
+        method = str(message.get("method") or "").strip().lower()
+        if method == "turn/completed":
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -213,7 +229,24 @@ async def await_runtime_thread_outcome(
     assistant_text = str(getattr(result, "assistant_text", "") or "")
     errors = tuple(getattr(result, "errors", ()) or ())
     raw_events = tuple(getattr(result, "raw_events", ()) or ())
+    successful_completion = status in _SUCCESSFUL_COMPLETION_STATUSES
     if errors:
+        # Some runtimes can emit a trailing transport error after a completed turn.
+        # Only prefer the final text when the runtime explicitly reported success
+        # and the raw event stream confirms completion was already observed.
+        if (
+            assistant_text.strip()
+            and successful_completion
+            and _raw_events_show_completion(raw_events)
+        ):
+            return RuntimeThreadOutcome(
+                status="ok",
+                assistant_text=assistant_text,
+                error=None,
+                backend_thread_id=backend_thread_id,
+                backend_turn_id=backend_turn_id,
+                raw_events=raw_events,
+            )
         detail = next(
             (str(error or "").strip() for error in errors if str(error or "").strip()),
             "",
@@ -235,7 +268,7 @@ async def await_runtime_thread_outcome(
             backend_turn_id=backend_turn_id,
             raw_events=raw_events,
         )
-    if status and status not in {"ok", "completed", "complete", "done", "success"}:
+    if status and not successful_completion:
         return RuntimeThreadOutcome(
             status="error",
             assistant_text="",
