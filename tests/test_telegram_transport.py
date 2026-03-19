@@ -131,7 +131,7 @@ async def test_deliver_turn_response_sends_intermediate_separator_and_final() ->
             "thread_id": 456,
             "reply_to": 789,
             "placeholder_id": 321,
-            "delete_placeholder_on_delivery": True,
+            "delete_placeholder_on_delivery": False,
         },
         {
             "chat_id": 123,
@@ -146,7 +146,7 @@ async def test_deliver_turn_response_sends_intermediate_separator_and_final() ->
             "text": "final output",
             "thread_id": 456,
             "reply_to": None,
-            "placeholder_id": None,
+            "placeholder_id": 321,
             "delete_placeholder_on_delivery": True,
         },
     ]

@@ -244,21 +244,25 @@ class TelegramMessageTransport:
                 thread_id=thread_id,
                 reply_to=reply_to,
                 placeholder_id=placeholder_id,
-                delete_placeholder_on_delivery=delete_placeholder_on_delivery,
+                delete_placeholder_on_delivery=False,
             )
             if not delivered:
                 return False
-            await self._send_message_with_outbox(
+            separator_sent = await self._send_message_with_outbox(
                 chat_id,
                 "---",
                 thread_id=thread_id,
                 reply_to=None,
             )
+            if not separator_sent:
+                return False
             return await self._send_message_with_outbox(
                 chat_id,
                 response,
                 thread_id=thread_id,
                 reply_to=None,
+                placeholder_id=placeholder_id,
+                delete_placeholder_on_delivery=delete_placeholder_on_delivery,
             )
         return await self._send_message_with_outbox(
             chat_id,
