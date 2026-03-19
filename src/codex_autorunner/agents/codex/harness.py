@@ -314,11 +314,12 @@ class CodexHarness(AgentHarness):
             for message in getattr(result, "agent_messages", []) or []
             if isinstance(message, str) and message.strip()
         ]
-        assistant_text = "\n\n".join(agent_messages).strip()
+        assistant_text = ""
+        final_message = getattr(result, "final_message", "")
+        if isinstance(final_message, str):
+            assistant_text = final_message.strip()
         if not assistant_text:
-            final_message = getattr(result, "final_message", "")
-            if isinstance(final_message, str):
-                assistant_text = final_message.strip()
+            assistant_text = "\n\n".join(agent_messages).strip()
         return TerminalTurnResult(
             status=(
                 str(result.status)

@@ -483,7 +483,9 @@ async def _execute_app_server(
         errors = turn_result.errors
         raise HTTPException(status_code=502, detail=errors[-1] if errors else "")
 
-    output = "\n".join(getattr(turn_result, "agent_messages", []) or []).strip()
+    output = str(getattr(turn_result, "final_message", "") or "").strip()
+    if not output:
+        output = "\n".join(getattr(turn_result, "agent_messages", []) or []).strip()
     raw_events = getattr(turn_result, "raw_events", []) or []
     return {
         "status": "ok",

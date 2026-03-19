@@ -122,6 +122,56 @@ async def test_turn_result_defaults_to_last_agent_message(tmp_path: Path) -> Non
         result = await handle.wait()
         assert result.status == "completed"
         assert result.agent_messages == ["draft reply", "final reply"]
+        assert result.commentary_messages == []
+        assert result.final_message == "final reply"
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_turn_result_prefers_phase_marked_final_answer(tmp_path: Path) -> None:
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        commentary_item = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-1",
+            "item": {
+                "type": "agentMessage",
+                "text": "draft reply",
+                "phase": "commentary",
+            },
+        }
+        final_item = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-2",
+            "item": {
+                "type": "agentMessage",
+                "text": "final reply",
+                "phase": "final_answer",
+            },
+        }
+        completed = {"turnId": "turn-1", "threadId": "thread-1", "status": "completed"}
+
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": commentary_item},
+            commentary_item,
+        )
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": final_item},
+            final_item,
+        )
+        await client._handle_notification_turn_completed(
+            {"method": "turn/completed", "params": completed},
+            completed,
+        )
+
+        result = await asyncio.wait_for(asyncio.shield(state.future), timeout=0.5)
+        assert result.status == "completed"
+        assert result.agent_messages == ["draft reply", "final reply"]
+        assert result.commentary_messages == ["draft reply"]
         assert result.final_message == "final reply"
     finally:
         await client.close()
@@ -600,6 +650,58 @@ async def test_turn_completed_via_resume_when_completion_missing(
         assert result.status == "completed"
         assert result.final_message == "recovered reply"
         assert result.agent_messages == ["recovered reply"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_wait_for_turn_stall_recovery_preserves_agent_message_phase(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=0.01,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.last_event_at -= 1.0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {
+                "thread": {
+                    "id": thread_id,
+                    "turns": [
+                        {
+                            "id": "turn-1",
+                            "status": "completed",
+                            "items": [
+                                {
+                                    "type": "agentMessage",
+                                    "text": "draft reply",
+                                    "phase": "commentary",
+                                },
+                                {
+                                    "type": "agentMessage",
+                                    "text": "final reply",
+                                    "phase": "final_answer",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            }
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        result = await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0)
+        assert result.status == "completed"
+        assert result.agent_messages == ["draft reply", "final reply"]
+        assert result.commentary_messages == ["draft reply"]
+        assert result.final_message == "final reply"
     finally:
         await client.close()
 
