@@ -1145,11 +1145,21 @@ async def _run_telegram_managed_thread_turn(
         )
     finally:
         if registered_turn_key is not None:
-            render_final_turn_progress = getattr(
-                handlers, "_render_final_turn_progress", None
+            render_turn_progress_summary = getattr(
+                handlers, "_render_turn_progress_summary", None
             )
-            if callable(render_final_turn_progress):
-                intermediate_response = render_final_turn_progress(registered_turn_key)
+            if callable(render_turn_progress_summary):
+                intermediate_response = render_turn_progress_summary(
+                    registered_turn_key
+                )
+            else:
+                render_final_turn_progress = getattr(
+                    handlers, "_render_final_turn_progress", None
+                )
+                if callable(render_final_turn_progress):
+                    intermediate_response = render_final_turn_progress(
+                        registered_turn_key
+                    )
             handlers._turn_contexts.pop(registered_turn_key, None)
             handlers._clear_thinking_preview(registered_turn_key)
             handlers._clear_turn_progress(registered_turn_key)
@@ -1837,6 +1847,7 @@ class ExecutionCommands(SharedHelpers):
         pma_thread_key: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         supervisor = getattr(self, "_opencode_supervisor", None)
+        turn_delivery_state: dict[str, str] = {}
         if supervisor is None:
             failure_message = "OpenCode backend unavailable; install opencode or switch to /agent codex."
             if send_failure_response:
@@ -2668,6 +2679,9 @@ class ExecutionCommands(SharedHelpers):
                 token_usage=token_usage,
                 transcript_message_id=transcript_message_id,
                 transcript_text=transcript_text,
+                intermediate_response=turn_delivery_state.get(
+                    "intermediate_response", ""
+                ),
             )
         except Exception as exc:
             log_extra: dict[str, Any] = {}
@@ -2704,6 +2718,21 @@ class ExecutionCommands(SharedHelpers):
             )
         finally:
             if turn_key is not None:
+                render_turn_progress_summary = getattr(
+                    self, "_render_turn_progress_summary", None
+                )
+                if callable(render_turn_progress_summary):
+                    turn_delivery_state["intermediate_response"] = (
+                        render_turn_progress_summary(turn_key)
+                    )
+                else:
+                    render_final_turn_progress = getattr(
+                        self, "_render_final_turn_progress", None
+                    )
+                    if callable(render_final_turn_progress):
+                        turn_delivery_state["intermediate_response"] = (
+                            render_final_turn_progress(turn_key)
+                        )
                 self._turn_contexts.pop(turn_key, None)
                 self._clear_thinking_preview(turn_key)
                 self._clear_turn_progress(turn_key)
@@ -3175,13 +3204,21 @@ class ExecutionCommands(SharedHelpers):
         finally:
             if turn_handle is not None:
                 if turn_key is not None:
-                    render_final_turn_progress = getattr(
-                        self, "_render_final_turn_progress", None
+                    render_turn_progress_summary = getattr(
+                        self, "_render_turn_progress_summary", None
                     )
-                    if callable(render_final_turn_progress):
+                    if callable(render_turn_progress_summary):
                         turn_delivery_state["intermediate_response"] = (
-                            render_final_turn_progress(turn_key)
+                            render_turn_progress_summary(turn_key)
                         )
+                    else:
+                        render_final_turn_progress = getattr(
+                            self, "_render_final_turn_progress", None
+                        )
+                        if callable(render_final_turn_progress):
+                            turn_delivery_state["intermediate_response"] = (
+                                render_final_turn_progress(turn_key)
+                            )
                     self._turn_contexts.pop(turn_key, None)
                     self._clear_thinking_preview(turn_key)
                     self._clear_turn_progress(turn_key)

@@ -41,6 +41,23 @@ _ACTIVE_PROGRESS_LABELS = {"working", "queued", "running", "review"}
 
 
 class TelegramNotificationHandlers:
+    def _render_turn_progress_summary(self, turn_key: tuple[str, str]) -> str:
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            cached_map = getattr(self, "_turn_progress_final_summary", None)
+            if not isinstance(cached_map, dict):
+                return ""
+            cached = cached_map.pop(turn_key, "")
+            return cached if isinstance(cached, str) else ""
+        rendered = render_progress_text(
+            tracker,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
+            now=time.monotonic(),
+            render_mode="live",
+        )
+        line = rendered.splitlines()[0].strip() if rendered else ""
+        return line
+
     def _render_final_turn_progress(self, turn_key: tuple[str, str]) -> str:
         tracker = self._turn_progress_trackers.get(turn_key)
         if tracker is None:
@@ -72,6 +89,13 @@ class TelegramNotificationHandlers:
         )
         if rendered.strip():
             cached_map[turn_key] = rendered
+            summary_map = getattr(self, "_turn_progress_final_summary", None)
+            if not isinstance(summary_map, dict):
+                summary_map = {}
+                self._turn_progress_final_summary = summary_map
+            summary_line = self._render_turn_progress_summary(turn_key)
+            if summary_line:
+                summary_map[turn_key] = summary_line
             touch_cache_timestamp = getattr(self, "_touch_cache_timestamp", None)
             if callable(touch_cache_timestamp):
                 touch_cache_timestamp("progress_trackers", turn_key)

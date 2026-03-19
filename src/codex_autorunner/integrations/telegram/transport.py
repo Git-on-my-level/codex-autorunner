@@ -25,6 +25,13 @@ from .state import OutboxRecord
 
 class TelegramMessageTransport:
     @staticmethod
+    def _looks_like_progress_summary(text: str) -> bool:
+        normalized = text.strip()
+        if not normalized or "\n" in normalized:
+            return False
+        return " · agent " in normalized
+
+    @staticmethod
     def _resolve_delivered_turn_response(
         response: str,
         intermediate_response: Optional[str] = None,
@@ -52,6 +59,8 @@ class TelegramMessageTransport:
         if metric_lines and all(
             line.startswith(("Turn time:", "Token usage:")) for line in metric_lines
         ):
+            return f"{intermediate_text}\n\n{response_text}"
+        if TelegramMessageTransport._looks_like_progress_summary(intermediate_text):
             return f"{intermediate_text}\n\n{response_text}"
         return response_text
 

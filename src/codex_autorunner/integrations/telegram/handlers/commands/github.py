@@ -1425,6 +1425,20 @@ class GitHubCommands(SharedHelpers):
         )
         metrics_mode = self._metrics_mode()
         response_text = output or "No response."
+        intermediate_response = ""
+        render_turn_progress_summary = getattr(
+            self, "_render_turn_progress_summary", None
+        )
+        if turn_context.turn_key is not None and callable(render_turn_progress_summary):
+            intermediate_response = render_turn_progress_summary(turn_context.turn_key)
+        elif turn_context.turn_key is not None:
+            render_final_turn_progress = getattr(
+                self, "_render_final_turn_progress", None
+            )
+            if callable(render_final_turn_progress):
+                intermediate_response = render_final_turn_progress(
+                    turn_context.turn_key
+                )
         if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
             response_text = f"{response_text}\n\n{metrics}"
         await self._deliver_turn_response(
@@ -1433,6 +1447,7 @@ class GitHubCommands(SharedHelpers):
             reply_to=message.message_id,
             placeholder_id=turn_context.placeholder_id,
             response=response_text,
+            intermediate_response=intermediate_response,
         )
         if metrics and metrics_mode == "separate":
             await self._send_turn_metrics(

@@ -373,6 +373,24 @@ class TelegramCommandHandlers(
         response_text = outcome.response
         if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
             response_text = f"{response_text}\n\n{metrics}"
+        intermediate_response = outcome.intermediate_response
+        if self._effective_agent(outcome.record) == "opencode":
+            if (
+                isinstance(response_text, str)
+                and response_text.strip() == "No response."
+            ):
+                response_text = ""
+            summary_text = (
+                outcome.intermediate_response.strip()
+                if isinstance(outcome.intermediate_response, str)
+                else ""
+            )
+            final_text = response_text.strip() if isinstance(response_text, str) else ""
+            if summary_text and final_text and summary_text != final_text:
+                response_text = f"{summary_text}\n\n{response_text}"
+            elif summary_text and not final_text:
+                response_text = summary_text
+            intermediate_response = None
         try:
             response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,
@@ -380,7 +398,7 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
                 placeholder_id=outcome.placeholder_id,
                 response=response_text,
-                intermediate_response=outcome.intermediate_response,
+                intermediate_response=intermediate_response,
             )
         except TypeError as exc:
             if "intermediate_response" not in str(exc):

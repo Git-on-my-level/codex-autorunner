@@ -123,6 +123,7 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         self._review_commit_subjects: dict[str, object] = {}
         self._sent_messages: list[str] = []
         self._delivered: list[str] = []
+        self._intermediate: list[Optional[str]] = []
         self._delivery_delete_flags: list[bool] = []
         self._deleted: list[int] = []
         self._placeholder_counter = 200
@@ -203,9 +204,16 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         reply_to: Optional[int],
         placeholder_id: Optional[int],
         response: str,
+        intermediate_response: Optional[str] = None,
         delete_placeholder_on_delivery: bool = True,
     ) -> bool:
-        _ = (chat_id, thread_id, reply_to, placeholder_id)
+        _ = (
+            chat_id,
+            thread_id,
+            reply_to,
+            placeholder_id,
+        )
+        self._intermediate.append(intermediate_response)
         self._delivery_delete_flags.append(delete_placeholder_on_delivery)
         self._delivered.append(response)
         return True
@@ -343,6 +351,53 @@ async def test_telegram_review_opencode_sends_command(
     assert handler._delivered[-1]
     assert handler._delivery_delete_flags[-1] is True
     assert handler._deleted == []
+
+
+@pytest.mark.integration
+@pytest.mark.anyio
+async def test_telegram_review_opencode_forwards_progress_summary(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    record = TelegramTopicRecord(
+        workspace_path=str(tmp_path),
+        agent="opencode",
+        active_thread_id="session-123",
+        thread_ids=["session-123"],
+    )
+    client = _OpenCodeClientStub(session_id="session-123")
+    supervisor = _SupervisorStub(client)
+    handler = _ReviewHandlerStub(record=record, supervisor=supervisor)
+    runtime = _RuntimeStub()
+
+    async def _fake_collect_opencode_output(
+        _client: object,
+        *,
+        session_id: str,
+        workspace_path: str,
+        **_kwargs: object,
+    ) -> OpenCodeTurnOutput:
+        _ = (session_id, workspace_path)
+        return OpenCodeTurnOutput(text="Review output", error=None)
+
+    async def _fake_opencode_missing_env(
+        *_args: object, **_kwargs: object
+    ) -> list[str]:
+        return []
+
+    monkeypatch.setattr(
+        github_commands, "collect_opencode_output", _fake_collect_opencode_output
+    )
+    monkeypatch.setattr(
+        github_commands, "opencode_missing_env", _fake_opencode_missing_env
+    )
+    handler._render_turn_progress_summary = lambda _turn_key: (
+        "done · agent opencode · model-x · 1s · step 3"
+    )
+
+    await handler._handle_review(_message(), "", runtime)
+
+    assert handler._intermediate
+    assert handler._intermediate[-1] == "done · agent opencode · model-x · 1s · step 3"
 
 
 @pytest.mark.integration
