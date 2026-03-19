@@ -336,9 +336,6 @@ def _build_compact_app_server_params(
         diff = properties.get("diff")
         if isinstance(diff, list):
             properties_summary["diff_count"] = len(diff)
-            compact_files = _compact_file_entries(diff)
-            if compact_files:
-                properties_summary["files"] = compact_files
         if preview:
             summary["message"] = preview
     if method == "message.part.updated":

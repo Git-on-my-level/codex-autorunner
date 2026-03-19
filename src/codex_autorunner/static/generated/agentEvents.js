@@ -277,7 +277,9 @@ export function parseAppServerEvent(payload) {
             (typeof params.message === "string" ? params.message.trim() : "") ||
             (typeof params.status === "string" ? params.status.trim() : "");
         const { summary: fileSummary, detail } = summarizeFileChanges(files, diffCount);
+        const diffCountLabel = diffCount === null ? "" : (diffCount === 1 ? "1 file change" : `${diffCount} file changes`);
         let summary = fileSummary;
+        let detailText = detail;
         if (!files.length && fallbackPreview) {
             const legacyDiffCount = parseLegacyDiffEntryCount(fallbackPreview);
             const effectiveDiffCount = diffCount ?? legacyDiffCount;
@@ -286,6 +288,9 @@ export function parseAppServerEvent(payload) {
             }
             else if (fallbackPreview !== "diff updated") {
                 summary = fallbackPreview;
+                if (!detailText && diffCountLabel && fallbackPreview !== diffCountLabel) {
+                    detailText = diffCountLabel;
+                }
             }
         }
         return {
@@ -293,7 +298,7 @@ export function parseAppServerEvent(payload) {
                 id: payload?.id || `${Date.now()}`,
                 title: "File change",
                 summary,
-                detail,
+                detail: detailText,
                 kind: "file",
                 isSignificant: true,
                 time: receivedAt,

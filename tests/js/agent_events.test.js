@@ -220,12 +220,6 @@ test("parses compacted session.diff payloads as file events", () => {
         message: "src/a.py, src/b.py, src/c.py, src/d.py +2 more files",
         properties: {
           diff_count: 6,
-          files: [
-            { path: "src/a.py" },
-            { path: "src/b.py" },
-            { path: "src/c.py" },
-            { path: "src/d.py" },
-          ],
         },
       },
     },
@@ -234,7 +228,7 @@ test("parses compacted session.diff payloads as file events", () => {
   assert.ok(parsed);
   assert.equal(parsed.event.kind, "file");
   assert.equal(parsed.event.title, "File change");
-  assert.equal(parsed.event.summary, "src/a.py, src/b.py, src/c.py, src/d.py +2 more");
+  assert.equal(parsed.event.summary, "src/a.py, src/b.py, src/c.py, src/d.py +2 more files");
   assert.equal(parsed.event.detail, "6 file changes");
 });
 

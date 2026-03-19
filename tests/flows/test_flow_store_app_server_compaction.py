@@ -172,10 +172,7 @@ def test_create_event_compacts_session_diff_to_semantic_file_preview(tmp_path) -
     assert event.data["message"]["params"]["message"] == "a.py, b.py"
     assert "status" not in event.data["message"]["params"]
     assert event.data["message"]["params"]["properties"]["diff_count"] == 2
-    assert event.data["message"]["params"]["properties"]["files"] == [
-        {"path": "a.py"},
-        {"path": "b.py"},
-    ]
+    assert "files" not in event.data["message"]["params"]["properties"]
 
 
 def test_create_event_session_diff_overwrites_raw_message_with_semantic_preview(
@@ -293,6 +290,5 @@ def test_create_event_compacts_session_diff_with_long_paths_and_limits(
     assert len(event.data["preview"]) <= 2048
     assert " ... " in event.data["preview"]
     assert "+2 more files" in event.data["preview"]
-    files = event.data["message"]["params"]["properties"]["files"]
-    assert len(files) == 10
+    assert "files" not in event.data["message"]["params"]["properties"]
     assert event.data["message"]["params"]["properties"]["diff_count"] == 12
