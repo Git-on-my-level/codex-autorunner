@@ -375,6 +375,11 @@ class TelegramCommandHandlers(
             response_text = f"{response_text}\n\n{metrics}"
         intermediate_response = outcome.intermediate_response
         if self._effective_agent(outcome.record) == "opencode":
+            if (
+                isinstance(response_text, str)
+                and response_text.strip() == "No response."
+            ):
+                response_text = ""
             summary_text = (
                 outcome.intermediate_response.strip()
                 if isinstance(outcome.intermediate_response, str)

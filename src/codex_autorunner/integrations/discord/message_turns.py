@@ -520,6 +520,7 @@ async def handle_message_event(
         return
     turn_result = result.thread_result
 
+    summary_already_in_response = False
     if isinstance(turn_result, DiscordMessageTurnResult):
         response_text = turn_result.final_message.strip()
         preview_message_id = turn_result.preview_message_id
@@ -530,6 +531,7 @@ async def handle_message_event(
         )
         if not response_text and intermediate_text:
             response_text = intermediate_text
+            summary_already_in_response = True
         metrics_text = _format_turn_metrics(
             turn_result.token_usage,
             turn_result.elapsed_seconds,
@@ -554,6 +556,7 @@ async def handle_message_event(
         agent == "opencode"
         and intermediate_text
         and response_text.strip()
+        and not summary_already_in_response
         and intermediate_text != response_text.strip()
     ):
         response_text = f"{intermediate_text}\n\n{response_text}"
