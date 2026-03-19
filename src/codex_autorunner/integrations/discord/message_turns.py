@@ -521,8 +521,10 @@ async def handle_message_event(
     turn_result = result.thread_result
 
     if isinstance(turn_result, DiscordMessageTurnResult):
-        response_text = turn_result.final_message
+        response_text = turn_result.final_message.strip()
         preview_message_id = turn_result.preview_message_id
+        if not response_text and isinstance(turn_result.intermediate_message, str):
+            response_text = turn_result.intermediate_message.strip()
         metrics_text = _format_turn_metrics(
             turn_result.token_usage,
             turn_result.elapsed_seconds,
