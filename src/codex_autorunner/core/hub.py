@@ -28,9 +28,11 @@ from ..manifest import (
 from ..tickets.outbox import set_lifecycle_emitter
 from .archive import (
     ArchiveProfile,
-    archive_workspace_car_state,
+    archive_workspace_for_fresh_start,
+    archive_workspace_managed_threads,
     archive_worktree_snapshot,
     build_snapshot_id,
+    dirty_car_state_paths,
     resolve_worktree_archive_intent,
 )
 from .archive_retention import resolve_worktree_archive_retention_policy
@@ -1433,35 +1435,13 @@ class HubSupervisor:
         worktree_repo_id: str,
         worktree_path: Path,
     ) -> list[str]:
-        store = PmaThreadStore(self.hub_config.root)
-        archived_thread_ids: list[str] = []
-        seen_ids: set[str] = set()
-        canonical_worktree = worktree_path.resolve()
-
-        for thread in store.list_threads(status="active", limit=None):
-            managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
-            if not managed_thread_id or managed_thread_id in seen_ids:
-                continue
-
-            thread_repo_id = str(thread.get("repo_id") or "").strip()
-            workspace_root = str(thread.get("workspace_root") or "").strip()
-            matches_repo = thread_repo_id == worktree_repo_id
-            matches_workspace = False
-            if workspace_root:
-                try:
-                    matches_workspace = (
-                        Path(workspace_root).resolve() == canonical_worktree
-                    )
-                except Exception:
-                    matches_workspace = False
-            if not matches_repo and not matches_workspace:
-                continue
-
-            store.archive_thread(managed_thread_id)
-            archived_thread_ids.append(managed_thread_id)
-            seen_ids.add(managed_thread_id)
-
-        return archived_thread_ids
+        return list(
+            archive_workspace_managed_threads(
+                hub_root=self.hub_config.root,
+                worktree_repo_id=worktree_repo_id,
+                worktree_path=worktree_path,
+            )
+        )
 
     def _bound_thread_target_ids(self) -> set[str]:
         try:
@@ -2005,13 +1985,16 @@ class HubSupervisor:
             base_path = (self.hub_config.root / base.path).resolve()
             base_repo_id = base.id
 
-        self._stop_runner_and_wait_for_exit(
-            repo_id=repo_id,
-            repo_path=repo_path,
-        )
+        has_car_state = bool(dirty_car_state_paths(repo_path))
+        if has_car_state:
+            self._stop_runner_and_wait_for_exit(
+                repo_id=repo_id,
+                repo_path=repo_path,
+            )
 
         branch_name = entry.branch or git_branch(repo_path) or "unknown"
-        result = archive_workspace_car_state(
+        result = archive_workspace_for_fresh_start(
+            hub_root=self.hub_config.root,
             base_repo_root=base_path,
             base_repo_id=base_repo_id,
             worktree_repo_root=repo_path,
@@ -2020,19 +2003,16 @@ class HubSupervisor:
             worktree_of=worktree_of,
             note=archive_note,
             source_path=entry.path,
-            intent="reset_car_state",
             retention_policy=resolve_worktree_archive_retention_policy(
                 self.hub_config.pma
             ),
         )
-        self._archive_bound_pma_threads(
-            worktree_repo_id=repo_id,
-            worktree_path=repo_path,
-        )
         return {
             "snapshot_id": result.snapshot_id,
-            "snapshot_path": str(result.snapshot_path),
-            "meta_path": str(result.meta_path),
+            "snapshot_path": (
+                str(result.snapshot_path) if result.snapshot_path else None
+            ),
+            "meta_path": str(result.meta_path) if result.meta_path else None,
             "status": result.status,
             "file_count": result.file_count,
             "total_bytes": result.total_bytes,
@@ -2040,6 +2020,8 @@ class HubSupervisor:
             "latest_flow_run_id": result.latest_flow_run_id,
             "archived_paths": list(result.archived_paths),
             "reset_paths": list(result.reset_paths),
+            "archived_thread_ids": list(result.archived_thread_ids),
+            "archived_thread_count": len(result.archived_thread_ids),
         }
 
     def archive_worktree_state(

@@ -3462,6 +3462,127 @@ class _NewtHandler(WorkspaceCommands):
         return None
 
 
+@pytest.mark.anyio
+async def test_archive_uses_shared_fresh_start_and_resets_topic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    record = TelegramTopicRecord(
+        workspace_path=str(workspace_root),
+        active_thread_id="thread-active",
+        thread_ids=["thread-active", "thread-old"],
+        rollout_path=str(workspace_root / "rollout.md"),
+        pending_compact_seed="seed",
+        pending_compact_seed_thread_id="thread-old",
+    )
+    record.thread_summaries = {
+        "thread-active": ThreadSummary(
+            user_preview="active",
+            last_used_at="2026-03-19T00:00:00Z",
+        )
+    }
+    handler = _NewtHandler(record, hub_root=hub_root)
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.resolve_workspace_archive_target",
+        lambda workspace_root, **_kwargs: SimpleNamespace(
+            base_repo_root=hub_root,
+            base_repo_id="base",
+            workspace_repo_id="repo",
+            worktree_of="base",
+            source_path="repo",
+        ),
+    )
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.archive_workspace_for_fresh_start",
+        lambda **kwargs: calls.append(kwargs)
+        or SimpleNamespace(
+            snapshot_id=None,
+            archived_paths=(),
+            archived_thread_ids=("managed-thread-1",),
+        ),
+    )
+
+    await handler._handle_archive(
+        TelegramMessage(
+            update_id=1,
+            message_id=2,
+            chat_id=10,
+            thread_id=20,
+            from_user_id=30,
+            text="/archive",
+            date=None,
+            is_topic_message=True,
+        )
+    )
+
+    assert calls
+    assert calls[0]["hub_root"] == hub_root
+    assert calls[0]["worktree_repo_id"] == "repo"
+    assert record.active_thread_id is None
+    assert record.thread_ids == []
+    assert record.thread_summaries == {}
+    assert record.rollout_path is None
+    assert record.pending_compact_seed is None
+    assert record.pending_compact_seed_thread_id is None
+    assert handler._sent
+    assert "Workspace CAR state was already clean." in handler._sent[-1]
+    assert "Archived 1 managed thread." in handler._sent[-1]
+
+
+@pytest.mark.anyio
+async def test_archive_without_hub_root_does_not_substitute_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    record = TelegramTopicRecord(workspace_path=str(workspace_root))
+    handler = _NewtHandler(record, hub_root=tmp_path / "unused")
+    handler._hub_root = None
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.resolve_workspace_archive_target",
+        lambda workspace_root, **_kwargs: SimpleNamespace(
+            base_repo_root=workspace_root,
+            base_repo_id="base",
+            workspace_repo_id="repo",
+            worktree_of="base",
+            source_path="repo",
+        ),
+    )
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.archive_workspace_for_fresh_start",
+        lambda **kwargs: calls.append(kwargs)
+        or SimpleNamespace(
+            snapshot_id="snap-1",
+            archived_paths=("tickets",),
+            archived_thread_ids=(),
+        ),
+    )
+
+    await handler._handle_archive(
+        TelegramMessage(
+            update_id=1,
+            message_id=2,
+            chat_id=10,
+            thread_id=20,
+            from_user_id=30,
+            text="/archive",
+            date=None,
+            is_topic_message=True,
+        )
+    )
+
+    assert calls
+    assert calls[0]["hub_root"] is None
+
+
 def _patch_newt_branch_reset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[dict[str, object]]:

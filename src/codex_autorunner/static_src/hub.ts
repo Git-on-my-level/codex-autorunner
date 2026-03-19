@@ -1112,6 +1112,7 @@ function buildActions(repo: HubRepo): RepoAction[] {
   const actions: RepoAction[] = [];
   const missing = !repo.exists_on_disk;
   const kind = repo.kind || "base";
+  const unboundThreads = unboundManagedThreadCount(repo);
   if (!missing && repo.mount_error) {
     actions.push({ key: "init", label: "Retry mount", kind: "primary" });
   } else if (!missing && repo.init_error) {
@@ -1131,12 +1132,17 @@ function buildActions(repo: HubRepo): RepoAction[] {
       title: "Repository settings",
     });
   }
-  if (!missing && repo.has_car_state) {
+  if (!missing && (repo.has_car_state || (kind === "base" && unboundThreads > 0))) {
     actions.push({
       key: "archive_state",
-      label: "Archive state",
+      label: "Archive",
       kind: "ghost",
-      title: "Archive CAR runtime state and reset this workspace for fresh work",
+      title:
+        kind === "base" && unboundThreads > 0
+          ? `Archive CAR state and ${unboundThreads} repo-linked managed thread${
+              unboundThreads === 1 ? "" : "s"
+            } for fresh work`
+          : "Archive CAR runtime state and reset this workspace for fresh work",
     });
   }
   if (!missing && kind === "base") {
@@ -1152,23 +1158,6 @@ function buildActions(repo: HubRepo): RepoAction[] {
       kind: "ghost",
       title: syncTitle,
       disabled: syncDisabled,
-    });
-    actions.push({
-      key: "cleanup_repo_threads",
-      label:
-        unboundManagedThreadCount(repo) > 0
-          ? `Cleanup threads (${unboundManagedThreadCount(repo)})`
-          : "Cleanup threads",
-      kind: "ghost",
-      title:
-        unboundManagedThreadCount(repo) > 0
-          ? `Archive ${unboundManagedThreadCount(
-              repo
-            )} stale non-chat-bound managed thread${
-              unboundManagedThreadCount(repo) === 1 ? "" : "s"
-            } for this repo`
-          : "No stale non-chat-bound managed threads for this repo",
-      disabled: unboundManagedThreadCount(repo) <= 0,
     });
   }
   if (!missing && kind === "worktree") {
@@ -3339,47 +3328,47 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
       await refreshHub();
       return;
     }
-    if (action === "cleanup_repo_threads") {
-      const repo = hubData.repos.find((item) => item.id === repoId);
-      if (!repo) {
-        flash(`Repo not found: ${repoId}`, "error");
-        return;
-      }
-      const cleanupCount = unboundManagedThreadCount(repo);
-      if (cleanupCount <= 0) {
-        flash(`No stale non-chat threads for ${repo.display_name || repoId}`, "success");
-        return;
-      }
-      const displayName = repo.display_name || repoId;
-      const response = (await api(
-        `/hub/repos/${encodeURIComponent(repoId)}/cleanup-threads`,
-        {
-          method: "POST",
-        }
-      )) as { message?: string } | null;
-      const message =
-        typeof response?.message === "string" && response.message.trim()
-          ? response.message.trim()
-          : `Cleaned up stale threads for ${displayName}`;
-      flash(message, "success");
-      await refreshHub();
-      return;
-    }
     if (action === "archive_state") {
       const repo = hubData.repos.find((item) => item.id === repoId);
-      if (!repo || !repo.has_car_state) return;
+      const cleanupCount = repo ? unboundManagedThreadCount(repo) : 0;
+      if (!repo || (!repo.has_car_state && cleanupCount <= 0)) return;
       const displayName = repo.display_name || repoId;
       const subject = repo.kind === "worktree" ? "worktree" : "repo";
+      const archiveSummary = repo.has_car_state
+        ? "archive reviewable runtime artifacts for later viewing in the Archive tab"
+        : "skip the snapshot because CAR state is already clean";
+      const threadSummary =
+        cleanupCount > 0
+          ? ` It will also archive ${cleanupCount} stale non-chat-bound managed thread${
+              cleanupCount === 1 ? "" : "s"
+            }.`
+          : "";
       const ok = await confirmModal(
-        `Archive ${subject} state "${displayName}"?\n\nCAR will archive reviewable runtime artifacts for later viewing in the Archive tab before resetting local CAR state. Git state is not touched, and active chat bindings remain available for fresh work.`,
-        { confirmText: "Archive state" }
+        `Archive ${subject} "${displayName}"?\n\nCAR will ${archiveSummary} before resetting local CAR state when needed.${threadSummary} Git state is not touched, and active chat bindings remain available for fresh work.`,
+        { confirmText: "Archive" }
       );
       if (!ok) return;
-      await api("/hub/repos/archive-state", {
+      const response = (await api("/hub/repos/archive-state", {
         method: "POST",
         body: { repo_id: repoId, archive_note: null },
-      });
-      flash(`Archived state for ${subject}: ${repoId}`, "success");
+      })) as {
+        snapshot_id?: string | null;
+        archived_thread_count?: number | null;
+      } | null;
+      const archivedThreadCount =
+        typeof response?.archived_thread_count === "number"
+          ? response.archived_thread_count
+          : 0;
+      const snapshotText = response?.snapshot_id
+        ? `snapshot ${response.snapshot_id}`
+        : "managed threads only";
+      const threadText =
+        archivedThreadCount > 0
+          ? ` and ${archivedThreadCount} managed thread${
+              archivedThreadCount === 1 ? "" : "s"
+            }`
+          : "";
+      flash(`Archived ${subject}: ${displayName} (${snapshotText}${threadText})`, "success");
       await refreshHub();
       return;
     }

@@ -4521,7 +4521,7 @@ class DiscordBotService:
             "/car experimental [action] [feature] - Toggle experimental features",
             "/car rollout - Show current thread rollout path",
             "/car feedback <reason> - Send feedback and logs",
-            "/car archive - Archive workspace state for a fresh start",
+            "/car archive - Archive workspace state and managed threads for a fresh start",
             "",
             "**Session Commands:**",
             "/car session resume [thread_id] - Resume a previous chat thread",
@@ -10908,7 +10908,7 @@ class DiscordBotService:
         channel_id: str,
     ) -> None:
         from ...core.archive import (
-            archive_workspace_car_state,
+            archive_workspace_for_fresh_start,
             resolve_workspace_archive_target,
         )
 
@@ -10932,7 +10932,8 @@ class DiscordBotService:
                 manifest_path=self._manifest_path,
             )
             result = await asyncio.to_thread(
-                archive_workspace_car_state,
+                archive_workspace_for_fresh_start,
+                hub_root=self._config.root,
                 base_repo_root=target.base_repo_root,
                 base_repo_id=target.base_repo_id,
                 worktree_repo_root=workspace_root,
@@ -10973,8 +10974,16 @@ class DiscordBotService:
             text=format_discord_message(
                 "\n".join(
                     [
-                        f"Archived workspace state to snapshot `{result.snapshot_id}`.",
+                        (
+                            f"Archived workspace state to snapshot `{result.snapshot_id}`."
+                            if result.snapshot_id
+                            else "Workspace CAR state was already clean."
+                        ),
                         f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
+                        (
+                            f"Archived {len(result.archived_thread_ids)} managed thread"
+                            f"{'' if len(result.archived_thread_ids) == 1 else 's'}."
+                        ),
                         "The binding remains active for fresh work.",
                     ]
                 )

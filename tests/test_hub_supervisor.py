@@ -802,6 +802,8 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
     assert "filebox" in payload["archived_paths"]
     assert "state.sqlite3" in payload["archived_paths"]
     assert "codex-autorunner.log" in payload["archived_paths"]
+    assert payload["archived_thread_count"] == 1
+    assert payload["archived_thread_ids"] == [created["managed_thread_id"]]
 
     snapshot_root = Path(payload["snapshot_path"])
     assert (snapshot_root / "tickets" / "TICKET-123-demo.md").exists()
@@ -888,7 +890,7 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     )
     monkeypatch.setattr(
         hub_module,
-        "archive_workspace_car_state",
+        "archive_workspace_for_fresh_start",
         lambda **_kwargs: archived.append(dict(_kwargs))
         or types.SimpleNamespace(
             snapshot_id="snap",
@@ -901,12 +903,8 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
             latest_flow_run_id=None,
             archived_paths=(),
             reset_paths=(),
+            archived_thread_ids=(),
         ),
-    )
-    monkeypatch.setattr(
-        supervisor,
-        "_archive_bound_pma_threads",
-        lambda **_kwargs: [],
     )
 
     supervisor.archive_repo_state(repo_id=base.id)
@@ -914,7 +912,43 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     assert fake_runner.stop_calls == 1
     assert fake_runner.reconcile_calls >= 2
     assert len(archived) == 1
-    assert archived[0]["intent"] == "reset_car_state"
+    assert archived[0]["worktree_repo_id"] == base.id
+
+
+@pytest.mark.slow
+def test_hub_archive_repo_state_endpoint_archives_threads_when_state_is_clean(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    (base.path / ".codex-autorunner" / "tickets" / "TICKET-100-seed.md").write_text(
+        "seed\n", encoding="utf-8"
+    )
+    supervisor.archive_repo_state(repo_id=base.id)
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
+    payload = supervisor.archive_repo_state(repo_id=base.id)
+    assert payload["snapshot_id"] is None
+    assert payload["snapshot_path"] is None
+    assert payload["status"] == "threads_only"
+    assert payload["archived_paths"] == []
+    assert payload["archived_thread_ids"] == [created["managed_thread_id"]]
+    assert payload["archived_thread_count"] == 1
+
+    thread = store.get_thread(created["managed_thread_id"])
+    assert thread is not None
+    assert thread["lifecycle_status"] == "archived"
 
 
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):

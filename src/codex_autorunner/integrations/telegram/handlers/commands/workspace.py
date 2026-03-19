@@ -1705,7 +1705,7 @@ class WorkspaceCommands(SharedHelpers):
 
     async def _handle_archive(self, message: TelegramMessage) -> None:
         from .....core.archive import (
-            archive_workspace_car_state,
+            archive_workspace_for_fresh_start,
             resolve_workspace_archive_target,
         )
 
@@ -1750,7 +1750,8 @@ class WorkspaceCommands(SharedHelpers):
                 manifest_path=manifest_path,
             )
             result = await asyncio.to_thread(
-                archive_workspace_car_state,
+                archive_workspace_for_fresh_start,
+                hub_root=self._hub_root,
                 base_repo_root=target.base_repo_root,
                 base_repo_id=target.base_repo_id,
                 worktree_repo_root=workspace_root,
@@ -1799,8 +1800,16 @@ class WorkspaceCommands(SharedHelpers):
             message.chat_id,
             "\n".join(
                 [
-                    f"Archived workspace state to snapshot `{result.snapshot_id}`.",
+                    (
+                        f"Archived workspace state to snapshot `{result.snapshot_id}`."
+                        if result.snapshot_id
+                        else "Workspace CAR state was already clean."
+                    ),
                     f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
+                    (
+                        f"Archived {len(result.archived_thread_ids)} managed thread"
+                        f"{'' if len(result.archived_thread_ids) == 1 else 's'}."
+                    ),
                     "The binding remains active for fresh work.",
                 ]
             ),

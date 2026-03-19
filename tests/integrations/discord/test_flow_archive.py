@@ -278,6 +278,68 @@ async def test_flow_archive_button_deletes_run_record_by_default(
 
 
 @pytest.mark.anyio
+async def test_car_archive_uses_shared_fresh_start_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+
+    async def _fake_require_bound_workspace(*_args: Any, **_kwargs: Any) -> Path:
+        return workspace
+
+    service._require_bound_workspace = _fake_require_bound_workspace  # type: ignore[assignment]
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.resolve_workspace_archive_target",
+        lambda workspace_root, **_kwargs: type(
+            "_Target",
+            (),
+            {
+                "base_repo_root": workspace_root,
+                "base_repo_id": "repo-1",
+                "workspace_repo_id": "repo-1",
+                "worktree_of": "repo-1",
+                "source_path": "workspace",
+            },
+        )(),
+    )
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "codex_autorunner.core.archive.archive_workspace_for_fresh_start",
+        lambda **kwargs: calls.append(kwargs)
+        or type(
+            "_Result",
+            (),
+            {
+                "snapshot_id": None,
+                "archived_paths": (),
+                "archived_thread_ids": ("thread-1", "thread-2"),
+            },
+        )(),
+    )
+
+    try:
+        await service._handle_car_archive(
+            "interaction-archive-1",
+            "token-archive-1",
+            channel_id="channel-1",
+        )
+    finally:
+        await service._store.close()
+
+    assert calls
+    assert calls[0]["hub_root"] == tmp_path
+    assert calls[0]["worktree_repo_root"] == workspace
+    assert rest.interaction_responses[0]["payload"]["type"] == 5
+    assert len(rest.followup_messages) == 1
+    content = rest.followup_messages[0]["payload"]["content"]
+    assert "workspace car state was already clean" in content.lower()
+    assert "archived 2 managed threads" in content.lower()
+
+
+@pytest.mark.anyio
 async def test_flow_archive_button_retires_stale_card_on_missing_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

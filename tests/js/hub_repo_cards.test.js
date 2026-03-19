@@ -121,7 +121,7 @@ test("repo cards show chat binding labels instead of raw chat ids", () => {
   assert.doesNotMatch(text, /ce806ba9-4e19-459a-9e01-2d3d3c6eafd4/);
 });
 
-test("worktree cards show archive state action when CAR state is present", () => {
+test("worktree cards show archive action when CAR state is present", () => {
   __hubTest.setHubChannelEntries([]);
   __hubTest.renderRepos([
     {
@@ -156,11 +156,11 @@ test("worktree cards show archive state action when CAR state is present", () =>
   ]);
 
   const text = document.getElementById("hub-repo-list")?.textContent || "";
-  assert.match(text, /Archive state/);
+  assert.match(text, /Archive/);
   assert.match(text, /Cleanup/);
 });
 
-test("base repo cards show archive state and cleanup threads actions", () => {
+test("base repo cards show archive action and cleanup-all summary", () => {
   __hubTest.setHubChannelEntries([]);
   __hubTest.renderRepos([
     {
@@ -196,8 +196,8 @@ test("base repo cards show archive state and cleanup threads actions", () => {
   ]);
 
   const text = document.getElementById("hub-repo-list")?.textContent || "";
-  assert.match(text, /Archive state/);
-  assert.match(text, /Cleanup threads \(2\)/);
+  assert.match(text, /Archive/);
+  assert.doesNotMatch(text, /Cleanup threads/);
   const cleanupAllText =
     document.getElementById("hub-cleanup-all-threads")?.textContent || "";
   assert.match(cleanupAllText, /Cleanup all \(2\)/);

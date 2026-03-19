@@ -220,9 +220,9 @@ class HubArchiveWorktreeResponse(ResponseModel):
 
 
 class HubArchiveWorktreeStateResponse(ResponseModel):
-    snapshot_id: str
-    snapshot_path: str
-    meta_path: str
+    snapshot_id: Optional[str]
+    snapshot_path: Optional[str]
+    meta_path: Optional[str]
     status: str
     file_count: int
     total_bytes: int
@@ -230,6 +230,8 @@ class HubArchiveWorktreeStateResponse(ResponseModel):
     latest_flow_run_id: Optional[str]
     archived_paths: list[str]
     reset_paths: list[str]
+    archived_thread_ids: list[str] = []
+    archived_thread_count: int = 0
 
 
 class HubArchiveRepoStateResponse(HubArchiveWorktreeStateResponse):

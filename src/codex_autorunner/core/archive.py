@@ -21,6 +21,7 @@ from .state import load_state, now_iso
 from .utils import atomic_write
 
 ArchiveStatus = Literal["complete", "partial", "failed"]
+WorkspaceFreshArchiveStatus = Literal["complete", "partial", "failed", "threads_only"]
 ArchiveMode = Literal["copy", "move"]
 ArchiveProfile = Literal["portable", "full"]
 ArchiveIntent = Literal[
@@ -67,6 +68,21 @@ class ArchivedCarStateResult:
     reset_paths: tuple[str, ...]
     missing_paths: tuple[str, ...]
     skipped_symlinks: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class WorkspaceFreshArchiveResult:
+    snapshot_id: Optional[str]
+    snapshot_path: Optional[Path]
+    meta_path: Optional[Path]
+    status: WorkspaceFreshArchiveStatus
+    file_count: int
+    total_bytes: int
+    flow_run_count: int
+    latest_flow_run_id: Optional[str]
+    archived_paths: tuple[str, ...]
+    reset_paths: tuple[str, ...]
+    archived_thread_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -672,6 +688,51 @@ def resolve_workspace_archive_target(
     )
 
 
+def archive_workspace_managed_threads(
+    *,
+    hub_root: Optional[Path],
+    worktree_repo_id: str,
+    worktree_path: Path,
+) -> tuple[str, ...]:
+    from .config import find_nearest_hub_config_path
+    from .pma_thread_store import PmaThreadStore
+
+    resolved_hub_root = hub_root
+    if resolved_hub_root is None:
+        config_path = find_nearest_hub_config_path(worktree_path)
+        resolved_hub_root = config_path.parent if config_path is not None else None
+    if resolved_hub_root is None:
+        return ()
+
+    store = PmaThreadStore(resolved_hub_root)
+    archived_thread_ids: list[str] = []
+    seen_ids: set[str] = set()
+    canonical_worktree = worktree_path.resolve()
+
+    for thread in store.list_threads(status="active", limit=None):
+        managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
+        if not managed_thread_id or managed_thread_id in seen_ids:
+            continue
+
+        thread_repo_id = str(thread.get("repo_id") or "").strip()
+        workspace_root = str(thread.get("workspace_root") or "").strip()
+        matches_repo = thread_repo_id == worktree_repo_id
+        matches_workspace = False
+        if workspace_root:
+            try:
+                matches_workspace = Path(workspace_root).resolve() == canonical_worktree
+            except Exception:
+                matches_workspace = False
+        if not matches_repo and not matches_workspace:
+            continue
+
+        store.archive_thread(managed_thread_id)
+        archived_thread_ids.append(managed_thread_id)
+        seen_ids.add(managed_thread_id)
+
+    return tuple(archived_thread_ids)
+
+
 def _move_entry(
     src: Path,
     dest: Path,
@@ -1174,4 +1235,73 @@ def archive_workspace_car_state(
         reset_paths=reset_paths,
         missing_paths=execution.missing_paths,
         skipped_symlinks=execution.skipped_symlinks,
+    )
+
+
+def archive_workspace_for_fresh_start(
+    *,
+    hub_root: Optional[Path],
+    base_repo_root: Path,
+    base_repo_id: str,
+    worktree_repo_root: Path,
+    worktree_repo_id: str,
+    branch: Optional[str],
+    worktree_of: str,
+    note: Optional[str] = None,
+    source_path: Optional[Path | str] = None,
+    retention_policy: Optional[WorktreeArchiveRetentionPolicy] = None,
+) -> WorkspaceFreshArchiveResult:
+    state_result: Optional[ArchivedCarStateResult] = None
+    if dirty_car_state_paths(worktree_repo_root):
+        state_result = archive_workspace_car_state(
+            base_repo_root=base_repo_root,
+            base_repo_id=base_repo_id,
+            worktree_repo_root=worktree_repo_root,
+            worktree_repo_id=worktree_repo_id,
+            branch=branch,
+            worktree_of=worktree_of,
+            note=note,
+            source_path=source_path,
+            intent="reset_car_state",
+            retention_policy=retention_policy,
+        )
+
+    archived_thread_ids = archive_workspace_managed_threads(
+        hub_root=hub_root,
+        worktree_repo_id=worktree_repo_id,
+        worktree_path=worktree_repo_root,
+    )
+
+    if state_result is None and not archived_thread_ids:
+        raise ValueError(
+            "No CAR state or managed threads to archive. Workspace is already clean."
+        )
+
+    if state_result is None:
+        return WorkspaceFreshArchiveResult(
+            snapshot_id=None,
+            snapshot_path=None,
+            meta_path=None,
+            status="threads_only",
+            file_count=0,
+            total_bytes=0,
+            flow_run_count=0,
+            latest_flow_run_id=None,
+            archived_paths=(),
+            reset_paths=(),
+            archived_thread_ids=archived_thread_ids,
+        )
+
+    return WorkspaceFreshArchiveResult(
+        snapshot_id=state_result.snapshot_id,
+        snapshot_path=state_result.snapshot_path,
+        meta_path=state_result.meta_path,
+        status=state_result.status,
+        file_count=state_result.file_count,
+        total_bytes=state_result.total_bytes,
+        flow_run_count=state_result.flow_run_count,
+        latest_flow_run_id=state_result.latest_flow_run_id,
+        archived_paths=state_result.archived_paths,
+        reset_paths=state_result.reset_paths,
+        archived_thread_ids=archived_thread_ids,
     )
