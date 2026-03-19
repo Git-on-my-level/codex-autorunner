@@ -480,7 +480,10 @@ async def _execute_app_server(
     )
     register_turn = getattr(events, "register_turn", None)
     if callable(register_turn):
-        await register_turn(thread_id, handle.turn_id)
+        try:
+            await register_turn(thread_id, handle.turn_id)
+        except Exception:
+            logger.debug("pma chat register_turn failed", exc_info=True)
     codex_harness = CodexHarness(supervisor, events)
     if on_meta is not None:
         try:

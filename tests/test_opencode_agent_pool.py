@@ -15,6 +15,7 @@ from codex_autorunner.agents.types import (
 )
 from codex_autorunner.core.config import TicketFlowConfig
 from codex_autorunner.core.flows.models import FlowEventType
+from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.integrations.agents.agent_pool_impl import DefaultAgentPool
 from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
@@ -27,6 +28,9 @@ class _HarnessScript:
     errors: list[str] = field(default_factory=list)
     release_event: Optional[asyncio.Event] = None
     started_event: Optional[asyncio.Event] = None
+    streamed_raw_events: Optional[list[dict[str, Any]]] = None
+    stream_pause_after: Optional[int] = None
+    stream_release_event: Optional[asyncio.Event] = None
 
 
 class _FakeHarness:
@@ -132,8 +136,15 @@ class _FakeHarness:
     ):
         _ = workspace_root
         script = self._turns[(conversation_id, turn_id)]
-        for payload in script.raw_events:
+        streamed_raw_events = script.streamed_raw_events or script.raw_events
+        for index, payload in enumerate(streamed_raw_events, start=1):
             yield payload
+            if (
+                script.stream_pause_after is not None
+                and index >= script.stream_pause_after
+                and script.stream_release_event is not None
+            ):
+                await script.stream_release_event.wait()
 
 
 class _FakeCloser:
@@ -556,6 +567,54 @@ async def test_run_turn_handles_failure_and_returns_error(tmp_path: Path):
     assert result.raw["token_usage"] is None
     assert isinstance(result.raw["execution_id"], str)
     assert result.raw["backend_thread_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_live_stream(
+    tmp_path: Path,
+):
+    raw_events = [
+        _message(
+            "item/toolCall/start",
+            {"item": {"toolCall": {"name": "shell", "input": {"cmd": "pwd"}}}},
+        ),
+        _message(
+            "item/toolCall/end",
+            {"name": "shell", "result": {"stdout": str(tmp_path)}},
+        ),
+    ]
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="done",
+                raw_events=raw_events,
+                streamed_raw_events=raw_events,
+                stream_pause_after=1,
+                stream_release_event=asyncio.Event(),
+            )
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="codex",
+            prompt="main",
+            workspace_root=tmp_path,
+        )
+    )
+
+    timeline = list_turn_timeline(
+        tmp_path,
+        execution_id=str(result.raw["execution_id"]),
+    )
+
+    assert [entry["event_type"] for entry in timeline] == [
+        "tool_call",
+        "tool_result",
+        "turn_completed",
+    ]
+    assert timeline[1]["event"]["result"] == {"stdout": str(tmp_path)}
 
 
 @pytest.mark.asyncio

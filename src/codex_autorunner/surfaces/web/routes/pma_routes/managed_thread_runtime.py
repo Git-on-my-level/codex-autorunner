@@ -262,6 +262,21 @@ def _persist_managed_thread_timeline(
         )
 
 
+async def _timeline_from_runtime_raw_events(
+    raw_events: tuple[Any, ...],
+) -> list[RunEvent]:
+    state = RuntimeThreadRunEventState()
+    timeline_events: list[RunEvent] = []
+    for raw_event in raw_events:
+        timeline_events.extend(
+            await normalize_runtime_thread_raw_event(
+                raw_event,
+                state,
+            )
+        )
+    return timeline_events
+
+
 async def deliver_bound_chat_assistant_output(
     request: Request,
     *,
@@ -836,14 +851,17 @@ def build_managed_thread_runtime_routes(
             timeline_events: list[RunEvent] = []
             stream_task: Optional[asyncio.Task[None]] = None
             live_backend_turn_id = str(started.execution.backend_id or "")
+            harness = getattr(started, "harness", None)
             if (
-                started.harness.supports("event_streaming")
+                harness is not None
+                and callable(getattr(harness, "supports", None))
+                and harness.supports("event_streaming")
                 and current_backend_thread_id
                 and live_backend_turn_id
             ):
 
                 async def _collect_timeline() -> None:
-                    async for raw_event in started.harness.stream_events(
+                    async for raw_event in harness.stream_events(
                         started.workspace_root,
                         current_backend_thread_id,
                         live_backend_turn_id,
@@ -882,14 +900,10 @@ def build_managed_thread_runtime_routes(
                     stream_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await stream_task
-            if not timeline_events and outcome.raw_events:
-                for raw_event in outcome.raw_events:
-                    timeline_events.extend(
-                        await normalize_runtime_thread_raw_event(
-                            raw_event,
-                            timeline_state,
-                        )
-                    )
+            if outcome.raw_events:
+                timeline_events = await _timeline_from_runtime_raw_events(
+                    outcome.raw_events
+                )
 
             finalized_thread = service.get_thread_target(managed_thread_id)
             resolved_backend_thread_id = (

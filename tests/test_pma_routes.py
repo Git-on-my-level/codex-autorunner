@@ -413,6 +413,25 @@ def test_pma_chat_response_omits_legacy_delivery_fields(hub_env) -> None:
     assert "delivery_status" not in payload
 
 
+def test_pma_chat_register_turn_failure_is_best_effort(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    _install_fake_successful_chat_supervisor(app, turn_id="turn-register-failure")
+
+    class _BrokenEvents:
+        async def register_turn(self, thread_id: str, turn_id: str) -> None:
+            _ = thread_id, turn_id
+            raise RuntimeError("buffer unavailable")
+
+    app.state.app_server_events = _BrokenEvents()
+
+    client = TestClient(app)
+    resp = client.post("/hub/pma/chat", json={"message": "hi"})
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
 def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

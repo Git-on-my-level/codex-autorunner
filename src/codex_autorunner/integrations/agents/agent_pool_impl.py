@@ -588,6 +588,39 @@ class DefaultAgentPool:
                 exc_info=True,
             )
 
+    async def _replay_runtime_raw_events(
+        self,
+        raw_events: list[Any] | tuple[Any, ...],
+        *,
+        emit_event: Optional[EmitEventFn],
+        turn_id: str,
+        summary: _RuntimeEventSummary,
+    ) -> None:
+        for raw_event in raw_events:
+            for message in await self._decode_runtime_messages(raw_event):
+                self._emit_runtime_message(
+                    message,
+                    emit_event=emit_event,
+                    turn_id=turn_id,
+                    summary=summary,
+                    timestamp=now_iso(),
+                )
+
+    async def _summarize_runtime_raw_events(
+        self,
+        raw_events: list[Any] | tuple[Any, ...],
+        *,
+        turn_id: str,
+    ) -> _RuntimeEventSummary:
+        summary = _RuntimeEventSummary()
+        await self._replay_runtime_raw_events(
+            raw_events,
+            emit_event=None,
+            turn_id=turn_id,
+            summary=summary,
+        )
+        return summary
+
     async def _run_started_execution(self, started: RuntimeThreadExecution) -> None:
         thread_id = started.thread.thread_target_id
         execution_id = started.execution.execution_id
@@ -595,6 +628,7 @@ class DefaultAgentPool:
         summary = _RuntimeEventSummary()
         stream_task: Optional[asyncio.Task[None]] = None
         backend_turn_id = _normalize_optional_text(started.execution.backend_id)
+        result_raw_events: tuple[Any, ...] = ()
 
         if backend_turn_id is not None and started.harness.supports("event_streaming"):
             stream_task = asyncio.create_task(
@@ -616,16 +650,14 @@ class DefaultAgentPool:
                 backend_turn_id,
                 timeout=None,
             )
+            result_raw_events = tuple(getattr(result, "raw_events", ()) or ())
             if not summary.streamed_live:
-                for raw_event in result.raw_events:
-                    for message in await self._decode_runtime_messages(raw_event):
-                        self._emit_runtime_message(
-                            message,
-                            emit_event=emitter,
-                            turn_id=backend_turn_id or execution_id,
-                            summary=summary,
-                            timestamp=now_iso(),
-                        )
+                await self._replay_runtime_raw_events(
+                    result_raw_events,
+                    emit_event=emitter,
+                    turn_id=backend_turn_id or execution_id,
+                    summary=summary,
+                )
             assistant_text = (
                 _normalize_optional_text(result.assistant_text)
                 or "".join(summary.assistant_parts).strip()
@@ -673,6 +705,12 @@ class DefaultAgentPool:
                 stream_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await stream_task
+        effective_summary = summary
+        if result_raw_events:
+            effective_summary = await self._summarize_runtime_raw_events(
+                result_raw_events,
+                turn_id=backend_turn_id or execution_id,
+            )
 
         refreshed_thread = started.service.get_thread_target(thread_id)
         backend_thread_id = (
@@ -726,14 +764,14 @@ class DefaultAgentPool:
         final_text = (
             assistant_text
             if assistant_text
-            else "".join(summary.assistant_parts).strip()
+            else "".join(effective_summary.assistant_parts).strip()
         )
         terminal_event = _final_run_event(
             status=status,
             assistant_text=final_text,
             error=final_error,
         )
-        summary.timeline_events.append(terminal_event)
+        effective_summary.timeline_events.append(terminal_event)
         if not is_terminal_run_event(terminal_event):
             raise RuntimeError("Delegated runtime execution did not finalize cleanly")
 
@@ -765,7 +803,7 @@ class DefaultAgentPool:
                     "reasoning": started.request.reasoning,
                     "request_kind": started.request.kind,
                 },
-                events=summary.timeline_events,
+                events=effective_summary.timeline_events,
             )
         except Exception:
             _logger.exception(
@@ -784,8 +822,8 @@ class DefaultAgentPool:
                 error=final_error,
                 raw={
                     "final_status": "completed" if status == "ok" else result_status,
-                    "log_lines": list(summary.log_lines),
-                    "token_usage": summary.token_usage,
+                    "log_lines": list(effective_summary.log_lines),
+                    "token_usage": effective_summary.token_usage,
                     "execution_id": execution_id,
                     "backend_thread_id": backend_thread_id,
                 },

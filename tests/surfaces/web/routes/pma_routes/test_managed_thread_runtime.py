@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
+from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.core.pma_context import format_pma_discoverability_preamble
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
@@ -431,6 +433,122 @@ def test_managed_thread_message_route_preserves_literal_message_whitespace(
     runtime_prompt = captured["request"].metadata["runtime_prompt"]
     assert f"<user_message>\n{literal_message}" in runtime_prompt
     assert runtime_prompt.endswith("\n</user_message>\n")
+
+
+def test_managed_thread_message_persists_full_timeline_from_raw_events(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex", hub_env.repo_root.resolve(), repo_id=hub_env.repo_id
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    raw_events = (
+        {
+            "message": {
+                "method": "item/toolCall/start",
+                "params": {
+                    "item": {"toolCall": {"name": "shell", "input": {"cmd": "pwd"}}}
+                },
+            }
+        },
+        {
+            "message": {
+                "method": "item/toolCall/end",
+                "params": {"name": "shell", "result": {"stdout": str(hub_env.repo_root)}},
+            }
+        },
+    )
+
+    class FakeHarness:
+        def supports(self, capability: str) -> bool:
+            return capability == "event_streaming"
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield raw_events[0]
+            await asyncio.Future()
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(self, *args, **kwargs):
+            _ = args, kwargs
+            return SimpleNamespace(status="ok", error=None, backend_id="backend-turn-1")
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+        def get_running_execution(self, thread_target_id: str):
+            _ = thread_target_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-raw-events",
+                backend_id="backend-turn-1",
+                status="running",
+            ),
+            thread=SimpleNamespace(backend_thread_id="backend-thread-1"),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+            harness=FakeHarness(),
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+            raw_events=raw_events,
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "await_runtime_thread_outcome",
+        _fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    timeline = list_turn_timeline(hub_env.hub_root, execution_id="managed-turn-raw-events")
+    assert [entry["event_type"] for entry in timeline] == [
+        "tool_call",
+        "tool_result",
+        "turn_completed",
+    ]
 
 
 def test_zeroclaw_managed_thread_projects_compat_agents_file_for_core_profile(
