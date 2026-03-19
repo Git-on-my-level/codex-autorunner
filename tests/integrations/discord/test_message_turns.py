@@ -2743,6 +2743,57 @@ async def test_message_create_turn_uses_progress_snapshot_when_final_empty(
 
 
 @pytest.mark.anyio
+async def test_message_create_opencode_turn_sends_summary_before_final(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_agent_state(channel_id="channel-1", agent="opencode")
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(**_kwargs: Any) -> DiscordMessageTurnResult:
+        return DiscordMessageTurnResult(
+            final_message="final output",
+            intermediate_message="done · agent opencode · model-x · 1s · step 3",
+            preview_message_id="preview-1",
+        )
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _fake_run_turn)
+
+    try:
+        await service.run_forever()
+        contents = [
+            str(msg["payload"].get("content", "")) for msg in rest.channel_messages
+        ]
+        assert any(
+            "done · agent opencode · model-x · 1s · step 3\n\nfinal output" in content
+            for content in contents
+        )
+        assert not any(content.strip() == "---" for content in contents)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_completion_sends_final_and_deletes_preview(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

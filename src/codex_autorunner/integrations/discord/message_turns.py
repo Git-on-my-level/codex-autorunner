@@ -523,8 +523,13 @@ async def handle_message_event(
     if isinstance(turn_result, DiscordMessageTurnResult):
         response_text = turn_result.final_message.strip()
         preview_message_id = turn_result.preview_message_id
-        if not response_text and isinstance(turn_result.intermediate_message, str):
-            response_text = turn_result.intermediate_message.strip()
+        intermediate_text = (
+            turn_result.intermediate_message.strip()
+            if isinstance(turn_result.intermediate_message, str)
+            else ""
+        )
+        if not response_text and intermediate_text:
+            response_text = intermediate_text
         metrics_text = _format_turn_metrics(
             turn_result.token_usage,
             turn_result.elapsed_seconds,
@@ -537,6 +542,7 @@ async def handle_message_event(
     else:
         response_text = str(turn_result or "")
         preview_message_id = None
+        intermediate_text = ""
 
     if isinstance(preview_message_id, str) and preview_message_id:
         await service._delete_channel_message_safe(
@@ -544,6 +550,13 @@ async def handle_message_event(
             message_id=preview_message_id,
             record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
         )
+    if (
+        agent == "opencode"
+        and intermediate_text
+        and response_text.strip()
+        and intermediate_text != response_text.strip()
+    ):
+        response_text = f"{intermediate_text}\n\n{response_text}"
     await _send_discord_turn_section(
         service,
         channel_id=channel_id,
@@ -1534,12 +1547,22 @@ async def _run_discord_orchestrated_turn_for_message(
     )
     if finalized["status"] != "ok":
         raise RuntimeError(str(finalized.get("error") or public_execution_error))
-    intermediate_message = render_progress_text(
+    summary_snapshot = render_progress_text(
         tracker,
         max_length=max_progress_len,
         now=time.monotonic(),
-        render_mode="final",
+        render_mode="live",
     )
+    intermediate_message = (
+        summary_snapshot.splitlines()[0].strip() if summary_snapshot else ""
+    )
+    if not intermediate_message:
+        intermediate_message = render_progress_text(
+            tracker,
+            max_length=max_progress_len,
+            now=time.monotonic(),
+            render_mode="final",
+        )
     return DiscordMessageTurnResult(
         final_message=str(finalized.get("assistant_text") or ""),
         preview_message_id=progress_message_id,
