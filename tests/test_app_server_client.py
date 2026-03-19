@@ -707,6 +707,55 @@ async def test_wait_for_turn_stall_recovery_preserves_agent_message_phase(
 
 
 @pytest.mark.anyio
+async def test_wait_for_turn_stall_recovery_clears_stale_final_answer_state(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=0.01,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.agent_messages = ["stale commentary", "stale final"]
+        state.commentary_messages = ["stale commentary"]
+        state.final_answer_messages = ["stale final"]
+        state.last_event_at -= 1.0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {
+                "thread": {
+                    "id": thread_id,
+                    "turns": [
+                        {
+                            "id": "turn-1",
+                            "status": "completed",
+                            "items": [
+                                {
+                                    "type": "agentMessage",
+                                    "text": "recovered final reply",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        result = await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0)
+        assert result.status == "completed"
+        assert result.agent_messages == ["recovered final reply"]
+        assert result.commentary_messages == []
+        assert result.final_message == "recovered final reply"
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_wait_for_turn_times_out_when_resume_stays_non_terminal(
     tmp_path: Path,
 ) -> None:

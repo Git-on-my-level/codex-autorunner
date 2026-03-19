@@ -137,9 +137,9 @@ class TurnResult:
     status: Optional[str]
     final_message: str
     agent_messages: list[str]
-    commentary_messages: list[str]
     errors: list[str]
     raw_events: list[Dict[str, Any]]
+    commentary_messages: list[str] = field(default_factory=list)
 
 
 class TurnHandle:
@@ -660,13 +660,11 @@ class CodexAppServerClient:
         )
         if agent_messages:
             state.agent_messages = agent_messages
+            state.commentary_messages = commentary_messages
+            state.final_answer_messages = final_answer_messages
             # Resume snapshots include full message bodies, so older streaming
             # deltas from before recovery are stale once we adopt them.
             state.agent_message_deltas.clear()
-        if commentary_messages:
-            state.commentary_messages = commentary_messages
-        if final_answer_messages:
-            state.final_answer_messages = final_answer_messages
         if errors:
             state.errors.extend(errors)
         if status:

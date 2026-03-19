@@ -111,6 +111,70 @@ async def test_opencode_harness_wait_for_turn_collects_plain_text_output() -> No
 
 
 @pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_prefers_phase_marked_final_answer() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.completed",
+                        data='{"sessionID":"session-1","text":"draft reply","phase":"commentary"}',
+                    ),
+                    SSEEvent(
+                        event="message.completed",
+                        data='{"sessionID":"session-1","text":"final reply","phase":"final_answer"}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "final reply"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_uses_stream_output_over_commentary_only_completion() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.completed",
+                        data='{"sessionID":"session-1","text":"draft reply","phase":"commentary"}',
+                    ),
+                    SSEEvent(
+                        event="item/agentMessage/delta",
+                        data='{"sessionID":"session-1","itemId":"item-1","delta":"final reply"}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "final reply"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
 async def test_opencode_harness_wait_for_turn_reports_errors() -> None:
     harness = OpenCodeHarness(
         _StubSupervisor(
