@@ -36,7 +36,13 @@ from .....core.pma_lifecycle import PmaLifecycleRouter
 from .....core.pma_queue import QueueItemState
 from .....core.pma_state import PmaStateStore
 from .....core.pma_transcripts import PmaTranscriptStore
-from .....core.ports.run_event import Completed, RunEvent
+from .....core.ports.run_event import (
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+    Completed,
+    OutputDelta,
+    RunEvent,
+)
 from .....core.time_utils import now_iso
 from .....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from .....integrations.github.context_injection import maybe_inject_github_context
@@ -427,6 +433,18 @@ def _cancel_background_task(task: asyncio.Task[Any], *, name: str) -> None:
     task.cancel()
 
 
+def _timeline_has_assistant_output(events: list[RunEvent]) -> bool:
+    return any(
+        isinstance(event, OutputDelta)
+        and event.delta_type
+        in {
+            RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+            RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        }
+        for event in events
+    )
+
+
 async def _execute_app_server(
     supervisor: Any,
     events: Any,
@@ -717,6 +735,31 @@ async def _execute_opencode(
 
     if output_result.error:
         raise HTTPException(status_code=502, detail=output_result.error)
+    if (
+        output_result.text
+        and prompt_response is not None
+        and not _timeline_has_assistant_output(timeline_events)
+    ):
+        completion_payload = (
+            dict(prompt_response) if isinstance(prompt_response, dict) else {}
+        )
+        info = completion_payload.get("info")
+        if not isinstance(info, dict):
+            info = {}
+        info = dict(info)
+        if not isinstance(info.get("role"), str) or not str(info.get("role")).strip():
+            info["role"] = "assistant"
+        completion_payload["info"] = info
+        if not isinstance(completion_payload.get("parts"), list):
+            completion_payload["parts"] = [{"type": "text", "text": output_result.text}]
+        timeline_events.extend(
+            normalize_runtime_thread_message(
+                "message.completed",
+                completion_payload,
+                timeline_state,
+                timestamp=now_iso(),
+            )
+        )
     timeline_events.append(
         Completed(timestamp=now_iso(), final_message=output_result.text)
     )

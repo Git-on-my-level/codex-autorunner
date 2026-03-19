@@ -17,6 +17,7 @@ from ...core.orchestration import (
 )
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
+    merge_runtime_thread_raw_events,
     normalize_runtime_thread_message_payload,
 )
 from ...core.orchestration.runtime_threads import (
@@ -183,6 +184,7 @@ class _RuntimeEventSummary:
         default_factory=RuntimeThreadRunEventState
     )
     timeline_events: list[RunEvent] = field(default_factory=list)
+    streamed_raw_events: list[Any] = field(default_factory=list)
 
 
 def _final_run_event(
@@ -571,6 +573,7 @@ class DefaultAgentPool:
                 backend_thread_id,
                 backend_turn_id,
             ):
+                summary.streamed_raw_events.append(raw_event)
                 for message in await self._decode_runtime_messages(raw_event):
                     self._emit_runtime_message(
                         message,
@@ -706,9 +709,13 @@ class DefaultAgentPool:
                 with contextlib.suppress(asyncio.CancelledError):
                     await stream_task
         effective_summary = summary
-        if result_raw_events:
+        merged_raw_events = merge_runtime_thread_raw_events(
+            summary.streamed_raw_events,
+            result_raw_events,
+        )
+        if merged_raw_events:
             effective_summary = await self._summarize_runtime_raw_events(
-                result_raw_events,
+                merged_raw_events,
                 turn_id=backend_turn_id or execution_id,
             )
 

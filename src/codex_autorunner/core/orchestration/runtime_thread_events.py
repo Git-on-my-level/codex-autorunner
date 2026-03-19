@@ -28,6 +28,36 @@ _APPROVAL_METHODS = {
 }
 
 
+def _runtime_raw_event_key(raw_event: Any) -> str:
+    if isinstance(raw_event, (dict, list)):
+        return json.dumps(
+            raw_event,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    return str(raw_event)
+
+
+def merge_runtime_thread_raw_events(
+    streamed_raw_events: list[Any] | tuple[Any, ...],
+    result_raw_events: list[Any] | tuple[Any, ...],
+) -> list[Any]:
+    streamed = list(streamed_raw_events or [])
+    result = list(result_raw_events or [])
+    if not streamed:
+        return result
+    if not result:
+        return streamed
+    streamed_keys = [_runtime_raw_event_key(item) for item in streamed]
+    result_keys = [_runtime_raw_event_key(item) for item in result]
+    max_overlap = min(len(streamed_keys), len(result_keys))
+    for overlap in range(max_overlap, 0, -1):
+        if streamed_keys[-overlap:] == result_keys[:overlap]:
+            return streamed + result[overlap:]
+    return streamed + result
+
+
 def _merge_assistant_stream(current: str, incoming: str) -> str:
     if not incoming:
         return current
@@ -1003,6 +1033,19 @@ def _extract_message_text(params: dict[str, Any]) -> str:
         value = params.get(key)
         if isinstance(value, str) and value.strip():
             return value
+    parts = params.get("parts")
+    if isinstance(parts, list):
+        text_parts: list[str] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") != "text":
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                text_parts.append(text)
+        if text_parts:
+            return "".join(text_parts)
     return ""
 
 
@@ -1051,6 +1094,7 @@ def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
 
 __all__ = [
     "RuntimeThreadRunEventState",
+    "merge_runtime_thread_raw_events",
     "normalize_runtime_thread_message",
     "normalize_runtime_thread_message_payload",
     "normalize_runtime_thread_raw_event",

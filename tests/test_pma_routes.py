@@ -11,6 +11,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
@@ -430,6 +431,62 @@ def test_pma_chat_register_turn_failure_is_best_effort(hub_env) -> None:
 
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_execute_opencode_records_completion_only_messages_in_timeline(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Client:
+        async def create_session(
+            self, directory: Optional[str] = None
+        ) -> dict[str, str]:
+            _ = directory
+            return {"sessionId": "session-1"}
+
+        async def prompt_async(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            return {
+                "info": {"id": "message-1", "role": "assistant"},
+                "parts": [{"type": "text", "text": "completed only reply"}],
+            }
+
+    class _Supervisor:
+        async def get_client(self, _hub_root: Path) -> _Client:
+            return _Client()
+
+        async def mark_turn_started(self, _hub_root: Path) -> None:
+            return None
+
+        async def mark_turn_finished(self, _hub_root: Path) -> None:
+            return None
+
+    async def _fake_collect(*_args: Any, **kwargs: Any) -> OpenCodeTurnOutput:
+        ready_event = kwargs.get("ready_event")
+        if ready_event is not None:
+            ready_event.set()
+        return OpenCodeTurnOutput(text="completed only reply")
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.opencode.runtime.collect_opencode_output",
+        _fake_collect,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.opencode.runtime.build_turn_id",
+        lambda session_id: f"{session_id}:turn",
+    )
+
+    result = await chat_runtime._execute_opencode(
+        _Supervisor(),
+        hub_env.hub_root,
+        "hello",
+        asyncio.Event(),
+    )
+
+    assert [type(event).__name__ for event in result["timeline_events"]] == [
+        "OutputDelta",
+        "Completed",
+    ]
+    assert result["timeline_events"][0].content == "completed only reply"
 
 
 def test_pma_chat_persists_transcript_and_history_entry(hub_env) -> None:

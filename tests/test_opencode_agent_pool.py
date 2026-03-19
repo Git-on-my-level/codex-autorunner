@@ -31,6 +31,7 @@ class _HarnessScript:
     streamed_raw_events: Optional[list[dict[str, Any]]] = None
     stream_pause_after: Optional[int] = None
     stream_release_event: Optional[asyncio.Event] = None
+    stream_started_event: Optional[asyncio.Event] = None
 
 
 class _FakeHarness:
@@ -117,6 +118,8 @@ class _FakeHarness:
         script = self._turns[(conversation_id, turn_id)]
         if script.started_event is not None:
             script.started_event.set()
+        if script.stream_started_event is not None:
+            await script.stream_started_event.wait()
         if script.release_event is not None:
             await script.release_event.wait()
         return TerminalTurnResult(
@@ -139,6 +142,8 @@ class _FakeHarness:
         streamed_raw_events = script.streamed_raw_events or script.raw_events
         for index, payload in enumerate(streamed_raw_events, start=1):
             yield payload
+            if index == 1 and script.stream_started_event is not None:
+                script.stream_started_event.set()
             if (
                 script.stream_pause_after is not None
                 and index >= script.stream_pause_after
@@ -573,7 +578,7 @@ async def test_run_turn_handles_failure_and_returns_error(tmp_path: Path):
 async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_live_stream(
     tmp_path: Path,
 ):
-    raw_events = [
+    streamed_raw_events = [
         _message(
             "item/toolCall/start",
             {"item": {"toolCall": {"name": "shell", "input": {"cmd": "pwd"}}}},
@@ -587,10 +592,11 @@ async def test_run_turn_persists_full_timeline_from_raw_events_after_partial_liv
         [
             _HarnessScript(
                 assistant_text="done",
-                raw_events=raw_events,
-                streamed_raw_events=raw_events,
+                raw_events=streamed_raw_events[1:],
+                streamed_raw_events=streamed_raw_events,
                 stream_pause_after=1,
                 stream_release_event=asyncio.Event(),
+                stream_started_event=asyncio.Event(),
             )
         ]
     )

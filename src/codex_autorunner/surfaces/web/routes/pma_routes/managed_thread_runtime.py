@@ -27,6 +27,7 @@ from .....core.orchestration import MessageRequest
 from .....core.orchestration.bindings import OrchestrationBindingStore
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
+    merge_runtime_thread_raw_events,
     normalize_runtime_thread_raw_event,
 )
 from .....core.orchestration.runtime_threads import (
@@ -849,6 +850,7 @@ def build_managed_thread_runtime_routes(
             )
             timeline_state = RuntimeThreadRunEventState()
             timeline_events: list[RunEvent] = []
+            streamed_raw_events: list[Any] = []
             stream_task: Optional[asyncio.Task[None]] = None
             live_backend_turn_id = str(started.execution.backend_id or "")
             harness = getattr(started, "harness", None)
@@ -866,6 +868,7 @@ def build_managed_thread_runtime_routes(
                         current_backend_thread_id,
                         live_backend_turn_id,
                     ):
+                        streamed_raw_events.append(raw_event)
                         timeline_events.extend(
                             await normalize_runtime_thread_raw_event(
                                 raw_event,
@@ -900,9 +903,13 @@ def build_managed_thread_runtime_routes(
                     stream_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await stream_task
-            if outcome.raw_events:
+            merged_raw_events = merge_runtime_thread_raw_events(
+                streamed_raw_events,
+                outcome.raw_events,
+            )
+            if merged_raw_events:
                 timeline_events = await _timeline_from_runtime_raw_events(
-                    outcome.raw_events
+                    merged_raw_events
                 )
 
             finalized_thread = service.get_thread_target(managed_thread_id)

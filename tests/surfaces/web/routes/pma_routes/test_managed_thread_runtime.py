@@ -465,6 +465,7 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
             }
         },
     )
+    stream_started = False
 
     class FakeHarness:
         def supports(self, capability: str) -> bool:
@@ -473,8 +474,10 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
         async def stream_events(
             self, workspace_root: Path, conversation_id: str, turn_id: str
         ):
+            nonlocal stream_started
             _ = workspace_root, conversation_id, turn_id
             yield raw_events[0]
+            stream_started = True
             await asyncio.Future()
 
     class FakeService:
@@ -496,6 +499,10 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
             _ = thread_target_id
             return None
 
+        def claim_next_queued_execution_request(self, thread_target_id: str):
+            _ = thread_target_id
+            return None
+
     async def _fake_begin(
         service, request, *, client_request_id=None, sandbox_policy=None
     ):
@@ -514,13 +521,15 @@ def test_managed_thread_message_persists_full_timeline_from_raw_events(
 
     async def _fake_await(*args, **kwargs):
         _ = args, kwargs
+        while not stream_started:
+            await asyncio.sleep(0)
         return RuntimeThreadOutcome(
             status="ok",
             assistant_text="assistant-output",
             error=None,
             backend_thread_id="backend-thread-1",
             backend_turn_id="backend-turn-1",
-            raw_events=raw_events,
+            raw_events=(raw_events[1],),
         )
 
     monkeypatch.setattr(
