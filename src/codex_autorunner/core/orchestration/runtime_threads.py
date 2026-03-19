@@ -21,10 +21,11 @@ def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
     for raw_event in raw_events:
         if not isinstance(raw_event, dict):
             continue
-        message = raw_event.get("message")
-        if not isinstance(message, dict):
-            continue
-        method = str(message.get("method") or "").strip().lower()
+        method = str(raw_event.get("method") or "").strip().lower()
+        if not method:
+            message = raw_event.get("message")
+            if isinstance(message, dict):
+                method = str(message.get("method") or "").strip().lower()
         if method == "turn/completed":
             return True
     return False
