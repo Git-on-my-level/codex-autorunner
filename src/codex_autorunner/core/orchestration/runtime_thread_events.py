@@ -185,7 +185,7 @@ def recover_post_completion_outcome(
 
     if outcome.status != "error" or not state.completed_seen:
         return outcome
-    assistant_text = outcome.assistant_text or state.best_assistant_text()
+    assistant_text = outcome.assistant_text or state.assistant_message_text
     if not isinstance(assistant_text, str) or not assistant_text.strip():
         return outcome
     return RuntimeThreadOutcome(
@@ -202,6 +202,33 @@ def _public_terminal_error_message(outcome: RuntimeThreadOutcome) -> str:
     if detail in {"Runtime thread timed out", "Runtime thread interrupted"}:
         return detail
     return "Runtime thread failed"
+
+
+def _extract_status_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("type", "status", "state"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+    return None
+
+
+def _status_indicates_successful_completion(
+    status: Any, *, assume_true_when_missing: bool
+) -> bool:
+    normalized = _extract_status_value(status)
+    if not isinstance(normalized, str):
+        return assume_true_when_missing
+    return normalized.lower() in {
+        "completed",
+        "complete",
+        "done",
+        "success",
+        "succeeded",
+        "idle",
+    }
 
 
 async def _parse_runtime_thread_sse(raw_event: str):
@@ -401,14 +428,23 @@ def _normalize_message_event(
         state.last_error_message = str(error_message)
         return [Failed(timestamp=now_iso(), error_message=str(error_message))]
 
-    if method in {"turn/completed", "session.idle"}:
+    if method == "turn/completed":
+        if _status_indicates_successful_completion(
+            params.get("status") or params.get("turn"),
+            assume_true_when_missing=True,
+        ):
+            state.completed_seen = True
+        return []
+
+    if method == "session.idle":
         state.completed_seen = True
         return []
 
     if method == "session.status":
         status = _coerce_dict(params.get("status"))
-        status_type = str(status.get("type") or status.get("status") or "").strip()
-        if status_type.lower() == "idle":
+        if _status_indicates_successful_completion(
+            status, assume_true_when_missing=False
+        ):
             state.completed_seen = True
             return []
         return []

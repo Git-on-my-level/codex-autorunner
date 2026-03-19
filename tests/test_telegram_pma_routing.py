@@ -1681,8 +1681,11 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
                 "app-server",
                 {
                     "message": {
-                        "method": "item/agentMessage/delta",
-                        "params": {"delta": "telegram completed reply survives"},
+                        "method": "message.completed",
+                        "params": {
+                            "text": "telegram completed reply survives",
+                            "info": {"id": "msg-1", "role": "assistant"},
+                        },
                     }
                 },
             )

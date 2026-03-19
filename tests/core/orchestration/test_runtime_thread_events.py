@@ -3,6 +3,7 @@ from __future__ import annotations
 from codex_autorunner.core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
+    recover_post_completion_outcome,
     terminal_run_event_from_outcome,
 )
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
@@ -121,6 +122,67 @@ async def test_normalize_runtime_thread_raw_event_surfaces_generic_error_notific
     assert isinstance(output[0], Failed)
     assert output[0].error_message == "Auth required"
     assert state.last_error_message == "Auth required"
+
+
+async def test_normalize_runtime_thread_raw_event_marks_only_successful_turn_completed() -> (
+    None
+):
+    failed_state = RuntimeThreadRunEventState()
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "turn/completed",
+                    "params": {"status": "failed"},
+                }
+            },
+        ),
+        failed_state,
+    )
+    assert failed_state.completed_seen is False
+
+    completed_state = RuntimeThreadRunEventState()
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "turn/completed",
+                    "params": {"status": "completed"},
+                }
+            },
+        ),
+        completed_state,
+    )
+    assert completed_state.completed_seen is True
+
+
+async def test_recover_post_completion_outcome_requires_canonical_final_message() -> (
+    None
+):
+    outcome = RuntimeThreadOutcome(
+        status="error",
+        assistant_text="",
+        error="App-server disconnected",
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+
+    partial_only_state = RuntimeThreadRunEventState(
+        assistant_stream_text="partial output",
+        completed_seen=True,
+    )
+    assert recover_post_completion_outcome(outcome, partial_only_state) == outcome
+
+    final_message_state = RuntimeThreadRunEventState(
+        assistant_stream_text="partial output",
+        assistant_message_text="final canonical output",
+        completed_seen=True,
+    )
+    recovered = recover_post_completion_outcome(outcome, final_message_state)
+    assert recovered.status == "ok"
+    assert recovered.assistant_text == "final canonical output"
 
 
 async def test_terminal_run_event_from_outcome_uses_streamed_fallback_text() -> None:
