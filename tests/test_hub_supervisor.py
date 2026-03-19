@@ -780,6 +780,22 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
     )
     store = PmaThreadStore(hub_root)
     created = store.create_thread("codex", base.path, repo_id=base.id)
+    bound = store.create_thread(
+        "codex",
+        base.path,
+        repo_id=base.id,
+        name="discord:archive-bound",
+    )
+    bindings = OrchestrationBindingStore(hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:archive-bound",
+        thread_target_id=bound["managed_thread_id"],
+        agent_id="codex",
+        repo_id=base.id,
+        resource_kind="repo",
+        resource_id=base.id,
+    )
 
     app = create_hub_app(hub_root)
     client = TestClient(app)
@@ -824,8 +840,11 @@ def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_s
     )
     assert base_after["has_car_state"] is False
     thread = store.get_thread(created["managed_thread_id"])
+    bound_thread = store.get_thread(bound["managed_thread_id"])
     assert thread is not None
+    assert bound_thread is not None
     assert thread["lifecycle_status"] == "archived"
+    assert bound_thread["lifecycle_status"] == "active"
 
 
 def test_archive_repo_state_waits_for_runner_exit_before_archiving(
@@ -938,6 +957,22 @@ def test_hub_archive_repo_state_endpoint_archives_threads_when_state_is_clean(
 
     store = PmaThreadStore(hub_root)
     created = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
+    bound = store.create_thread(
+        "codex",
+        base.path,
+        repo_id=base.id,
+        name="discord:thread-only-bound",
+    )
+    bindings = OrchestrationBindingStore(hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:thread-only-bound",
+        thread_target_id=bound["managed_thread_id"],
+        agent_id="codex",
+        repo_id=base.id,
+        resource_kind="repo",
+        resource_id=base.id,
+    )
     payload = supervisor.archive_repo_state(repo_id=base.id)
     assert payload["snapshot_id"] is None
     assert payload["snapshot_path"] is None
@@ -947,8 +982,11 @@ def test_hub_archive_repo_state_endpoint_archives_threads_when_state_is_clean(
     assert payload["archived_thread_count"] == 1
 
     thread = store.get_thread(created["managed_thread_id"])
+    bound_thread = store.get_thread(bound["managed_thread_id"])
     assert thread is not None
+    assert bound_thread is not None
     assert thread["lifecycle_status"] == "archived"
+    assert bound_thread["lifecycle_status"] == "active"
 
 
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):

@@ -693,8 +693,12 @@ def archive_workspace_managed_threads(
     hub_root: Optional[Path],
     worktree_repo_id: str,
     worktree_path: Path,
+    skip_chat_bound: bool = False,
 ) -> tuple[str, ...]:
+    import sqlite3
+
     from .config import find_nearest_hub_config_path
+    from .orchestration.sqlite import open_orchestration_sqlite
     from .pma_thread_store import PmaThreadStore
 
     resolved_hub_root = hub_root
@@ -704,6 +708,29 @@ def archive_workspace_managed_threads(
     if resolved_hub_root is None:
         return ()
 
+    bound_thread_ids: set[str] = set()
+    if skip_chat_bound:
+        try:
+            with open_orchestration_sqlite(resolved_hub_root) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT target_id
+                      FROM orch_bindings
+                     WHERE disabled_at IS NULL
+                       AND target_kind = 'thread'
+                       AND TRIM(COALESCE(target_id, '')) != ''
+                    """
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+        else:
+            bound_thread_ids = {
+                str(row["target_id"]).strip()
+                for row in rows
+                if isinstance(row["target_id"], str) and row["target_id"].strip()
+            }
+
     store = PmaThreadStore(resolved_hub_root)
     archived_thread_ids: list[str] = []
     seen_ids: set[str] = set()
@@ -712,6 +739,8 @@ def archive_workspace_managed_threads(
     for thread in store.list_threads(status="active", limit=None):
         managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
         if not managed_thread_id or managed_thread_id in seen_ids:
+            continue
+        if skip_chat_bound and managed_thread_id in bound_thread_ids:
             continue
 
         thread_repo_id = str(thread.get("repo_id") or "").strip()
@@ -1270,6 +1299,7 @@ def archive_workspace_for_fresh_start(
         hub_root=hub_root,
         worktree_repo_id=worktree_repo_id,
         worktree_path=worktree_repo_root,
+        skip_chat_bound=True,
     )
 
     if state_result is None and not archived_thread_ids:
