@@ -518,9 +518,9 @@ class OpenCodeHarness(AgentHarness):
             )
 
         queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
-        pending.progress_event_subscribers.append(queue)
         for item in pending.progress_event_history:
             queue.put_nowait(item)
+        pending.progress_event_subscribers.append(queue)
 
         async def _stream() -> AsyncIterator[str]:
             try:

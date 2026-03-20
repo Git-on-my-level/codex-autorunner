@@ -208,7 +208,12 @@ def harness_allows_parallel_event_stream(harness: Any) -> bool:
 def harness_supports_progress_event_stream(harness: Any) -> bool:
     progress_stream = getattr(harness, "progress_event_stream", None)
     if callable(progress_stream):
-        return True
+        progress_func = getattr(progress_stream, "__func__", None)
+        if (
+            progress_func is None
+            or progress_func is not AgentHarness.progress_event_stream
+        ):
+            return True
     return harness_allows_parallel_event_stream(harness)
 
 
@@ -220,7 +225,12 @@ def harness_progress_event_stream(
 ) -> AsyncIterator[str]:
     progress_stream = getattr(harness, "progress_event_stream", None)
     if callable(progress_stream):
-        return progress_stream(workspace_root, conversation_id, turn_id)
+        progress_func = getattr(progress_stream, "__func__", None)
+        if (
+            progress_func is None
+            or progress_func is not AgentHarness.progress_event_stream
+        ):
+            return progress_stream(workspace_root, conversation_id, turn_id)
     stream_events = getattr(harness, "stream_events", None)
     if callable(stream_events) and harness_allows_parallel_event_stream(harness):
         return stream_events(workspace_root, conversation_id, turn_id)

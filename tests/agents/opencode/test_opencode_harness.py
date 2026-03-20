@@ -230,6 +230,45 @@ async def test_opencode_harness_progress_event_stream_reuses_pending_turn_collec
 
 
 @pytest.mark.asyncio
+async def test_opencode_harness_progress_event_stream_replays_buffer_before_live_events() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+    pending = harness._pending_turns[("session-1", turn.turn_id)]
+    pending.progress_event_history.append("first-event")
+
+    streamed: list[str] = []
+
+    async def _collect_stream() -> None:
+        async for raw_event in harness.progress_event_stream(
+            workspace, "session-1", turn.turn_id
+        ):
+            streamed.append(raw_event)
+
+    stream_task = asyncio.create_task(_collect_stream())
+    await asyncio.sleep(0)
+
+    for queue in list(pending.progress_event_subscribers):
+        queue.put_nowait("second-event")
+        queue.put_nowait(None)
+
+    await stream_task
+
+    assert streamed == ["first-event", "second-event"]
+
+
+@pytest.mark.asyncio
 async def test_opencode_harness_wait_for_turn_recovers_late_disconnect_after_completion() -> (
     None
 ):
