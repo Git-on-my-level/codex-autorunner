@@ -430,6 +430,100 @@ async def test_flush_coalesced_key_wraps_with_typing_indicator(
 
 
 @pytest.mark.anyio
+async def test_enqueue_or_run_topic_work_wraps_queued_work_with_typing() -> None:
+    timeline: list[tuple[object, ...]] = []
+    queued: list[object] = []
+
+    async def _work() -> None:
+        timeline.append(("inner",))
+
+    async def _begin(chat_id: int, thread_id: Optional[int]) -> None:
+        timeline.append(("begin", chat_id, thread_id))
+
+    async def _end(chat_id: int, thread_id: Optional[int]) -> None:
+        timeline.append(("end", chat_id, thread_id))
+
+    def _enqueue_topic_work(_key: str, wrapped: object) -> None:
+        queued.append(wrapped)
+
+    handlers = types.SimpleNamespace(
+        _enqueue_topic_work=_enqueue_topic_work,
+        _begin_typing_indicator=_begin,
+        _end_typing_indicator=_end,
+    )
+
+    await msg_module._enqueue_or_run_topic_work(
+        handlers,
+        "topic-key",
+        chat_id=3,
+        thread_id=4,
+        placeholder_id=None,
+        work=_work,
+    )
+
+    assert timeline == []
+    assert len(queued) == 1
+    await queued[0]()
+    assert timeline == [
+        ("begin", 3, 4),
+        ("inner",),
+        ("end", 3, 4),
+    ]
+
+
+@pytest.mark.anyio
+async def test_enqueue_or_run_topic_work_handles_coroutine_wrappers() -> None:
+    timeline: list[tuple[object, ...]] = []
+    queued: list[object] = []
+
+    async def _work() -> None:
+        timeline.append(("inner",))
+
+    async def _begin(chat_id: int, thread_id: Optional[int]) -> None:
+        timeline.append(("begin", chat_id, thread_id))
+
+    async def _end(chat_id: int, thread_id: Optional[int]) -> None:
+        timeline.append(("end", chat_id, thread_id))
+
+    def _wrap_placeholder_work(
+        *,
+        chat_id: int,
+        placeholder_id: Optional[int],
+        work: object,
+    ) -> object:
+        _ = (chat_id, placeholder_id)
+        return work()
+
+    def _enqueue_topic_work(_key: str, wrapped: object) -> None:
+        queued.append(wrapped)
+
+    handlers = types.SimpleNamespace(
+        _enqueue_topic_work=_enqueue_topic_work,
+        _wrap_placeholder_work=_wrap_placeholder_work,
+        _begin_typing_indicator=_begin,
+        _end_typing_indicator=_end,
+    )
+
+    await msg_module._enqueue_or_run_topic_work(
+        handlers,
+        "topic-key",
+        chat_id=3,
+        thread_id=4,
+        placeholder_id=9,
+        work=_work,
+    )
+
+    assert timeline == []
+    assert len(queued) == 1
+    await queued[0]()
+    assert timeline == [
+        ("begin", 3, 4),
+        ("inner",),
+        ("end", 3, 4),
+    ]
+
+
+@pytest.mark.anyio
 async def test_buffer_media_batch_does_not_construct_lock_when_key_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -735,7 +829,7 @@ async def test_handle_message_inner_paused_flow_with_media_uses_media_handler(
 
     await handle_message_inner(handlers, message)
     assert len(queued) == 1
-    await queued[0]
+    await queued[0]()
 
     assert media_calls
     assert media_calls[0]["caption_text"] == "caption here"
