@@ -14,6 +14,12 @@ from urllib.parse import unquote, urlparse
 from .git_utils import GitError, run_git
 from .locks import process_matches_identity
 from .update_paths import resolve_update_paths
+from .update_targets import (
+    UpdateTargetDefinition,
+    available_update_target_definitions,
+    get_update_target_definition,
+    normalize_update_target,
+)
 
 
 class UpdateInProgressError(RuntimeError):
@@ -44,22 +50,11 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
 
 
 def _normalize_update_target(raw: Optional[str]) -> str:
-    if raw is None:
-        return "both"
-    value = str(raw).strip().lower()
-    if value in ("", "both", "all"):
-        return "both"
-    if value in ("web", "hub", "server", "ui"):
-        return "web"
-    if value in ("chat", "chat-apps", "apps"):
-        return "chat"
-    if value in ("telegram", "tg", "bot"):
-        return "telegram"
-    if value in ("discord", "dc"):
-        return "discord"
-    raise ValueError(
-        "Unsupported update target (use both, web, chat, telegram, or discord)."
-    )
+    return normalize_update_target(raw)
+
+
+def _get_update_target_definition(raw: Optional[str]) -> UpdateTargetDefinition:
+    return get_update_target_definition(raw)
 
 
 def _normalize_update_backend(raw: Optional[str]) -> str:
@@ -209,12 +204,12 @@ def _chat_target_active(
     return False
 
 
-def _available_update_target_options(
+def _available_update_target_definitions(
     *,
     raw_config: Optional[dict[str, Any]] = None,
     update_backend: str = "auto",
     linux_service_names: Optional[dict[str, str]] = None,
-) -> tuple[tuple[str, str], ...]:
+) -> tuple[UpdateTargetDefinition, ...]:
     telegram_available = _chat_target_enableable(
         raw_config=raw_config, target="telegram"
     ) or _chat_target_active(
@@ -230,17 +225,26 @@ def _available_update_target_options(
         linux_service_names=linux_service_names,
     )
 
-    options: list[tuple[str, str]] = []
-    if telegram_available or discord_available:
-        options.append(("both", "Web + Chat Apps"))
-    options.append(("web", "Web only"))
-    if telegram_available and discord_available:
-        options.append(("chat", "Chat Apps (Telegram + Discord)"))
-    if telegram_available:
-        options.append(("telegram", "Telegram only"))
-    if discord_available:
-        options.append(("discord", "Discord only"))
-    return tuple(options)
+    return available_update_target_definitions(
+        telegram_available=telegram_available,
+        discord_available=discord_available,
+    )
+
+
+def _available_update_target_options(
+    *,
+    raw_config: Optional[dict[str, Any]] = None,
+    update_backend: str = "auto",
+    linux_service_names: Optional[dict[str, str]] = None,
+) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (definition.value, definition.label)
+        for definition in _available_update_target_definitions(
+            raw_config=raw_config,
+            update_backend=update_backend,
+            linux_service_names=linux_service_names,
+        )
+    )
 
 
 def _default_update_target(
@@ -250,8 +254,8 @@ def _default_update_target(
     linux_service_names: Optional[dict[str, str]] = None,
 ) -> str:
     values = {
-        value
-        for value, _label in _available_update_target_options(
+        definition.value
+        for definition in _available_update_target_definitions(
             raw_config=raw_config,
             update_backend=update_backend,
             linux_service_names=linux_service_names,

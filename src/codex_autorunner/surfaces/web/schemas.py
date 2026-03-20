@@ -464,6 +464,9 @@ class SystemUpdateRequest(Payload):
 class SystemUpdateTargetOption(ResponseModel):
     value: str
     label: str
+    description: Optional[str] = None
+    includes_web: bool = False
+    restart_notice: Optional[str] = None
 
 
 class SystemUpdateTargetsResponse(ResponseModel):

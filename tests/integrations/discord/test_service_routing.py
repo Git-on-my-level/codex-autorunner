@@ -4606,7 +4606,7 @@ async def test_car_update_starts_worker_with_explicit_target(
         assert observed["notify_context"] == {"chat_id": "channel-1"}
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "update started (both)" in content
+        assert "update started (all)" in content
     finally:
         await store.close()
 

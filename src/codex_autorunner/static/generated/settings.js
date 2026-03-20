@@ -1,6 +1,7 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, flash, resolvePath, openModal } from "./utils.js";
 import { initTemplateReposSettings, loadTemplateRepos } from "./templateReposSettings.js";
+import { describeUpdateTarget, getUpdateTarget, includesWebUpdateTarget, normalizeUpdateTarget, updateRestartNotice, updateTargetOptionsFromResponse, } from "./updateTargets.js";
 const ui = {
     settingsBtn: document.getElementById("repo-settings"),
     threadList: document.getElementById("thread-tools-list"),
@@ -153,44 +154,6 @@ export function initRepoSettingsPanel() {
         // ignore
     }
 }
-const UPDATE_TARGET_LABELS = {
-    both: "Web + Chat Apps",
-    web: "web only",
-    chat: "Chat Apps (Telegram + Discord)",
-    telegram: "Telegram only",
-    discord: "Discord only",
-};
-function normalizeUpdateTarget(value) {
-    if (!value)
-        return "both";
-    if (value === "both" ||
-        value === "web" ||
-        value === "chat" ||
-        value === "telegram" ||
-        value === "discord") {
-        return value;
-    }
-    return "both";
-}
-function getUpdateTarget(selectId) {
-    const select = selectId ? document.getElementById(selectId) : null;
-    return normalizeUpdateTarget(select ? select.value : "both");
-}
-function describeUpdateTarget(target) {
-    return UPDATE_TARGET_LABELS[target] || UPDATE_TARGET_LABELS.both;
-}
-function includesWebUpdateTarget(target) {
-    return target === "both" || target === "web";
-}
-function updateRestartNotice(target) {
-    if (target === "chat")
-        return "Telegram and Discord bots will restart.";
-    if (target === "telegram")
-        return "The Telegram bot will restart.";
-    if (target === "discord")
-        return "The Discord bot will restart.";
-    return "The service will restart.";
-}
 async function loadUpdateTargetOptions(selectId) {
     const select = selectId ? document.getElementById(selectId) : null;
     if (!select)
@@ -203,29 +166,11 @@ async function loadUpdateTargetOptions(selectId) {
     catch (_err) {
         return;
     }
-    const rawOptions = Array.isArray(payload?.targets) ? payload.targets : [];
-    const options = [];
-    const seen = new Set();
-    rawOptions.forEach((entry) => {
-        const rawValue = typeof entry?.value === "string" ? entry.value : "";
-        if (!["both", "web", "chat", "telegram", "discord"].includes(rawValue))
-            return;
-        if (!rawValue)
-            return;
-        const value = normalizeUpdateTarget(rawValue);
-        if (seen.has(value))
-            return;
-        seen.add(value);
-        const label = typeof entry?.label === "string" && entry.label.trim()
-            ? entry.label.trim()
-            : describeUpdateTarget(value);
-        options.push({ value, label });
-    });
+    const { options, defaultTarget } = updateTargetOptionsFromResponse(payload);
     if (!options.length)
         return;
     const previous = normalizeUpdateTarget(select.value || "both");
     const hasPrevious = options.some((item) => item.value === previous);
-    const defaultTarget = normalizeUpdateTarget(payload?.default_target || "both");
     const fallback = options.some((item) => item.value === defaultTarget)
         ? defaultTarget
         : options[0].value;

@@ -81,7 +81,7 @@ def test_available_update_target_options_include_telegram_when_enableable(
         linux_service_names={"hub": "car-hub"},
     )
     assert options == (
-        ("both", "Web + Chat Apps"),
+        ("both", "All"),
         ("web", "Web only"),
         ("telegram", "Telegram only"),
     )
@@ -104,7 +104,7 @@ def test_available_update_target_options_include_discord_when_active(
         linux_service_names={"hub": "car-hub", "discord": "car-discord"},
     )
     assert options == (
-        ("both", "Web + Chat Apps"),
+        ("both", "All"),
         ("web", "Web only"),
         ("discord", "Discord only"),
     )

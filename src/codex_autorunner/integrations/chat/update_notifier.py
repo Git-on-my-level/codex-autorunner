@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from ...core.logging_utils import log_event
+from ...core.update_targets import get_update_target_label
 
 TERMINAL_UPDATE_STATES = frozenset({"ok", "error", "rollback"})
 RUNNING_UPDATE_STATES = frozenset({"running", "spawned"})
@@ -125,6 +126,9 @@ def format_update_status_message(status: Optional[dict[str, Any]]) -> str:
     if isinstance(timestamp, (int, float)):
         rendered_time = datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
     lines = [f"Update status: {state}"]
+    target = status.get("update_target")
+    if isinstance(target, str) and target.strip():
+        lines.append(f"Target: {get_update_target_label(target)}")
     if message:
         lines.append(f"Message: {message}")
     if rendered_time:

@@ -69,12 +69,14 @@ from ...core.ticket_flow_projection import select_authoritative_run_record
 from ...core.ticket_flow_summary import build_ticket_flow_display
 from ...core.update import (
     UpdateInProgressError,
+    _available_update_target_definitions,
     _normalize_update_ref,
     _normalize_update_target,
     _read_update_status,
     _spawn_update_process,
 )
 from ...core.update_paths import resolve_update_paths
+from ...core.update_targets import get_update_target_label
 from ...core.utils import (
     atomic_write,
     canonicalize_path,
@@ -6001,7 +6003,12 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 "Select update target:",
-                [build_update_target_picker(custom_id=UPDATE_TARGET_SELECT_ID)],
+                [
+                    build_update_target_picker(
+                        custom_id=UPDATE_TARGET_SELECT_ID,
+                        target_definitions=self._dynamic_update_target_definitions(),
+                    )
+                ],
             )
             return
         if isinstance(raw_target, str) and raw_target.strip().lower() == "status":
@@ -6020,7 +6027,12 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 f"{exc} Select update target:",
-                [build_update_target_picker(custom_id=UPDATE_TARGET_SELECT_ID)],
+                [
+                    build_update_target_picker(
+                        custom_id=UPDATE_TARGET_SELECT_ID,
+                        target_definitions=self._dynamic_update_target_definitions(),
+                    )
+                ],
             )
             return
 
@@ -6090,8 +6102,9 @@ class DiscordBotService:
             )
             return
 
+        target_label = get_update_target_label(update_target)
         text = format_discord_message(
-            f"Update started ({update_target}). The selected service(s) will restart. "
+            f"Update started ({target_label}). The selected service(s) will restart. "
             "I will post completion status in this channel. "
             "Use `/car update target:status` for progress."
         )
@@ -6110,9 +6123,6 @@ class DiscordBotService:
         if not status:
             return rendered
         lines = [rendered]
-        target = status.get("update_target")
-        if isinstance(target, str) and target.strip():
-            lines.append(f"Target: {target.strip()}")
         repo_ref = status.get("repo_ref")
         if isinstance(repo_ref, str) and repo_ref.strip():
             lines.append(f"Ref: {repo_ref.strip()}")
@@ -6120,6 +6130,24 @@ class DiscordBotService:
         if isinstance(log_path, str) and log_path.strip():
             lines.append(f"Log: {log_path.strip()}")
         return "\n".join(lines)
+
+    def _dynamic_update_target_definitions(self):
+        raw_config = self._hub_raw_config_cache
+        if raw_config is None:
+            try:
+                raw_config = load_hub_config(self._config.root).raw
+            except Exception:
+                raw_config = {}
+            self._hub_raw_config_cache = raw_config
+        return _available_update_target_definitions(
+            raw_config=raw_config if isinstance(raw_config, dict) else None,
+            update_backend=self._update_backend,
+            linux_service_names=(
+                self._update_linux_service_names
+                if isinstance(self._update_linux_service_names, dict)
+                else None
+            ),
+        )
 
     async def _send_update_status_notice(
         self, notify_context: dict[str, Any], text: str
