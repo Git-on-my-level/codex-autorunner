@@ -261,6 +261,7 @@ DEFAULT_UPDATE_REPO_REF = "main"
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
+DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
@@ -606,6 +607,9 @@ class DiscordBotService:
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._typing_sessions: dict[str, int] = {}
+        self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._typing_lock: Optional[asyncio.Lock] = None
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="discord",
             logger=self._logger,
@@ -899,8 +903,130 @@ class DiscordBotService:
             await self._handle_normalized_interaction(event, context)
             return
         if isinstance(event, ChatMessageEvent):
-            await self._handle_message_event(event, context)
+            await self._run_with_typing_indicator(
+                channel_id=context.chat_id,
+                work=lambda: self._handle_message_event(event, context),
+            )
             return
+
+    def _ensure_typing_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        lock = self._typing_lock
+        lock_loop = getattr(lock, "_loop", None) if lock else None
+        if (
+            lock is None
+            or lock_loop is None
+            or lock_loop is not loop
+            or lock_loop.is_closed()
+        ):
+            lock = asyncio.Lock()
+            self._typing_lock = lock
+        return lock
+
+    async def _typing_session_active(self, channel_id: str) -> bool:
+        lock = self._ensure_typing_lock()
+        async with lock:
+            return self._typing_sessions.get(channel_id, 0) > 0
+
+    async def _typing_indicator_loop(self, channel_id: str) -> None:
+        trigger_typing = getattr(self._rest, "trigger_typing", None)
+        if not callable(trigger_typing):
+            return
+        try:
+            while True:
+                try:
+                    await trigger_typing(channel_id=channel_id)
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "discord.typing.send.failed",
+                        channel_id=channel_id,
+                        exc=exc,
+                    )
+                await asyncio.sleep(DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS)
+                if not await self._typing_session_active(channel_id):
+                    return
+        finally:
+            lock = self._ensure_typing_lock()
+            async with lock:
+                task = self._typing_tasks.get(channel_id)
+                if task is asyncio.current_task():
+                    self._typing_tasks.pop(channel_id, None)
+
+    async def _begin_typing_indicator(self, channel_id: str) -> None:
+        lock = self._ensure_typing_lock()
+        async with lock:
+            self._typing_sessions[channel_id] = (
+                self._typing_sessions.get(channel_id, 0) + 1
+            )
+            task = self._typing_tasks.get(channel_id)
+            if task is not None and not task.done():
+                return
+            typing_coro = self._typing_indicator_loop(channel_id)
+            try:
+                self._typing_tasks[channel_id] = self._spawn_task(typing_coro)
+            except Exception:
+                typing_coro.close()
+                count = self._typing_sessions.get(channel_id, 0)
+                if count <= 1:
+                    self._typing_sessions.pop(channel_id, None)
+                else:
+                    self._typing_sessions[channel_id] = count - 1
+                raise
+
+    async def _end_typing_indicator(self, channel_id: str) -> None:
+        task_to_cancel: Optional[asyncio.Task[Any]] = None
+        lock = self._ensure_typing_lock()
+        async with lock:
+            count = self._typing_sessions.get(channel_id)
+            if count is None:
+                return
+            if count > 1:
+                self._typing_sessions[channel_id] = count - 1
+                return
+            self._typing_sessions.pop(channel_id, None)
+            task_to_cancel = self._typing_tasks.pop(channel_id, None)
+        if task_to_cancel is not None and not task_to_cancel.done():
+            task_to_cancel.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task_to_cancel
+
+    async def _run_with_typing_indicator(
+        self,
+        *,
+        channel_id: Optional[str],
+        work: Callable[[], Awaitable[None]],
+    ) -> None:
+        if not channel_id:
+            await work()
+            return
+        began = False
+        try:
+            await self._begin_typing_indicator(channel_id)
+            began = True
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.typing.begin.failed",
+                channel_id=channel_id,
+                exc=exc,
+            )
+        try:
+            await work()
+        finally:
+            if began:
+                try:
+                    await self._end_typing_indicator(channel_id)
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "discord.typing.end.failed",
+                        channel_id=channel_id,
+                        exc=exc,
+                    )
 
     def _allowlist_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
         if isinstance(event, ChatInteractionEvent):
@@ -2481,8 +2607,20 @@ class DiscordBotService:
         session_key: str,
         orchestrator_channel_key: str,
     ) -> DiscordMessageTurnResult:
-        if orchestrator_channel_key.startswith("pma:"):
-            return await run_managed_thread_turn_for_message(
+        async def _run_turn() -> DiscordMessageTurnResult:
+            if orchestrator_channel_key.startswith("pma:"):
+                return await run_managed_thread_turn_for_message(
+                    self,
+                    workspace_root=workspace_root,
+                    prompt_text=prompt_text,
+                    input_items=input_items,
+                    agent=agent,
+                    model_override=model_override,
+                    reasoning_effort=reasoning_effort,
+                    session_key=session_key,
+                    orchestrator_channel_key=orchestrator_channel_key,
+                )
+            return await run_agent_turn_for_message(
                 self,
                 workspace_root=workspace_root,
                 prompt_text=prompt_text,
@@ -2492,22 +2630,30 @@ class DiscordBotService:
                 reasoning_effort=reasoning_effort,
                 session_key=session_key,
                 orchestrator_channel_key=orchestrator_channel_key,
+                max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
+                min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+                heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+                log_event_fn=log_event,
             )
-        return await run_agent_turn_for_message(
-            self,
-            workspace_root=workspace_root,
-            prompt_text=prompt_text,
-            input_items=input_items,
-            agent=agent,
-            model_override=model_override,
-            reasoning_effort=reasoning_effort,
-            session_key=session_key,
-            orchestrator_channel_key=orchestrator_channel_key,
-            max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
-            min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
-            heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
-            log_event_fn=log_event,
+
+        turn_result: Optional[DiscordMessageTurnResult] = None
+
+        async def _wrapped() -> None:
+            nonlocal turn_result
+            turn_result = await _run_turn()
+
+        resolved_channel_id = (
+            orchestrator_channel_key[4:]
+            if orchestrator_channel_key.startswith("pma:")
+            else orchestrator_channel_key
         )
+        await self._run_with_typing_indicator(
+            channel_id=resolved_channel_id or None,
+            work=_wrapped,
+        )
+        if turn_result is None:
+            raise RuntimeError("Discord turn finished without a result")
+        return turn_result
 
     @staticmethod
     def _extract_command_result(

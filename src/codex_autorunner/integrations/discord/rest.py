@@ -266,6 +266,13 @@ class DiscordRestClient:
         )
         return response if isinstance(response, dict) else {}
 
+    async def trigger_typing(self, *, channel_id: str) -> None:
+        await self._request(
+            "POST",
+            f"/channels/{channel_id}/typing",
+            expect_json=False,
+        )
+
     async def create_channel_message(
         self,
         *,

@@ -86,6 +86,32 @@ async def test_command_routes_global_and_guild() -> None:
 
 
 @pytest.mark.anyio
+async def test_trigger_typing_posts_to_channel_typing_route() -> None:
+    observed: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["authorization"] = request.headers.get("Authorization")
+        observed["method"] = request.method
+        observed["path"] = request.url.path
+        return httpx.Response(204)
+
+    client = DiscordRestClient(
+        bot_token="abc123", base_url="https://discord.test/api/v10"
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        await client.trigger_typing(channel_id="chan-1")
+    finally:
+        await client.close()
+
+    assert observed == {
+        "authorization": "Bot abc123",
+        "method": "POST",
+        "path": "/api/v10/channels/chan-1/typing",
+    }
+
+
+@pytest.mark.anyio
 async def test_rate_limit_retry_after_retries_and_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

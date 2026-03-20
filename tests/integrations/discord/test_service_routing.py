@@ -35,7 +35,10 @@ from codex_autorunner.integrations.discord.config import (
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.errors import DiscordAPIError
-from codex_autorunner.integrations.discord.service import DiscordBotService
+from codex_autorunner.integrations.discord.service import (
+    DiscordBotService,
+    DiscordMessageTurnResult,
+)
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
@@ -50,6 +53,7 @@ class _FakeRest:
         self.interaction_responses: list[dict[str, Any]] = []
         self.followup_messages: list[dict[str, Any]] = []
         self.channel_messages: list[dict[str, Any]] = []
+        self.typing_calls: list[str] = []
         self.command_sync_calls: list[dict[str, Any]] = []
 
     async def create_interaction_response(
@@ -77,6 +81,9 @@ class _FakeRest:
             }
         )
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
+
+    async def trigger_typing(self, *, channel_id: str) -> None:
+        self.typing_calls.append(channel_id)
 
     async def create_followup_message(
         self,
@@ -4880,4 +4887,174 @@ async def test_car_command_raises_on_invalid_workspace(
         content = last_response["payload"]["data"]["content"].lower()
         assert "workspace path does not exist" in content
     finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_handle_chat_event_message_starts_and_stops_typing_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_handle_message_event(_event: Any, _context: Any) -> None:
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(service, "_handle_message_event", _fake_handle_message_event)
+
+    event = ChatMessageEvent(
+        update_id="u-1",
+        thread=ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None),
+        message=ChatMessageRef(
+            thread=ChatThreadRef(
+                platform="discord",
+                chat_id="channel-1",
+                thread_id=None,
+            ),
+            message_id="m-1",
+        ),
+        from_user_id="user-1",
+        text="hello",
+    )
+    context = build_dispatch_context(event)
+    task = asyncio.create_task(service._handle_chat_event(event, context))
+    try:
+        await started.wait()
+        for _ in range(100):
+            if rest.typing_calls:
+                break
+            await asyncio.sleep(0.01)
+        assert rest.typing_calls == ["channel-1"]
+        release.set()
+        await task
+        assert not await service._typing_session_active("channel-1")
+    finally:
+        release.set()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_typing_indicator_reference_count_waits_for_last_end(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._begin_typing_indicator("channel-1")
+        await service._begin_typing_indicator("channel-1")
+        assert await service._typing_session_active("channel-1")
+        await service._end_typing_indicator("channel-1")
+        assert await service._typing_session_active("channel-1")
+        await service._end_typing_indicator("channel-1")
+        assert not await service._typing_session_active("channel-1")
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_run_agent_turn_for_message_wraps_typing_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_run_agent_turn(
+        _service: Any,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        input_items: list[dict[str, Any]] | None = None,
+        agent: str,
+        model_override: str | None,
+        reasoning_effort: str | None,
+        session_key: str,
+        orchestrator_channel_key: str,
+        max_actions: int,
+        min_edit_interval_seconds: float,
+        heartbeat_interval_seconds: float,
+        log_event_fn: Any,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            input_items,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+            max_actions,
+            min_edit_interval_seconds,
+            heartbeat_interval_seconds,
+            log_event_fn,
+        )
+        started.set()
+        await release.wait()
+        return DiscordMessageTurnResult(final_message="ok")
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "run_agent_turn_for_message",
+        _fake_run_agent_turn,
+    )
+
+    task = asyncio.create_task(
+        service._run_agent_turn_for_message(
+            workspace_root=tmp_path,
+            prompt_text="hello",
+            agent="codex",
+            model_override=None,
+            reasoning_effort=None,
+            session_key="session-1",
+            orchestrator_channel_key="channel-1",
+        )
+    )
+    try:
+        await started.wait()
+        for _ in range(100):
+            if rest.typing_calls:
+                break
+            await asyncio.sleep(0.01)
+        assert rest.typing_calls == ["channel-1"]
+        release.set()
+        result = await task
+        assert result.final_message == "ok"
+        assert not await service._typing_session_active("channel-1")
+    finally:
+        release.set()
         await store.close()
