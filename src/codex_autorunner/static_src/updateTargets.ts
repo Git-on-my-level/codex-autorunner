@@ -38,59 +38,7 @@ const UPDATE_TARGET_ALIASES = new Map<string, string>([
   ["discord", "discord"],
   ["dc", "discord"],
 ]);
-const FALLBACK_TARGETS = new Map<UpdateTarget, UpdateTargetOption>([
-  [
-    "both",
-    {
-      value: "both",
-      label: "All",
-      description: "Web + Telegram + Discord",
-      includesWeb: true,
-      restartNotice: "The web UI, Telegram, and Discord will restart.",
-    },
-  ],
-  [
-    "web",
-    {
-      value: "web",
-      label: "Web only",
-      description: "Web UI only",
-      includesWeb: true,
-      restartNotice: "The web UI will restart.",
-    },
-  ],
-  [
-    "chat",
-    {
-      value: "chat",
-      label: "Chat apps (Telegram + Discord)",
-      description: "Telegram + Discord",
-      includesWeb: false,
-      restartNotice: "Telegram and Discord will restart.",
-    },
-  ],
-  [
-    "telegram",
-    {
-      value: "telegram",
-      label: "Telegram only",
-      description: "Telegram only",
-      includesWeb: false,
-      restartNotice: "Telegram will restart.",
-    },
-  ],
-  [
-    "discord",
-    {
-      value: "discord",
-      label: "Discord only",
-      description: "Discord only",
-      includesWeb: false,
-      restartNotice: "Discord will restart.",
-    },
-  ],
-]);
-const updateTargetRegistry = new Map<UpdateTarget, UpdateTargetOption>(FALLBACK_TARGETS);
+const updateTargetRegistry = new Map<UpdateTarget, UpdateTargetOption>();
 
 function titleCaseTarget(value: string): string {
   return value
@@ -106,7 +54,7 @@ function fallbackTargetOption(value: UpdateTarget): UpdateTargetOption {
     value: normalized,
     label: titleCaseTarget(normalized),
     description: titleCaseTarget(normalized),
-    includesWeb: false,
+    includesWeb: normalized === "both" || normalized === "web",
     restartNotice: "The selected services will restart.",
   };
 }
