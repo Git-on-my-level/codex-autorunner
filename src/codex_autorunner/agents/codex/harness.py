@@ -4,9 +4,13 @@ import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from ...integrations.app_server.client import CodexAppServerResponseError
+from ...integrations.app_server.client import (
+    CodexAppServerResponseError,
+    is_missing_thread_error,
+)
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
+from ...integrations.chat.model_selection import REASONING_EFFORT_VALUES
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -18,7 +22,6 @@ from ..types import (
     TurnRef,
 )
 
-_DEFAULT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 _INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
 
 
@@ -79,7 +82,7 @@ def _coerce_reasoning_efforts(entry: dict[str, Any]) -> list[str]:
     if isinstance(default_effort, str) and default_effort:
         efforts.append(default_effort)
     if not efforts:
-        efforts = list(_DEFAULT_REASONING_EFFORTS)
+        efforts = list(REASONING_EFFORT_VALUES)
     return list(dict.fromkeys(efforts))
 
 
@@ -187,7 +190,12 @@ class CodexHarness(AgentHarness):
         resume = getattr(client, "thread_resume", None)
         if not callable(resume):
             return ConversationRef(agent=self.agent_id, id=conversation_id)
-        result = await resume(conversation_id)
+        try:
+            result = await resume(conversation_id)
+        except Exception as exc:
+            if is_missing_thread_error(exc):
+                return ConversationRef(agent=self.agent_id, id=conversation_id)
+            raise
         thread_id = conversation_id
         if isinstance(result, dict):
             candidate = result.get("id")
@@ -306,11 +314,12 @@ class CodexHarness(AgentHarness):
             for message in getattr(result, "agent_messages", []) or []
             if isinstance(message, str) and message.strip()
         ]
-        assistant_text = "\n\n".join(agent_messages).strip()
+        assistant_text = ""
+        final_message = getattr(result, "final_message", "")
+        if isinstance(final_message, str):
+            assistant_text = final_message.strip()
         if not assistant_text:
-            final_message = getattr(result, "final_message", "")
-            if isinstance(final_message, str):
-                assistant_text = final_message.strip()
+            assistant_text = "\n\n".join(agent_messages).strip()
         return TerminalTurnResult(
             status=(
                 str(result.status)

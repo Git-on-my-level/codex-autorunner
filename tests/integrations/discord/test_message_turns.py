@@ -28,17 +28,18 @@ from codex_autorunner.core.filebox import (
     outbox_sent_dir,
 )
 from codex_autorunner.core.ports.run_event import (
-    RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
+    RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
     Completed,
     Failed,
     OutputDelta,
-    RunNotice,
-    Started,
     TokenUsage,
-    ToolCall,
 )
 from codex_autorunner.core.sse import format_sse
+from codex_autorunner.integrations.app_server.client import (
+    CodexAppServerDisconnected,
+)
 from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
@@ -72,6 +73,7 @@ class _FakeRest:
         self.attachment_messages: list[dict[str, Any]] = []
         self.edited_channel_messages: list[dict[str, Any]] = []
         self.deleted_channel_messages: list[dict[str, Any]] = []
+        self.typing_calls: list[str] = []
         self.message_ops: list[dict[str, Any]] = []
         self.download_requests: list[dict[str, Any]] = []
         self.attachment_data_by_url: dict[str, bytes] = {}
@@ -167,6 +169,9 @@ class _FakeRest:
             }
         )
 
+    async def trigger_typing(self, *, channel_id: str) -> None:
+        self.typing_calls.append(channel_id)
+
     async def download_attachment(
         self, *, url: str, max_size_bytes: Optional[int] = None
     ) -> bytes:
@@ -185,9 +190,7 @@ class _FakeRest:
         return commands
 
 
-def test_sanitize_runtime_thread_result_error_returns_public_error_for_unknown_failures() -> (
-    None
-):
+def test_sanitize_runtime_thread_result_error_preserves_sanitized_detail() -> None:
     assert (
         discord_message_turns_module._sanitize_runtime_thread_result_error(
             "backend exploded with private detail",
@@ -195,8 +198,130 @@ def test_sanitize_runtime_thread_result_error_returns_public_error_for_unknown_f
             timeout_error="Discord PMA turn timed out",
             interrupted_error="Discord PMA turn interrupted",
         )
+        == "backend exploded with private detail"
+    )
+
+
+def test_sanitize_runtime_thread_result_error_maps_timeout_to_surface_timeout() -> None:
+    from codex_autorunner.core.orchestration.runtime_threads import (
+        RUNTIME_THREAD_TIMEOUT_ERROR,
+    )
+
+    assert (
+        discord_message_turns_module._sanitize_runtime_thread_result_error(
+            RUNTIME_THREAD_TIMEOUT_ERROR,
+            public_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+        )
+        == "Discord PMA turn timed out"
+    )
+
+
+def test_sanitize_runtime_thread_result_error_maps_interrupted_to_surface_interrupted() -> (
+    None
+):
+    from codex_autorunner.core.orchestration.runtime_threads import (
+        RUNTIME_THREAD_INTERRUPTED_ERROR,
+    )
+
+    assert (
+        discord_message_turns_module._sanitize_runtime_thread_result_error(
+            RUNTIME_THREAD_INTERRUPTED_ERROR,
+            public_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+        )
+        == "Discord PMA turn interrupted"
+    )
+
+
+def test_sanitize_runtime_thread_result_error_returns_public_error_for_empty_detail() -> (
+    None
+):
+    assert (
+        discord_message_turns_module._sanitize_runtime_thread_result_error(
+            "",
+            public_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+        )
         == "Discord PMA turn failed"
     )
+
+
+def test_resolve_discord_turn_policies_prefers_binding_preset() -> None:
+    assert discord_message_turns_module._resolve_discord_turn_policies(
+        {"approval_mode": "read-only"},
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    ) == ("on-request", "readOnly")
+
+
+def test_resolve_discord_turn_policies_maps_safe_to_prompted_workspace_write() -> None:
+    assert discord_message_turns_module._resolve_discord_turn_policies(
+        {"approval_mode": "safe"},
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    ) == ("on-request", "workspaceWrite")
+
+
+def test_resolve_discord_turn_policies_prefers_explicit_binding_values() -> None:
+    assert discord_message_turns_module._resolve_discord_turn_policies(
+        {
+            "approval_mode": "full-access",
+            "approval_policy": "on-failure",
+            "sandbox_policy": "workspaceWrite",
+        },
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    ) == ("on-failure", "workspaceWrite")
+
+
+@pytest.mark.asyncio
+async def test_run_managed_thread_turn_for_message_uses_binding_policies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def _fake_run_discord_orchestrated_turn_for_message(
+        *args: Any, **kwargs: Any
+    ):
+        _ = args
+        captured.update(kwargs)
+        return DiscordMessageTurnResult(final_message="ok")
+
+    class _Store:
+        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
+            assert channel_id == "channel-1"
+            return {"approval_mode": "safe"}
+
+    service = SimpleNamespace(
+        _config=_config(tmp_path),
+        _store=_Store(),
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "_run_discord_orchestrated_turn_for_message",
+        _fake_run_discord_orchestrated_turn_for_message,
+    )
+
+    result = await discord_message_turns_module.run_managed_thread_turn_for_message(
+        service,
+        workspace_root=tmp_path,
+        prompt_text="hello",
+        input_items=None,
+        agent="codex",
+        model_override=None,
+        reasoning_effort=None,
+        session_key="session-1",
+        orchestrator_channel_key="channel-1",
+    )
+
+    assert result.final_message == "ok"
+    assert captured["approval_mode"] == "on-request"
+    assert captured["sandbox_policy"] == "workspaceWrite"
 
 
 class _FailingChannelRest(_FakeRest):
@@ -359,6 +484,184 @@ class _RaisingStreamingFakeOrchestrator(_StreamingFakeOrchestrator):
         raise self._exc
 
 
+class _StreamingFakeHarness:
+    display_name = "StreamingFake"
+    capabilities = frozenset(
+        {
+            "durable_threads",
+            "message_turns",
+            "interrupt",
+            "event_streaming",
+        }
+    )
+
+    def __init__(
+        self,
+        events: list[Any],
+        *,
+        status: str = "ok",
+        assistant_text: str = "done",
+        errors: Optional[list[str]] = None,
+        wait_for_stream: bool = False,
+        stream_exception: Optional[Exception] = None,
+        allow_parallel_event_stream: bool = True,
+        allow_progress_event_stream: bool = True,
+    ) -> None:
+        self._events = events
+        self._status = status
+        self._assistant_text = assistant_text
+        self._errors = list(errors or [])
+        self._wait_for_stream = wait_for_stream
+        self._stream_exception = stream_exception
+        self._allow_parallel_event_stream = allow_parallel_event_stream
+        self._allow_progress_event_stream = allow_progress_event_stream
+        self._stream_done = asyncio.Event()
+
+    async def ensure_ready(self, workspace_root: Path) -> None:
+        _ = workspace_root
+
+    def supports(self, capability: str) -> bool:
+        return capability in self.capabilities
+
+    def allows_parallel_event_stream(self) -> bool:
+        return self._allow_parallel_event_stream
+
+    def progress_event_stream(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ):
+        if not self._allow_progress_event_stream:
+
+            async def _unsupported():
+                if False:
+                    yield None
+                raise RuntimeError("progress event streaming disabled")
+
+            return _unsupported()
+        return self.stream_events(workspace_root, conversation_id, turn_id)
+
+    async def new_conversation(
+        self, workspace_root: Path, title: Optional[str] = None
+    ) -> SimpleNamespace:
+        _ = workspace_root, title
+        return SimpleNamespace(id="backend-thread-1")
+
+    async def resume_conversation(
+        self, workspace_root: Path, conversation_id: str
+    ) -> SimpleNamespace:
+        _ = workspace_root
+        return SimpleNamespace(id=conversation_id)
+
+    async def start_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        prompt: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        *,
+        approval_mode: Optional[str],
+        sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> SimpleNamespace:
+        _ = (
+            workspace_root,
+            model,
+            reasoning,
+            approval_mode,
+            sandbox_policy,
+            input_items,
+        )
+        return SimpleNamespace(
+            conversation_id=conversation_id, turn_id="backend-turn-1"
+        )
+
+    async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+        raise AssertionError("review mode should not be used in this test")
+
+    async def wait_for_turn(
+        self,
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = workspace_root, conversation_id, timeout
+        assert isinstance(turn_id, str)
+        if self._wait_for_stream:
+            await self._stream_done.wait()
+        return SimpleNamespace(
+            status=self._status,
+            assistant_text=self._assistant_text,
+            errors=list(self._errors),
+        )
+
+    async def interrupt(
+        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+    ) -> None:
+        _ = workspace_root, conversation_id, turn_id
+
+    async def stream_events(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ):
+        _ = workspace_root, conversation_id, turn_id
+        try:
+            for event in self._events:
+                if (
+                    isinstance(event, tuple)
+                    and len(event) == 2
+                    and isinstance(event[0], (int, float))
+                ):
+                    delay = float(event[0])
+                    payload = event[1]
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    yield payload
+                    continue
+                yield event
+            if self._stream_exception is not None:
+                raise self._stream_exception
+        finally:
+            self._stream_done.set()
+
+
+def _patch_streaming_harness(
+    monkeypatch: pytest.MonkeyPatch,
+    events: list[Any],
+    *,
+    status: str = "ok",
+    assistant_text: str = "done",
+    errors: Optional[list[str]] = None,
+    wait_for_stream: bool = False,
+    stream_exception: Optional[Exception] = None,
+    allow_parallel_event_stream: bool = True,
+    allow_progress_event_stream: bool = True,
+) -> _StreamingFakeHarness:
+    harness = _StreamingFakeHarness(
+        events,
+        status=status,
+        assistant_text=assistant_text,
+        errors=errors,
+        wait_for_stream=wait_for_stream,
+        stream_exception=stream_exception,
+        allow_parallel_event_stream=allow_parallel_event_stream,
+        allow_progress_event_stream=allow_progress_event_stream,
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+    return harness
+
+
 class _FakeVoiceService:
     def __init__(self, transcript: str = "transcribed text") -> None:
         self.transcript = transcript
@@ -382,6 +685,7 @@ def _config(
     shell_timeout_ms: int = 120000,
     shell_max_output_chars: int = 3800,
     max_message_length: int = 2000,
+    message_overflow: str = "split",
     media_enabled: bool = True,
     media_voice: bool = True,
     media_max_voice_bytes: int = 10 * 1024 * 1024,
@@ -405,7 +709,7 @@ def _config(
         state_file=root / ".codex-autorunner" / "discord_state.sqlite3",
         intents=1,
         max_message_length=max_message_length,
-        message_overflow="split",
+        message_overflow=message_overflow,
         pma_enabled=pma_enabled,
         shell=DiscordBotShellConfig(
             enabled=shell_enabled,
@@ -490,15 +794,6 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
     )
     rest = _FakeRest()
     gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-
     captured: list[dict[str, Any]] = []
 
     async def _fake_run_turn(
@@ -506,12 +801,13 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
         *,
         workspace_root: Path,
         prompt_text: str,
+        input_items: Optional[list[dict[str, Any]]] = None,
         agent: str,
         model_override: Optional[str],
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
-    ) -> str:
+    ) -> DiscordMessageTurnResult:
         captured.append(
             {
                 "workspace_root": workspace_root,
@@ -521,9 +817,17 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
                 "orchestrator_channel_key": orchestrator_channel_key,
             }
         )
-        return "Done from fake turn"
+        return DiscordMessageTurnResult(final_message="Done from fake turn")
 
-    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(  # type: ignore[assignment]
         service, DiscordBotService
     )
 
@@ -532,7 +836,7 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
         assert captured
         assert captured[0]["workspace_root"] == workspace.resolve()
         assert "ship it" in captured[0]["prompt_text"]
-        assert CAR_AWARENESS_BLOCK in captured[0]["prompt_text"]
+        assert CAR_AWARENESS_BLOCK not in captured[0]["prompt_text"]
         assert captured[0]["agent"] == "codex"
         assert captured[0]["session_key"].startswith(
             f"{FILE_CHAT_PREFIX}discord.channel-1."
@@ -1044,7 +1348,7 @@ async def test_message_create_non_pma_injects_prompt_context_hints(
     try:
         await service.run_forever()
         assert captured_prompts
-        assert CAR_AWARENESS_BLOCK in captured_prompts[0]
+        assert CAR_AWARENESS_BLOCK not in captured_prompts[0]
         assert PROMPT_WRITING_HINT in captured_prompts[0]
         assert "please write a prompt for triage" in captured_prompts[0]
     finally:
@@ -1130,7 +1434,7 @@ async def test_message_create_non_pma_uses_raw_message_for_github_link_source(
         await service.run_forever()
         assert captured_link_source == [user_text]
         assert captured_prompt
-        assert CAR_AWARENESS_BLOCK in captured_prompt[0]
+        assert CAR_AWARENESS_BLOCK not in captured_prompt[0]
         assert PROMPT_WRITING_HINT in captured_prompt[0]
     finally:
         await store.close()
@@ -1317,6 +1621,74 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
         items = captured_input_items[0] or []
         assert items and items[0].get("type") == "text"
         assert any(item.get("type") == "localImage" for item in items[1:])
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_injects_car_context_for_car_trigger(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create("resume ticket flow in .codex-autorunner/"),
+            )
+        ]
+    )
+    captured_prompts: list[str] = []
+
+    service = DiscordBotService(
+        _config(tmp_path, allowed_channel_ids=frozenset({"channel-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(
+        self: DiscordBotService,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        assert CAR_AWARENESS_BLOCK in captured_prompts[0]
     finally:
         await store.close()
 
@@ -2082,6 +2454,7 @@ def test_build_attachment_filename_does_not_infer_audio_suffix_for_video(
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_posts_progress_placeholder_and_edits(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2104,20 +2477,74 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            OutputDelta(timestamp="2026-01-01T00:00:02Z", content="still thinking"),
-            Completed(timestamp="2026-01-01T00:00:03Z", final_message="done"),
-        ]
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+        ],
+        assistant_text="done from streaming turn",
+        wait_for_stream=True,
     )
 
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
+    try:
+        await service.run_forever()
+        send_indices = [
+            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "send"
+        ]
+        edit_indices = [
+            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "edit"
+        ]
+        assert send_indices
+        assert edit_indices
+        assert send_indices[0] < edit_indices[0]
+    finally:
+        await store.close()
 
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_uses_safe_progress_stream_when_parallel_streaming_is_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    _patch_streaming_harness(
+        monkeypatch,
+        [
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+        ],
+        assistant_text="done from streaming turn",
+        wait_for_stream=True,
+        allow_parallel_event_stream=False,
+        allow_progress_event_stream=True,
+    )
 
     try:
         await service.run_forever()
@@ -2137,6 +2564,7 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_persists_full_output_in_progress(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2163,19 +2591,18 @@ async def test_message_create_streaming_turn_persists_full_output_in_progress(
         "This output line is intentionally longer than one hundred twenty characters "
         "so we can verify Discord progress keeps the full persistent intermediate turn."
     )
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content=full_output),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message="done"),
-        ]
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=full_output,
+                delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
+            ),
+        ],
+        assistant_text="done from streaming turn",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -2191,6 +2618,7 @@ async def test_message_create_streaming_turn_persists_full_output_in_progress(
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_updates_token_usage_log_line_in_place(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2213,9 +2641,9 @@ async def test_message_create_streaming_turn_updates_token_usage_log_line_in_pla
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
                 content="tokens used - input: 66, output: 158, reasoning: 0",
@@ -2226,16 +2654,10 @@ async def test_message_create_streaming_turn_updates_token_usage_log_line_in_pla
                 content="tokens used - input: 297, cached: 11853, output: 147, reasoning: 0",
                 delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
             ),
-            Completed(timestamp="2026-01-01T00:00:03Z", final_message="done"),
-        ]
+        ],
+        assistant_text="done from streaming turn",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-
     try:
         await service.run_forever()
         assert rest.edited_channel_messages
@@ -2255,6 +2677,7 @@ async def test_message_create_streaming_turn_updates_token_usage_log_line_in_pla
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_accumulates_segmented_intermediate_outputs(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2277,39 +2700,39 @@ async def test_message_create_streaming_turn_accumulates_segmented_intermediate_
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
                 content="intermediate output one",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
             ),
             OutputDelta(
                 timestamp="2026-01-01T00:00:02Z",
                 content="intermediate output two",
-                delta_type="assistant_message",
+                delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
             ),
-            Completed(timestamp="2026-01-01T00:00:03Z", final_message="done"),
-        ]
+        ],
+        assistant_text="done from streaming turn",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-
     try:
         await service.run_forever()
-        assert rest.edited_channel_messages
-        rendered_progress = [
+        progress_contents = [
             str(msg["payload"].get("content", ""))
             for msg in rest.edited_channel_messages
         ]
-        final_progress = rendered_progress[-1]
-        assert "intermediate output one" in final_progress
-        assert "intermediate output two" in final_progress
+        sent_contents = [
+            str(msg["payload"].get("content", "")) for msg in rest.channel_messages
+        ]
+        assert any(
+            "intermediate output one" in content
+            and "intermediate output two" in content
+            for content in progress_contents
+        )
+        assert "---" not in sent_contents
+        assert any("done from streaming turn" in content for content in sent_contents)
     finally:
         await store.close()
 
@@ -2317,6 +2740,120 @@ async def test_message_create_streaming_turn_accumulates_segmented_intermediate_
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_final_progress_omits_duplicate_terminal_output(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    final_text = "intermediate output two"
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    _patch_streaming_harness(
+        monkeypatch,
+        [
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="intermediate output one",
+                delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:02Z",
+                content=final_text,
+                delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
+            ),
+        ],
+        assistant_text=final_text,
+        wait_for_stream=True,
+    )
+    try:
+        await service.run_forever()
+        progress_contents = [
+            str(msg["payload"].get("content", ""))
+            for msg in rest.edited_channel_messages
+        ]
+        sent_contents = [
+            str(msg["payload"].get("content", "")) for msg in rest.channel_messages
+        ]
+        intermediate_messages = [
+            content
+            for content in progress_contents
+            if "intermediate output one" in content
+        ]
+        assert intermediate_messages
+        assert all(final_text not in content for content in intermediate_messages)
+        assert "---" not in sent_contents
+        assert any(final_text in content for content in sent_contents)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_turn_sends_only_final_attachment_when_long(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=40, message_overflow="document"),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(**_kwargs: Any) -> DiscordMessageTurnResult:
+        return DiscordMessageTurnResult(
+            final_message=("final section " * 20).strip(),
+            intermediate_message=("intermediate section " * 20).strip(),
+            preview_message_id="preview-1",
+        )
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _fake_run_turn)
+
+    try:
+        await service.run_forever()
+        assert len(rest.attachment_messages) == 1
+        assert rest.attachment_messages[0]["filename"] == "final-response.md"
+        assert not any(
+            msg["payload"].get("content", "") == "---" for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_turn_uses_progress_snapshot_when_final_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2339,42 +2876,24 @@ async def test_message_create_streaming_turn_final_progress_omits_duplicate_term
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    final_text = "terminal final answer"
-    orchestrator = _StreamingFakeOrchestrator(
-        [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content="intermediate output one",
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
-            ),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:02Z",
-                content=final_text,
-                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
-            ),
-            Completed(timestamp="2026-01-01T00:00:03Z", final_message=final_text),
-        ]
-    )
 
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
+    async def _fake_run_turn(**_kwargs: Any) -> DiscordMessageTurnResult:
+        return DiscordMessageTurnResult(
+            final_message="",
+            intermediate_message="progress snapshot output",
+            preview_message_id="preview-1",
+        )
 
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _fake_run_turn)
 
     try:
         await service.run_forever()
-        assert rest.edited_channel_messages
-        rendered_progress = [
-            str(msg["payload"].get("content", ""))
-            for msg in rest.edited_channel_messages
-        ]
-        final_progress = rendered_progress[-1]
-        assert "intermediate output one" in final_progress
-        assert final_text not in final_progress
         assert any(
-            final_text in str(msg["payload"].get("content", ""))
+            "progress snapshot output" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "(No response text returned.)" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
     finally:
@@ -2382,8 +2901,111 @@ async def test_message_create_streaming_turn_final_progress_omits_duplicate_term
 
 
 @pytest.mark.anyio
+async def test_message_create_opencode_turn_sends_summary_before_final(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_agent_state(channel_id="channel-1", agent="opencode")
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_run_turn(**_kwargs: Any) -> DiscordMessageTurnResult:
+        return DiscordMessageTurnResult(
+            final_message="final output",
+            intermediate_message="done · agent opencode · model-x · 1s · step 3",
+            preview_message_id="preview-1",
+        )
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _fake_run_turn)
+
+    try:
+        await service.run_forever()
+        contents = [
+            str(msg["payload"].get("content", "")) for msg in rest.channel_messages
+        ]
+        assert any(
+            "final output\n\ndone · agent opencode · model-x · 1s · step 3" in content
+            for content in contents
+        )
+        assert not any(content.strip() == "---" for content in contents)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_opencode_turn_does_not_duplicate_summary_with_metrics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_agent_state(channel_id="channel-1", agent="opencode")
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    summary = "done · agent opencode · model-x · 1s · step 3"
+
+    async def _fake_run_turn(**_kwargs: Any) -> DiscordMessageTurnResult:
+        return DiscordMessageTurnResult(
+            final_message="",
+            intermediate_message=summary,
+            preview_message_id="preview-1",
+            elapsed_seconds=1.0,
+        )
+
+    monkeypatch.setattr(service, "_run_agent_turn_for_message", _fake_run_turn)
+
+    try:
+        await service.run_forever()
+        contents = [
+            str(msg["payload"].get("content", "")) for msg in rest.channel_messages
+        ]
+        combined = "\n".join(contents)
+        assert combined.count(summary) == 1
+        assert "(No response text returned.)" in combined
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_completion_sends_final_and_deletes_preview(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2398,6 +3020,7 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
     )
     rest = _FakeRest()
     gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    final_text = "done from streaming turn"
     service = DiscordBotService(
         _config(tmp_path),
         logger=logging.getLogger("test"),
@@ -2406,21 +3029,18 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    final_text = "done from streaming turn"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
-        ]
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+        ],
+        assistant_text=final_text,
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-
     try:
         await service.run_forever()
         assert len(rest.deleted_channel_messages) == 1
@@ -2438,6 +3058,7 @@ async def test_message_create_streaming_turn_completion_sends_final_and_deletes_
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_keeps_components_cleared_after_completion(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2460,25 +3081,18 @@ async def test_message_create_streaming_turn_keeps_components_cleared_after_comp
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message="done"),
-            RunNotice(
-                timestamp="2026-01-01T00:00:03Z",
-                kind="notice",
-                message="late notice",
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
-        ]
+        ],
+        assistant_text="done from streaming turn",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-
     try:
         await service.run_forever()
         assert rest.edited_channel_messages
@@ -2513,22 +3127,6 @@ async def test_message_create_streaming_turn_ignores_late_failed_after_completed
         outbox_manager=_FakeOutboxManager(),
     )
     final_text = "done before late failure"
-    orchestrator = _StreamingFakeOrchestrator(
-        [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
-            Failed(
-                timestamp="2026-01-01T00:00:03Z",
-                error_message="late failure after completion",
-            ),
-        ]
-    )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
     logged_events: list[dict[str, Any]] = []
 
     def _capture_log_event(
@@ -2542,10 +3140,21 @@ async def test_message_create_streaming_turn_ignores_late_failed_after_completed
         _ = logger
         logged_events.append({"level": level, "event": event, "exc": exc, **fields})
 
-    monkeypatch.setattr(
-        service, "_orchestrator_for_workspace", _fake_orchestrator_for_workspace
-    )
     monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
+    _patch_streaming_harness(
+        monkeypatch,
+        [
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+            Failed(timestamp="2026-01-01T00:00:03Z", error_message="Turn failed"),
+        ],
+        assistant_text=final_text,
+        wait_for_stream=True,
+    )
 
     try:
         await service.run_forever()
@@ -2557,9 +3166,8 @@ async def test_message_create_streaming_turn_ignores_late_failed_after_completed
             "Turn failed:" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
-        assert any(
+        assert not any(
             event["event"] == "discord.turn.failed_late_ignored"
-            and event["level"] == logging.WARNING
             for event in logged_events
         )
     finally:
@@ -2592,26 +3200,6 @@ async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fal
         outbox_manager=_FakeOutboxManager(),
     )
     streamed_text = "fallback streamed answer survives"
-    orchestrator = _StreamingFakeOrchestrator(
-        [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(
-                timestamp="2026-01-01T00:00:01Z",
-                content=streamed_text,
-                delta_type="assistant_stream",
-            ),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
-            Failed(
-                timestamp="2026-01-01T00:00:03Z",
-                error_message="late failure after streamed fallback",
-            ),
-        ]
-    )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
     logged_events: list[dict[str, Any]] = []
 
     def _capture_log_event(
@@ -2625,10 +3213,21 @@ async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fal
         _ = logger
         logged_events.append({"level": level, "event": event, "exc": exc, **fields})
 
-    monkeypatch.setattr(
-        service, "_orchestrator_for_workspace", _fake_orchestrator_for_workspace
-    )
     monkeypatch.setattr(discord_service_module, "log_event", _capture_log_event)
+    _patch_streaming_harness(
+        monkeypatch,
+        [
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=streamed_text,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
+            Failed(timestamp="2026-01-01T00:00:03Z", error_message="Turn failed"),
+        ],
+        assistant_text="",
+        wait_for_stream=True,
+    )
 
     try:
         await service.run_forever()
@@ -2644,9 +3243,8 @@ async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fal
             "Turn failed:" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
-        assert any(
+        assert not any(
             event["event"] == "discord.turn.failed_late_ignored"
-            and event["level"] == logging.WARNING
             for event in logged_events
         )
     finally:
@@ -2654,8 +3252,8 @@ async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fal
 
 
 @pytest.mark.anyio
-async def test_message_create_streaming_turn_failure_before_completion_still_fails(
-    tmp_path: Path,
+async def test_message_create_streaming_turn_recovers_if_wait_disconnects_after_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2678,27 +3276,87 @@ async def test_message_create_streaming_turn_failure_before_completion_still_fai
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    orchestrator = _StreamingFakeOrchestrator(
+    final_text = "completed answer survives reconnect"
+    harness = _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=final_text,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
+        ],
+        assistant_text="",
+        wait_for_stream=True,
+    )
+
+    async def _disconnecting_wait_for_turn(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        await harness._stream_done.wait()
+        raise CodexAppServerDisconnected("Reconnecting... 2/5")
+
+    monkeypatch.setattr(harness, "wait_for_turn", _disconnecting_wait_for_turn)
+
+    try:
+        await service.run_forever()
+        assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "Turn failed:" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "(No response text returned.)" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert rest.deleted_channel_messages
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_failure_before_completion_still_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    _patch_streaming_harness(
+        monkeypatch,
+        [
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
                 content="partial output before failure",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
-            Failed(
-                timestamp="2026-01-01T00:00:02Z",
-                error_message="hard failure before completion",
-            ),
-        ]
+        ],
+        status="error",
+        assistant_text="",
+        errors=["Discord turn failed"],
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-
     try:
         await service.run_forever()
         assert any(
@@ -2718,6 +3376,7 @@ async def test_message_create_streaming_turn_failure_before_completion_still_fai
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sends_chunks(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2743,19 +3402,18 @@ async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sen
     final_text = "\n".join(
         [f"line {index} with enough content for chunking" for index in range(1, 20)]
     )
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
-        ]
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+        ],
+        assistant_text=final_text,
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -2774,6 +3432,7 @@ async def test_message_create_streaming_turn_multi_chunk_deletes_preview_and_sen
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_appends_final_metrics(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2797,9 +3456,9 @@ async def test_message_create_streaming_turn_appends_final_metrics(
         outbox_manager=_FakeOutboxManager(),
     )
     final_text = "done from streaming turn"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             TokenUsage(
                 timestamp="2026-01-01T00:00:01Z",
                 usage={
@@ -2811,15 +3470,10 @@ async def test_message_create_streaming_turn_appends_final_metrics(
                     "modelContextWindow": 203352,
                 },
             ),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
-        ]
+        ],
+        assistant_text=final_text,
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -2831,7 +3485,8 @@ async def test_message_create_streaming_turn_appends_final_metrics(
                 final_content = content
                 break
         assert final_content
-        assert "Turn time:" in final_content
+        assert "agent codex" in final_content
+        assert "ctx 65%" in final_content
         assert "Token usage: total 71173 input 400 output 245 ctx 65%" in final_content
     finally:
         await store.close()
@@ -2840,6 +3495,7 @@ async def test_message_create_streaming_turn_appends_final_metrics(
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_uses_assistant_stream_when_final_empty(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2863,13 +3519,13 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
         outbox_manager=_FakeOutboxManager(),
     )
     streamed_text = "fallback streamed answer"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
                 content=streamed_text,
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
             TokenUsage(
                 timestamp="2026-01-01T00:00:02Z",
@@ -2882,15 +3538,10 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
                     "modelContextWindow": 203352,
                 },
             ),
-            Completed(timestamp="2026-01-01T00:00:03Z", final_message=""),
-        ]
+        ],
+        assistant_text="",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -2906,7 +3557,8 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
                 break
         assert final_content
         assert streamed_text in final_content
-        assert "Turn time:" in final_content
+        assert "agent codex" in final_content
+        assert "ctx 65%" in final_content
         assert "Token usage: total 71173 input 400 output 245 ctx 65%" in final_content
         assert "(No response text returned.)" not in final_content
     finally:
@@ -2916,6 +3568,7 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_empty_final_includes_text_fallback_with_metrics(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -2938,9 +3591,9 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             TokenUsage(
                 timestamp="2026-01-01T00:00:01Z",
                 usage={
@@ -2952,16 +3605,10 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
                     "modelContextWindow": 203352,
                 },
             ),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
-        ]
+        ],
+        assistant_text="",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-
     try:
         await service.run_forever()
         final_candidates = [*rest.edited_channel_messages, *rest.channel_messages]
@@ -2973,7 +3620,8 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
                 break
         assert final_content
         assert "(No response text returned.)" in final_content
-        assert "Turn time:" in final_content
+        assert "agent codex" in final_content
+        assert "ctx 65%" in final_content
     finally:
         await store.close()
 
@@ -2981,6 +3629,7 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_fallback_preserves_multichunk_whitespace(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3004,33 +3653,28 @@ async def test_message_create_streaming_turn_fallback_preserves_multichunk_white
         outbox_manager=_FakeOutboxManager(),
     )
     expected_text = "go go \nnext line"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
                 content="go ",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
             OutputDelta(
                 timestamp="2026-01-01T00:00:02Z",
-                content="go ",
-                delta_type="assistant_stream",
+                content="go go ",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
             OutputDelta(
                 timestamp="2026-01-01T00:00:03Z",
                 content="\nnext line",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
-            Completed(timestamp="2026-01-01T00:00:04Z", final_message=""),
-        ]
+        ],
+        assistant_text="",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -3050,6 +3694,7 @@ async def test_message_create_streaming_turn_fallback_preserves_multichunk_white
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_fallback_preserves_whitespace_only_chunks(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3073,33 +3718,28 @@ async def test_message_create_streaming_turn_fallback_preserves_whitespace_only_
         outbox_manager=_FakeOutboxManager(),
     )
     expected_text = "line 1\n\nline 2"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
                 content="line 1",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
             OutputDelta(
                 timestamp="2026-01-01T00:00:02Z",
                 content="\n\n",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
             OutputDelta(
                 timestamp="2026-01-01T00:00:03Z",
                 content="line 2",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
-            Completed(timestamp="2026-01-01T00:00:04Z", final_message=""),
-        ]
+        ],
+        assistant_text="",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -3119,6 +3759,7 @@ async def test_message_create_streaming_turn_fallback_preserves_whitespace_only_
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_fallback_handles_cumulative_deltas(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3142,28 +3783,23 @@ async def test_message_create_streaming_turn_fallback_handles_cumulative_deltas(
         outbox_manager=_FakeOutboxManager(),
     )
     expected_text = "Hello world"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
                 content="Hello",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
             OutputDelta(
                 timestamp="2026-01-01T00:00:02Z",
                 content="Hello world",
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
-            Completed(timestamp="2026-01-01T00:00:03Z", final_message=""),
-        ]
+        ],
+        assistant_text="",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -3184,6 +3820,7 @@ async def test_message_create_streaming_turn_fallback_handles_cumulative_deltas(
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_ignores_user_message_delta(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3208,28 +3845,23 @@ async def test_message_create_streaming_turn_ignores_user_message_delta(
     )
     secret = "SECRET PMA CONTEXT SHOULD NOT LEAK"
     visible = "assistant output"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
             OutputDelta(
                 timestamp="2026-01-01T00:00:01Z",
                 content=secret,
-                delta_type="user_message",
+                delta_type=RUN_EVENT_DELTA_TYPE_USER_MESSAGE,
             ),
             OutputDelta(
                 timestamp="2026-01-01T00:00:02Z",
                 content=visible,
-                delta_type="assistant_stream",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
             ),
-            Completed(timestamp="2026-01-01T00:00:03Z", final_message="done"),
-        ]
+        ],
+        assistant_text="done from streaming turn",
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -3246,6 +3878,7 @@ async def test_message_create_streaming_turn_ignores_user_message_delta(
 @pytest.mark.anyio
 async def test_message_create_progress_failures_are_best_effort_and_do_not_block_completion(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3269,19 +3902,18 @@ async def test_message_create_progress_failures_are_best_effort_and_do_not_block
         outbox_manager=_FakeOutboxManager(),
     )
     final_text = "final despite progress failures"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
-        ]
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+        ],
+        assistant_text=final_text,
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -3297,6 +3929,7 @@ async def test_message_create_progress_failures_are_best_effort_and_do_not_block
 @pytest.mark.anyio
 async def test_message_create_progress_edit_failures_are_best_effort_and_throttled(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3320,20 +3953,23 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
         outbox_manager=_FakeOutboxManager(),
     )
     final_text = "final despite edit failures"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            OutputDelta(timestamp="2026-01-01T00:00:02Z", content="still thinking"),
-            Completed(timestamp="2026-01-01T00:00:03Z", final_message=final_text),
-        ]
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:02Z",
+                content="still thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+        ],
+        assistant_text=final_text,
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -3351,6 +3987,7 @@ async def test_message_create_progress_edit_failures_are_best_effort_and_throttl
 @pytest.mark.anyio
 async def test_message_create_streaming_turn_enqueues_preview_delete_when_delete_fails(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3374,19 +4011,18 @@ async def test_message_create_streaming_turn_enqueues_preview_delete_when_delete
         outbox_manager=_FakeOutboxManager(),
     )
     final_text = "final with preview kept"
-    orchestrator = _StreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            Completed(timestamp="2026-01-01T00:00:02Z", final_message=final_text),
-        ]
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+        ],
+        assistant_text=final_text,
+        wait_for_stream=True,
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -3401,73 +4037,9 @@ async def test_message_create_streaming_turn_enqueues_preview_delete_when_delete
 
 
 @pytest.mark.anyio
-async def test_message_create_progress_edit_recovers_after_transient_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id="guild-1",
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-    rest = _FlakyEditProgressRest(fail_first_edits=3)
-    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
-    service = DiscordBotService(
-        _config(tmp_path, max_message_length=80),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS",
-        0.0,
-    )
-    final_text = "\n".join(
-        [f"line {index} with enough content for chunking" for index in range(1, 20)]
-    )
-    orchestrator = _StreamingFakeOrchestrator(
-        [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
-            ToolCall(
-                timestamp="2026-01-01T00:00:02Z",
-                tool_name="first_tool",
-                tool_input={},
-            ),
-            ToolCall(
-                timestamp="2026-01-01T00:00:03Z",
-                tool_name="second_tool",
-                tool_input={},
-            ),
-            OutputDelta(timestamp="2026-01-01T00:00:04Z", content="still thinking"),
-            Completed(timestamp="2026-01-01T00:00:05Z", final_message=final_text),
-        ]
-    )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
-
-    try:
-        await service.run_forever()
-        assert rest.edit_attempts >= 4
-        assert rest.edited_channel_messages
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_message_create_streaming_turn_exception_marks_progress_failed(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3490,19 +4062,21 @@ async def test_message_create_streaming_turn_exception_marks_progress_failed(
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    orchestrator = _RaisingStreamingFakeOrchestrator(
+    _patch_streaming_harness(
+        monkeypatch,
         [
-            Started(timestamp="2026-01-01T00:00:00Z", session_id="thread-1"),
-            OutputDelta(timestamp="2026-01-01T00:00:01Z", content="thinking"),
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
         ],
-        RuntimeError("boom"),
+        status="error",
+        assistant_text="",
+        errors=["Discord turn failed"],
+        wait_for_stream=True,
+        stream_exception=RuntimeError("boom"),
     )
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return orchestrator
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -3513,6 +4087,10 @@ async def test_message_create_streaming_turn_exception_marks_progress_failed(
         )
         assert any(
             "Turn failed: Discord turn failed" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "(No response text returned.)" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
     finally:
@@ -5112,6 +5690,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         )
         assert any("first orchestration reply" in content for content in contents)
         assert any("second orchestration reply" in content for content in contents)
+        assert rest.typing_calls.count("channel-1") >= 2
 
         thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)

@@ -73,6 +73,7 @@ def test_pma_config_defaults(tmp_path: Path) -> None:
     assert pma_config.get("max_repos") == 25
     assert pma_config.get("max_messages") == 10
     assert pma_config.get("max_text_chars") == 10_000
+    assert config.pma.managed_thread_terminal_followup_default is True
 
 
 def test_pma_generated_files_refreshed_without_force(tmp_path: Path) -> None:

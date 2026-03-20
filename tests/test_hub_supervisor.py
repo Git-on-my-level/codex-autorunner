@@ -4,6 +4,7 @@ import shutil
 import sqlite3
 import subprocess
 import time
+import types
 from pathlib import Path
 from typing import Optional
 
@@ -23,8 +24,10 @@ from codex_autorunner.core.destinations import default_car_docker_container_name
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
+from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.integrations.agents.backend_orchestrator import (
     build_backend_orchestrator,
 )
@@ -262,6 +265,7 @@ def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Pa
         workspace_id="zc-main",
         runtime="zeroclaw",
         display_name="ZeroClaw Main",
+        enabled=False,
     )
     assert workspace.runtime == "zeroclaw"
     assert workspace.display_name == "ZeroClaw Main"
@@ -292,6 +296,75 @@ def test_hub_supervisor_can_create_list_and_remove_agent_workspaces(tmp_path: Pa
     assert supervisor.list_agent_workspaces(use_cache=False) == []
 
 
+def test_hub_supervisor_rejects_unknown_agent_workspace_runtime(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+
+    with pytest.raises(ValueError, match="Unknown agent workspace runtime"):
+        supervisor.create_agent_workspace(
+            workspace_id="unknown-main",
+            runtime="bogus",
+        )
+
+
+def test_hub_supervisor_blocks_agent_workspace_create_on_failed_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    monkeypatch.setattr(
+        hub_module,
+        "probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "incompatible",
+            "message": "ZeroClaw CLI is incompatible",
+            "fix": "Install a compatible ZeroClaw build.",
+        },
+    )
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    with pytest.raises(ValueError, match="ZeroClaw CLI is incompatible"):
+        supervisor.create_agent_workspace(
+            workspace_id="zc-main",
+            runtime="zeroclaw",
+        )
+
+    manifest = load_manifest(hub_root / ".codex-autorunner" / "manifest.yml", hub_root)
+    assert manifest.agent_workspaces == []
+
+
+def test_hub_supervisor_blocks_enabling_agent_workspace_on_failed_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        enabled=False,
+    )
+
+    monkeypatch.setattr(
+        hub_module,
+        "probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "incompatible",
+            "message": "ZeroClaw CLI is incompatible",
+        },
+    )
+
+    with pytest.raises(ValueError, match="ZeroClaw CLI is incompatible"):
+        supervisor.update_agent_workspace("zc-main", enabled=True)
+
+
 def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -302,6 +375,7 @@ def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
         workspace_id="zc-main",
         runtime="zeroclaw",
         display_name="ZeroClaw Main",
+        enabled=False,
     )
 
     client = TestClient(create_hub_app(hub_root))
@@ -332,6 +406,7 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
             "id": "zc-main",
             "runtime": "zeroclaw",
             "display_name": "ZeroClaw Main",
+            "enabled": False,
         },
     )
     assert create_resp.status_code == 200
@@ -387,7 +462,7 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
 
     recreate_resp = client.post(
         "/hub/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw"},
+        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
     )
     assert recreate_resp.status_code == 200
 
@@ -436,7 +511,7 @@ def test_hub_agent_workspace_job_routes_submit_expected_kinds(
 
     create_resp = client.post(
         "/hub/jobs/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw"},
+        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
     )
     assert create_resp.status_code == 200
     assert create_resp.json()["kind"] == "hub.create_agent_workspace"
@@ -452,7 +527,7 @@ def test_hub_agent_workspace_job_routes_submit_expected_kinds(
 
     recreate_resp = client.post(
         "/hub/jobs/agent-workspaces",
-        json={"id": "zc-main", "runtime": "zeroclaw"},
+        json={"id": "zc-main", "runtime": "zeroclaw", "enabled": False},
     )
     assert recreate_resp.status_code == 200
     assert recreate_resp.json()["kind"] == "hub.create_agent_workspace"
@@ -626,6 +701,8 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
     dispatch_dir = worktree_car / "runs" / "run-1" / "dispatch"
     dispatch_dir.mkdir(parents=True, exist_ok=True)
     (dispatch_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     app = create_hub_app(hub_root)
     client = TestClient(app)
@@ -661,6 +738,255 @@ def test_hub_archive_state_endpoint_archives_and_resets_runtime_state(tmp_path: 
         item for item in repos_after_resp.json()["repos"] if item["id"] == worktree.id
     )
     assert worktree_after["has_car_state"] is False
+    thread = store.get_thread(created["managed_thread_id"])
+    assert thread is not None
+    assert thread["lifecycle_status"] == "archived"
+
+
+@pytest.mark.slow
+def test_hub_archive_repo_state_endpoint_archives_and_resets_base_repo_runtime_state(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    base_car = base.path / ".codex-autorunner"
+    (base_car / "tickets" / "TICKET-123-demo.md").write_text(
+        "demo ticket", encoding="utf-8"
+    )
+    (base_car / "contextspace" / "active_context.md").write_text(
+        "active context", encoding="utf-8"
+    )
+    dispatch_dir = base_car / "runs" / "run-1" / "dispatch"
+    dispatch_dir.mkdir(parents=True, exist_ok=True)
+    (dispatch_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    (base_car / "filebox" / "outbox").mkdir(parents=True, exist_ok=True)
+    (base_car / "filebox" / "outbox" / "reply.txt").write_text(
+        "artifact", encoding="utf-8"
+    )
+    (base_car / "codex-autorunner.log").write_text("log", encoding="utf-8")
+    save_state(
+        base_car / "state.sqlite3",
+        RunnerState(1, "idle", None, None, None),
+    )
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", base.path, repo_id=base.id)
+    bound = store.create_thread(
+        "codex",
+        base.path,
+        repo_id=base.id,
+        name="discord:archive-bound",
+    )
+    bindings = OrchestrationBindingStore(hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:archive-bound",
+        thread_target_id=bound["managed_thread_id"],
+        agent_id="codex",
+        repo_id=base.id,
+        resource_kind="repo",
+        resource_id=base.id,
+    )
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    repos_resp = client.get("/hub/repos")
+    assert repos_resp.status_code == 200
+    base_payload = next(
+        item for item in repos_resp.json()["repos"] if item["id"] == base.id
+    )
+    assert base_payload["has_car_state"] is True
+
+    archive_resp = client.post(
+        "/hub/repos/archive-state",
+        json={"repo_id": base.id},
+    )
+    assert archive_resp.status_code == 200
+    payload = archive_resp.json()
+    assert "tickets" in payload["archived_paths"]
+    assert "runs" in payload["archived_paths"]
+    assert "filebox" in payload["archived_paths"]
+    assert "state.sqlite3" in payload["archived_paths"]
+    assert "codex-autorunner.log" in payload["archived_paths"]
+    assert payload["archived_thread_count"] == 1
+    assert payload["archived_thread_ids"] == [created["managed_thread_id"]]
+
+    snapshot_root = Path(payload["snapshot_path"])
+    assert (snapshot_root / "tickets" / "TICKET-123-demo.md").exists()
+    assert (snapshot_root / "runs" / "run-1" / "dispatch" / "DISPATCH.md").exists()
+    assert (snapshot_root / "filebox" / "outbox" / "reply.txt").exists()
+    assert (snapshot_root / "state" / "state.sqlite3").exists()
+    assert (snapshot_root / "logs" / "codex-autorunner.log").exists()
+    assert (base_car / "contextspace" / "active_context.md").read_text(
+        encoding="utf-8"
+    ) == ""
+    assert not (base_car / "tickets" / "TICKET-123-demo.md").exists()
+    assert not (base_car / "runs").exists()
+
+    repos_after_resp = client.get("/hub/repos")
+    assert repos_after_resp.status_code == 200
+    base_after = next(
+        item for item in repos_after_resp.json()["repos"] if item["id"] == base.id
+    )
+    assert base_after["has_car_state"] is False
+    thread = store.get_thread(created["managed_thread_id"])
+    bound_thread = store.get_thread(bound["managed_thread_id"])
+    assert thread is not None
+    assert bound_thread is not None
+    assert thread["lifecycle_status"] == "archived"
+    assert bound_thread["lifecycle_status"] == "active"
+
+
+def test_archive_repo_state_waits_for_runner_exit_before_archiving(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg_path = hub_root / CONFIG_FILENAME
+    write_test_config(cfg_path, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    state_path = base.path / ".codex-autorunner" / "state.sqlite3"
+    state_path.write_text("stub", encoding="utf-8")
+
+    class _FakeRunner:
+        def __init__(self) -> None:
+            self.stop_calls = 0
+            self.reconcile_calls = 0
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+
+        def reconcile(self) -> None:
+            self.reconcile_calls += 1
+
+    fake_runner = _FakeRunner()
+    archived: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        supervisor,
+        "_ensure_runner",
+        lambda repo_id, allow_uninitialized=True: fake_runner,
+    )
+    monkeypatch.setattr(hub_module.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        hub_module,
+        "read_lock_status",
+        lambda _path: (
+            hub_module.LockStatus.LOCKED_ALIVE
+            if fake_runner.reconcile_calls < 2
+            else hub_module.LockStatus.UNLOCKED
+        ),
+    )
+    monkeypatch.setattr(
+        hub_module,
+        "load_state",
+        lambda _path: hub_module.RunnerState(
+            last_run_id=None,
+            status="running" if fake_runner.reconcile_calls < 2 else "idle",
+            last_exit_code=None,
+            last_run_started_at=None,
+            last_run_finished_at=None,
+            runner_pid=123 if fake_runner.reconcile_calls < 2 else None,
+        ),
+    )
+    monkeypatch.setattr(
+        hub_module,
+        "archive_workspace_for_fresh_start",
+        lambda **_kwargs: archived.append(dict(_kwargs))
+        or types.SimpleNamespace(
+            snapshot_id="snap",
+            snapshot_path=base.path / ".codex-autorunner" / "archive",
+            meta_path=base.path / ".codex-autorunner" / "archive" / "META.json",
+            status="complete",
+            file_count=0,
+            total_bytes=0,
+            flow_run_count=0,
+            latest_flow_run_id=None,
+            archived_paths=(),
+            reset_paths=(),
+            archived_thread_ids=(),
+        ),
+    )
+
+    supervisor.archive_repo_state(repo_id=base.id)
+
+    assert fake_runner.stop_calls == 1
+    assert fake_runner.reconcile_calls >= 2
+    assert len(archived) == 1
+    assert archived[0]["worktree_repo_id"] == base.id
+
+
+@pytest.mark.slow
+def test_hub_archive_repo_state_endpoint_archives_threads_when_state_is_clean(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    (base.path / ".codex-autorunner" / "tickets" / "TICKET-100-seed.md").write_text(
+        "seed\n", encoding="utf-8"
+    )
+    supervisor.archive_repo_state(repo_id=base.id)
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
+    bound = store.create_thread(
+        "codex",
+        base.path,
+        repo_id=base.id,
+        name="discord:thread-only-bound",
+    )
+    bindings = OrchestrationBindingStore(hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:thread-only-bound",
+        thread_target_id=bound["managed_thread_id"],
+        agent_id="codex",
+        repo_id=base.id,
+        resource_kind="repo",
+        resource_id=base.id,
+    )
+    payload = supervisor.archive_repo_state(repo_id=base.id)
+    assert payload["snapshot_id"] is None
+    assert payload["snapshot_path"] is None
+    assert payload["status"] == "threads_only"
+    assert payload["archived_paths"] == []
+    assert payload["archived_thread_ids"] == [created["managed_thread_id"]]
+    assert payload["archived_thread_count"] == 1
+
+    thread = store.get_thread(created["managed_thread_id"])
+    bound_thread = store.get_thread(bound["managed_thread_id"])
+    assert thread is not None
+    assert bound_thread is not None
+    assert thread["lifecycle_status"] == "archived"
+    assert bound_thread["lifecycle_status"] == "active"
 
 
 def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
@@ -689,6 +1015,178 @@ def test_hub_pin_parent_repo_endpoint_persists(tmp_path: Path):
     unpin_resp = client.post("/hub/repos/demo/pin", json={"pinned": False})
     assert unpin_resp.status_code == 200
     assert "demo" not in unpin_resp.json()["pinned_parent_repo_ids"]
+
+
+def test_hub_api_cleanup_repo_threads_archives_only_unbound_threads(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    other = supervisor.create_repo("other")
+    _init_git_repo(base.path)
+    _init_git_repo(other.path)
+
+    store = PmaThreadStore(hub_root)
+    unbound = store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
+    bound = store.create_thread(
+        "codex",
+        base.path,
+        repo_id=base.id,
+        name="discord:1234567890",
+    )
+    untouched = store.create_thread("codex", other.path, repo_id=other.id, name="other")
+
+    bindings = OrchestrationBindingStore(hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:1234567890",
+        thread_target_id=bound["managed_thread_id"],
+        agent_id="codex",
+        repo_id=base.id,
+        resource_kind="repo",
+        resource_id=base.id,
+    )
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.post(f"/hub/repos/{base.id}/cleanup-threads")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["archived_count"] == 1
+    assert payload["archived_thread_ids"] == [unbound["managed_thread_id"]]
+
+    unbound_thread = store.get_thread(unbound["managed_thread_id"])
+    bound_thread = store.get_thread(bound["managed_thread_id"])
+    untouched_thread = store.get_thread(untouched["managed_thread_id"])
+    assert unbound_thread is not None
+    assert bound_thread is not None
+    assert untouched_thread is not None
+    assert unbound_thread["lifecycle_status"] == "archived"
+    assert bound_thread["lifecycle_status"] == "active"
+    assert untouched_thread["lifecycle_status"] == "active"
+
+
+def test_hub_repo_listing_includes_unbound_managed_thread_count(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id=base.id,
+        branch="feature/unbound-count",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    store.create_thread("codex", base.path, repo_id=base.id, name="scratch")
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.get("/hub/repos")
+    assert resp.status_code == 200
+    repos = {item["id"]: item for item in resp.json()["repos"]}
+    assert repos[base.id]["unbound_managed_thread_count"] == 1
+    assert repos[worktree.id]["unbound_managed_thread_count"] == 0
+
+
+def test_hub_api_cleanup_all_repo_threads_archives_unbound_threads_and_reports_dirty(
+    tmp_path: Path,
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base_one = supervisor.create_repo("base-one")
+    base_two = supervisor.create_repo("base-two")
+    _init_git_repo(base_one.path)
+    _init_git_repo(base_two.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id=base_one.id,
+        branch="feature/bulk-cleanup",
+        start_point="HEAD",
+    )
+
+    (base_two.path / "DIRTY.txt").write_text("dirty\n", encoding="utf-8")
+
+    store = PmaThreadStore(hub_root)
+    base_one_unbound = store.create_thread(
+        "codex", base_one.path, repo_id=base_one.id, name="scratch-one"
+    )
+    base_one_bound = store.create_thread(
+        "codex",
+        base_one.path,
+        repo_id=base_one.id,
+        name="discord:bulk-123",
+    )
+    base_two_unbound = store.create_thread(
+        "codex", base_two.path, repo_id=base_two.id, name="scratch-two"
+    )
+    worktree_thread = store.create_thread(
+        "codex", worktree.path, repo_id=worktree.id, name="worktree-thread"
+    )
+
+    bindings = OrchestrationBindingStore(hub_root)
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="discord:bulk-123",
+        thread_target_id=base_one_bound["managed_thread_id"],
+        agent_id="codex",
+        repo_id=base_one.id,
+        resource_kind="repo",
+        resource_id=base_one.id,
+    )
+
+    app = create_hub_app(hub_root)
+    client = TestClient(app)
+
+    resp = client.post("/hub/repos/cleanup-threads")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["archived_count"] == 2
+    assert payload["cleaned_repo_count"] == 2
+    assert payload["dirty_repo_ids"] == [base_two.id]
+    results = {item["repo_id"]: item for item in payload["results"]}
+    assert results[base_one.id]["archived_count"] == 1
+    assert results[base_two.id]["archived_count"] == 1
+    assert results[base_two.id]["is_dirty"] is True
+
+    assert (
+        store.get_thread(base_one_unbound["managed_thread_id"])["lifecycle_status"]
+        == "archived"
+    )
+    assert (
+        store.get_thread(base_two_unbound["managed_thread_id"])["lifecycle_status"]
+        == "archived"
+    )
+    assert (
+        store.get_thread(base_one_bound["managed_thread_id"])["lifecycle_status"]
+        == "active"
+    )
+    assert (
+        store.get_thread(worktree_thread["managed_thread_id"])["lifecycle_status"]
+        == "active"
+    )
 
 
 @pytest.mark.slow
@@ -1703,6 +2201,7 @@ def test_hub_api_cleanup_worktree_forwards_force_attestation(
         force_archive: bool = False,
         archive_note: Optional[str] = None,
         force_attestation: Optional[dict[str, str]] = None,
+        archive_profile: Optional[str] = None,
     ) -> dict[str, object]:
         captured["worktree_repo_id"] = worktree_repo_id
         captured["delete_branch"] = delete_branch
@@ -1712,6 +2211,7 @@ def test_hub_api_cleanup_worktree_forwards_force_attestation(
         captured["force_archive"] = force_archive
         captured["archive_note"] = archive_note
         captured["force_attestation"] = force_attestation
+        captured["archive_profile"] = archive_profile
         return {"status": "ok"}
 
     monkeypatch.setattr(
@@ -1739,6 +2239,7 @@ def test_hub_api_cleanup_worktree_forwards_force_attestation(
         "force": True,
         "force_archive": False,
         "archive_note": "cleanup",
+        "archive_profile": None,
         "force_attestation": {
             "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
             "user_request": "REMOVE base--feature",
@@ -1766,10 +2267,95 @@ def test_cleanup_worktree_allows_pma_only_bound_without_force(tmp_path: Path):
         start_point="HEAD",
     )
     store = PmaThreadStore(hub_root)
-    store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
 
     supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
     assert not worktree.path.exists()
+    thread = store.get_thread(created["managed_thread_id"])
+    assert thread is not None
+    assert thread["lifecycle_status"] == "archived"
+
+
+def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/chat-guard-failure",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    original_run_git = hub_module.run_git
+
+    def _failing_run_git(args, cwd, **kwargs):
+        if list(args[:2]) == ["worktree", "remove"]:
+            return subprocess.CompletedProcess(
+                args=args,
+                returncode=1,
+                stdout="",
+                stderr="fatal: cleanup blocked",
+            )
+        return original_run_git(args, cwd, **kwargs)
+
+    monkeypatch.setattr(hub_module, "run_git", _failing_run_git)
+
+    with pytest.raises(ValueError, match="git worktree remove failed:"):
+        supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
+
+    thread = store.get_thread(created["managed_thread_id"])
+    assert thread is not None
+    assert thread["lifecycle_status"] == "active"
+    assert worktree.path.exists()
+
+
+def test_archive_worktree_archives_bound_pma_threads(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    worktree = supervisor.create_worktree(
+        base_repo_id="base",
+        branch="feature/archive-pma-threads",
+        start_point="HEAD",
+    )
+    store = PmaThreadStore(hub_root)
+    repo_bound = store.create_thread("codex", worktree.path, repo_id=worktree.id)
+    workspace_bound = store.create_thread("opencode", worktree.path)
+    other = store.create_thread("codex", base.path, repo_id=base.id)
+
+    payload = supervisor.archive_worktree(worktree_repo_id=worktree.id)
+
+    assert payload["status"] in {"complete", "partial"}
+    archived_repo_bound = store.get_thread(repo_bound["managed_thread_id"])
+    archived_workspace_bound = store.get_thread(workspace_bound["managed_thread_id"])
+    untouched = store.get_thread(other["managed_thread_id"])
+    assert archived_repo_bound is not None
+    assert archived_repo_bound["lifecycle_status"] == "archived"
+    assert archived_workspace_bound is not None
+    assert archived_workspace_bound["lifecycle_status"] == "archived"
+    assert untouched is not None
+    assert untouched["lifecycle_status"] == "active"
 
 
 def test_cleanup_worktree_allows_mixed_chat_bound_with_force(tmp_path: Path):

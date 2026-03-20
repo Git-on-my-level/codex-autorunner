@@ -13,6 +13,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramAudio,
     TelegramCallbackQuery,
     TelegramDocument,
+    TelegramForwardOrigin,
     TelegramMessage,
     TelegramPhotoSize,
     TelegramUpdate,
@@ -108,6 +109,42 @@ async def test_poll_events_maps_message_with_media_metadata() -> None:
     assert event.attachments[1].file_name == "report.txt"
     assert event.attachments[2].mime_type == "audio/mpeg"
     assert event.attachments[3].size_bytes == 1024
+
+
+@pytest.mark.anyio
+async def test_poll_events_maps_forwarded_message_metadata() -> None:
+    message = TelegramMessage(
+        update_id=14,
+        message_id=24,
+        chat_id=654321,
+        thread_id=None,
+        from_user_id=123,
+        text="forwarded text",
+        date=1700000100,
+        is_topic_message=False,
+        forward_origin=TelegramForwardOrigin(
+            source_label="Build Alerts",
+            message_id=77,
+            is_automatic=True,
+        ),
+    )
+    adapter = TelegramChatAdapter(
+        bot=object(),  # type: ignore[arg-type]
+        poller=_DummyPoller(
+            updates=[TelegramUpdate(update_id=14, message=message, callback=None)]
+        ),
+    )
+
+    events = await adapter.poll_events()
+
+    assert len(events) == 1
+    event = events[0]
+    assert isinstance(event, ChatMessageEvent)
+    assert event.forwarded_from is not None
+    assert event.forwarded_from.source_label == "Build Alerts"
+    assert event.forwarded_from.message_id == "77"
+    assert event.forwarded_from.text == "forwarded text"
+    assert event.forwarded_from.is_automatic is True
 
 
 @pytest.mark.anyio

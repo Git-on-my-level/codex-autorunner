@@ -23,6 +23,9 @@ def pma_config_from_raw(raw: Any) -> dict[str, Any]:
         "default_agent": normalize_optional_text(pma_config.get("default_agent")),
         "model": normalize_optional_text(pma_config.get("model")),
         "reasoning": normalize_optional_text(pma_config.get("reasoning")),
+        "managed_thread_terminal_followup_default": bool(
+            pma_config.get("managed_thread_terminal_followup_default", True)
+        ),
         "active_context_max_lines": int(
             pma_config.get("active_context_max_lines", 200)
         ),

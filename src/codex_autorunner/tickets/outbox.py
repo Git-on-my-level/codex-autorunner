@@ -47,10 +47,8 @@ class OutboxPaths:
     dispatch_path: Path
 
 
-def resolve_outbox_paths(
-    *, workspace_root: Path, runs_dir: Path, run_id: str
-) -> OutboxPaths:
-    run_dir = workspace_root / runs_dir / run_id
+def resolve_outbox_paths(*, workspace_root: Path, run_id: str) -> OutboxPaths:
+    run_dir = workspace_root / ".codex-autorunner" / "runs" / run_id
     dispatch_dir = run_dir / "dispatch"
     dispatch_history_dir = run_dir / "dispatch_history"
     dispatch_path = run_dir / "DISPATCH.md"

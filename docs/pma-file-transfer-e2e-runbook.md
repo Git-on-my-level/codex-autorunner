@@ -22,8 +22,6 @@ All PMA files live under the hub root:
 └── outbox/   # Files written by agents for users to download
 ```
 
-Legacy paths `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` are still supported but redirect to filebox.
-
 ## PMA Durable Docs (Manual Mode)
 
 PMA also maintains hub-scoped docs under `.codex-autorunner/pma/`:

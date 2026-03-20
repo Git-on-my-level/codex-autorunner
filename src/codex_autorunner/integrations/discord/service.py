@@ -41,7 +41,7 @@ from ...core.flows import (
     FlowStore,
     flow_run_duration_seconds,
     format_flow_duration,
-    load_latest_paused_ticket_flow_dispatch,
+    list_unseen_ticket_flow_dispatches,
 )
 from ...core.flows.hub_overview import build_hub_flow_overview_entries
 from ...core.flows.reconciler import reconcile_flow_run
@@ -50,10 +50,12 @@ from ...core.flows.ux_helpers import (
     build_flow_status_snapshot,
     ensure_worker,
     issue_md_path,
+    resolve_ticket_flow_archive_mode,
     seed_issue_from_github,
     seed_issue_from_text,
     select_default_ticket_flow_run,
     summarize_flow_freshness,
+    ticket_flow_archive_requires_force,
     ticket_progress,
 )
 from ...core.git_utils import GitError, reset_branch_from_origin_main
@@ -67,12 +69,14 @@ from ...core.ticket_flow_projection import select_authoritative_run_record
 from ...core.ticket_flow_summary import build_ticket_flow_display
 from ...core.update import (
     UpdateInProgressError,
+    _available_update_target_definitions,
     _normalize_update_ref,
     _normalize_update_target,
     _read_update_status,
     _spawn_update_process,
 )
 from ...core.update_paths import resolve_update_paths
+from ...core.update_targets import get_update_target_label
 from ...core.utils import (
     atomic_write,
     canonicalize_path,
@@ -83,15 +87,13 @@ from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.agents.opencode_supervisor_factory import (
     build_opencode_supervisor_from_repo_config,
 )
-from ...integrations.app_server.client import CodexAppServerClient
+from ...integrations.app_server.client import ApprovalDecision, CodexAppServerClient
 from ...integrations.app_server.env import app_server_env, build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
 from ...integrations.app_server.threads import (
-    FILE_CHAT_OPENCODE_PREFIX,
-    FILE_CHAT_PREFIX,
-    PMA_KEY,
-    PMA_OPENCODE_KEY,
+    file_chat_discord_key,
+    pma_base_key,
 )
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
@@ -115,6 +117,7 @@ from ...integrations.chat.dispatcher import (
     DispatchContext,
     DispatchResult,
 )
+from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.media import (
     audio_content_type_for_input,
     audio_extension_for_input,
@@ -123,6 +126,7 @@ from ...integrations.chat.media import (
     normalize_mime_type,
 )
 from ...integrations.chat.model_selection import (
+    REASONING_EFFORT_VALUES,
     _coerce_model_entries,
     _display_name_is_model_alias,
     _is_valid_opencode_model_name,
@@ -164,6 +168,7 @@ from ...tickets.files import (
     read_ticket_frontmatter,
     safe_relpath,
 )
+from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ..chat.review_commits import _parse_review_commit_log
@@ -194,6 +199,8 @@ from .collaboration_helpers import (
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
+    DISCORD_BUTTON_STYLE_DANGER,
+    DISCORD_BUTTON_STYLE_SUCCESS,
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_action_row,
     build_agent_picker,
@@ -260,6 +267,7 @@ DEFAULT_UPDATE_REPO_REF = "main"
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
+DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS = 5.0
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...[truncated]..."
 DISCORD_ATTACHMENT_MAX_BYTES = 100_000_000
 THREAD_LIST_MAX_PAGES = 5
@@ -427,6 +435,36 @@ class _OpenCodeSupervisorCacheEntry:
     supervisor: OpenCodeSupervisor
     prune_interval_seconds: Optional[float]
     last_requested_at: float
+
+
+@dataclass(frozen=True)
+class _DiscordTurnApprovalContext:
+    channel_id: str
+
+
+@dataclass
+class _DiscordPendingApproval:
+    token: str
+    request_id: str
+    turn_id: str
+    channel_id: str
+    message_id: Optional[str]
+    prompt: str
+    future: asyncio.Future[ApprovalDecision]
+
+
+class _DiscordBackendNotificationRouter:
+    def __init__(
+        self,
+        *,
+        notification_handler: Callable[[dict[str, object]], Awaitable[None]],
+        approval_handler: Callable[[dict[str, Any]], Awaitable[ApprovalDecision]],
+    ) -> None:
+        self._notification_handler = notification_handler
+        self.approval_handler = approval_handler
+
+    async def __call__(self, payload: dict[str, object]) -> None:
+        await self._notification_handler(payload)
 
 
 class _DiscordAppServerSupervisorAdapter:
@@ -605,6 +643,13 @@ class DiscordBotService:
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._typing_sessions: dict[str, int] = {}
+        self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._typing_lock: Optional[asyncio.Lock] = None
+        self._discord_turn_approval_contexts: dict[str, _DiscordTurnApprovalContext] = (
+            {}
+        )
+        self._discord_pending_approvals: dict[str, _DiscordPendingApproval] = {}
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="discord",
             logger=self._logger,
@@ -706,7 +751,7 @@ class DiscordBotService:
         *,
         is_explicit_command: bool,
     ) -> CollaborationEvaluationResult:
-        text = (event.text or "").strip()
+        text = compose_forwarded_message_text(event.text, event.forwarded_from)
         return evaluate_collaboration_policy(
             self._collaboration_policy,
             CollaborationEvaluationContext(
@@ -847,7 +892,8 @@ class DiscordBotService:
     def _is_turn_candidate_message_event(self, event: ChatMessageEvent) -> bool:
         text = (event.text or "").strip()
         has_attachments = bool(event.attachments)
-        if not text and not has_attachments:
+        has_forwarded_content = event.forwarded_from is not None
+        if not text and not has_attachments and not has_forwarded_content:
             return False
         if text.startswith("/"):
             return False
@@ -898,8 +944,130 @@ class DiscordBotService:
             await self._handle_normalized_interaction(event, context)
             return
         if isinstance(event, ChatMessageEvent):
-            await self._handle_message_event(event, context)
+            await self._run_with_typing_indicator(
+                channel_id=context.chat_id,
+                work=lambda: self._handle_message_event(event, context),
+            )
             return
+
+    def _ensure_typing_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        lock = self._typing_lock
+        lock_loop = getattr(lock, "_loop", None) if lock else None
+        if (
+            lock is None
+            or lock_loop is None
+            or lock_loop is not loop
+            or lock_loop.is_closed()
+        ):
+            lock = asyncio.Lock()
+            self._typing_lock = lock
+        return lock
+
+    async def _typing_session_active(self, channel_id: str) -> bool:
+        lock = self._ensure_typing_lock()
+        async with lock:
+            return self._typing_sessions.get(channel_id, 0) > 0
+
+    async def _typing_indicator_loop(self, channel_id: str) -> None:
+        trigger_typing = getattr(self._rest, "trigger_typing", None)
+        if not callable(trigger_typing):
+            return
+        try:
+            while True:
+                try:
+                    await trigger_typing(channel_id=channel_id)
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "discord.typing.send.failed",
+                        channel_id=channel_id,
+                        exc=exc,
+                    )
+                await asyncio.sleep(DISCORD_TYPING_HEARTBEAT_INTERVAL_SECONDS)
+                if not await self._typing_session_active(channel_id):
+                    return
+        finally:
+            lock = self._ensure_typing_lock()
+            async with lock:
+                task = self._typing_tasks.get(channel_id)
+                if task is asyncio.current_task():
+                    self._typing_tasks.pop(channel_id, None)
+
+    async def _begin_typing_indicator(self, channel_id: str) -> None:
+        lock = self._ensure_typing_lock()
+        async with lock:
+            self._typing_sessions[channel_id] = (
+                self._typing_sessions.get(channel_id, 0) + 1
+            )
+            task = self._typing_tasks.get(channel_id)
+            if task is not None and not task.done():
+                return
+            typing_coro = self._typing_indicator_loop(channel_id)
+            try:
+                self._typing_tasks[channel_id] = self._spawn_task(typing_coro)
+            except Exception:
+                typing_coro.close()
+                count = self._typing_sessions.get(channel_id, 0)
+                if count <= 1:
+                    self._typing_sessions.pop(channel_id, None)
+                else:
+                    self._typing_sessions[channel_id] = count - 1
+                raise
+
+    async def _end_typing_indicator(self, channel_id: str) -> None:
+        task_to_cancel: Optional[asyncio.Task[Any]] = None
+        lock = self._ensure_typing_lock()
+        async with lock:
+            count = self._typing_sessions.get(channel_id)
+            if count is None:
+                return
+            if count > 1:
+                self._typing_sessions[channel_id] = count - 1
+                return
+            self._typing_sessions.pop(channel_id, None)
+            task_to_cancel = self._typing_tasks.pop(channel_id, None)
+        if task_to_cancel is not None and not task_to_cancel.done():
+            task_to_cancel.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task_to_cancel
+
+    async def _run_with_typing_indicator(
+        self,
+        *,
+        channel_id: Optional[str],
+        work: Callable[[], Awaitable[None]],
+    ) -> None:
+        if not channel_id:
+            await work()
+            return
+        began = False
+        try:
+            await self._begin_typing_indicator(channel_id)
+            began = True
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.typing.begin.failed",
+                channel_id=channel_id,
+                exc=exc,
+            )
+        try:
+            await work()
+        finally:
+            if began:
+                try:
+                    await self._end_typing_indicator(channel_id)
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "discord.typing.end.failed",
+                        channel_id=channel_id,
+                        exc=exc,
+                    )
 
     def _allowlist_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
         if isinstance(event, ChatInteractionEvent):
@@ -1116,7 +1284,8 @@ class DiscordBotService:
         channel_id = context.chat_id
         text = (event.text or "").strip()
         has_attachments = bool(event.attachments)
-        if not text and not has_attachments:
+        has_forwarded_content = event.forwarded_from is not None
+        if not text and not has_attachments and not has_forwarded_content:
             return
         if text.startswith("/"):
             return
@@ -1590,6 +1759,7 @@ class DiscordBotService:
     def _is_user_ticket_pause(
         self, workspace_root: Path, record: FlowRunRecord
     ) -> bool:
+        resolved_workspace_root = workspace_root.resolve()
         state = getattr(record, "state", None)
         if not isinstance(state, dict):
             return False
@@ -1601,16 +1771,26 @@ class DiscordBotService:
         current_ticket = engine.get("current_ticket")
         if not isinstance(current_ticket, str) or not current_ticket.strip():
             return False
-        ticket_path = (workspace_root / current_ticket).resolve()
+        ticket_path = (resolved_workspace_root / current_ticket).resolve()
         if not ticket_path.is_file() or not is_within(
-            root=workspace_root, target=ticket_path
+            root=resolved_workspace_root,
+            target=ticket_path,
         ):
             return False
         ticket_doc, errors = read_ticket(ticket_path)
-        if errors or ticket_doc is None:
+        if not errors and ticket_doc is not None:
+            return ticket_doc.frontmatter.agent == "user" and not bool(
+                ticket_doc.frontmatter.done
+            )
+        try:
+            raw = ticket_path.read_text(encoding="utf-8")
+        except OSError:
             return False
-        return ticket_doc.frontmatter.agent == "user" and not bool(
-            ticket_doc.frontmatter.done
+        data, _body = parse_markdown_frontmatter(raw)
+        if not isinstance(data, dict):
+            return False
+        return str(data.get("agent") or "").strip().lower() == "user" and (
+            data.get("done") is False
         )
 
     async def _maybe_inject_github_context(
@@ -1639,10 +1819,8 @@ class DiscordBotService:
         agent: str,
     ) -> str:
         if pma_enabled:
-            return PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
-        digest = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[:12]
-        prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
-        return f"{prefix}discord.{channel_id}.{digest}"
+            return pma_base_key(agent)
+        return file_chat_discord_key(agent, channel_id, str(workspace_root))
 
     def _build_runner_state(
         self,
@@ -1736,17 +1914,16 @@ class DiscordBotService:
         )
         had_previous = current_thread is not None
         if current_thread is not None:
-            orchestration_service.cancel_queued_executions(
+            stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
             )
-            if (
-                orchestration_service.get_running_execution(
-                    current_thread.thread_target_id
-                )
-                is not None
-            ):
-                await orchestration_service.interrupt_thread(
-                    current_thread.thread_target_id
+            if stop_outcome.recovered_lost_backend:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.thread.recovered_lost_backend",
+                    channel_id=channel_id,
+                    thread_target_id=current_thread.thread_target_id,
                 )
             orchestration_service.archive_thread_target(current_thread.thread_target_id)
         owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
@@ -1918,19 +2095,203 @@ class DiscordBotService:
                 orchestrator = BackendOrchestrator(
                     repo_root=workspace_root,
                     config=repo_config,
+                    notification_handler=_DiscordBackendNotificationRouter(
+                        notification_handler=self.app_server_events.handle_notification,
+                        approval_handler=self._handle_backend_approval_request,
+                    ),
                     logger=self._logger,
                 )
             self._backend_orchestrators[key] = orchestrator
             return orchestrator
+
+    def _register_discord_turn_approval_context(
+        self, *, started_execution: Any, channel_id: str
+    ) -> None:
+        for turn_id in (
+            str(getattr(started_execution.execution, "backend_id", "") or "").strip(),
+            str(getattr(started_execution.execution, "execution_id", "") or "").strip(),
+        ):
+            if turn_id:
+                self._discord_turn_approval_contexts[turn_id] = (
+                    _DiscordTurnApprovalContext(channel_id=channel_id)
+                )
+
+    def _clear_discord_turn_approval_context(self, *, started_execution: Any) -> None:
+        for turn_id in (
+            str(getattr(started_execution.execution, "backend_id", "") or "").strip(),
+            str(getattr(started_execution.execution, "execution_id", "") or "").strip(),
+        ):
+            if turn_id:
+                self._discord_turn_approval_contexts.pop(turn_id, None)
+
+    @staticmethod
+    def _format_discord_approval_prompt(request: dict[str, Any]) -> str:
+        method = request.get("method")
+        params = (
+            request.get("params") if isinstance(request.get("params"), dict) else {}
+        )
+        lines = ["Approval required"]
+        reason = params.get("reason")
+        if isinstance(reason, str) and reason:
+            lines.append(f"Reason: {reason}")
+        if method == "item/commandExecution/requestApproval":
+            command = params.get("command")
+            if isinstance(command, list):
+                command = " ".join(str(part) for part in command).strip()
+            if isinstance(command, str) and command:
+                lines.append(f"Command: {command}")
+        elif method == "item/fileChange/requestApproval":
+            files = params.get("paths")
+            if isinstance(files, list):
+                normalized = [str(path).strip() for path in files if str(path).strip()]
+                if len(normalized) == 1:
+                    lines.append(f"File: {normalized[0]}")
+                elif normalized:
+                    lines.append("Files:")
+                    lines.extend(f"- {path}" for path in normalized[:10])
+                    if len(normalized) > 10:
+                        lines.append("- ...")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_discord_approval_components(token: str) -> list[dict[str, Any]]:
+        return [
+            build_action_row(
+                [
+                    build_button(
+                        "Accept",
+                        f"approval:{token}:accept",
+                        style=DISCORD_BUTTON_STYLE_SUCCESS,
+                    ),
+                    build_button(
+                        "Decline",
+                        f"approval:{token}:decline",
+                    ),
+                ]
+            ),
+            build_action_row(
+                [
+                    build_button(
+                        "Cancel",
+                        f"approval:{token}:cancel",
+                    )
+                ]
+            ),
+        ]
+
+    async def _handle_backend_approval_request(
+        self, request: dict[str, Any]
+    ) -> ApprovalDecision:
+        request_id = str(request.get("id") or "").strip()
+        params = (
+            request.get("params") if isinstance(request.get("params"), dict) else {}
+        )
+        turn_id = str(params.get("turnId") or params.get("turn_id") or "").strip()
+        if not request_id or not turn_id:
+            return "cancel"
+        context = self._discord_turn_approval_contexts.get(turn_id)
+        if context is None:
+            return "cancel"
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[ApprovalDecision] = loop.create_future()
+        token = uuid.uuid4().hex[:12]
+        prompt = self._format_discord_approval_prompt(request)
+        pending = _DiscordPendingApproval(
+            token=token,
+            request_id=request_id,
+            turn_id=turn_id,
+            channel_id=context.channel_id,
+            message_id=None,
+            prompt=prompt,
+            future=future,
+        )
+        try:
+            response = await self._send_channel_message(
+                context.channel_id,
+                {
+                    "content": format_discord_message(prompt),
+                    "components": self._build_discord_approval_components(token),
+                },
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.approval.send_failed",
+                channel_id=context.channel_id,
+                request_id=request_id,
+                turn_id=turn_id,
+                exc=exc,
+            )
+            await self._send_channel_message_safe(
+                context.channel_id,
+                {
+                    "content": format_discord_message(
+                        "Approval prompt failed to send; canceling approval. Please retry."
+                    )
+                },
+            )
+            return "cancel"
+
+        message_id = response.get("id")
+        if isinstance(message_id, str) and message_id:
+            pending.message_id = message_id
+        self._discord_pending_approvals[token] = pending
+        try:
+            return await future
+        finally:
+            self._discord_pending_approvals.pop(token, None)
+
+    async def _handle_approval_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        custom_id: str,
+    ) -> None:
+        _prefix, token, decision = (custom_id.split(":", 2) + ["", "", ""])[:3]
+        pending = self._discord_pending_approvals.pop(token, None)
+        if pending is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Approval already handled",
+            )
+            return
+        if not pending.future.done():
+            pending.future.set_result(decision)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Decision: {decision}",
+        )
+        if not pending.message_id:
+            return
+        try:
+            await self._delete_channel_message(
+                pending.channel_id,
+                pending.message_id,
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                await self._rest.edit_channel_message(
+                    channel_id=pending.channel_id,
+                    message_id=pending.message_id,
+                    payload={
+                        "content": format_discord_message(f"Approval {decision}."),
+                        "components": [],
+                    },
+                )
 
     def _build_workspace_env(
         self, workspace_root: Path, workspace_id: str, state_dir: Path
     ) -> dict[str, str]:
         repo_config = load_repo_config(workspace_root, hub_path=self._hub_config_path)
         command = (
-            repo_config.app_server.command
+            list(repo_config.app_server.command)
             if repo_config and repo_config.app_server and repo_config.app_server.command
-            else ["codex", "app-server"]
+            else []
         )
         return build_app_server_env(
             command,
@@ -1953,11 +2314,11 @@ class DiscordBotService:
                 hub_path=self._hub_config_path,
             )
             command = (
-                repo_config.app_server.command
+                list(repo_config.app_server.command)
                 if repo_config
                 and repo_config.app_server
                 and repo_config.app_server.command
-                else ["codex", "app-server"]
+                else []
             )
             supervisor = WorkspaceAppServerSupervisor(
                 command,
@@ -2440,6 +2801,37 @@ class DiscordBotService:
             return None
         return resolved_run_id
 
+    @staticmethod
+    def _flow_archive_prompt_text(record: FlowRunRecord) -> str:
+        return (
+            f"Run {record.id} is {record.status.value}. "
+            "Archiving it will reset the live tickets/contextspace state and move the "
+            "current run artifacts into the archive. Archive it anyway?"
+        )
+
+    @staticmethod
+    def _build_flow_archive_confirmation_components(
+        run_id: str,
+        *,
+        prompt_variant: bool,
+    ) -> list[dict[str, Any]]:
+        confirm_action = (
+            "archive_confirm_prompt" if prompt_variant else "archive_confirm"
+        )
+        cancel_action = "archive_cancel_prompt" if prompt_variant else "archive_cancel"
+        return [
+            build_action_row(
+                [
+                    build_button(
+                        "Archive now",
+                        f"flow:{run_id}:{confirm_action}",
+                        style=DISCORD_BUTTON_STYLE_DANGER,
+                    ),
+                    build_button("Cancel", f"flow:{run_id}:{cancel_action}"),
+                ]
+            )
+        ]
+
     async def _run_agent_turn_for_message(
         self,
         *,
@@ -2452,8 +2844,20 @@ class DiscordBotService:
         session_key: str,
         orchestrator_channel_key: str,
     ) -> DiscordMessageTurnResult:
-        if orchestrator_channel_key.startswith("pma:"):
-            return await run_managed_thread_turn_for_message(
+        async def _run_turn() -> DiscordMessageTurnResult:
+            if orchestrator_channel_key.startswith("pma:"):
+                return await run_managed_thread_turn_for_message(
+                    self,
+                    workspace_root=workspace_root,
+                    prompt_text=prompt_text,
+                    input_items=input_items,
+                    agent=agent,
+                    model_override=model_override,
+                    reasoning_effort=reasoning_effort,
+                    session_key=session_key,
+                    orchestrator_channel_key=orchestrator_channel_key,
+                )
+            return await run_agent_turn_for_message(
                 self,
                 workspace_root=workspace_root,
                 prompt_text=prompt_text,
@@ -2463,22 +2867,30 @@ class DiscordBotService:
                 reasoning_effort=reasoning_effort,
                 session_key=session_key,
                 orchestrator_channel_key=orchestrator_channel_key,
+                max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
+                min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+                heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+                log_event_fn=log_event,
             )
-        return await run_agent_turn_for_message(
-            self,
-            workspace_root=workspace_root,
-            prompt_text=prompt_text,
-            input_items=input_items,
-            agent=agent,
-            model_override=model_override,
-            reasoning_effort=reasoning_effort,
-            session_key=session_key,
-            orchestrator_channel_key=orchestrator_channel_key,
-            max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
-            min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
-            heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
-            log_event_fn=log_event,
+
+        turn_result: Optional[DiscordMessageTurnResult] = None
+
+        async def _wrapped() -> None:
+            nonlocal turn_result
+            turn_result = await _run_turn()
+
+        resolved_channel_id = (
+            orchestrator_channel_key[4:]
+            if orchestrator_channel_key.startswith("pma:")
+            else orchestrator_channel_key
         )
+        await self._run_with_typing_indicator(
+            channel_id=resolved_channel_id or None,
+            work=_wrapped,
+        )
+        if turn_result is None:
+            raise RuntimeError("Discord turn finished without a result")
+        return turn_result
 
     @staticmethod
     def _extract_command_result(
@@ -2833,96 +3245,111 @@ class DiscordBotService:
             if preferred_source == "telegram":
                 continue
             run_mirror = self._flow_run_mirror(workspace_root)
-            snapshot = await asyncio.to_thread(
-                load_latest_paused_ticket_flow_dispatch, workspace_root
+            snapshots = await asyncio.to_thread(
+                list_unseen_ticket_flow_dispatches,
+                workspace_root,
+                last_run_id=binding.get("last_dispatch_run_id"),
+                last_dispatch_seq=binding.get("last_dispatch_seq"),
             )
-            if snapshot is None:
+            if not snapshots:
                 continue
 
-            if (
-                binding.get("last_pause_run_id") == snapshot.run_id
-                and binding.get("last_pause_dispatch_seq") == snapshot.dispatch_seq
-            ):
-                continue
+            for snapshot in snapshots:
+                content = self._format_ticket_flow_dispatch_notification(
+                    run_id=snapshot.run_id,
+                    dispatch_seq=snapshot.dispatch_seq,
+                    content=snapshot.dispatch_markdown,
+                    source=self._format_pause_notification_source(
+                        workspace_root=workspace_root,
+                        repo_id=binding.get("repo_id"),
+                    ),
+                    allow_resume_hint=snapshot.allow_resume_hint,
+                    is_handoff=snapshot.is_handoff,
+                )
+                chunks = chunk_discord_message(
+                    content,
+                    max_len=self._config.max_message_length,
+                    with_numbering=False,
+                )
+                if not chunks:
+                    chunks = ["(dispatch notification had no content)"]
 
-            content = format_pause_notification_text(
-                run_id=snapshot.run_id,
-                dispatch_seq=snapshot.dispatch_seq,
-                content=snapshot.dispatch_markdown,
-                source=self._format_pause_notification_source(
-                    workspace_root=workspace_root,
-                    repo_id=binding.get("repo_id"),
-                ),
-                resume_hint=(
-                    "`/car flow resume`" if snapshot.allow_resume_hint else ""
-                ),
-            )
-            chunks = chunk_discord_message(
-                content,
-                max_len=self._config.max_message_length,
-                with_numbering=False,
-            )
-            if not chunks:
-                chunks = ["(pause notification had no content)"]
-
-            enqueued = True
-            for index, chunk in enumerate(chunks, start=1):
-                record_id = f"pause:{channel_id}:{snapshot.run_id}:{snapshot.dispatch_seq}:{index}"
-                try:
-                    await self._store.enqueue_outbox(
-                        OutboxRecord(
-                            record_id=record_id,
-                            channel_id=channel_id,
-                            message_id=None,
-                            operation="send",
-                            payload_json={"content": chunk},
+                record_prefix = "pause" if snapshot.is_handoff else "dispatch"
+                event_type = (
+                    "flow_pause_dispatch_notice"
+                    if snapshot.is_handoff
+                    else "flow_dispatch_notice"
+                )
+                enqueued = True
+                for index, chunk in enumerate(chunks, start=1):
+                    record_id = (
+                        f"{record_prefix}:{channel_id}:{snapshot.run_id}:"
+                        f"{snapshot.dispatch_seq}:{index}"
+                    )
+                    try:
+                        await self._store.enqueue_outbox(
+                            OutboxRecord(
+                                record_id=record_id,
+                                channel_id=channel_id,
+                                message_id=None,
+                                operation="send",
+                                payload_json={"content": chunk},
+                            )
                         )
-                    )
-                    run_mirror.mirror_outbound(
-                        run_id=snapshot.run_id,
-                        platform="discord",
-                        event_type="flow_pause_dispatch_notice",
-                        kind="dispatch",
-                        actor="car",
-                        text=chunk,
-                        chat_id=channel_id,
-                        thread_id=binding.get("guild_id"),
-                        message_id=record_id,
-                        meta={
-                            "dispatch_seq": snapshot.dispatch_seq,
-                            "chunk_index": index,
-                        },
-                    )
-                except Exception as exc:
-                    enqueued = False
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.pause_watch.enqueue_failed",
-                        exc=exc,
+                        run_mirror.mirror_outbound(
+                            run_id=snapshot.run_id,
+                            platform="discord",
+                            event_type=event_type,
+                            kind="dispatch",
+                            actor="car",
+                            text=chunk,
+                            chat_id=channel_id,
+                            thread_id=binding.get("guild_id"),
+                            message_id=record_id,
+                            meta={
+                                "dispatch_seq": snapshot.dispatch_seq,
+                                "chunk_index": index,
+                                "mode": snapshot.mode,
+                            },
+                        )
+                    except Exception as exc:
+                        enqueued = False
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.dispatch_watch.enqueue_failed",
+                            exc=exc,
+                            channel_id=channel_id,
+                            run_id=snapshot.run_id,
+                            dispatch_seq=snapshot.dispatch_seq,
+                            mode=snapshot.mode,
+                        )
+                        break
+
+                if not enqueued:
+                    break
+
+                await self._store.mark_dispatch_seen(
+                    channel_id=channel_id,
+                    run_id=snapshot.run_id,
+                    dispatch_seq=snapshot.dispatch_seq,
+                )
+                if snapshot.is_handoff:
+                    await self._store.mark_pause_dispatch_seen(
                         channel_id=channel_id,
                         run_id=snapshot.run_id,
                         dispatch_seq=snapshot.dispatch_seq,
                     )
-                    break
-
-            if not enqueued:
-                continue
-
-            await self._store.mark_pause_dispatch_seen(
-                channel_id=channel_id,
-                run_id=snapshot.run_id,
-                dispatch_seq=snapshot.dispatch_seq,
-            )
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.pause_watch.notified",
-                channel_id=channel_id,
-                run_id=snapshot.run_id,
-                dispatch_seq=snapshot.dispatch_seq,
-                chunk_count=len(chunks),
-            )
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.dispatch_watch.notified",
+                    channel_id=channel_id,
+                    run_id=snapshot.run_id,
+                    dispatch_seq=snapshot.dispatch_seq,
+                    mode=snapshot.mode,
+                    chunk_count=len(chunks),
+                )
 
     def _format_pause_notification_source(
         self, *, workspace_root: Optional[Path], repo_id: Optional[str]
@@ -2935,6 +3362,32 @@ class DiscordBotService:
             logger=self._logger,
             debug_label="discord.pause_watch.manifest_label_failed",
         )
+
+    def _format_ticket_flow_dispatch_notification(
+        self,
+        *,
+        run_id: str,
+        dispatch_seq: str,
+        content: str,
+        source: Optional[str],
+        allow_resume_hint: bool,
+        is_handoff: bool,
+    ) -> str:
+        if is_handoff:
+            return format_pause_notification_text(
+                run_id=run_id,
+                dispatch_seq=dispatch_seq,
+                content=content,
+                source=source,
+                resume_hint="`/car flow resume`" if allow_resume_hint else "",
+            )
+        body = content.strip() or "(no dispatch message)"
+        header_lines = [
+            f"Ticket flow dispatch (run {run_id}). Dispatch #{dispatch_seq}:"
+        ]
+        if isinstance(source, str) and source.strip():
+            header_lines.append(f"Source: {source.strip()}")
+        return "\n\n".join(("\n".join(header_lines), body))
 
     def _preferred_bound_source_for_workspace(self, workspace_root: Path) -> str | None:
         raw_config = self._hub_raw_config_cache
@@ -4485,7 +4938,7 @@ class DiscordBotService:
             "/car experimental [action] [feature] - Toggle experimental features",
             "/car rollout - Show current thread rollout path",
             "/car feedback <reason> - Send feedback and logs",
-            "/car archive - Archive workspace state for a fresh start",
+            "/car archive - Archive workspace state and managed threads for a fresh start",
             "",
             "**Session Commands:**",
             "/car session resume [thread_id] - Resume a previous chat thread",
@@ -5785,7 +6238,12 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 "Select update target:",
-                [build_update_target_picker(custom_id=UPDATE_TARGET_SELECT_ID)],
+                [
+                    build_update_target_picker(
+                        custom_id=UPDATE_TARGET_SELECT_ID,
+                        target_definitions=self._dynamic_update_target_definitions(),
+                    )
+                ],
             )
             return
         if isinstance(raw_target, str) and raw_target.strip().lower() == "status":
@@ -5804,7 +6262,12 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 f"{exc} Select update target:",
-                [build_update_target_picker(custom_id=UPDATE_TARGET_SELECT_ID)],
+                [
+                    build_update_target_picker(
+                        custom_id=UPDATE_TARGET_SELECT_ID,
+                        target_definitions=self._dynamic_update_target_definitions(),
+                    )
+                ],
             )
             return
 
@@ -5874,8 +6337,9 @@ class DiscordBotService:
             )
             return
 
+        target_label = get_update_target_label(update_target)
         text = format_discord_message(
-            f"Update started ({update_target}). The selected service(s) will restart. "
+            f"Update started ({target_label}). The selected service(s) will restart. "
             "I will post completion status in this channel. "
             "Use `/car update target:status` for progress."
         )
@@ -5894,9 +6358,6 @@ class DiscordBotService:
         if not status:
             return rendered
         lines = [rendered]
-        target = status.get("update_target")
-        if isinstance(target, str) and target.strip():
-            lines.append(f"Target: {target.strip()}")
         repo_ref = status.get("repo_ref")
         if isinstance(repo_ref, str) and repo_ref.strip():
             lines.append(f"Ref: {repo_ref.strip()}")
@@ -5904,6 +6365,24 @@ class DiscordBotService:
         if isinstance(log_path, str) and log_path.strip():
             lines.append(f"Log: {log_path.strip()}")
         return "\n".join(lines)
+
+    def _dynamic_update_target_definitions(self):
+        raw_config = self._hub_raw_config_cache
+        if raw_config is None:
+            try:
+                raw_config = load_hub_config(self._config.root).raw
+            except Exception:
+                raw_config = {}
+            self._hub_raw_config_cache = raw_config
+        return _available_update_target_definitions(
+            raw_config=raw_config if isinstance(raw_config, dict) else None,
+            update_backend=self._update_backend,
+            linux_service_names=(
+                self._update_linux_service_names
+                if isinstance(self._update_linux_service_names, dict)
+                else None
+            ),
+        )
 
     async def _send_update_status_notice(
         self, notify_context: dict[str, Any], text: str
@@ -6017,7 +6496,7 @@ class DiscordBotService:
             f"Agent set to {switch_state.agent}. Will apply on the next turn.",
         )
 
-    VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+    VALID_REASONING_EFFORTS = REASONING_EFFORT_VALUES
 
     def _pending_interaction_scope_key(
         self,
@@ -6698,7 +7177,29 @@ class DiscordBotService:
     ) -> Optional[FlowRunRecord]:
         if not records:
             return None
-        return select_authoritative_run_record(records)
+        live_records = [
+            record
+            for record in records
+            if not record.status.is_terminal()
+            and record.status != FlowRunStatus.SUPERSEDED
+        ]
+        if not live_records:
+            return None
+        return select_authoritative_run_record(live_records)
+
+    @staticmethod
+    def _build_historical_runs_picker(
+        runs: list[FlowRunRecord],
+    ) -> list[dict[str, Any]]:
+        if not runs:
+            return []
+        run_tuples = [(run.id, run.status.value) for run in runs]
+        return [
+            build_flow_runs_picker(
+                run_tuples,
+                placeholder="Select a historical run...",
+            )
+        ]
 
     @staticmethod
     def _build_flow_status_components(
@@ -6720,6 +7221,66 @@ class DiscordBotService:
                 )
             )
         return components
+
+    @staticmethod
+    def _format_flow_status_response_text(
+        record: FlowRunRecord,
+        snapshot: dict[str, Any],
+    ) -> str:
+        worker = snapshot.get("worker_health")
+        worker_status = getattr(worker, "status", "unknown")
+        worker_pid = getattr(worker, "pid", None)
+        worker_text = (
+            f"{worker_status} (pid={worker_pid})"
+            if isinstance(worker_pid, int)
+            else str(worker_status)
+        )
+        last_event_seq = snapshot.get("last_event_seq")
+        last_event_at = snapshot.get("last_event_at")
+        current_ticket = snapshot.get("effective_current_ticket")
+        ticket_progress = snapshot.get("ticket_progress")
+        progress_label = None
+        if isinstance(ticket_progress, dict):
+            done = ticket_progress.get("done")
+            total = ticket_progress.get("total")
+            if isinstance(done, int) and isinstance(total, int) and total >= 0:
+                progress_label = f"{done}/{total}"
+        lines = [
+            f"Run: {record.id}",
+            f"Status: {record.status.value}",
+        ]
+        if progress_label:
+            lines.append(f"Tickets: {progress_label}")
+        duration_label = format_flow_duration(flow_run_duration_seconds(record))
+        if duration_label:
+            lines.append(f"Elapsed: {duration_label}")
+        freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
+        freshness_line = (
+            f"Freshness: {freshness_summary}" if freshness_summary else None
+        )
+        lines.extend(
+            [
+                f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
+                f"Worker: {worker_text}",
+                f"Current ticket: {current_ticket or '-'}",
+            ]
+        )
+        if freshness_line:
+            lines.append(freshness_line)
+        return "\n".join(lines)
+
+    def _build_flow_status_message(
+        self,
+        *,
+        record: FlowRunRecord,
+        runs: list[FlowRunRecord],
+        snapshot: dict[str, Any],
+        prefix: Optional[str] = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        response_text = self._format_flow_status_response_text(record, snapshot)
+        if isinstance(prefix, str) and prefix.strip():
+            response_text = f"{prefix.strip()}\n\n{response_text}"
+        return response_text, self._build_flow_status_components(record, runs)
 
     async def _handle_flow_status(
         self,
@@ -6792,9 +7353,38 @@ class DiscordBotService:
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
                 record = self._select_default_status_run(runs)
+            explicit_run_requested = isinstance(run_id_opt, str) and bool(
+                run_id_opt.strip()
+            )
             if record is None:
+                if runs and not explicit_run_requested:
+                    content = (
+                        "No current ticket_flow run.\n\n"
+                        "Use the picker below to inspect historical runs."
+                    )
+                    components = self._build_historical_runs_picker(runs)
+                    if update_message:
+                        await self._update_component_message(
+                            interaction_id=interaction_id,
+                            interaction_token=interaction_token,
+                            text=content,
+                            components=components,
+                        )
+                    else:
+                        await self._respond_with_components_public(
+                            interaction_id,
+                            interaction_token,
+                            content,
+                            components,
+                        )
+                    return
+                message = (
+                    f"Ticket_flow run {run_id_opt.strip()} not found."
+                    if explicit_run_requested
+                    else "No ticket_flow runs found."
+                )
                 await self._respond_ephemeral(
-                    interaction_id, interaction_token, "No ticket_flow runs found."
+                    interaction_id, interaction_token, message
                 )
                 return
             try:
@@ -6837,47 +7427,11 @@ class DiscordBotService:
         finally:
             store.close()
 
-        worker = snapshot.get("worker_health")
-        worker_status = getattr(worker, "status", "unknown")
-        worker_pid = getattr(worker, "pid", None)
-        worker_text = (
-            f"{worker_status} (pid={worker_pid})"
-            if isinstance(worker_pid, int)
-            else str(worker_status)
+        response_text, status_buttons = self._build_flow_status_message(
+            record=record,
+            runs=runs,
+            snapshot=snapshot,
         )
-        last_event_seq = snapshot.get("last_event_seq")
-        last_event_at = snapshot.get("last_event_at")
-        current_ticket = snapshot.get("effective_current_ticket")
-        ticket_progress = snapshot.get("ticket_progress")
-        progress_label = None
-        if isinstance(ticket_progress, dict):
-            done = ticket_progress.get("done")
-            total = ticket_progress.get("total")
-            if isinstance(done, int) and isinstance(total, int) and total >= 0:
-                progress_label = f"{done}/{total}"
-        lines = [
-            f"Run: {record.id}",
-            f"Status: {record.status.value}",
-        ]
-        if progress_label:
-            lines.append(f"Tickets: {progress_label}")
-        duration_label = format_flow_duration(flow_run_duration_seconds(record))
-        if duration_label:
-            lines.append(f"Elapsed: {duration_label}")
-        freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
-        freshness_line = (
-            f"Freshness: {freshness_summary}" if freshness_summary else None
-        )
-        lines.extend(
-            [
-                f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
-                f"Worker: {worker_text}",
-                f"Current ticket: {current_ticket or '-'}",
-            ]
-        )
-        if freshness_line:
-            lines.append(freshness_line)
-        response_text = "\n".join(lines)
         run_mirror = self._flow_run_mirror(workspace_root)
         run_mirror.mirror_inbound(
             run_id=record.id,
@@ -6903,8 +7457,6 @@ class DiscordBotService:
             thread_id=guild_id,
             meta={"response_type": response_type},
         )
-
-        status_buttons = self._build_flow_status_components(record, runs)
         if status_buttons:
             if update_message:
                 await self._update_component_message(
@@ -7127,11 +7679,109 @@ class DiscordBotService:
                     active_or_paused.id,
                     is_terminal=active_or_paused.status.is_terminal(),
                 )
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"Reusing ticket_flow run {active_or_paused.id} ({active_or_paused.status.value}).",
+                try:
+                    store = self._open_flow_store(workspace_root)
+                except (sqlite3.Error, OSError, RuntimeError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.flow.store_open_failed",
+                        workspace_root=str(workspace_root),
+                        exc=exc,
+                    )
+                    raise DiscordTransientError(
+                        f"Failed to open flow database: {exc}",
+                        user_message="Unable to access flow database. Please try again later.",
+                    ) from None
+                try:
+                    try:
+                        record = self._resolve_flow_run_by_id(
+                            store, run_id=active_or_paused.id
+                        )
+                        runs = store.list_flow_runs(flow_type="ticket_flow")
+                    except (sqlite3.Error, OSError) as exc:
+                        log_event(
+                            self._logger,
+                            logging.ERROR,
+                            "discord.flow.query_failed",
+                            exc=exc,
+                            run_id=active_or_paused.id,
+                        )
+                        raise DiscordTransientError(
+                            f"Failed to query flow run: {exc}",
+                            user_message="Unable to query flow database. Please try again later.",
+                        ) from None
+                    if record is None:
+                        await self._respond_ephemeral(
+                            interaction_id,
+                            interaction_token,
+                            (
+                                "Reusing ticket_flow run "
+                                f"{active_or_paused.id} ({active_or_paused.status.value})."
+                            ),
+                        )
+                        return
+                    try:
+                        record, _updated, locked = reconcile_flow_run(
+                            workspace_root, record, store
+                        )
+                        if locked:
+                            await self._respond_ephemeral(
+                                interaction_id,
+                                interaction_token,
+                                f"Run {record.id} is locked for reconcile; try again.",
+                            )
+                            return
+                    except (sqlite3.Error, OSError) as exc:
+                        log_event(
+                            self._logger,
+                            logging.ERROR,
+                            "discord.flow.reconcile_failed",
+                            exc=exc,
+                            run_id=record.id,
+                        )
+                        raise DiscordTransientError(
+                            f"Failed to reconcile flow run: {exc}",
+                            user_message="Unable to reconcile flow run. Please try again later.",
+                        ) from None
+                    try:
+                        snapshot = build_flow_status_snapshot(
+                            workspace_root, record, store
+                        )
+                    except (sqlite3.Error, OSError) as exc:
+                        log_event(
+                            self._logger,
+                            logging.ERROR,
+                            "discord.flow.snapshot_failed",
+                            exc=exc,
+                            run_id=record.id,
+                        )
+                        raise DiscordTransientError(
+                            f"Failed to build flow snapshot: {exc}",
+                            user_message="Unable to build flow snapshot. Please try again later.",
+                        ) from None
+                finally:
+                    store.close()
+                response_text, status_buttons = self._build_flow_status_message(
+                    record=record,
+                    runs=runs,
+                    snapshot=snapshot,
+                    prefix=(
+                        "Reusing ticket_flow run "
+                        f"{record.id} ({record.status.value})."
+                    ),
                 )
+                if status_buttons:
+                    await self._respond_with_components_public(
+                        interaction_id,
+                        interaction_token,
+                        response_text,
+                        status_buttons,
+                    )
+                else:
+                    await self._respond_public(
+                        interaction_id, interaction_token, response_text
+                    )
                 return
 
         metadata: dict[str, Any] = {"origin": "discord", "force_new": force_new}
@@ -7148,12 +7798,100 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
             return
 
+        try:
+            store = self._open_flow_store(workspace_root)
+        except (sqlite3.Error, OSError, RuntimeError) as exc:
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "discord.flow.store_open_failed",
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            raise DiscordTransientError(
+                f"Failed to open flow database: {exc}",
+                user_message="Unable to access flow database. Please try again later.",
+            ) from None
+        try:
+            try:
+                record = self._resolve_flow_run_by_id(store, run_id=started.run_id)
+                runs = store.list_flow_runs(flow_type="ticket_flow")
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.query_failed",
+                    exc=exc,
+                    run_id=started.run_id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to query flow run: {exc}",
+                    user_message="Unable to query flow database. Please try again later.",
+                ) from None
+            if record is None:
+                prefix = "Started new" if force_new else "Started"
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    f"{prefix} ticket_flow run {started.run_id}.",
+                )
+                return
+            try:
+                record, _updated, locked = reconcile_flow_run(
+                    workspace_root, record, store
+                )
+                if locked:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        f"Run {record.id} is locked for reconcile; try again.",
+                    )
+                    return
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.reconcile_failed",
+                    exc=exc,
+                    run_id=record.id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to reconcile flow run: {exc}",
+                    user_message="Unable to reconcile flow run. Please try again later.",
+                ) from None
+            try:
+                snapshot = build_flow_status_snapshot(workspace_root, record, store)
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.snapshot_failed",
+                    exc=exc,
+                    run_id=record.id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to build flow snapshot: {exc}",
+                    user_message="Unable to build flow snapshot. Please try again later.",
+                ) from None
+        finally:
+            store.close()
+
         prefix = "Started new" if force_new else "Started"
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"{prefix} ticket_flow run {started.run_id}.",
+        response_text, status_buttons = self._build_flow_status_message(
+            record=record,
+            runs=runs,
+            snapshot=snapshot,
+            prefix=f"{prefix} ticket_flow run {record.id}.",
         )
+        if status_buttons:
+            await self._respond_with_components_public(
+                interaction_id,
+                interaction_token,
+                response_text,
+                status_buttons,
+            )
+        else:
+            await self._respond_public(interaction_id, interaction_token, response_text)
 
     async def _handle_flow_restart(
         self,
@@ -7615,15 +8353,20 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = await self._resolve_flow_run_input(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            action="archive",
-            run_id_opt=options.get("run_id"),
-        )
-        if run_id_opt is None:
-            return
+        confirmed = bool(options.get("confirmed"))
+        run_id_opt = options.get("run_id")
+        if isinstance(run_id_opt, str) and run_id_opt.strip():
+            run_id_opt = await self._resolve_flow_run_input(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="archive",
+                run_id_opt=run_id_opt,
+            )
+            if run_id_opt is None:
+                return
+        else:
+            run_id_opt = ""
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -7658,7 +8401,7 @@ class DiscordBotService:
                     ) from None
             else:
                 try:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                    target = select_default_ticket_flow_run(store)
                 except (sqlite3.Error, OSError) as exc:
                     log_event(
                         self._logger,
@@ -7671,7 +8414,6 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = runs[0] if runs else None
         finally:
             store.close()
 
@@ -7680,6 +8422,30 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 "No ticket_flow run found to archive.",
+            )
+            return
+
+        archive_mode = resolve_ticket_flow_archive_mode(target)
+        if archive_mode == "blocked":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                (
+                    f"Run {target.id} is {target.status.value}. "
+                    "Stop or pause it before archiving."
+                ),
+            )
+            return
+
+        if archive_mode == "confirm" and not confirmed:
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                self._flow_archive_prompt_text(target),
+                self._build_flow_archive_confirmation_components(
+                    target.id,
+                    prompt_variant=True,
+                ),
             )
             return
 
@@ -7696,14 +8462,35 @@ class DiscordBotService:
             message_id=interaction_id,
         )
         flow_service = self._ticket_flow_orchestration_service(workspace_root)
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         try:
-            summary = flow_service.archive_flow_run(
+            summary = await asyncio.to_thread(
+                flow_service.archive_flow_run,
                 target.id,
-                force=False,
+                force=ticket_flow_archive_requires_force(target),
                 delete_run=True,
             )
+        except KeyError:
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=(
+                    f"Run {target.id} no longer exists. "
+                    "Use /car flow status or /car flow runs to inspect historical runs."
+                ),
+            )
+            return
         except ValueError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=str(exc),
+            )
             return
 
         outbound_text = (
@@ -7712,10 +8499,11 @@ class DiscordBotService:
             f"runs_archived={summary['archived_runs']}, "
             f"contextspace={summary['archived_contextspace']})."
         )
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            outbound_text,
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=outbound_text,
         )
 
     async def _handle_flow_reply(
@@ -7876,15 +8664,8 @@ class DiscordBotService:
         record: FlowRunRecord,
         text: str,
     ) -> Path:
-        runs_dir_raw = record.input_data.get("runs_dir")
-        runs_dir = (
-            Path(runs_dir_raw)
-            if isinstance(runs_dir_raw, str) and runs_dir_raw
-            else Path(".codex-autorunner/runs")
-        )
         run_paths = resolve_outbox_paths(
             workspace_root=workspace_root,
-            runs_dir=runs_dir,
             run_id=record.id,
         )
         try:
@@ -8331,6 +9112,27 @@ class DiscordBotService:
             return False
         return True
 
+    async def _defer_component_update(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+    ) -> bool:
+        try:
+            await self._rest.create_interaction_response(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                payload={"type": 6},
+            )
+        except DiscordAPIError as exc:
+            self._logger.warning(
+                "Failed to defer component update: %s (interaction_id=%s)",
+                exc,
+                interaction_id,
+            )
+            return False
+        return True
+
     async def _send_or_respond_ephemeral(
         self,
         *,
@@ -8455,6 +9257,35 @@ class DiscordBotService:
                     exc,
                     interaction_id,
                 )
+
+    async def _edit_original_component_message(
+        self,
+        *,
+        interaction_token: str,
+        text: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> bool:
+        application_id = (self._config.application_id or "").strip()
+        if not application_id:
+            return False
+        max_len = max(int(self._config.max_message_length), 32)
+        payload: dict[str, Any] = {
+            "content": truncate_for_discord(text, max_len=max_len),
+            "components": components or [],
+        }
+        try:
+            await self._rest.edit_original_interaction_response(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                payload=payload,
+            )
+        except DiscordAPIError as exc:
+            self._logger.error(
+                "Failed to edit original interaction response: %s",
+                exc,
+            )
+            return False
+        return True
 
     async def _send_followup_ephemeral(
         self,
@@ -8964,6 +9795,14 @@ class DiscordBotService:
                     )
                 return
 
+            if custom_id.startswith("approval:"):
+                await self._handle_approval_component(
+                    interaction_id,
+                    interaction_token,
+                    custom_id=custom_id,
+                )
+                return
+
             if custom_id == "cancel_turn":
                 await self._handle_cancel_turn_button(
                     interaction_id,
@@ -9305,6 +10144,14 @@ class DiscordBotService:
                     )
                 return
 
+            if custom_id.startswith("approval:"):
+                await self._handle_approval_component(
+                    interaction_id,
+                    interaction_token,
+                    custom_id=custom_id,
+                )
+                return
+
             if custom_id == "cancel_turn":
                 await self._handle_cancel_turn_button(
                     interaction_id,
@@ -9524,28 +10371,161 @@ class DiscordBotService:
                 interaction_token,
                 f"Stop requested for run {updated.run_id} ({updated.status}).",
             )
-        elif action == "archive":
-            try:
-                summary = flow_service.archive_flow_run(
-                    run_id,
-                    force=False,
-                    delete_run=True,
+        elif action in {
+            "archive",
+            "archive_confirm",
+            "archive_cancel",
+            "archive_confirm_prompt",
+            "archive_cancel_prompt",
+        }:
+            if action == "archive_cancel":
+                await self._handle_flow_status(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options={"run_id": run_id},
+                    channel_id=channel_id,
+                    guild_id=guild_id,
+                    update_message=True,
                 )
-            except (KeyError, ValueError) as exc:
-                await self._respond_ephemeral(
-                    interaction_id, interaction_token, str(exc)
+                return
+            if action == "archive_cancel_prompt":
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text="Archive cancelled.",
+                    components=[],
                 )
                 return
 
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    f"Archived run {summary['run_id']} "
-                    f"(tickets={summary['archived_tickets']}, "
-                    f"runs_archived={summary['archived_runs']}, "
-                    f"contextspace={summary['archived_contextspace']})."
-                ),
+            try:
+                store = self._open_flow_store(workspace_root)
+            except (sqlite3.Error, OSError, RuntimeError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.store_open_failed",
+                    workspace_root=str(workspace_root),
+                    exc=exc,
+                )
+                raise DiscordTransientError(
+                    f"Failed to open flow database: {exc}",
+                    user_message="Unable to access flow database. Please try again later.",
+                ) from None
+            try:
+                target = self._resolve_flow_run_by_id(store, run_id=run_id)
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.query_failed",
+                    exc=exc,
+                    run_id=run_id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to query flow run: {exc}",
+                    user_message="Unable to query flow database. Please try again later.",
+                ) from None
+            finally:
+                store.close()
+
+            if target is None:
+                stale_text = (
+                    f"Run {run_id} no longer exists. "
+                    "Use /car flow status or /car flow runs to inspect historical runs."
+                )
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, stale_text
+                )
+                return
+
+            archive_mode = resolve_ticket_flow_archive_mode(target)
+            blocked_text = f"Run {target.id} is {target.status.value}. Stop or pause it before archiving."
+            if archive_mode == "blocked":
+                if action.endswith("_prompt"):
+                    await self._update_component_message(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        text=blocked_text,
+                        components=[],
+                    )
+                else:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        blocked_text,
+                    )
+                return
+
+            if action == "archive" and archive_mode == "confirm":
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text=self._flow_archive_prompt_text(target),
+                    components=self._build_flow_archive_confirmation_components(
+                        target.id,
+                        prompt_variant=False,
+                    ),
+                )
+                return
+
+            deferred = await self._defer_component_update(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+            try:
+                summary = await asyncio.to_thread(
+                    flow_service.archive_flow_run,
+                    run_id,
+                    force=ticket_flow_archive_requires_force(target),
+                    delete_run=True,
+                )
+            except KeyError:
+                stale_text = (
+                    f"Run {run_id} no longer exists. "
+                    "Use /car flow status or /car flow runs to inspect historical runs."
+                )
+                if deferred:
+                    updated = await self._edit_original_component_message(
+                        interaction_token=interaction_token,
+                        text=stale_text,
+                        components=[],
+                    )
+                    if updated:
+                        return
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, stale_text
+                )
+                return
+            except ValueError as exc:
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=str(exc),
+                )
+                return
+
+            archived_text = (
+                f"Archived run {summary['run_id']} "
+                f"(tickets={summary['archived_tickets']}, "
+                f"runs_archived={summary['archived_runs']}, "
+                f"contextspace={summary['archived_contextspace']}).\n\n"
+                "Use /car flow status or /car flow runs to inspect historical runs."
+            )
+            if deferred:
+                updated = await self._edit_original_component_message(
+                    interaction_token=interaction_token,
+                    text=archived_text,
+                    components=[],
+                )
+                if updated:
+                    return
+            await self._update_component_message(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                text=archived_text,
+                components=[],
             )
         elif action == "restart":
             await self._handle_flow_restart(
@@ -10534,7 +11514,7 @@ class DiscordBotService:
         channel_id: str,
     ) -> None:
         from ...core.archive import (
-            archive_workspace_car_state,
+            archive_workspace_for_fresh_start,
             resolve_workspace_archive_target,
         )
 
@@ -10558,7 +11538,8 @@ class DiscordBotService:
                 manifest_path=self._manifest_path,
             )
             result = await asyncio.to_thread(
-                archive_workspace_car_state,
+                archive_workspace_for_fresh_start,
+                hub_root=self._config.root,
                 base_repo_root=target.base_repo_root,
                 base_repo_id=target.base_repo_id,
                 worktree_repo_root=workspace_root,
@@ -10599,8 +11580,16 @@ class DiscordBotService:
             text=format_discord_message(
                 "\n".join(
                     [
-                        f"Archived workspace state to snapshot `{result.snapshot_id}`.",
+                        (
+                            f"Archived workspace state to snapshot `{result.snapshot_id}`."
+                            if result.snapshot_id
+                            else "Workspace CAR state was already clean."
+                        ),
                         f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
+                        (
+                            f"Archived {len(result.archived_thread_ids)} managed thread"
+                            f"{'' if len(result.archived_thread_ids) == 1 else 's'}."
+                        ),
                         "The binding remains active for fresh work.",
                     ]
                 )
@@ -10655,30 +11644,31 @@ class DiscordBotService:
             await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
         try:
-            cancelled_queued = orchestration_service.cancel_queued_executions(
+            stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
             )
-            interrupted_active = False
             if (
-                orchestration_service.get_running_execution(
-                    current_thread.thread_target_id
-                )
-                is not None
+                not stop_outcome.interrupted_active
+                and not stop_outcome.recovered_lost_backend
+                and not stop_outcome.cancelled_queued
             ):
-                await orchestration_service.interrupt_thread(
-                    current_thread.thread_target_id
-                )
-                interrupted_active = True
-            if not interrupted_active and not cancelled_queued:
                 text = format_discord_message("No active turn to interrupt.")
                 await self._respond_ephemeral(interaction_id, interaction_token, text)
                 return
             parts = []
-            if interrupted_active:
+            if stop_outcome.interrupted_active:
                 parts.append("Stopping current turn...")
-            if cancelled_queued:
-                parts.append(f"Cancelled {cancelled_queued} queued turn(s).")
-            text = format_discord_message("Stopping current turn...")
+            elif stop_outcome.recovered_lost_backend:
+                parts.append("Recovered stale session after backend thread was lost.")
+            if stop_outcome.cancelled_queued:
+                parts.append(
+                    f"Cancelled {stop_outcome.cancelled_queued} queued turn(s)."
+                )
+            text = format_discord_message(
+                "Recovered stale session after backend thread was lost."
+                if stop_outcome.recovered_lost_backend
+                else "Stopping current turn..."
+            )
             if parts:
                 text = format_discord_message(" ".join(parts))
             await self._respond_ephemeral(interaction_id, interaction_token, text)

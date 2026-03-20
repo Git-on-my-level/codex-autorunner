@@ -185,14 +185,11 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
 
         workspace_value = run_record.input_data.get("workspace_root")
         workspace_root = Path(workspace_value) if workspace_value else repo_root
-        runs_dir = Path(
-            run_record.input_data.get("runs_dir") or ".codex-autorunner/runs"
-        )
         outbox_paths = resolve_outbox_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_record.id
+            workspace_root=workspace_root, run_id=run_record.id
         )
         reply_paths = resolve_reply_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_record.id
+            workspace_root=workspace_root, run_id=run_record.id
         )
         turns["dispatches"] = _count_history_dirs(outbox_paths.dispatch_history_dir)
         turns["replies"] = _count_history_dirs(reply_paths.reply_history_dir)

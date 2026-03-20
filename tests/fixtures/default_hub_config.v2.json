@@ -218,7 +218,14 @@
     "reactive_origin_blocklist": [
       "pma"
     ],
-    "reasoning": null
+    "reasoning": null,
+    "run_archive_max_age_days": 30,
+    "run_archive_max_entries": 200,
+    "run_archive_max_total_bytes": 1000000000,
+    "worktree_archive_max_age_days": 30,
+    "worktree_archive_max_snapshots_per_repo": 10,
+    "worktree_archive_max_total_bytes": 1000000000,
+    "worktree_archive_profile": "portable"
   },
   "repo_defaults": {
     "autorunner": {
@@ -438,7 +445,7 @@
       "codex",
       "app-server"
     ],
-    "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
+    "app_server_command_env": "CAR_APP_SERVER_COMMAND",
     "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
     "cache": {
       "cleanup_interval_seconds": 300,

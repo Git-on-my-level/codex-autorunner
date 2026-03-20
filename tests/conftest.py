@@ -9,10 +9,15 @@ Ensure tests always import the in-repo code.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +25,63 @@ import pytest
 import yaml
 
 DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
+_OPENCODE_PROCESS_KIND = "opencode"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_PYTEST_RUNTIME_KEY = hashlib.sha1(str(_REPO_ROOT).encode("utf-8")).hexdigest()[:10]
+_PYTEST_RUNTIME_ROOT = Path("/tmp") / f"cp-{_PYTEST_RUNTIME_KEY}"
+_PYTEST_TEMP_ROOT = _PYTEST_RUNTIME_ROOT / "t"
+_PYTEST_OPENCODE_STATE_ROOT = _REPO_ROOT / ".codex-autorunner" / "pytest-opencode-state"
+_PYTEST_RUN_TOKEN = os.environ.setdefault("CAR_PYTEST_RUN_TOKEN", uuid.uuid4().hex[:8])
 os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
+
+
+def _pytest_process_token() -> str:
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker_id:
+        return worker_id
+    return f"p{os.getpid():x}"
+
+
+def _pytest_temp_env_root() -> Path:
+    return _PYTEST_TEMP_ROOT / _PYTEST_RUN_TOKEN / _pytest_process_token()
+
+
+def _pytest_global_state_root() -> Path:
+    return _PYTEST_OPENCODE_STATE_ROOT / _PYTEST_RUN_TOKEN / _pytest_process_token()
+
+
+def _prepare_repo_local_tmpdir() -> None:
+    temp_root = _pytest_temp_env_root()
+    temp_root.mkdir(parents=True, exist_ok=True)
+    for key in ("TMPDIR", "TMP", "TEMP"):
+        os.environ[key] = str(temp_root)
+    tempfile.tempdir = None
+
+
+def _prune_old_runtime_dirs(
+    root: Path, *, keep: set[str], max_age_seconds: int
+) -> None:
+    if not root.exists():
+        return
+    cutoff = time.time() - max_age_seconds
+    for path in root.iterdir():
+        if path.name in keep:
+            continue
+        try:
+            if path.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        shutil.rmtree(path, ignore_errors=True)
+
+
+_prepare_repo_local_tmpdir()
+_prune_old_runtime_dirs(
+    _PYTEST_TEMP_ROOT, keep={_PYTEST_RUN_TOKEN}, max_age_seconds=86400
+)
+_prune_old_runtime_dirs(
+    _PYTEST_OPENCODE_STATE_ROOT, keep={_PYTEST_RUN_TOKEN}, max_age_seconds=86400
+)
 
 
 _ORIGINAL_UNRAISABLE_HOOK = sys.unraisablehook
@@ -178,6 +239,61 @@ def _remove_car_managed_docker_containers(container_names: set[str]) -> list[str
     return failures
 
 
+def _iter_opencode_registry_roots(root: Path) -> set[Path]:
+    if not root.exists():
+        return set()
+    return {
+        path.parents[2]
+        for path in root.rglob(".codex-autorunner/processes/opencode")
+        if path.is_dir()
+    }
+
+
+def _force_reap_attestation(root: Path) -> dict[str, str]:
+    from codex_autorunner.core.force_attestation import (
+        FORCE_ATTESTATION_REQUIRED_PHRASE,
+    )
+
+    return {
+        "phrase": FORCE_ATTESTATION_REQUIRED_PHRASE,
+        "user_request": "pytest cleanup fixture reaping temp-rooted managed processes",
+        "target_scope": f"tests.cleanup:{root}",
+    }
+
+
+def _reap_opencode_processes(roots: set[Path], *, force: bool) -> list[str]:
+    from codex_autorunner.core.managed_processes import (
+        list_process_records,
+        reap_managed_processes,
+    )
+
+    failures: list[str] = []
+    for root in sorted(roots):
+        try:
+            records = list_process_records(root, _OPENCODE_PROCESS_KIND)
+        except ValueError:
+            continue
+        if not records:
+            continue
+        reap_kwargs: dict[str, object] = {}
+        if force:
+            reap_kwargs["force"] = True
+            reap_kwargs["force_attestation"] = _force_reap_attestation(root)
+        reap_managed_processes(root, **reap_kwargs)
+        try:
+            remaining = list_process_records(root, _OPENCODE_PROCESS_KIND)
+        except ValueError:
+            continue
+        if not remaining:
+            continue
+        details = ", ".join(
+            f"workspace_id={record.workspace_id} pid={record.pid} pgid={record.pgid}"
+            for record in remaining
+        )
+        failures.append(f"{root}: {details}")
+    return failures
+
+
 @pytest.fixture(autouse=True)
 def docker_managed_cleanup(request: pytest.FixtureRequest) -> None:
     if request.node.get_closest_marker("docker_managed_cleanup") is None:
@@ -203,6 +319,18 @@ def docker_managed_cleanup(request: pytest.FixtureRequest) -> None:
         )
 
 
+@pytest.fixture(autouse=True)
+def _configure_opencode_global_state_root(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node_path = str(getattr(request.node, "path", request.node.nodeid))
+    if "opencode" not in node_path:
+        yield
+        return
+    monkeypatch.setenv("CAR_GLOBAL_STATE_ROOT", str(_pytest_global_state_root()))
+    yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _cleanup_codex_app_server_clients() -> None:
     """
@@ -220,6 +348,30 @@ def _cleanup_codex_app_server_clients() -> None:
     from codex_autorunner.integrations.app_server.client import _close_all_clients
 
     anyio.run(_close_all_clients)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_opencode_processes_session() -> None:
+    """
+    Reap stale prior-run OpenCode records and fail if this run leaks any.
+    """
+    prior_state_roots = (
+        {
+            path
+            for path in _PYTEST_OPENCODE_STATE_ROOT.iterdir()
+            if path.is_dir() and path.name != _PYTEST_RUN_TOKEN
+        }
+        if _PYTEST_OPENCODE_STATE_ROOT.exists()
+        else set()
+    )
+    _reap_opencode_processes(prior_state_roots, force=False)
+    yield
+    failures = _reap_opencode_processes({_pytest_global_state_root()}, force=True)
+    if failures:
+        raise AssertionError(
+            "Leaked OpenCode managed processes remained after the test session: "
+            + "; ".join(failures)
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -243,6 +395,21 @@ async def _cleanup_codex_app_server_clients_per_test() -> None:
         t.cancel()
     if pending_restart_tasks:
         await asyncio.gather(*pending_restart_tasks, return_exceptions=True)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_opencode_processes_per_test(request: pytest.FixtureRequest) -> None:
+    yield
+    roots = {_pytest_global_state_root()}
+    tmp_path = request.node.funcargs.get("tmp_path")
+    if tmp_path is not None:
+        roots.update(_iter_opencode_registry_roots(tmp_path))
+    failures = _reap_opencode_processes(roots, force=True)
+    if failures:
+        pytest.fail(
+            "Leaked OpenCode managed processes remained after test teardown: "
+            + "; ".join(failures)
+        )
 
 
 @pytest.fixture()

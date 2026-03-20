@@ -1,5 +1,5 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-import { parseAppServerEvent } from "./agentEvents.js";
+import { parseAppServerEvent, resetOpenCodeEventState } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_ACTIONS, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { saveChatHistory, loadChatHistory } from "./docChatStorage.js";
 import { renderMarkdown } from "./messages.js";
@@ -117,6 +117,7 @@ export function createDocChat(config) {
         state.events = [];
         state.totalEvents = 0;
         state.eventItemIndex = {};
+        resetOpenCodeEventState();
     }
     function applyAppEvent(payload) {
         const parsed = parseAppServerEvent(payload);
@@ -132,6 +133,9 @@ export function createDocChat(config) {
             }
             else if (mergeStrategy === "newline") {
                 existing.summary = `${existing.summary || ""}\n\n`;
+            }
+            else if (mergeStrategy === "replace") {
+                existing.summary = event.summary;
             }
             existing.time = event.time;
             return;

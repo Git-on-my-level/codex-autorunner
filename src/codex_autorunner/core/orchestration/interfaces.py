@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
+from ..car_context import CarContextProfile
 from .models import (
     AgentDefinition,
     BusyThreadPolicy,
@@ -11,6 +12,7 @@ from .models import (
     FlowTarget,
     MessageRequest,
     MessageRequestKind,
+    ThreadStopOutcome,
     ThreadTarget,
 )
 
@@ -120,6 +122,7 @@ class ThreadExecutionStore(Protocol):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 
@@ -249,6 +252,7 @@ class OrchestrationThreadService(Protocol):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 
@@ -263,6 +267,7 @@ class OrchestrationThreadService(Protocol):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget: ...
 
@@ -281,6 +286,8 @@ class OrchestrationThreadService(Protocol):
     ) -> ExecutionRecord: ...
 
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord: ...
+
+    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome: ...
 
     def get_execution(
         self, thread_target_id: str, execution_id: str

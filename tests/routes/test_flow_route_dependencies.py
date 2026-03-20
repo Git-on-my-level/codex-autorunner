@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from codex_autorunner.surfaces.web.routes.flow_routes.dependencies import (
@@ -50,3 +51,41 @@ def test_seed_issue_dependency_adapter_uses_helper_signatures(
 
     assert deps.seed_issue(repo_root, "run-1", issue_text="write a plan") == "text-seed"
     assert observed["text"] == "write a plan"
+
+
+def test_safe_list_flow_runs_dependency_adapter_uses_flow_store_service(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    observed: dict[str, object] = {}
+
+    def _fake_safe_list_flow_runs(
+        repo_root_arg: Path,
+        flow_type: str | None = None,
+        *,
+        recover_stuck: bool = False,
+        logger: logging.Logger | None = None,
+    ) -> list[str]:
+        observed["call"] = (repo_root_arg, flow_type, recover_stuck, logger)
+        return ["run-1"]
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.flow_store.safe_list_flow_runs",
+        _fake_safe_list_flow_runs,
+    )
+
+    deps = build_default_flow_route_dependencies()
+
+    assert deps.safe_list_flow_runs(
+        repo_root,
+        flow_type="ticket_flow",
+        recover_stuck=True,
+    ) == ["run-1"]
+    repo_root_arg, flow_type, recover_stuck, logger = observed["call"]
+    assert repo_root_arg == repo_root
+    assert flow_type == "ticket_flow"
+    assert recover_stuck is True
+    assert isinstance(logger, logging.Logger)
+    assert logger.name == (
+        "codex_autorunner.surfaces.web.routes.flow_routes.dependencies"
+    )

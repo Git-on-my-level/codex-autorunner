@@ -5,6 +5,7 @@ Normalized statuses:
 - ``running``: a managed turn is in flight
 - ``paused``: execution is intentionally compacted/paused without finishing
 - ``completed``: the latest managed turn finished successfully
+- ``interrupted``: the latest managed turn was intentionally interrupted
 - ``failed``: the latest managed turn finished unsuccessfully
 - ``archived``: the thread is terminal and read-only
 
@@ -18,11 +19,11 @@ Transition table:
 | --- | --- | --- | --- |
 | any | ``thread_created`` | ``idle`` | no |
 | ``paused``/``archived`` | ``thread_resumed`` | ``idle`` | no |
-| ``idle``/``completed``/``failed``/``paused`` | ``turn_started`` | ``running`` | no |
-| ``idle``/``completed``/``failed``/``paused`` | ``thread_compacted`` | ``paused`` | no |
+| ``idle``/``completed``/``interrupted``/``failed``/``paused`` | ``turn_started`` | ``running`` | no |
+| ``idle``/``completed``/``interrupted``/``failed``/``paused`` | ``thread_compacted`` | ``paused`` | no |
 | ``running`` | ``managed_turn_completed`` | ``completed`` | yes |
 | ``running`` | ``managed_turn_failed`` | ``failed`` | yes |
-| ``running`` | ``managed_turn_interrupted`` | ``failed`` | yes |
+| ``running`` | ``managed_turn_interrupted`` | ``interrupted`` | yes |
 | any | ``thread_archived`` | ``archived`` | yes |
 
 Rules:
@@ -46,7 +47,17 @@ class ManagedThreadStatus(str, Enum):
     RUNNING = "running"
     PAUSED = "paused"
     COMPLETED = "completed"
+    INTERRUPTED = "interrupted"
     FAILED = "failed"
+
+
+class ManagedThreadOperatorStatus(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    PAUSED = "paused"
+    REUSABLE = "reusable"
+    ATTENTION_REQUIRED = "attention_required"
+    ARCHIVED = "archived"
 
 
 class ManagedThreadStatusReason(str, Enum):
@@ -63,6 +74,7 @@ class ManagedThreadStatusReason(str, Enum):
 TERMINAL_STATUSES = frozenset(
     {
         ManagedThreadStatus.COMPLETED.value,
+        ManagedThreadStatus.INTERRUPTED.value,
         ManagedThreadStatus.FAILED.value,
         ManagedThreadStatus.ARCHIVED.value,
     }
@@ -87,6 +99,7 @@ TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
         "from": (
             ManagedThreadStatus.IDLE.value,
             ManagedThreadStatus.COMPLETED.value,
+            ManagedThreadStatus.INTERRUPTED.value,
             ManagedThreadStatus.FAILED.value,
             ManagedThreadStatus.PAUSED.value,
         ),
@@ -97,6 +110,7 @@ TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
         "from": (
             ManagedThreadStatus.IDLE.value,
             ManagedThreadStatus.COMPLETED.value,
+            ManagedThreadStatus.INTERRUPTED.value,
             ManagedThreadStatus.FAILED.value,
             ManagedThreadStatus.PAUSED.value,
         ),
@@ -115,7 +129,7 @@ TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
     {
         "signal": ManagedThreadStatusReason.MANAGED_TURN_INTERRUPTED.value,
         "from": (ManagedThreadStatus.RUNNING.value,),
-        "to": ManagedThreadStatus.FAILED.value,
+        "to": ManagedThreadStatus.INTERRUPTED.value,
     },
     {
         "signal": ManagedThreadStatusReason.THREAD_ARCHIVED.value,
@@ -326,14 +340,46 @@ def backfill_managed_thread_status(
     )
 
 
+def derive_managed_thread_operator_status(
+    *,
+    normalized_status: str | None,
+    lifecycle_status: str | None,
+) -> str:
+    normalized_lifecycle = str(lifecycle_status or "").strip().lower()
+    normalized_runtime = str(normalized_status or "").strip().lower()
+
+    if normalized_lifecycle == ManagedThreadStatus.ARCHIVED.value:
+        return ManagedThreadOperatorStatus.ARCHIVED.value
+    if normalized_runtime == ManagedThreadStatus.COMPLETED.value:
+        return ManagedThreadOperatorStatus.REUSABLE.value
+    if normalized_runtime == ManagedThreadStatus.INTERRUPTED.value:
+        return ManagedThreadOperatorStatus.REUSABLE.value
+    if normalized_runtime == ManagedThreadStatus.FAILED.value:
+        return ManagedThreadOperatorStatus.ATTENTION_REQUIRED.value
+    if normalized_runtime in {
+        ManagedThreadStatus.IDLE.value,
+        ManagedThreadStatus.RUNNING.value,
+        ManagedThreadStatus.PAUSED.value,
+        ManagedThreadOperatorStatus.ARCHIVED.value,
+    }:
+        return normalized_runtime
+    if normalized_lifecycle == ManagedThreadStatus.ACTIVE.value:
+        return ManagedThreadOperatorStatus.IDLE.value
+    if normalized_lifecycle == ManagedThreadStatus.ARCHIVED.value:
+        return ManagedThreadOperatorStatus.ARCHIVED.value
+    return ManagedThreadOperatorStatus.IDLE.value
+
+
 __all__ = [
-    "TERMINAL_STATUSES",
-    "TRANSITION_TABLE",
+    "ManagedThreadOperatorStatus",
     "ManagedThreadStatus",
     "ManagedThreadStatusReason",
     "ManagedThreadStatusSnapshot",
+    "TERMINAL_STATUSES",
+    "TRANSITION_TABLE",
     "backfill_managed_thread_status",
     "build_managed_thread_status_snapshot",
+    "derive_managed_thread_operator_status",
     "normalize_status_timestamp",
     "transition_managed_thread_status",
 ]

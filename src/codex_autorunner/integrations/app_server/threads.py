@@ -1,5 +1,29 @@
+"""
+AppServerThreadRegistry: Post-Cutover Thread Identity Cache
+
+This module provides the registry that backs thread identity lookups across
+managed-thread surfaces after the BackendOrchestrator removal.
+
+The registry is NOT an orphaned BackendOrchestrator artifact. It remains a
+valid runtime state store for:
+
+1. PMA lifecycle resets (/new, /reset commands in Telegram/Discord/Web)
+2. Telegram PMA thread identity (per-topic PMA isolation when require_topics)
+3. Hub/Web channel status reads (active thread lookups for status display)
+4. Discord file-chat thread lookups (channel-scoped conversations)
+
+The registry stores feature-key to thread-id mappings in a per-worktree JSON
+file under `.codex-autorunner/app_server_threads.json`. Keys are normalized
+to lowercase with `.` separators.
+
+Replacing this registry with PmaThreadStore or orchestration.sqlite3 requires
+a separate migration ticket with explicit state-migration rules. Do not treat
+it as dead code.
+"""
+
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -19,6 +43,8 @@ FILE_CHAT_PREFIX = "file_chat."
 FILE_CHAT_OPENCODE_PREFIX = "file_chat.opencode."
 PMA_KEY = "pma"
 PMA_OPENCODE_KEY = "pma.opencode"
+PMA_PREFIX = "pma."
+PMA_OPENCODE_PREFIX = "pma.opencode."
 
 LOGGER = logging.getLogger("codex_autorunner.app_server")
 
@@ -31,6 +57,106 @@ FEATURE_KEYS = {
     "autorunner",
     "autorunner.opencode",
 }
+
+
+def pma_base_key(agent: str) -> str:
+    """
+    Return the base PMA registry key for the given agent.
+
+    Args:
+        agent: Agent identifier ("opencode" or "codex"/other).
+
+    Returns:
+        PMA_OPENCODE_KEY if agent is "opencode", otherwise PMA_KEY.
+    """
+    if isinstance(agent, str) and agent.strip().lower() == "opencode":
+        return PMA_OPENCODE_KEY
+    return PMA_KEY
+
+
+def pma_prefix_for_agent(agent: Optional[str]) -> str:
+    """
+    Return the PMA registry key prefix for the given agent.
+
+    This prefix matches both the base key and any topic-scoped variants.
+
+    Args:
+        agent: Agent identifier ("opencode" or "codex"/other/None).
+
+    Returns:
+        PMA_OPENCODE_PREFIX if agent is "opencode", otherwise PMA_PREFIX.
+    """
+    if isinstance(agent, str) and agent.strip().lower() == "opencode":
+        return PMA_OPENCODE_PREFIX
+    return PMA_PREFIX
+
+
+def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
+    """
+    Return the list of PMA registry key prefixes to reset for a given agent.
+
+    When resetting PMA state, we need to clear:
+    - Global keys (pma, pma.opencode)
+    - Topic-scoped keys (pma.*, pma.opencode.*)
+
+    Args:
+        agent: Agent identifier ("opencode", "codex", "all", or None).
+
+    Returns:
+        List of prefixes to reset.
+    """
+    if agent == "opencode":
+        return [PMA_OPENCODE_PREFIX]
+    if agent == "codex":
+        return [PMA_PREFIX]
+    return [PMA_PREFIX, PMA_OPENCODE_PREFIX]
+
+
+def pma_topic_scoped_key(
+    agent: str, chat_id: int, thread_id: Optional[int], topic_key_fn=None
+) -> str:
+    """
+    Build a topic-scoped PMA registry key.
+
+    Used by Telegram PMA when require_topics is enabled to give each topic
+    its own isolated PMA conversation context.
+
+    Args:
+        agent: Agent identifier ("opencode" or "codex"/other).
+        chat_id: Telegram chat ID.
+        thread_id: Telegram thread/topic ID (None for root).
+        topic_key_fn: Optional function to build topic key (injected for testing).
+
+    Returns:
+        Topic-scoped key like "pma.{chat_id}:{thread}" or "pma.opencode.{chat_id}:{thread}".
+    """
+    base = pma_base_key(agent)
+    if topic_key_fn is None:
+        from ..telegram.state import topic_key as _default_topic_key
+
+        topic_key_fn = _default_topic_key
+    return f"{base}.{topic_key_fn(chat_id, thread_id)}"
+
+
+def file_chat_discord_key(agent: str, channel_id: str, workspace_path: str) -> str:
+    """
+    Build a Discord file-chat registry key.
+
+    Discord file-chat keys are scoped to channel and workspace to allow
+    multiple Discord channels to have independent file-chat threads per repo.
+
+    Args:
+        agent: Agent identifier ("opencode" or "codex"/other).
+        channel_id: Discord channel ID.
+        workspace_path: Absolute workspace path (hashed for key stability).
+
+    Returns:
+        Registry key like "file_chat.discord.{channel}.{digest}" or
+        "file_chat.opencode.discord.{channel}.{digest}".
+    """
+    prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
+    digest = hashlib.sha256(workspace_path.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}discord.{channel_id.strip()}.{digest}"
 
 
 def default_app_server_threads_path(repo_root: Path) -> Path:
@@ -48,6 +174,10 @@ def normalize_feature_key(raw: str) -> str:
         return key
     # Allow per-target file chat threads (e.g. file_chat.ticket.1, file_chat.workspace.spec).
     for prefix in (FILE_CHAT_PREFIX, FILE_CHAT_OPENCODE_PREFIX):
+        if key.startswith(prefix) and len(key) > len(prefix):
+            return key
+    # Allow per-topic PMA threads (e.g. pma.-1001234567890:42, pma.opencode.123:root).
+    for prefix in (PMA_PREFIX, PMA_OPENCODE_PREFIX):
         if key.startswith(prefix) and len(key) > len(prefix):
             return key
     raise ValueError(f"invalid feature key: {raw}")
@@ -128,6 +258,42 @@ class AppServerThreadRegistry:
             threads.pop(normalized, None)
             self._save_unlocked(threads)
             return True
+
+    def reset_threads_by_prefix(
+        self, prefix: str, *, exclude_prefixes: tuple[str, ...] = ()
+    ) -> list[str]:
+        """
+        Reset all threads whose keys start with the given prefix.
+
+        Used by PMA lifecycle to clear both global and topic-scoped PMA keys.
+
+        Args:
+            prefix: Key prefix to match (e.g., "pma." or "pma.opencode.")
+            exclude_prefixes: Optional prefixes to skip even if they start with
+                ``prefix``. Used to keep nested families like ``pma.opencode.``
+                from being cleared by the broader ``pma.`` reset path.
+
+        Returns:
+            List of keys that were cleared.
+        """
+        cleared_keys = []
+        with file_lock(self._lock_path()):
+            threads = self._load_unlocked()
+            keys_to_remove = [
+                key
+                for key in threads
+                if key.startswith(prefix)
+                and not any(
+                    key == excluded.rstrip(".") or key.startswith(excluded)
+                    for excluded in exclude_prefixes
+                )
+            ]
+            for key in keys_to_remove:
+                threads.pop(key, None)
+                cleared_keys.append(key)
+            if cleared_keys:
+                self._save_unlocked(threads)
+        return cleared_keys
 
     def reset_all(self) -> None:
         with file_lock(self._lock_path()):

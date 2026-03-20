@@ -22,6 +22,11 @@ import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
 from ..manifest import ManifestError, load_manifest
+from .app_server_command import (
+    GLOBAL_APP_SERVER_COMMAND_ENV,
+    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
+    resolve_app_server_command,
+)
 from .config_contract import CONFIG_VERSION, ConfigError
 from .destinations import default_local_destination, resolve_effective_repo_destination
 from .path_utils import ConfigPathError, resolve_config_path
@@ -205,7 +210,7 @@ def _default_telegram_bot_section(
         },
         "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
-        "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
+        "app_server_command_env": GLOBAL_APP_SERVER_COMMAND_ENV,
         "app_server_command": ["codex", "app-server"],
         "app_server": {
             "max_handles": 20,
@@ -675,6 +680,7 @@ REPO_SHARED_KEYS = {
     "server",
     "app_server",
     "opencode",
+    "pma",
     "telegram_bot",
     "discord_bot",
     "terminal",
@@ -715,6 +721,13 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         # Worktree cleanup policies
         "cleanup_require_archive": True,
         "cleanup_auto_delete_orphans": False,
+        "worktree_archive_profile": "portable",
+        "worktree_archive_max_snapshots_per_repo": 10,
+        "worktree_archive_max_age_days": 30,
+        "worktree_archive_max_total_bytes": 1_000_000_000,
+        "run_archive_max_entries": 200,
+        "run_archive_max_age_days": 30,
+        "run_archive_max_total_bytes": 1_000_000_000,
     },
     "templates": {
         "enabled": True,
@@ -876,6 +889,7 @@ class PmaConfig:
     default_agent: str
     model: Optional[str]
     reasoning: Optional[str]
+    managed_thread_terminal_followup_default: bool
     max_upload_bytes: int
     max_repos: int
     max_messages: int
@@ -893,6 +907,13 @@ class PmaConfig:
     # Worktree cleanup policies
     cleanup_require_archive: bool = True
     cleanup_auto_delete_orphans: bool = False
+    worktree_archive_profile: str = "portable"
+    worktree_archive_max_snapshots_per_repo: int = 10
+    worktree_archive_max_age_days: int = 30
+    worktree_archive_max_total_bytes: int = 1_000_000_000
+    run_archive_max_entries: int = 200
+    run_archive_max_age_days: int = 30
+    run_archive_max_total_bytes: int = 1_000_000_000
 
 
 @dataclasses.dataclass
@@ -1004,6 +1025,7 @@ class RepoConfig:
     update_linux_service_names: Dict[str, str]
     app_server: AppServerConfig
     opencode: OpenCodeConfig
+    pma: PmaConfig
     usage: UsageConfig
     server_host: str
     server_port: int
@@ -1652,7 +1674,18 @@ def _parse_app_server_config(
     defaults: Dict[str, Any],
 ) -> AppServerConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
-    command = _parse_command(cfg.get("command", defaults.get("command")))
+    raw_command = cfg.get("command", dataclasses.MISSING)
+    if raw_command is dataclasses.MISSING:
+        command = resolve_app_server_command(
+            defaults.get("command"),
+            env=os.environ,
+        )
+    else:
+        command = resolve_app_server_command(
+            raw_command,
+            env=os.environ,
+            fallback=(),
+        )
     state_root_raw = cfg.get("state_root", defaults.get("state_root"))
     if state_root_raw is None:
         raise ConfigError("app_server.state_root is required")
@@ -1850,6 +1883,12 @@ def _parse_pma_config(
     model = str(model_raw).strip() or None if model_raw else None
     reasoning_raw = cfg.get("reasoning", defaults.get("reasoning"))
     reasoning = str(reasoning_raw).strip() or None if reasoning_raw else None
+    managed_thread_terminal_followup_default = bool(
+        cfg.get(
+            "managed_thread_terminal_followup_default",
+            defaults.get("managed_thread_terminal_followup_default", True),
+        )
+    )
     max_upload_bytes_raw = cfg.get(
         "max_upload_bytes", defaults.get("max_upload_bytes", 10_000_000)
     )
@@ -1929,11 +1968,47 @@ def _parse_pma_config(
             defaults.get("cleanup_auto_delete_orphans", False),
         )
     )
+    worktree_archive_profile = (
+        str(
+            cfg.get(
+                "worktree_archive_profile",
+                defaults.get("worktree_archive_profile", "portable"),
+            )
+        )
+        .strip()
+        .lower()
+    )
+    if worktree_archive_profile not in {"portable", "full"}:
+        worktree_archive_profile = "portable"
+
+    def _parse_nonnegative_int(name: str, fallback: int) -> int:
+        raw = cfg.get(name, defaults.get(name, fallback))
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            value = fallback
+        return max(0, value)
+
+    worktree_archive_max_snapshots_per_repo = _parse_nonnegative_int(
+        "worktree_archive_max_snapshots_per_repo", 10
+    )
+    worktree_archive_max_age_days = _parse_nonnegative_int(
+        "worktree_archive_max_age_days", 30
+    )
+    worktree_archive_max_total_bytes = _parse_nonnegative_int(
+        "worktree_archive_max_total_bytes", 1_000_000_000
+    )
+    run_archive_max_entries = _parse_nonnegative_int("run_archive_max_entries", 200)
+    run_archive_max_age_days = _parse_nonnegative_int("run_archive_max_age_days", 30)
+    run_archive_max_total_bytes = _parse_nonnegative_int(
+        "run_archive_max_total_bytes", 1_000_000_000
+    )
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
         model=model,
         reasoning=reasoning,
+        managed_thread_terminal_followup_default=managed_thread_terminal_followup_default,
         max_upload_bytes=max_upload_bytes,
         max_repos=max_repos,
         max_messages=max_messages,
@@ -1949,6 +2024,13 @@ def _parse_pma_config(
         reactive_origin_blocklist=reactive_origin_blocklist,
         cleanup_require_archive=cleanup_require_archive,
         cleanup_auto_delete_orphans=cleanup_auto_delete_orphans,
+        worktree_archive_profile=worktree_archive_profile,
+        worktree_archive_max_snapshots_per_repo=worktree_archive_max_snapshots_per_repo,
+        worktree_archive_max_age_days=worktree_archive_max_age_days,
+        worktree_archive_max_total_bytes=worktree_archive_max_total_bytes,
+        run_archive_max_entries=run_archive_max_entries,
+        run_archive_max_age_days=run_archive_max_age_days,
+        run_archive_max_total_bytes=run_archive_max_total_bytes,
     )
 
 
@@ -2182,9 +2264,11 @@ VOICE_ENV_OVERRIDES = (
     "CODEX_AUTORUNNER_VOICE_MIN_HOLD_MS",
 )
 
+COMMON_ENV_OVERRIDES = (GLOBAL_APP_SERVER_COMMAND_ENV,)
+
 TELEGRAM_ENV_OVERRIDES = (
     "CAR_OPENCODE_COMMAND",
-    "CAR_TELEGRAM_APP_SERVER_COMMAND",
+    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
 )
 
 DISCORD_ENV_OVERRIDES = (
@@ -2215,6 +2299,9 @@ def collect_env_overrides(
     if _has_value("CAR_GLOBAL_STATE_ROOT"):
         overrides.append("CAR_GLOBAL_STATE_ROOT")
     for key in VOICE_ENV_OVERRIDES:
+        if _has_value(key):
+            overrides.append(key)
+    for key in COMMON_ENV_OVERRIDES:
         if _has_value(key):
             overrides.append(key)
     if include_telegram:
@@ -2443,6 +2530,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
         opencode=_parse_opencode_config(
             cfg.get("opencode"), root, DEFAULT_REPO_CONFIG.get("opencode")
         ),
+        pma=_parse_pma_config(cfg.get("pma"), root, DEFAULT_HUB_CONFIG.get("pma")),
         usage=_parse_usage_config(
             cfg.get("usage"), root, DEFAULT_REPO_CONFIG.get("usage")
         ),

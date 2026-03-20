@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ def _write_ticket(
 ) -> None:
     text = (
         "---\n"
+        f"ticket_id: tkt_{uuid.uuid4().hex}\n"
         f"agent: {agent}\n"
         f"done: {str(done).lower()}\n"
         "title: Test\n"
@@ -170,7 +172,6 @@ async def test_oversize_ticket_body_is_truncated(tmp_path: Path) -> None:
 
     config = TicketRunConfig(
         ticket_dir=Path(".codex-autorunner/tickets"),
-        runs_dir=Path(".codex-autorunner/runs"),
         prompt_max_bytes=1024,  # Small budget to force truncation
         auto_commit=False,
     )
@@ -207,7 +208,6 @@ async def test_oversize_agent_output_is_truncated(tmp_path: Path) -> None:
 
     config = TicketRunConfig(
         ticket_dir=Path(".codex-autorunner/tickets"),
-        runs_dir=Path(".codex-autorunner/runs"),
         prompt_max_bytes=2048,
         auto_commit=False,
     )
@@ -247,13 +247,13 @@ async def test_truncation_order_is_deterministic(tmp_path: Path) -> None:
 
     prev_path = ticket_dir / "TICKET-000.md"
     prev_path.write_text(
-        "---\nagent: codex\ndone: true\n---\n\n" + "y" * 1000,
+        '---\nticket_id: "tkt_prevbudget"\nagent: codex\ndone: true\n---\n\n'
+        + "y" * 1000,
         encoding="utf-8",
     )
 
     config = TicketRunConfig(
         ticket_dir=Path(".codex-autorunner/tickets"),
-        runs_dir=Path(".codex-autorunner/runs"),
         prompt_max_bytes=2048,
         auto_commit=False,
     )
@@ -296,7 +296,6 @@ async def test_ticket_frontmatter_preserved_on_truncation(tmp_path: Path) -> Non
 
     config = TicketRunConfig(
         ticket_dir=Path(".codex-autorunner/tickets"),
-        runs_dir=Path(".codex-autorunner/runs"),
         prompt_max_bytes=5000,  # Larger budget to fit header + ticket frontmatter
         auto_commit=False,
     )

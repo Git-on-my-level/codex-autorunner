@@ -1,27 +1,77 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from codex_autorunner.agents.opencode.harness import OpenCodeHarness
 from codex_autorunner.agents.registry import get_registered_agents
+from codex_autorunner.core.orchestration.runtime_thread_events import (
+    merge_runtime_thread_raw_events,
+)
 from codex_autorunner.core.sse import SSEEvent
 
 
 class _StubClient:
-    def __init__(self, events: list[SSEEvent]) -> None:
+    def __init__(
+        self, events: list[SSEEvent], *, stream_error: Exception | None = None
+    ) -> None:
         self._events = events
+        self._stream_error = stream_error
+        self.permission_replies: list[tuple[str, str]] = []
+        self.question_replies: list[tuple[str, list[list[str]]]] = []
+        self.question_rejections: list[str] = []
+        self.prompt_calls: list[dict[str, object]] = []
 
-    async def stream_events(self, *, directory: str | None = None):
+    async def stream_events(
+        self, *, directory: str | None = None, ready_event: object = None
+    ):
         _ = directory
+        if ready_event is not None:
+            ready_event.set()
         for event in self._events:
             yield event
+        if self._stream_error is not None:
+            raise self._stream_error
+
+    async def prompt_async(self, session_id: str, **kwargs: object) -> dict[str, str]:
+        self.prompt_calls.append({"session_id": session_id, **kwargs})
+        return {}
+
+    async def send_command(self, session_id: str, **kwargs: object) -> dict[str, str]:
+        self.prompt_calls.append({"session_id": session_id, **kwargs})
+        return {}
+
+    async def session_status(
+        self, *, directory: str | None = None
+    ) -> dict[str, object]:
+        _ = directory
+        return {}
+
+    async def providers(self, *, directory: str | None = None) -> dict[str, object]:
+        _ = directory
+        return {}
+
+    async def respond_permission(self, *, request_id: str, reply: str) -> None:
+        self.permission_replies.append((request_id, reply))
+
+    async def reply_question(
+        self, request_id: str, *, answers: list[list[str]]
+    ) -> None:
+        self.question_replies.append((request_id, answers))
+
+    async def reject_question(self, request_id: str) -> None:
+        self.question_rejections.append(request_id)
 
 
 class _StubSupervisor:
-    def __init__(self, client: _StubClient) -> None:
+    def __init__(
+        self, client: _StubClient, *, session_stall_timeout_seconds: float | None = None
+    ) -> None:
         self._client = client
+        self.session_stall_timeout_seconds = session_stall_timeout_seconds
 
     async def get_client(self, _workspace_root: Path) -> _StubClient:
         return self._client
@@ -36,6 +86,8 @@ async def test_opencode_harness_reports_capabilities_from_contract() -> None:
     assert harness.capabilities == get_registered_agents()["opencode"].capabilities
     assert harness.supports("interrupt") is True
     assert harness.supports("review") is True
+    assert harness.supports("event_streaming") is True
+    assert harness.allows_parallel_event_stream() is False
     assert harness.supports("approvals") is False
     assert report.capabilities == harness.capabilities
 
@@ -68,6 +120,225 @@ async def test_opencode_harness_wait_for_turn_collects_plain_text_output() -> No
     assert result.status == "ok"
     assert result.assistant_text == "hello world"
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_prefers_phase_marked_final_answer() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.completed",
+                        data='{"sessionID":"session-1","text":"draft reply","phase":"commentary"}',
+                    ),
+                    SSEEvent(
+                        event="message.completed",
+                        data='{"sessionID":"session-1","text":"final reply","phase":"final_answer"}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "final reply"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_uses_stream_output_over_commentary_only_completion() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.completed",
+                        data='{"sessionID":"session-1","text":"draft reply","phase":"commentary"}',
+                    ),
+                    SSEEvent(
+                        event="item/agentMessage/delta",
+                        data='{"sessionID":"session-1","itemId":"item-1","delta":"final reply"}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "final reply"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_progress_event_stream_reuses_pending_turn_collector() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="message.completed",
+                data='{"sessionID":"session-1","info":{"id":"assistant-1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}',
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    streamed: list[Any] = []
+
+    async def _collect_stream() -> None:
+        async for raw_event in harness.progress_event_stream(
+            workspace, "session-1", turn.turn_id
+        ):
+            streamed.append(raw_event)
+
+    stream_task = asyncio.create_task(_collect_stream())
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+    await stream_task
+
+    assert result.status == "ok"
+    assert result.assistant_text == "hello world"
+    assert len(streamed) == 1
+    assert streamed[0] == result.raw_events[0]
+    assert merge_runtime_thread_raw_events(streamed, result.raw_events) == list(
+        result.raw_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_progress_event_stream_replays_buffer_before_live_events() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+    pending = harness._pending_turns[("session-1", turn.turn_id)]
+    pending.progress_event_history.append({"message": {"method": "first"}})
+
+    streamed: list[Any] = []
+
+    async def _collect_stream() -> None:
+        async for raw_event in harness.progress_event_stream(
+            workspace, "session-1", turn.turn_id
+        ):
+            streamed.append(raw_event)
+
+    stream_task = asyncio.create_task(_collect_stream())
+    await asyncio.sleep(0)
+
+    for queue in list(pending.progress_event_subscribers):
+        queue.put_nowait({"message": {"method": "second"}})
+        queue.put_nowait(None)
+
+    await stream_task
+
+    assert streamed == [
+        {"message": {"method": "first"}},
+        {"message": {"method": "second"}},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_progress_event_stream_is_empty_after_pending_turn_cleanup() -> (
+    None
+):
+    harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
+
+    streamed = [
+        raw_event
+        async for raw_event in harness.progress_event_stream(
+            Path("/tmp/workspace").resolve(), "session-1", "turn-1"
+        )
+    ]
+
+    assert streamed == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_recovers_late_disconnect_after_completion() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.completed",
+                        data='{"sessionID":"session-1","text":"final reply","phase":"final_answer"}',
+                    ),
+                ],
+                stream_error=RuntimeError("stream dropped"),
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "final reply"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_still_raises_without_terminal_completion() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.delta",
+                        data='{"sessionID":"session-1","delta":"partial"}',
+                    ),
+                ],
+                stream_error=RuntimeError("stream dropped"),
+            )
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="stream dropped"):
+        await harness.wait_for_turn(Path("."), "session-1", "turn-1")
 
 
 @pytest.mark.asyncio
@@ -192,3 +463,114 @@ async def test_opencode_harness_wait_for_turn_ignores_user_message_part_updates(
     assert result.status == "ok"
     assert result.assistant_text == "assistant reply"
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_repo_scoped_turn_rejects_out_of_workspace_permission() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="permission.asked",
+                data=(
+                    '{"sessionID":"session-1","properties":{"id":"perm-1",'
+                    '"permission":"external_directory","patterns":["/tmp/elsewhere/*"],'
+                    '"metadata":{"filepath":"/tmp/elsewhere/file.py"}}}'
+                ),
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode="on-request",
+        sandbox_policy="workspaceWrite",
+    )
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+
+    assert result.status == "ok"
+    assert client.permission_replies == [("perm-1", "reject")]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_repo_scoped_turn_allows_in_workspace_permission() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="permission.asked",
+                data=(
+                    '{"sessionID":"session-1","properties":{"id":"perm-1",'
+                    '"permission":"external_directory","patterns":["src/*"],'
+                    '"metadata":{"filepath":"src/app.py"}}}'
+                ),
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode="on-request",
+        sandbox_policy="workspaceWrite",
+    )
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+
+    assert result.status == "ok"
+    assert client.permission_replies == [("perm-1", "once")]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_noninteractive_turn_rejects_questions() -> None:
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="question.asked",
+                data=(
+                    '{"sessionID":"session-1","properties":{"id":"q-1","questions":'
+                    '[{"text":"Continue?","options":[{"label":"Yes"},{"label":"No"}]}]}}'
+                ),
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode="on-request",
+        sandbox_policy="workspaceWrite",
+    )
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+
+    assert result.status == "ok"
+    assert client.question_rejections == ["q-1"]

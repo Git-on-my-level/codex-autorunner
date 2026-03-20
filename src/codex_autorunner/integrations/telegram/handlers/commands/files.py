@@ -18,6 +18,7 @@ from .....core.state import now_iso
 from ....chat.media import IMAGE_CONTENT_TYPES, IMAGE_EXTS
 from ...adapter import TelegramMessage
 from ...config import TelegramMediaCandidate
+from ...forwarding import format_forwarded_telegram_message_text
 from ...helpers import _path_within, format_public_error
 from ...state import PendingVoiceRecord, TelegramTopicRecord
 from .. import messages as message_handlers
@@ -964,9 +965,9 @@ class FilesCommands(SharedHelpers):
     ) -> tuple[str, Optional[list[dict[str, Any]]]]:
         """Build the combined prompt text and image input payload."""
         captions = [
-            m.caption or ""
+            format_forwarded_telegram_message_text(m, m.caption or m.text or "")
             for m in context.sorted_messages
-            if m.caption and m.caption.strip()
+            if (m.caption and m.caption.strip()) or m.forward_origin is not None
         ]
         prompt_parts: list[str] = []
         if captions:

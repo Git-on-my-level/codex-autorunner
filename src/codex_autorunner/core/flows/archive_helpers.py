@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -13,10 +14,17 @@ from ..archive import (
     build_common_car_archive_entries,
     execute_archive_entries,
 )
+from ..archive_retention import (
+    RunArchiveRetentionPolicy,
+    prune_run_archive_root,
+    resolve_run_archive_retention_policy,
+)
 from ..config import ConfigError, load_repo_config
 from ..pma_thread_store import PmaThreadStore
 from .models import FlowRunStatus
 from .store import FlowStore
+
+logger = logging.getLogger(__name__)
 
 
 def flow_run_artifacts_root(repo_root: Path, run_id: str) -> Path:
@@ -33,6 +41,15 @@ def _get_durable_writes(repo_root: Path) -> bool:
         return load_repo_config(repo_root).durable_writes
     except ConfigError:
         return False
+
+
+def _get_run_archive_retention_policy(
+    repo_root: Path,
+) -> Optional[RunArchiveRetentionPolicy]:
+    try:
+        return resolve_run_archive_retention_policy(load_repo_config(repo_root).pma)
+    except ConfigError:
+        return resolve_run_archive_retention_policy({})
 
 
 def _next_archive_dir(base_dir: Path) -> Path:
@@ -152,6 +169,10 @@ def _build_flow_archive_entries(
         car_root,
         archive_root,
         include_contextspace=False,
+        include_config=False,
+        include_runtime_state=False,
+        include_logs=False,
+        include_github_context=True,
     )
     entries.append(
         ArchiveEntrySpec(
@@ -223,15 +244,8 @@ def archive_flow_run_artifacts(
                 "Can only archive completed/stopped/failed runs (use --force for paused/stopping)."
             )
 
-        runs_dir_raw = record.input_data.get("runs_dir")
-        runs_dir = (
-            Path(runs_dir_raw)
-            if isinstance(runs_dir_raw, str) and runs_dir_raw
-            else Path(".codex-autorunner/runs")
-        )
         run_paths = resolve_outbox_paths(
             workspace_root=repo_root,
-            runs_dir=runs_dir,
             run_id=record.id,
         )
         run_dir = run_paths.run_dir
@@ -277,6 +291,27 @@ def archive_flow_run_artifacts(
             list(execution.copied_paths) + list(execution.moved_paths)
         )
         summary["missing_paths"] = list(execution.missing_paths)
+        retention_policy = _get_run_archive_retention_policy(repo_root)
+        if retention_policy is not None:
+            try:
+                prune_summary = prune_run_archive_root(
+                    repo_root / ".codex-autorunner" / "archive" / "runs",
+                    policy=retention_policy,
+                    preserve_paths=(Path(str(archive_plan["archive_root"])),),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to prune archived runs under %s",
+                    repo_root / ".codex-autorunner" / "archive" / "runs",
+                    exc_info=True,
+                )
+            else:
+                summary["archive_prune"] = {
+                    "kept": prune_summary.kept,
+                    "pruned": prune_summary.pruned,
+                    "bytes_before": prune_summary.bytes_before,
+                    "bytes_after": prune_summary.bytes_after,
+                }
 
         seed_repo_files(repo_root, force=False, git_required=False)
         try:

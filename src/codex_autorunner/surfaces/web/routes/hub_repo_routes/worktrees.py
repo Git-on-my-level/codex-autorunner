@@ -91,6 +91,7 @@ class HubWorktreeService:
         force_attestation: Optional[str],
         force_archive: bool,
         archive_note: Optional[str],
+        archive_profile: Optional[str],
     ) -> dict:
         from .....core.logging_utils import safe_log
 
@@ -116,6 +117,7 @@ class HubWorktreeService:
             "force": force,
             "force_archive": force_archive,
             "archive_note": archive_note,
+            "archive_profile": archive_profile,
         }
         if force_attestation is not None:
             cleanup_kwargs["force_attestation"] = self._build_force_attestation_payload(
@@ -142,6 +144,7 @@ class HubWorktreeService:
             "force": payload.force,
             "force_archive": payload.force_archive,
             "archive_note": payload.archive_note,
+            "archive_profile": payload.archive_profile,
         }
         if payload.force_attestation is not None:
             cleanup_kwargs["force_attestation"] = self._build_force_attestation_payload(
@@ -166,6 +169,7 @@ class HubWorktreeService:
         self,
         worktree_repo_id: str,
         archive_note: Optional[str],
+        archive_profile: Optional[str],
     ) -> dict:
         from .....core.logging_utils import safe_log
 
@@ -179,6 +183,7 @@ class HubWorktreeService:
                 self._context.supervisor.archive_worktree,
                 worktree_repo_id=str(worktree_repo_id),
                 archive_note=archive_note,
+                archive_profile=archive_profile,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -188,6 +193,7 @@ class HubWorktreeService:
         self,
         worktree_repo_id: str,
         archive_note: Optional[str],
+        archive_profile: Optional[str],
     ) -> dict:
         from .....core.logging_utils import safe_log
 
@@ -198,9 +204,10 @@ class HubWorktreeService:
         )
         try:
             result = await asyncio.to_thread(
-                self._context.supervisor.archive_worktree_state,
-                worktree_repo_id=str(worktree_repo_id),
+                self._context.supervisor.archive_repo_state,
+                repo_id=str(worktree_repo_id),
                 archive_note=archive_note,
+                archive_profile=archive_profile,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

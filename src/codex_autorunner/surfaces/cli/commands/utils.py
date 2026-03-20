@@ -7,6 +7,7 @@ import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn, Optional
+from urllib.parse import urlsplit
 
 import httpx
 import typer
@@ -30,6 +31,7 @@ from ....core.utils import (
 )
 from ....manifest import load_manifest
 from ....tickets.files import list_ticket_paths, read_ticket, safe_relpath
+from ....tickets.frontmatter import render_markdown_frontmatter
 from ....tickets.ingest_state import INGEST_STATE_FILENAME
 from ....tickets.lint import lint_ticket_directory, parse_ticket_index
 
@@ -126,6 +128,115 @@ def request_json(
             f"Non-JSON response from {response.url!s} (status={response.status_code}).{hint}"
         ) from exc
     return data if isinstance(data, dict) else {}
+
+
+def format_hub_request_error(
+    *,
+    action: str,
+    url: str,
+    exc: BaseException,
+    base_path_cli_hint: Optional[str] = None,
+) -> str:
+    host_port = _extract_host_port(url)
+    lines = [
+        action,
+        f"Resolved URL: {url}",
+        f"Target host/port: {host_port}",
+    ]
+
+    status_code = _http_status_code(exc)
+    if _is_hub_host_unreachable(exc):
+        lines.append("Failure type: hub host/port unreachable.")
+        lines.append(
+            "Hint: Ensure the hub service is running in this runtime "
+            "(for example `car hub serve`) and listening on this host/port."
+        )
+        lines.append(
+            "If the service runs elsewhere, update `server.host`/`server.port` in the hub config."
+        )
+    detail = _http_error_detail(exc)
+    if status_code in {404, 405} and _looks_like_route_mismatch_status(
+        status_code, detail
+    ):
+        lines.append("Failure type: possible base-path mismatch.")
+        lines.append(f"HTTP status: {status_code}")
+        lines.append(
+            "Hint: The hub service responded but the route was not found at this path."
+        )
+        lines.append(_base_path_hint(base_path_cli_hint))
+    else:
+        if status_code is not None:
+            lines.append(f"Failure type: HTTP status {status_code}.")
+        else:
+            lines.append("Failure type: unexpected transport error.")
+        lines.append(
+            "Hint: Ensure the hub service is reachable from this runtime and the configured base path is correct."
+        )
+        if detail:
+            lines.append(f"Server detail: {detail}")
+
+    underlying = str(exc).strip()
+    if underlying:
+        lines.append(f"Underlying error: {underlying}")
+    return "\n".join(lines)
+
+
+def _base_path_hint(base_path_cli_hint: Optional[str]) -> str:
+    hint = "Set `server.base_path` in the hub config"
+    if base_path_cli_hint:
+        hint += f" or pass `{base_path_cli_hint}`"
+    return f"Hint: {hint}."
+
+
+def _extract_host_port(url: str) -> str:
+    parsed = urlsplit(url)
+    host = parsed.hostname or "<unknown>"
+    if parsed.port is None:
+        return host
+    return f"{host}:{parsed.port}"
+
+
+def _is_hub_host_unreachable(exc: BaseException) -> bool:
+    return isinstance(exc, (httpx.ConnectError, httpx.TimeoutException, OSError))
+
+
+def _http_status_code(exc: BaseException) -> Optional[int]:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    response = exc.response
+    if response is None:
+        return None
+    return response.status_code
+
+
+def _http_error_detail(exc: BaseException) -> Optional[str]:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    response = exc.response
+    if response is None:
+        return None
+    try:
+        parsed = response.json()
+    except Exception:
+        return None
+    if isinstance(parsed, dict):
+        for key in ("detail", "error", "message"):
+            value = parsed.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+    return None
+
+
+def _looks_like_route_mismatch_status(status_code: int, detail: Optional[str]) -> bool:
+    canonical = (detail or "").strip().lower()
+    if status_code == 404:
+        return canonical in {"", "not found"}
+    if status_code == 405:
+        return canonical in {"", "method not allowed"}
+    return False
 
 
 def request_form_json(
@@ -339,14 +450,6 @@ def build_server_url(
     return f"http://{config.server_host}:{config.server_port}{base_path}{path}"
 
 
-def resolve_ticket_dir(repo_root: Path, ticket_dir: Optional[Path]) -> Path:
-    if ticket_dir is None:
-        return repo_root / ".codex-autorunner" / "tickets"
-    if ticket_dir.is_absolute():
-        return ticket_dir
-    return repo_root / ticket_dir
-
-
 def collect_ticket_indices(ticket_dir: Path) -> list[int]:
     from ....tickets.lint import parse_ticket_index
 
@@ -493,8 +596,7 @@ def validate_tickets(ticket_dir: Path) -> list[str]:
 
 
 def render_ticket_markdown(frontmatter: dict, body: str) -> str:
-    fm_yaml = yaml.safe_dump(frontmatter, sort_keys=False).rstrip()
-    return f"---\n{fm_yaml}\n---\n\n{body.rstrip()}\n"
+    return render_markdown_frontmatter(frontmatter, body)
 
 
 def guard_unregistered_hub_repo(repo_root: Path, hub: Optional[Path]) -> None:

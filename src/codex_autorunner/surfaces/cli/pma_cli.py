@@ -2,6 +2,7 @@
 
 import json
 import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -10,7 +11,12 @@ import httpx
 import typer
 
 from ...bootstrap import ensure_pma_docs, pma_doc_path
+from ...core.car_context import (
+    default_managed_thread_context_profile,
+    normalize_car_context_profile,
+)
 from ...core.config import load_hub_config
+from .commands.utils import format_hub_request_error
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +76,53 @@ def _resolve_hub_path(path: Optional[Path]) -> Path:
         if candidate.exists():
             return candidate.parent.parent.resolve()
     return Path.cwd()
+
+
+def _resolve_message_body(
+    *,
+    message: Optional[str],
+    message_file: Optional[Path],
+    message_stdin: bool,
+    option_hint: str,
+) -> str:
+    selected_inputs = sum(
+        1
+        for selected in (
+            message is not None,
+            message_file is not None,
+            message_stdin,
+        )
+        if selected
+    )
+    if selected_inputs != 1:
+        raise typer.BadParameter(
+            f"Provide exactly one of {option_hint}.",
+            param_hint="--message / --message-file / --message-stdin",
+        )
+
+    if message_file is not None:
+        try:
+            raw_message = message_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise typer.BadParameter(
+                f"Failed to read message file: {exc}",
+                param_hint="--message-file",
+            ) from exc
+    elif message_stdin:
+        raw_message = sys.stdin.read()
+    else:
+        raw_message = message or ""
+
+    if not raw_message.strip():
+        raise typer.BadParameter("Message cannot be empty.")
+    return raw_message
+
+
+def _echo_delivered_message(message: str) -> None:
+    typer.echo("delivered message:")
+    typer.echo(message, nl=False)
+    if not message.endswith("\n"):
+        typer.echo()
 
 
 def _request_json(
@@ -214,15 +267,79 @@ def _format_tail_event_line(event: dict[str, Any]) -> str:
     return f"{prefix}{id_part}{event_type}: {summary}".rstrip()
 
 
+def _format_received_at_label(value: Any) -> str:
+    timestamp = str(value or "").strip()
+    if not timestamp:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        return timestamp
+    return dt.strftime("%H:%M:%S")
+
+
+def _render_active_turn_diagnostics(data: dict[str, Any]) -> None:
+    request_kind = str(data.get("request_kind") or "-")
+    model = str(data.get("model") or "-")
+    reasoning = str(data.get("reasoning") or "-")
+    stalled = "yes" if bool(data.get("stalled")) else "no"
+    stream = "yes" if bool(data.get("stream_available")) else "no"
+    typer.echo(
+        "active_turn: "
+        f"kind={request_kind} model={model} reasoning={reasoning} "
+        f"stream={stream} stalled={stalled}"
+    )
+    prompt_preview = str(data.get("prompt_preview") or "").strip()
+    if prompt_preview:
+        typer.echo(f"prompt: {prompt_preview}")
+    last_event_type = str(data.get("last_event_type") or "").strip()
+    last_event_summary = str(data.get("last_event_summary") or "").strip()
+    if last_event_type or last_event_summary:
+        typer.echo(
+            "last_event: "
+            + (last_event_type or "-")
+            + " @"
+            + _format_received_at_label(data.get("last_event_at"))
+            + (f" {last_event_summary}" if last_event_summary else "")
+        )
+    backend_thread_id = str(data.get("backend_thread_id") or "").strip()
+    backend_turn_id = str(data.get("backend_turn_id") or "").strip()
+    if backend_thread_id or backend_turn_id:
+        typer.echo(
+            "backend: "
+            f"thread={backend_thread_id or '-'} turn={backend_turn_id or '-'}"
+        )
+    stall_reason = str(data.get("stall_reason") or "").strip()
+    if stall_reason:
+        typer.echo(f"stall_reason: {stall_reason}")
+
+
 def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
     managed_turn_id = snapshot.get("managed_turn_id") or "-"
     status = snapshot.get("turn_status") or "none"
     activity = snapshot.get("activity") or "idle"
+    phase = snapshot.get("phase") or "-"
     elapsed = _format_seconds(snapshot.get("elapsed_seconds"))
     idle = _format_seconds(snapshot.get("idle_seconds"))
     typer.echo(
-        f"turn={managed_turn_id} status={status} activity={activity} elapsed={elapsed} idle={idle}"
+        f"turn={managed_turn_id} status={status} activity={activity} phase={phase} elapsed={elapsed} idle={idle}"
     )
+    guidance = str(snapshot.get("guidance") or "").strip()
+    if guidance:
+        typer.echo(f"guidance: {guidance}")
+    diagnostics = snapshot.get("active_turn_diagnostics")
+    if isinstance(diagnostics, dict):
+        _render_active_turn_diagnostics(diagnostics)
+    last_tool = snapshot.get("last_tool")
+    if isinstance(last_tool, dict) and str(last_tool.get("name") or "").strip():
+        typer.echo(
+            "last_tool="
+            + str(last_tool.get("name") or "")
+            + " status="
+            + str(last_tool.get("status") or "-")
+            + " in_flight="
+            + ("yes" if bool(last_tool.get("in_flight")) else "no")
+        )
     lifecycle = snapshot.get("lifecycle_events")
     if isinstance(lifecycle, list) and lifecycle:
         typer.echo("lifecycle: " + ", ".join(str(item) for item in lifecycle))
@@ -335,7 +452,7 @@ def _normalize_resource_owner_options(
     resource_kind: Optional[str],
     resource_id: Optional[str],
     workspace_root: Optional[str] = None,
-) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
     normalized_repo_id = (
         repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
     )
@@ -404,7 +521,6 @@ def _normalize_resource_owner_options(
         normalized_resource_id = normalized_repo_id
 
     return (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         normalized_workspace_root,
@@ -428,6 +544,8 @@ def _format_resource_owner_label(item: dict[str, Any]) -> str:
 
 
 def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
+    from ...core.managed_thread_status import derive_managed_thread_operator_status
+
     raw_thread = data.get("thread")
     thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
     raw_turn = data.get("turn")
@@ -435,12 +553,22 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
     managed_thread_id = str(data.get("managed_thread_id") or "")
     agent = str(thread.get("agent") or "-")
     owner = _format_resource_owner_label(thread)
-    thread_state = str(data.get("status") or thread.get("status") or "-")
+    raw_thread_status = str(data.get("status") or thread.get("status") or "-")
     lifecycle_state = str(thread.get("lifecycle_status") or "-")
+    operator_status = derive_managed_thread_operator_status(
+        normalized_status=raw_thread_status,
+        lifecycle_status=lifecycle_state,
+    )
+    last_turn_outcome = (
+        raw_thread_status
+        if raw_thread_status in {"completed", "interrupted", "failed"}
+        else "-"
+    )
     status_reason = str(data.get("status_reason") or thread.get("status_reason") or "-")
     managed_turn_id = str(turn.get("managed_turn_id") or "-")
     turn_state = str(turn.get("status") or "-")
     activity = str(turn.get("activity") or "-")
+    phase = str(turn.get("phase") or "-")
     elapsed = _format_seconds(turn.get("elapsed_seconds"))
     idle = _format_seconds(turn.get("idle_seconds"))
     alive = "yes" if bool(data.get("is_alive")) else "no"
@@ -450,16 +578,32 @@ def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
                 f"id={managed_thread_id}",
                 f"agent={agent}",
                 owner,
-                f"thread={thread_state}",
-                f"lifecycle={lifecycle_state}",
+                f"status={operator_status}",
+                f"last_turn={last_turn_outcome}",
                 f"alive={alive}",
             ]
         )
     )
     typer.echo(f"reason={status_reason}")
     typer.echo(
-        f"turn={managed_turn_id} status={turn_state} activity={activity} elapsed={elapsed} idle={idle}"
+        f"turn={managed_turn_id} status={turn_state} activity={activity} phase={phase} elapsed={elapsed} idle={idle}"
     )
+    guidance = str(turn.get("guidance") or "").strip()
+    if guidance:
+        typer.echo(f"guidance: {guidance}")
+    diagnostics = data.get("active_turn_diagnostics")
+    if isinstance(diagnostics, dict):
+        _render_active_turn_diagnostics(diagnostics)
+    last_tool = turn.get("last_tool")
+    if isinstance(last_tool, dict) and str(last_tool.get("name") or "").strip():
+        typer.echo(
+            "last_tool="
+            + str(last_tool.get("name") or "")
+            + " status="
+            + str(last_tool.get("status") or "-")
+            + " in_flight="
+            + ("yes" if bool(last_tool.get("in_flight")) else "no")
+        )
     progress = data.get("recent_progress")
     if isinstance(progress, list) and progress:
         typer.echo("recent progress:")
@@ -970,10 +1114,20 @@ def pma_thread_spawn(
     backend_id: Optional[str] = typer.Option(
         None, "--backend-id", help="Optional existing backend thread/session id"
     ),
+    context_profile: Optional[str] = typer.Option(
+        None,
+        "--context-profile",
+        help="CAR context profile (car_core|car_ambient|none)",
+    ),
     notify_on: Optional[str] = typer.Option(
         None,
         "--notify-on",
         help="Auto-subscribe for lifecycle events (supported: terminal)",
+    ),
+    terminal_followup: Optional[bool] = typer.Option(
+        None,
+        "--terminal-followup/--no-terminal-followup",
+        help="Override the default terminal follow-up subscription for new threads",
     ),
     notify_lane: Optional[str] = typer.Option(
         None, "--notify-lane", help="Lane id used for terminal notifications"
@@ -989,7 +1143,6 @@ def pma_thread_spawn(
     """Create a managed PMA thread."""
     normalized_agent = _normalize_agent_option(agent)
     (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         normalized_workspace_root,
@@ -1024,6 +1177,17 @@ def pma_thread_spawn(
             err=True,
         )
         raise typer.Exit(code=1) from None
+    normalized_context_profile = normalize_car_context_profile(context_profile)
+    if context_profile is not None and normalized_context_profile is None:
+        typer.echo(
+            "--context-profile must be one of: car_core, car_ambient, none",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    if normalized_context_profile is None:
+        normalized_context_profile = default_managed_thread_context_profile(
+            resource_kind=normalized_resource_kind
+        )
 
     hub_root = _resolve_hub_path(path)
     try:
@@ -1044,18 +1208,23 @@ def pma_thread_spawn(
 
     try:
         normalized_notify_on = _normalize_notify_on(notify_on)
+        if terminal_followup is False and normalized_notify_on == "terminal":
+            raise typer.BadParameter(
+                "--no-terminal-followup cannot be combined with --notify-on terminal"
+            )
         data = _request_json(
             "POST",
             _build_pma_url(config, "/threads"),
             {
                 "agent": normalized_agent,
-                "repo_id": normalized_repo_id,
                 "resource_kind": normalized_resource_kind,
                 "resource_id": normalized_resource_id,
                 "workspace_root": normalized_workspace_root,
                 "name": name,
                 "backend_thread_id": backend_id,
+                "context_profile": normalized_context_profile,
                 "notify_on": normalized_notify_on,
+                "terminal_followup": terminal_followup,
                 "notify_lane": notify_lane,
                 "notify_once": notify_once,
             },
@@ -1097,7 +1266,6 @@ def pma_thread_list(
     """List managed PMA threads."""
     hub_root = _resolve_hub_path(path)
     (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         _normalized_workspace_root,
@@ -1111,7 +1279,6 @@ def pma_thread_list(
         for key, value in {
             "agent": agent,
             "status": status,
-            "repo_id": normalized_repo_id,
             "resource_kind": normalized_resource_kind,
             "resource_id": normalized_resource_id,
             "limit": limit,
@@ -1238,8 +1405,14 @@ def pma_thread_send(
     managed_thread_id: str = typer.Option(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
-    message: str = typer.Option(
-        ..., "--message", help="User message to send", show_default=False
+    message: Optional[str] = typer.Option(
+        None, "--message", help="User message to send", show_default=False
+    ),
+    message_file: Optional[Path] = typer.Option(
+        None, "--message-file", help="Read the user message from a file"
+    ),
+    message_stdin: bool = typer.Option(
+        False, "--message-stdin", help="Read the user message from stdin"
     ),
     model: Optional[str] = typer.Option(None, "--model", help="Model override"),
     reasoning: Optional[str] = typer.Option(
@@ -1272,13 +1445,19 @@ def pma_thread_send(
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """Send a message to a managed PMA thread."""
+    message_body = _resolve_message_body(
+        message=message,
+        message_file=message_file,
+        message_stdin=message_stdin,
+        option_hint="--message, --message-file, or --message-stdin",
+    )
     normalized_notify_on = _normalize_notify_on(notify_on)
     should_defer = watch or normalized_notify_on == "terminal"
     normalized_if_busy = (if_busy or "").strip().lower() or "queue"
     if normalized_if_busy not in {"queue", "interrupt", "reject"}:
         raise typer.BadParameter("if-busy must be queue, interrupt, or reject")
     payload: dict[str, Any] = {
-        "message": message,
+        "message": message_body,
         "busy_policy": normalized_if_busy,
         "defer_execution": should_defer,
     }
@@ -1337,6 +1516,7 @@ def pma_thread_send(
             )
         return
 
+    delivered_message = str(data.get("delivered_message") or message_body)
     execution_state = str(data.get("execution_state") or "").strip().lower()
     if execution_state == "queued" or (should_defer and execution_state == "running"):
         line = (
@@ -1350,6 +1530,7 @@ def pma_thread_send(
         if queue_depth is not None:
             line += f" queue_depth={queue_depth}"
         typer.echo(line)
+        _echo_delivered_message(delivered_message)
         if watch:
             pma_thread_tail(
                 managed_thread_id=managed_thread_id,
@@ -1375,7 +1556,17 @@ def pma_thread_send(
                 typer.echo(excerpt)
         return
 
-    typer.echo(str(data.get("assistant_text") or ""))
+    line = (
+        f"send_state={send_state or 'accepted'} "
+        f"managed_turn_id={data.get('managed_turn_id') or ''} "
+        f"execution_state={execution_state or 'completed'}"
+    )
+    typer.echo(line.strip())
+    _echo_delivered_message(delivered_message)
+    assistant_text = str(data.get("assistant_text") or "")
+    if assistant_text:
+        typer.echo("\nassistant:")
+        typer.echo(assistant_text)
 
 
 @thread_app.command("turns")
@@ -1545,7 +1736,11 @@ def pma_thread_tail(
                     status = data.get("turn_status") or "running"
                     elapsed = _format_seconds(data.get("elapsed_seconds"))
                     idle = _format_seconds(data.get("idle_seconds"))
-                    line = f"progress: status={status} elapsed={elapsed} idle={idle}"
+                    phase = str(data.get("phase") or "-")
+                    line = (
+                        f"progress: status={status} phase={phase} "
+                        f"elapsed={elapsed} idle={idle}"
+                    )
                     idle_seconds = data.get("idle_seconds")
                     if (
                         isinstance(idle_seconds, int)
@@ -1554,6 +1749,12 @@ def pma_thread_tail(
                     ):
                         line += " (possibly stalled)"
                     typer.echo(line)
+                    guidance = str(data.get("guidance") or "").strip()
+                    if guidance:
+                        typer.echo(f"guidance: {guidance}")
+                    diagnostics = data.get("active_turn_diagnostics")
+                    if isinstance(diagnostics, dict):
+                        _render_active_turn_diagnostics(diagnostics)
                     if status != "running":
                         return
     except httpx.HTTPError as exc:
@@ -1647,13 +1848,21 @@ def pma_thread_archive(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
+        archive_url = _build_pma_url(config, f"/threads/{managed_thread_id}/archive")
         data = _request_json(
             "POST",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/archive"),
+            archive_url,
             token_env=config.server_auth_token_env,
         )
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
+        typer.echo(
+            format_hub_request_error(
+                action=f"Failed to archive managed PMA thread {managed_thread_id}.",
+                url=archive_url,
+                exc=exc,
+            ),
+            err=True,
+        )
         raise typer.Exit(code=1) from None
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -1719,7 +1928,24 @@ def pma_thread_interrupt(
     if output_json:
         typer.echo(json.dumps(data, indent=2))
     else:
-        typer.echo(f"Interrupted {managed_thread_id}")
+        status = str(data.get("status") or "").strip().lower()
+        if status == "ok":
+            typer.echo(f"Interrupted {managed_thread_id}")
+        else:
+            detail = str(
+                data.get("detail")
+                or data.get("backend_error")
+                or "Managed thread interrupt failed"
+            )
+            interrupt_state = str(data.get("interrupt_state") or "").strip()
+            managed_turn_id = str(data.get("managed_turn_id") or "").strip()
+            line = detail
+            if interrupt_state:
+                line = f"interrupt_state={interrupt_state} error={detail}"
+            if managed_turn_id:
+                line += f" managed_turn_id={managed_turn_id}"
+            typer.echo(line, err=True)
+            raise typer.Exit(code=1) from None
 
 
 @pma_app.command("files")
@@ -2203,7 +2429,6 @@ def pma_binding_list(
     """List orchestration bindings for threads."""
     hub_root = _resolve_hub_path(path)
     (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         _normalized_workspace_root,
@@ -2216,7 +2441,6 @@ def pma_binding_list(
         key: value
         for key, value in {
             "agent": agent,
-            "repo_id": normalized_repo_id,
             "resource_kind": normalized_resource_kind,
             "resource_id": normalized_resource_id,
             "surface_kind": surface_kind,
@@ -2325,7 +2549,6 @@ def pma_binding_work(
     """List busy-work summaries (threads with running or queued work)."""
     hub_root = _resolve_hub_path(path)
     (
-        normalized_repo_id,
         normalized_resource_kind,
         normalized_resource_id,
         _normalized_workspace_root,
@@ -2338,7 +2561,6 @@ def pma_binding_work(
         key: value
         for key, value in {
             "agent": agent,
-            "repo_id": normalized_repo_id,
             "resource_kind": normalized_resource_kind,
             "resource_id": normalized_resource_id,
             "limit": limit,

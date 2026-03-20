@@ -8,9 +8,15 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from .....agents.registry import get_registered_agents
+from .....core.car_context import (
+    default_managed_thread_context_profile,
+    normalize_car_context_profile,
+)
+from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.models import ThreadTarget
+from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_thread_store import PmaThreadStore
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
@@ -20,6 +26,11 @@ from ...schemas import (
     PmaManagedThreadCompactRequest,
     PmaManagedThreadCreateRequest,
     PmaManagedThreadResumeRequest,
+)
+from ...services.pma.managed_thread_followup import (
+    ManagedThreadAutomationClient,
+    ManagedThreadAutomationUnavailable,
+    resolve_managed_thread_followup_policy,
 )
 from .automation_adapter import (
     call_store_action_with_id,
@@ -114,16 +125,51 @@ def _resolve_workspace_from_input(hub_root: Path, workspace_root: str) -> Path:
     return workspace
 
 
-def _normalize_notify_on(value: Any) -> Optional[str]:
-    normalized = normalize_optional_text(value)
-    if normalized is None:
-        return None
-    notify_on = normalized.lower()
-    if notify_on != "terminal":
+def _normalize_resource_owner(
+    *,
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    normalized_resource_kind = normalize_optional_text(resource_kind)
+    normalized_resource_id = normalize_optional_text(resource_id)
+    if normalized_resource_id and normalized_resource_kind is None:
         raise HTTPException(
-            status_code=400, detail="notify_on must be 'terminal' when provided"
+            status_code=400,
+            detail="resource_kind is required when resource_id is provided",
         )
-    return notify_on
+    if normalized_resource_kind and normalized_resource_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="resource_id is required when resource_kind is provided",
+        )
+    if normalized_resource_kind not in {None, "repo", "agent_workspace"}:
+        raise HTTPException(
+            status_code=400,
+            detail="resource_kind must be one of: repo, agent_workspace",
+        )
+    normalized_repo_id = (
+        normalized_resource_id if normalized_resource_kind == "repo" else None
+    )
+    return normalized_resource_kind, normalized_resource_id, normalized_repo_id
+
+
+def _build_operator_status_fields(
+    *,
+    normalized_status: Optional[str],
+    lifecycle_status: Optional[str],
+) -> dict[str, Any]:
+    operator_status = derive_managed_thread_operator_status(
+        normalized_status=normalized_status,
+        lifecycle_status=lifecycle_status,
+    )
+    return {
+        "operator_status": operator_status,
+        "is_reusable": operator_status
+        in {
+            "idle",
+            "reusable",
+        },
+    }
 
 
 def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
@@ -146,11 +192,26 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
     payload["accepts_messages"] = lifecycle_status == "active"
     payload["resource_kind"] = normalize_optional_text(thread.get("resource_kind"))
     payload["resource_id"] = normalize_optional_text(thread.get("resource_id"))
+    metadata = thread.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    payload["context_profile"] = normalize_car_context_profile(
+        metadata.get("context_profile"),
+        default=default_managed_thread_context_profile(
+            resource_kind=payload["resource_kind"]
+        ),
+    )
+    payload.update(
+        _build_operator_status_fields(
+            normalized_status=payload["normalized_status"],
+            lifecycle_status=lifecycle_status,
+        )
+    )
     return payload
 
 
 def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
-    return {
+    payload = {
         "managed_thread_id": thread.thread_target_id,
         "agent": thread.agent_id,
         "repo_id": thread.repo_id,
@@ -169,8 +230,47 @@ def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
         "last_turn_id": thread.last_execution_id,
         "last_message_preview": thread.last_message_preview,
         "compact_seed": thread.compact_seed,
+        "context_profile": normalize_car_context_profile(
+            thread.context_profile,
+            default=default_managed_thread_context_profile(
+                resource_kind=thread.resource_kind
+            ),
+        ),
         "accepts_messages": thread.lifecycle_status == "active",
     }
+    payload.update(
+        _build_operator_status_fields(
+            normalized_status=thread.status,
+            lifecycle_status=thread.lifecycle_status,
+        )
+    )
+    return payload
+
+
+def _raise_agent_workspace_runtime_not_ready(
+    request: Request, resource_id: str
+) -> None:
+    supervisor = getattr(request.app.state, "hub_supervisor", None)
+    if supervisor is None:
+        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
+    snapshot = supervisor.get_agent_workspace_snapshot(resource_id)
+    if not snapshot.enabled:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent workspace '{resource_id}' is disabled",
+        )
+    readiness = supervisor.get_agent_workspace_runtime_readiness(resource_id)
+    if not isinstance(readiness, dict):
+        return
+    status = str(readiness.get("status") or "").strip().lower()
+    if status in {"", "ready", "deferred"}:
+        return
+    message = str(readiness.get("message") or "").strip()
+    fix = str(readiness.get("fix") or "").strip()
+    detail = message or f"Agent workspace runtime '{snapshot.runtime}' is not ready"
+    if fix:
+        detail = f"{detail} Fix: {fix}"
+    raise HTTPException(status_code=400, detail=detail)
 
 
 def build_managed_thread_orchestration_service(request: Request):
@@ -187,56 +287,6 @@ def build_managed_thread_orchestration_service(request: Request):
         harness_factory=_make_harness,
         pma_thread_store=PmaThreadStore(request.app.state.config.root),
     )
-
-
-def _build_terminal_notify_subscription_payload(
-    *,
-    managed_thread_id: str,
-    lane_id: Optional[str],
-    notify_once: bool,
-    idempotency_key: Optional[str],
-) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "event_types": ["managed_thread_completed", "managed_thread_failed"],
-        "thread_id": managed_thread_id,
-        "lane_id": lane_id,
-        "notify_once": notify_once,
-        "metadata": {"notify_once": notify_once},
-    }
-    if idempotency_key:
-        payload["idempotency_key"] = idempotency_key
-    return payload
-
-
-async def register_managed_thread_terminal_notify(
-    request: Request,
-    *,
-    managed_thread_id: str,
-    lane_id: Optional[str],
-    notify_once: bool,
-    idempotency_key: Optional[str],
-    get_runtime_state,
-) -> Optional[dict[str, Any]]:
-    store = await get_automation_store(request, get_runtime_state())
-    if store is None:
-        return None
-    created = await call_store_create_with_payload(
-        store,
-        (
-            "create_subscription",
-            "add_subscription",
-            "upsert_subscription",
-        ),
-        _build_terminal_notify_subscription_payload(
-            managed_thread_id=managed_thread_id,
-            lane_id=lane_id,
-            notify_once=notify_once,
-            idempotency_key=idempotency_key,
-        ),
-    )
-    if isinstance(created, dict) and "subscription" in created:
-        return created
-    return {"subscription": created}
 
 
 def build_automation_routes(
@@ -436,60 +486,25 @@ def build_managed_thread_crud_routes(
     get_runtime_state,
 ) -> None:
     """Build managed-thread CRUD routes (create, list, get, compact, resume, archive)."""
-    from ...services.pma.common import pma_config_from_raw
-
-    def _get_pma_config(request: Request) -> dict[str, Any]:
-        raw = getattr(request.app.state.config, "raw", {})
-        return pma_config_from_raw(raw)
 
     @router.post("/threads")
     async def create_managed_thread(
         request: Request, payload: PmaManagedThreadCreateRequest
     ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
+        pma_config = request.app.state.config.pma
         agent_id = normalize_optional_text(payload.agent)
-        repo_id = normalize_optional_text(payload.repo_id)
-        resource_kind = normalize_optional_text(payload.resource_kind)
-        resource_id = normalize_optional_text(payload.resource_id)
+        resource_kind, resource_id, resolved_repo_id = _normalize_resource_owner(
+            resource_kind=payload.resource_kind,
+            resource_id=payload.resource_id,
+        )
         workspace_root = normalize_optional_text(payload.workspace_root)
-        raw_payload: dict[str, Any] = {}
-        try:
-            parsed = await request.json()
-            if isinstance(parsed, dict):
-                raw_payload = parsed
-        except Exception:
-            pass
-        notify_on = _normalize_notify_on(
-            raw_payload.get("notify_on") or raw_payload.get("notifyOn")
+        followup_policy = resolve_managed_thread_followup_policy(
+            payload,
+            default_terminal_followup=(
+                pma_config.managed_thread_terminal_followup_default
+            ),
         )
-        notify_lane = normalize_optional_text(
-            raw_payload.get("notify_lane") or raw_payload.get("notifyLane")
-        )
-        raw_notify_once = raw_payload.get("notify_once")
-        if raw_notify_once is None:
-            raw_notify_once = raw_payload.get("notifyOnce")
-        notify_once = bool(raw_notify_once) if raw_notify_once is not None else True
-
-        if resource_id and resource_kind is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_kind is required when resource_id is provided",
-            )
-        if resource_kind and resource_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_id is required when resource_kind is provided",
-            )
-        if repo_id and resource_kind not in {None, "repo"}:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id cannot be combined with a non-repo resource_kind",
-            )
-        if repo_id and resource_id and resource_id != repo_id:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id must match resource_id for repo-backed requests",
-            )
 
         owner_present = resource_kind is not None and resource_id is not None
         if owner_present == bool(workspace_root):
@@ -498,7 +513,6 @@ def build_managed_thread_crud_routes(
                 detail="Exactly one of resource owner or workspace_root is required",
             )
 
-        resolved_repo_id: Optional[str] = None
         resolved_runtime: Optional[str] = None
         if owner_present:
             assert resource_kind is not None
@@ -538,6 +552,8 @@ def build_managed_thread_crud_routes(
                         f"('{resolved_runtime}')"
                     ),
                 )
+            assert resource_id is not None
+            _raise_agent_workspace_runtime_not_ready(request, resource_id)
 
         if agent_id is None:
             raise HTTPException(
@@ -547,6 +563,12 @@ def build_managed_thread_crud_routes(
                     "the runtime"
                 ),
             )
+        context_profile = normalize_car_context_profile(
+            payload.context_profile,
+            default=default_managed_thread_context_profile(resource_kind=resource_kind),
+        )
+        if context_profile is None:
+            raise HTTPException(status_code=400, detail="context_profile is invalid")
 
         service = build_managed_thread_orchestration_service(request)
         try:
@@ -558,23 +580,32 @@ def build_managed_thread_crud_routes(
                 resource_id=resource_id,
                 display_name=normalize_optional_text(payload.name),
                 backend_thread_id=normalize_optional_text(payload.backend_thread_id),
+                metadata={"context_profile": context_profile},
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         notification: Optional[dict[str, Any]] = None
-        if notify_on == "terminal":
-            notification = await register_managed_thread_terminal_notify(
+        if followup_policy.event_mode == "terminal":
+            automation_client = ManagedThreadAutomationClient(
                 request,
-                managed_thread_id=thread.thread_target_id,
-                lane_id=notify_lane,
-                notify_once=notify_once,
-                idempotency_key=(
-                    f"managed-thread-notify:{thread.thread_target_id}"
-                    if notify_once
-                    else None
-                ),
-                get_runtime_state=get_runtime_state,
+                get_runtime_state,
             )
+            try:
+                notification = await automation_client.create_terminal_followup(
+                    managed_thread_id=thread.thread_target_id,
+                    lane_id=followup_policy.lane_id,
+                    notify_once=followup_policy.notify_once,
+                    idempotency_key=(
+                        f"managed-thread-notify:{thread.thread_target_id}"
+                        if followup_policy.notify_once
+                        else None
+                    ),
+                    required=followup_policy.required,
+                )
+            except ManagedThreadAutomationUnavailable as exc:
+                raise HTTPException(
+                    status_code=503, detail="Automation action unavailable"
+                ) from exc
         response: dict[str, Any] = {"thread": _serialize_thread_target(thread)}
         if notification is not None:
             response["notification"] = notification
@@ -586,7 +617,6 @@ def build_managed_thread_crud_routes(
         agent: Optional[str] = None,
         status: Optional[str] = None,
         lifecycle_status: Optional[str] = None,
-        repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 200,
@@ -601,27 +631,14 @@ def build_managed_thread_crud_routes(
         ):
             normalized_lifecycle_status = normalized_status
             normalized_status = None
-        normalized_repo_id = normalize_optional_text(repo_id)
-        normalized_resource_kind = normalize_optional_text(resource_kind)
-        normalized_resource_id = normalize_optional_text(resource_id)
-        if normalized_resource_id and normalized_resource_kind is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_kind is required when resource_id is provided",
-            )
-        if normalized_resource_kind and normalized_resource_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_id is required when resource_kind is provided",
-            )
-        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id cannot be combined with a non-repo resource_kind",
-            )
-        if normalized_repo_id and normalized_resource_kind is None:
-            normalized_resource_kind = "repo"
-            normalized_resource_id = normalized_repo_id
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_repo_id,
+        ) = _normalize_resource_owner(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
         service = build_managed_thread_orchestration_service(request)
         threads = service.list_thread_targets(
             agent_id=normalize_optional_text(agent),
@@ -651,7 +668,7 @@ def build_managed_thread_crud_routes(
         summary = (payload.summary or "").strip()
         if not summary:
             raise HTTPException(status_code=400, detail="summary is required")
-        max_text_chars = int(_get_pma_config(request).get("max_text_chars", 0) or 0)
+        max_text_chars = int(request.app.state.config.pma.max_text_chars or 0)
         if max_text_chars > 0 and len(summary) > max_text_chars:
             raise HTTPException(
                 status_code=400,
@@ -792,13 +809,18 @@ def build_managed_thread_crud_routes(
         turn = store.get_turn(managed_thread_id, managed_turn_id)
         if turn is None:
             raise HTTPException(status_code=404, detail="Managed turn not found")
-        return {"turn": turn}
+        return {
+            "turn": turn,
+            "timeline": list_turn_timeline(
+                request.app.state.config.root,
+                execution_id=managed_turn_id,
+            ),
+        }
 
     @router.get("/bindings")
     def list_bindings(
         request: Request,
         agent: Optional[str] = None,
-        repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
         surface_kind: Optional[str] = None,
@@ -807,27 +829,14 @@ def build_managed_thread_crud_routes(
     ) -> dict[str, Any]:
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        normalized_repo_id = normalize_optional_text(repo_id)
-        normalized_resource_kind = normalize_optional_text(resource_kind)
-        normalized_resource_id = normalize_optional_text(resource_id)
-        if normalized_resource_id and normalized_resource_kind is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_kind is required when resource_id is provided",
-            )
-        if normalized_resource_kind and normalized_resource_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_id is required when resource_kind is provided",
-            )
-        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id cannot be combined with a non-repo resource_kind",
-            )
-        if normalized_repo_id and normalized_resource_kind is None:
-            normalized_resource_kind = "repo"
-            normalized_resource_id = normalized_repo_id
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_repo_id,
+        ) = _normalize_resource_owner(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
         service = build_managed_thread_orchestration_service(request)
         bindings = service.list_bindings(
             agent_id=normalize_optional_text(agent),
@@ -879,7 +888,6 @@ def build_managed_thread_crud_routes(
     def list_active_work_summaries(
         request: Request,
         agent: Optional[str] = None,
-        repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
         limit: int = 200,
@@ -887,27 +895,14 @@ def build_managed_thread_crud_routes(
         """List busy thread summaries for running or queued work only."""
         if limit <= 0:
             raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        normalized_repo_id = normalize_optional_text(repo_id)
-        normalized_resource_kind = normalize_optional_text(resource_kind)
-        normalized_resource_id = normalize_optional_text(resource_id)
-        if normalized_resource_id and normalized_resource_kind is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_kind is required when resource_id is provided",
-            )
-        if normalized_resource_kind and normalized_resource_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail="resource_id is required when resource_kind is provided",
-            )
-        if normalized_repo_id and normalized_resource_kind not in {None, "repo"}:
-            raise HTTPException(
-                status_code=400,
-                detail="repo_id cannot be combined with a non-repo resource_kind",
-            )
-        if normalized_repo_id and normalized_resource_kind is None:
-            normalized_resource_kind = "repo"
-            normalized_resource_id = normalized_repo_id
+        (
+            normalized_resource_kind,
+            normalized_resource_id,
+            normalized_repo_id,
+        ) = _normalize_resource_owner(
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
         service = build_managed_thread_orchestration_service(request)
         summaries = service.list_active_work_summaries(
             agent_id=normalize_optional_text(agent),

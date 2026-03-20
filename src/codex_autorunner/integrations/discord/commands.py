@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...core.update_targets import update_target_command_choices
+from ..chat.agents import chat_agent_command_choices, chat_agent_description
+from ..chat.model_selection import (
+    reasoning_effort_command_choices,
+    reasoning_effort_description,
+)
+
 # Discord application command option types.
 SUB_COMMAND = 1
 SUB_COMMAND_GROUP = 2
@@ -59,12 +66,9 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "name",
-                            "description": "Agent name: codex or opencode",
+                            "description": f"Agent name: {chat_agent_description()}",
                             "required": False,
-                            "choices": [
-                                {"name": "codex", "value": "codex"},
-                                {"name": "opencode", "value": "opencode"},
-                            ],
+                            "choices": list(chat_agent_command_choices()),
                         }
                     ],
                 },
@@ -83,16 +87,12 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "effort",
-                            "description": "Reasoning effort (codex only): none, minimal, low, medium, high, xhigh",
+                            "description": (
+                                "Reasoning effort (codex only): "
+                                f"{reasoning_effort_description()}"
+                            ),
                             "required": False,
-                            "choices": [
-                                {"name": "none", "value": "none"},
-                                {"name": "minimal", "value": "minimal"},
-                                {"name": "low", "value": "low"},
-                                {"name": "medium", "value": "medium"},
-                                {"name": "high", "value": "high"},
-                                {"name": "xhigh", "value": "xhigh"},
-                            ],
+                            "choices": list(reasoning_effort_command_choices()),
                         },
                     ],
                 },
@@ -104,16 +104,11 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "target",
-                            "description": "Target: both, web, chat, telegram, discord, or status",
+                            "description": "Target service group or status",
                             "required": False,
-                            "choices": [
-                                {"name": "both", "value": "both"},
-                                {"name": "web", "value": "web"},
-                                {"name": "chat", "value": "chat"},
-                                {"name": "telegram", "value": "telegram"},
-                                {"name": "discord", "value": "discord"},
-                                {"name": "status", "value": "status"},
-                            ],
+                            "choices": list(
+                                update_target_command_choices(include_status=True)
+                            ),
                         }
                     ],
                 },

@@ -72,18 +72,26 @@ def normalize_notification(message: dict[str, Any]) -> Optional[NormalizedNotifi
 
 def extract_resume_snapshot(
     payload: Any, target_turn_id: str
-) -> Optional[tuple[Optional[str], list[str], list[str]]]:
+) -> Optional[tuple[Optional[str], list[str], list[str], list[str], list[str]]]:
     if not isinstance(payload, dict):
         return None
     snapshot = _collect_turn_snapshot_data(payload, target_turn_id)
     if (
         not snapshot.found
         and not snapshot.agent_messages
+        and not snapshot.commentary_messages
+        and not snapshot.final_answer_messages
         and not snapshot.errors
         and snapshot.status is None
     ):
         return None
-    return snapshot.status, snapshot.agent_messages, snapshot.errors
+    return (
+        snapshot.status,
+        snapshot.agent_messages,
+        snapshot.commentary_messages,
+        snapshot.final_answer_messages,
+        snapshot.errors,
+    )
 
 
 def _collect_turn_snapshot_data(
@@ -92,6 +100,8 @@ def _collect_turn_snapshot_data(
     snapshot = ResumeSnapshot(
         status=None,
         agent_messages=[],
+        commentary_messages=[],
+        final_answer_messages=[],
         errors=[],
         found=False,
         target_turn_id=target_turn_id,
@@ -156,8 +166,9 @@ def _collect_turn_snapshot_from_entry(turn: Any, snapshot: ResumeSnapshot) -> bo
         return False
     if snapshot.status is None:
         snapshot.status = _extract_status_value(turn.get("status"))
-    snapshot.agent_messages.extend(
-        _extract_agent_messages_from_container(turn, snapshot.target_turn_id)
+    _extend_snapshot_agent_messages(
+        snapshot,
+        _extract_agent_messages_from_container(turn, snapshot.target_turn_id),
     )
     snapshot.errors.extend(_extract_errors_from_container(turn))
     return True
@@ -171,7 +182,9 @@ def _collect_turn_snapshot_from_item(item: Any, snapshot: ResumeSnapshot) -> Non
         return
     text = _extract_agent_message_text(item)
     if text:
-        snapshot.agent_messages.append(text)
+        _append_snapshot_agent_message(
+            snapshot, text, phase=_extract_agent_message_phase(item)
+        )
 
 
 def _collect_thread_turn_items(
@@ -215,6 +228,18 @@ def _extract_agent_message_text(item: Any) -> Optional[str]:
                 parts.append(candidate)
         if parts:
             return "".join(parts)
+    return None
+
+
+def _extract_agent_message_phase(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return None
+    phase = item.get("phase")
+    if not isinstance(phase, str):
+        return None
+    normalized = phase.strip().lower()
+    if normalized in {"commentary", "final_answer"}:
+        return normalized
     return None
 
 
@@ -265,10 +290,10 @@ def _extract_error_message(payload: Any) -> Optional[str]:
 
 def _extract_agent_messages_from_container(
     container: Any, target_turn_id: Optional[str]
-) -> list[str]:
+) -> list[tuple[str, Optional[str]]]:
     if not isinstance(container, dict):
         return []
-    agent_messages: list[str] = []
+    agent_messages: list[tuple[str, Optional[str]]] = []
     for key in ("items", "messages"):
         entries = container.get(key)
         if not isinstance(entries, list):
@@ -281,27 +306,62 @@ def _extract_agent_messages_from_container(
                 continue
             text = _extract_agent_message_text(entry)
             if text:
-                agent_messages.append(text)
+                agent_messages.append((text, _extract_agent_message_phase(entry)))
             elif entry.get("role") == "assistant":
                 fallback = entry.get("text")
                 if isinstance(fallback, str) and fallback.strip():
-                    agent_messages.append(fallback)
+                    agent_messages.append(
+                        (fallback, _extract_agent_message_phase(entry))
+                    )
     return agent_messages
 
 
+def _append_snapshot_agent_message(
+    snapshot: "ResumeSnapshot",
+    text: str,
+    *,
+    phase: Optional[str],
+) -> None:
+    snapshot.agent_messages.append(text)
+    if phase == "commentary":
+        snapshot.commentary_messages.append(text)
+    elif phase == "final_answer":
+        snapshot.final_answer_messages.append(text)
+
+
+def _extend_snapshot_agent_messages(
+    snapshot: "ResumeSnapshot",
+    messages: list[tuple[str, Optional[str]]],
+) -> None:
+    for text, phase in messages:
+        _append_snapshot_agent_message(snapshot, text, phase=phase)
+
+
 class ResumeSnapshot:
-    __slots__ = ("status", "agent_messages", "errors", "found", "target_turn_id")
+    __slots__ = (
+        "status",
+        "agent_messages",
+        "commentary_messages",
+        "final_answer_messages",
+        "errors",
+        "found",
+        "target_turn_id",
+    )
 
     def __init__(
         self,
         status: Optional[str],
         agent_messages: list[str],
+        commentary_messages: list[str],
+        final_answer_messages: list[str],
         errors: list[str],
         found: bool,
         target_turn_id: str,
     ) -> None:
         self.status = status
         self.agent_messages = agent_messages
+        self.commentary_messages = commentary_messages
+        self.final_answer_messages = final_answer_messages
         self.errors = errors
         self.found = found
         self.target_turn_id = target_turn_id

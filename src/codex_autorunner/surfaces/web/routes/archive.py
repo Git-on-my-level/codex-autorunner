@@ -12,7 +12,6 @@ from typing import Any, Literal, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 
-from ....core.flows.archive_helpers import flow_run_archive_root
 from ..schemas import (
     ArchiveSnapshotDetailResponse,
     ArchiveSnapshotsResponse,
@@ -137,12 +136,26 @@ def _resolve_snapshot_root(
 
 
 def _resolve_local_run_root(repo_root: Path, run_id: str) -> Path:
+    def _resolve_candidate(base_root: Path) -> Optional[Path]:
+        candidate = base_root / run_id
+        if not candidate.exists() or not candidate.is_dir():
+            return None
+        resolved_root = candidate.resolve(strict=False)
+        archive_root = base_root.resolve(strict=False)
+        try:
+            resolved_root.relative_to(archive_root)
+        except ValueError:
+            raise ValueError("invalid run archive path") from None
+        return resolved_root
+
     run_id = _normalize_component(run_id, "run_id")
-    primary = flow_run_archive_root(repo_root, run_id)
-    if primary.exists() and primary.is_dir():
+    primary_root = _local_run_archives_root(repo_root)
+    primary = _resolve_candidate(primary_root)
+    if primary is not None:
         return primary
-    legacy = _legacy_local_flows_root(repo_root) / run_id
-    if legacy.exists() and legacy.is_dir():
+    legacy_root = _legacy_local_flows_root(repo_root)
+    legacy = _resolve_candidate(legacy_root)
+    if legacy is not None:
         return legacy
     raise FileNotFoundError("run archive not found")
 
@@ -226,6 +239,8 @@ def _iter_snapshots(repo_root: Path) -> list[ArchiveSnapshotSummary]:
             if not snapshot_dir.is_dir():
                 continue
             meta = _load_meta(snapshot_dir / "META.json")
+            if meta is None:
+                continue
             snapshots.append(_snapshot_summary(snapshot_dir, worktree_id, meta))
     snapshots.sort(
         key=lambda item: (item.created_at or "", item.snapshot_id), reverse=True

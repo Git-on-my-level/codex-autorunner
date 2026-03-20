@@ -333,6 +333,7 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - CLI primitives:
   - `car pma thread spawn --agent codex --repo <repo_id> --name <label>`
   - `car pma thread send --id <managed_thread_id> --message "..." --watch`
+  - `car pma thread send --id <managed_thread_id> --message-file prompt.md --watch`
   - `car pma thread send --id <managed_thread_id> --message "..." --notify-on terminal --notify-lane <lane_id>`
   - `car pma thread status --id <managed_thread_id>`
   - `car pma thread compact --id <id> --summary "..."`
@@ -491,7 +492,6 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 
 - User uploads arrive in `.codex-autorunner/filebox/inbox/`.
 - Send user-facing files by writing to `.codex-autorunner/filebox/outbox/`.
-- Legacy `.codex-autorunner/pma/inbox/` and `.codex-autorunner/pma/outbox/` paths redirect to filebox.
 
 ## PMA dispatches (user attention)
 

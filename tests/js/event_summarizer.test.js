@@ -72,7 +72,43 @@ test("still trims thinking and tool text and keeps latest thinking entry", () =>
   const thinkingActions = summary.actions.filter((action) => action.label === "thinking");
 
   assert.equal(thinkingActions.length, 1);
-  assert.match(rendered, /✓ tool: .*…/);
-  assert.match(rendered, /🧠 .*…/);
+  assert.match(rendered, /✓ tool: tool a+ \.\.\. a+/);
+  assert.match(rendered, /🧠 latest c \.\.\. c+/);
   assert.match(rendered, /latest/);
 });
+
+test("middle truncates long status text while preserving both ends", () => {
+  const summary = summarizeEvents(
+    [
+      event({
+        id: "evt-status",
+        title: "Status",
+        kind: "status",
+        summary: "prefix-" + "x".repeat(40) + "-suffix",
+        method: "status",
+      }),
+    ],
+    { maxTextLength: 20, maxActions: 5, now: 1000, startTime: 0 }
+  );
+
+  const rendered = renderCompactSummary(summary);
+  assert.match(rendered, /▸ status: prefix-x \.\.\. -suffix/);
+});
+test("middle truncation respects tiny max lengths", () => {
+  const summary = summarizeEvents(
+    [
+      event({
+        id: "evt-tool-small",
+        title: "Tool",
+        kind: "tool",
+        summary: "abcdefghi",
+        method: "item/completed",
+      }),
+    ],
+    { maxTextLength: 6, maxActions: 5, now: 1000, startTime: 0 }
+  );
+
+  assert.equal(summary.actions[0].text.length, 6);
+  assert.equal(summary.actions[0].text, "a ... " );
+});
+

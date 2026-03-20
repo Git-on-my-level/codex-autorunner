@@ -52,50 +52,53 @@
         </button>
       </div>
     </header>
-    <section class="hub-stats">
-      <div class="hub-stat">
-        <div class="hub-stat-value" id="hub-count-total">–</div>
-        <p class="muted small">repos</p>
-      </div>
-      <div class="hub-stat">
-        <div class="hub-stat-value" id="hub-count-running">–</div>
-        <p class="muted small">running</p>
-      </div>
-      <div class="hub-stat">
-        <div class="hub-stat-value" id="hub-count-missing">–</div>
-        <p class="muted small">missing</p>
-      </div>
-    </section>
-    <section class="hub-repo-panel">
+    <div class="hub-stats-inline">
+      <span class="hub-stat-inline"><span class="hub-stat-value" id="hub-count-total">–</span> repos</span>
+      <span class="hub-stat-inline"><span class="hub-stat-value" id="hub-count-running">–</span> running</span>
+      <span class="hub-stat-inline"><span class="hub-stat-value" id="hub-count-missing">–</span> missing</span>
+    </div>
+    <section class="hub-repo-panel" id="hub-repo-panel" data-hub-panel="repos">
       <div class="hub-panel-header">
-        <div class="hub-panel-title">
-          <span class="label">Repositories</span>
-          <div class="hub-repo-controls">
-            <label class="hub-repo-control">
-              Flow
-              <select id="hub-flow-filter" class="hub-repo-select" aria-label="Filter by flow status">
-                <option value="all">All</option>
-                <option value="active">Active</option>
-                <option value="running">Running</option>
-                <option value="paused">Paused</option>
-                <option value="completed">Completed</option>
-                <option value="failed">Failed</option>
-                <option value="idle">Idle</option>
-              </select>
-            </label>
-            <label class="hub-repo-control">
-              Sort
-              <select id="hub-sort-order" class="hub-repo-select" aria-label="Sort parent repos">
-                <option value="repo_id">Repo ID (A-Z)</option>
-                <option value="last_activity_desc">Last activity (newest)</option>
-                <option value="last_activity_asc">Last activity (oldest)</option>
-                <option value="flow_progress_desc">Flow progress</option>
-              </select>
-            </label>
-            <label class="hub-repo-control hub-repo-search-control">
-              <input id="hub-repo-search" class="hub-repo-search-input" type="text"
-                placeholder="Search…" spellcheck="false" aria-label="Search repos and channels" />
-            </label>
+        <div class="hub-panel-header-main">
+          <button class="hub-panel-summary" id="hub-repo-panel-summary" type="button"
+            aria-controls="hub-repo-list" aria-expanded="true">
+            <span class="hub-panel-summary-copy">
+              <span class="label">Repositories</span>
+            </span>
+            <span class="hub-panel-summary-state" id="hub-repo-panel-state">Expanded</span>
+          </button>
+          <div class="hub-panel-title">
+            <div class="hub-repo-controls">
+              <label class="hub-repo-control">
+                Flow
+                <select id="hub-flow-filter" class="hub-repo-select" aria-label="Filter by flow status">
+                  <option value="all">All</option>
+                  <option value="active">Active</option>
+                  <option value="running">Running</option>
+                  <option value="paused">Paused</option>
+                  <option value="completed">Completed</option>
+                  <option value="failed">Failed</option>
+                  <option value="idle">Idle</option>
+                </select>
+              </label>
+              <label class="hub-repo-control">
+                Sort
+                <select id="hub-sort-order" class="hub-repo-select" aria-label="Sort parent repos">
+                  <option value="repo_id">Repo ID (A-Z)</option>
+                  <option value="last_activity_desc">Last activity (newest)</option>
+                  <option value="last_activity_asc">Last activity (oldest)</option>
+                  <option value="flow_progress_desc">Flow progress</option>
+                </select>
+              </label>
+              <label class="hub-repo-control hub-repo-search-control">
+                <input id="hub-repo-search" class="hub-repo-search-input" type="text"
+                  placeholder="Search…" spellcheck="false" aria-label="Search repos and channels" />
+              </label>
+              <button class="ghost sm" id="hub-cleanup-all-threads" type="button"
+                title="Archive stale non-chat-bound managed threads across base repos">
+                Cleanup all
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -103,11 +106,16 @@
         <div class="muted small">Loading…</div>
       </div>
     </section>
-    <section class="hub-repo-panel hub-agent-panel">
+    <section class="hub-repo-panel hub-agent-panel" id="hub-agent-panel" data-hub-panel="agents">
       <div class="hub-panel-header">
-        <div class="hub-panel-title">
-          <span class="label">Agents</span>
-          <p class="muted small">Managed agent workspaces</p>
+        <div class="hub-panel-header-main">
+          <button class="hub-panel-summary" id="hub-agent-panel-summary" type="button"
+            aria-controls="hub-agent-workspace-list" aria-expanded="false">
+            <span class="hub-panel-summary-copy">
+              <span class="label">Agents</span>
+            </span>
+            <span class="hub-panel-summary-state" id="hub-agent-panel-state">Show panel</span>
+          </button>
         </div>
       </div>
       <div class="hub-repo-list hub-agent-list" id="hub-agent-workspace-list">
@@ -501,10 +509,6 @@
             <span class="muted small" id="contextspace-status"></span>
           </div>
           <div class="contextspace-header-actions">
-            <input type="file" id="contextspace-upload-input" multiple hidden />
-            <button class="ghost sm" id="contextspace-upload" title="Upload to current folder">Upload</button>
-            <button class="ghost sm" id="contextspace-new-folder" title="Create folder">New Folder</button>
-            <button class="ghost sm" id="contextspace-new-file" title="Create markdown file">New File</button>
             <button class="ghost sm hidden" id="contextspace-generate-tickets" title="Generate tickets from spec">Generate
               tickets</button>
             <button class="ghost sm" id="contextspace-reload">Reload</button>
@@ -513,8 +517,6 @@
         </div>
         <div class="contextspace-path-row">
           <nav class="contextspace-breadcrumbs" id="contextspace-breadcrumbs"></nav>
-          <button class="ghost sm contextspace-download-all-btn" id="contextspace-download-all"
-            title="Download all as ZIP">⬇</button>
         </div>
         <div class="contextspace-grid">
           <aside class="contextspace-file-browser">
@@ -551,18 +553,7 @@
               </button>
               <div class="contextspace-mobile-actions">
                 <span class="muted small" id="contextspace-status-mobile"></span>
-                <div class="contextspace-mobile-menu">
-                  <button class="ghost sm icon-btn" id="contextspace-mobile-menu-toggle"
-                    title="Contextspace actions">⋯</button>
-                  <div class="contextspace-mobile-dropdown hidden" id="contextspace-mobile-dropdown">
-                    <button class="contextspace-mobile-item" id="contextspace-mobile-upload">Upload files</button>
-                    <button class="contextspace-mobile-item" id="contextspace-mobile-new-folder">New folder</button>
-                    <button class="contextspace-mobile-item" id="contextspace-mobile-new-file">New file</button>
-                    <button class="contextspace-mobile-item" id="contextspace-mobile-download">Download ZIP</button>
-                    <button class="contextspace-mobile-item hidden" id="contextspace-mobile-generate">Generate
-                      tickets</button>
-                  </div>
-                </div>
+                <button class="ghost sm hidden" id="contextspace-mobile-generate" title="Generate tickets">Generate</button>
                 <button class="ghost sm" id="contextspace-reload-mobile" title="Reload">↻</button>
                 <button class="primary sm" id="contextspace-save-mobile">Save</button>
               </div>
@@ -1262,47 +1253,6 @@
       </div>
       <div class="file-picker-body" id="file-picker-body">
         <!-- File list rendered here by JS -->
-      </div>
-    </div>
-  </div>
-  <!-- Contextspace Create Modal -->
-  <div class="modal-overlay" hidden="" id="contextspace-create-modal">
-    <div aria-describedby="workspace-create-body" aria-labelledby="contextspace-create-title" aria-modal="true"
-      class="modal-dialog workspace-create-dialog" role="dialog" tabindex="-1">
-      <div class="modal-header">
-        <span class="label" id="contextspace-create-title">Create</span>
-        <button class="file-picker-close" id="contextspace-create-close" aria-label="Close">&times;</button>
-      </div>
-      <div class="modal-body" id="workspace-create-body">
-        <div class="form-group">
-          <label class="muted small" for="contextspace-create-name">Name</label>
-          <input id="contextspace-create-name" placeholder="my-note.md" type="text" />
-          <span class="form-hint" id="contextspace-create-hint">Created under current folder</span>
-        </div>
-        <div class="form-group">
-          <label class="muted small" for="contextspace-create-path">Location</label>
-          <select id="contextspace-create-path"></select>
-        </div>
-      </div>
-      <div class="modal-actions workspace-create-actions">
-        <button class="ghost sm" id="contextspace-create-cancel">Cancel</button>
-        <button class="primary sm" id="contextspace-create-submit">Create</button>
-      </div>
-    </div>
-  </div>
-  <!-- Contextspace Confirm Modal -->
-  <div class="modal-overlay" hidden="" id="contextspace-confirm-modal">
-    <div aria-describedby="contextspace-confirm-body" aria-labelledby="contextspace-confirm-title" aria-modal="true"
-      class="modal-dialog contextspace-confirm-dialog" role="dialog" tabindex="-1">
-      <div class="modal-header">
-        <span class="label" id="contextspace-confirm-title">Confirm</span>
-      </div>
-      <div class="modal-body" id="contextspace-confirm-body">
-        <p id="contextspace-confirm-text"></p>
-      </div>
-      <div class="modal-actions contextspace-confirm-actions">
-        <button class="ghost sm" id="contextspace-confirm-cancel">Cancel</button>
-        <button class="primary sm" id="contextspace-confirm-yes">Confirm</button>
       </div>
     </div>
   </div>

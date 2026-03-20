@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
+
+from ...core.update_targets import (
+    UpdateTargetDefinition,
+    all_update_target_definitions,
+)
+from ..chat.agents import CHAT_AGENT_DEFINITIONS
+from ..chat.model_selection import REASONING_EFFORT_VALUES
 
 DISCORD_BUTTON_STYLE_PRIMARY = 1
 DISCORD_BUTTON_STYLE_SECONDARY = 2
@@ -114,17 +121,12 @@ def build_agent_picker(
 ) -> dict[str, Any]:
     options = [
         build_select_option(
-            label="codex",
-            value="codex",
-            description="Default Codex agent",
-            default=current_agent == "codex",
-        ),
-        build_select_option(
-            label="opencode",
-            value="opencode",
-            description="OpenCode agent (requires opencode binary)",
-            default=current_agent == "opencode",
-        ),
+            label=definition.value,
+            value=definition.value,
+            description=definition.description,
+            default=current_agent == definition.value,
+        )
+        for definition in CHAT_AGENT_DEFINITIONS
     ]
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
@@ -177,19 +179,19 @@ def build_model_effort_picker(
     custom_id: str = "model_effort_select",
     placeholder: str = "Select reasoning effort...",
 ) -> dict[str, Any]:
-    options = [
-        build_select_option(
-            label="(none)",
-            value="none",
-            description="Do not set an effort override",
-            default=True,
-        ),
-        build_select_option("minimal", "minimal"),
-        build_select_option("low", "low"),
-        build_select_option("medium", "medium"),
-        build_select_option("high", "high"),
-        build_select_option("xhigh", "xhigh"),
-    ]
+    options = []
+    for effort in REASONING_EFFORT_VALUES:
+        if effort == "none":
+            options.append(
+                build_select_option(
+                    label="(none)",
+                    value=effort,
+                    description="Do not set an effort override",
+                    default=True,
+                )
+            )
+            continue
+        options.append(build_select_option(effort, effort))
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
     )
@@ -365,17 +367,26 @@ def build_review_commit_picker(
 
 def build_update_target_picker(
     *,
+    target_definitions: Optional[Sequence[UpdateTargetDefinition]] = None,
     custom_id: str = "update_target_select",
     placeholder: str = "Select update target...",
 ) -> dict[str, Any]:
+    definitions = (
+        tuple(target_definitions)
+        if target_definitions is not None
+        else all_update_target_definitions()
+    )
     options = [
-        build_select_option("both", "both", description="Web + Chat apps"),
-        build_select_option("web", "web", description="Web UI only"),
-        build_select_option("chat", "chat", description="Telegram + Discord"),
-        build_select_option("telegram", "telegram", description="Telegram only"),
-        build_select_option("discord", "discord", description="Discord only"),
-        build_select_option("status", "status", description="Show update status"),
+        build_select_option(
+            definition.label,
+            definition.value,
+            description=definition.description,
+        )
+        for definition in definitions[: DISCORD_SELECT_OPTION_MAX_OPTIONS - 1]
     ]
+    options.append(
+        build_select_option("Status", "status", description="Show update status")
+    )
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
     )

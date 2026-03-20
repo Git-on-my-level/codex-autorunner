@@ -11,6 +11,8 @@ import { isRepoHealthy } from "./health.js";
 import { preserveScroll } from "./preserve.js";
 import { createSmartRefresh, type SmartRefreshReason } from "./smartRefresh.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
+import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
+import { CONSTANTS } from "./constants.js";
 
 /**
  * Dispatch: Agent-to-human communication.
@@ -104,8 +106,7 @@ let bellInitialized = false;
 let messagesInitialized = false;
 let activeRunId: string | null = null;
 let selectedRunId: string | null = null;
-let messageBellPollIntervalId: ReturnType<typeof setInterval> | null = null;
-let messageBellUnloadCleanupInstalled = false;
+let messageBellCleanup: (() => void) | null = null;
 const MESSAGE_REFRESH_REASONS: SmartRefreshReason[] = ["initial", "background", "manual"];
 
 const threadsEl = document.getElementById("messages-thread-list");
@@ -213,24 +214,22 @@ export function initMessageBell(): void {
   if (bellInitialized) return;
   bellInitialized = true;
 
-  // Cheap polling. (The repo shell already does other polling; keep this light.)
-  refreshBell();
-  if (messageBellPollIntervalId === null) {
-    messageBellPollIntervalId = window.setInterval(() => {
-      if (document.hidden) return;
-      if (!isRepoHealthy()) return;
-      refreshBell();
-    }, 15000);
+  if (messageBellCleanup) {
+    messageBellCleanup();
   }
-  if (!messageBellUnloadCleanupInstalled) {
-    messageBellUnloadCleanupInstalled = true;
-    window.addEventListener("beforeunload", () => {
-      if (messageBellPollIntervalId !== null) {
-        clearInterval(messageBellPollIntervalId);
-        messageBellPollIntervalId = null;
+  messageBellCleanup = registerAutoRefresh("messages:bell", {
+    callback: async (_ctx: RefreshContext) => {
+      if (!isRepoHealthy()) {
+        activeRunId = null;
+        setBadge(0);
+        return;
       }
-    });
-  }
+      await refreshBell();
+    },
+    interval: CONSTANTS.UI.POLLING_INTERVAL,
+    refreshOnActivation: true,
+    immediate: true,
+  });
 
   subscribe("repo:health", (payload: unknown) => {
     const status = (payload as { status?: string } | null)?.status || "";

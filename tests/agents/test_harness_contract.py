@@ -5,7 +5,12 @@ from typing import Any, Optional
 
 import pytest
 
-from codex_autorunner.agents.base import AgentHarness, UnsupportedAgentCapabilityError
+from codex_autorunner.agents.base import (
+    AgentHarness,
+    UnsupportedAgentCapabilityError,
+    harness_progress_event_stream,
+    harness_supports_progress_event_stream,
+)
 from codex_autorunner.agents.types import (
     AgentId,
     ConversationRef,
@@ -128,3 +133,51 @@ async def test_agent_harness_optional_helpers_are_capability_gated() -> None:
     with pytest.raises(UnsupportedAgentCapabilityError, match="event_streaming"):
         async for _event in harness.stream_events(Path("."), "conv-1", "turn-1"):
             pass
+
+
+@pytest.mark.asyncio
+async def test_progress_event_stream_support_stays_disabled_for_base_helper() -> None:
+    harness = _MinimalHarness()
+
+    assert harness_supports_progress_event_stream(harness) is False
+    with pytest.raises(UnsupportedAgentCapabilityError, match="event_streaming"):
+        async for _event in harness_progress_event_stream(
+            harness, Path("."), "conv-1", "turn-1"
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_progress_event_stream_support_detects_custom_override() -> None:
+    class _CustomProgressHarness(_MinimalHarness):
+        capabilities = frozenset(
+            [
+                RuntimeCapability("durable_threads"),
+                RuntimeCapability("message_turns"),
+                RuntimeCapability("event_streaming"),
+            ]
+        )
+
+        def allows_parallel_event_stream(self) -> bool:
+            return False
+
+        def progress_event_stream(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _events():
+                yield "custom-progress"
+
+            return _events()
+
+    harness = _CustomProgressHarness()
+
+    assert harness_supports_progress_event_stream(harness) is True
+    streamed = [
+        event
+        async for event in harness_progress_event_stream(
+            harness, Path("."), "conv-1", "turn-1"
+        )
+    ]
+    assert streamed == ["custom-progress"]

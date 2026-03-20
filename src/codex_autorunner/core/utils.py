@@ -420,3 +420,44 @@ def find_template_repo(
         if repo.id == repo_id:
             return repo
     return None
+
+
+def resolve_opencode_auth_path(
+    workspace_root: Optional[Union[Path, str]] = None,
+    *,
+    env: Optional[MutableMapping[str, str]] = None,
+) -> Optional[Path]:
+    """
+    Resolve the canonical OpenCode auth.json path.
+
+    This is the single authority for OpenCode auth path resolution across
+    supervisor, runtime, and docker wrapping layers.
+
+    Resolution order:
+    1. XDG_DATA_HOME/opencode/auth.json if XDG_DATA_HOME is set
+    2. HOME/.local/share/opencode/auth.json if HOME is set
+    3. Inferred from workspace_root if provided (macOS/Linux patterns)
+
+    Args:
+        workspace_root: Optional workspace path for HOME inference fallback
+        env: Optional environment dict (defaults to os.environ)
+
+    Returns:
+        Resolved auth path or None if home cannot be determined
+    """
+    check_env = env if env is not None else os.environ
+
+    data_home = check_env.get("XDG_DATA_HOME")
+    if data_home:
+        return Path(data_home) / "opencode" / "auth.json"
+
+    home = check_env.get("HOME")
+    if home:
+        return Path(home) / ".local" / "share" / "opencode" / "auth.json"
+
+    if workspace_root is not None:
+        inferred = infer_home_from_workspace(workspace_root)
+        if inferred is not None:
+            return inferred / ".local" / "share" / "opencode" / "auth.json"
+
+    return None

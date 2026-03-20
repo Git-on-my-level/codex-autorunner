@@ -1,7 +1,7 @@
 # ZeroClaw Host Dogfood
 
-This is the opt-in local-host path for validating the supported CAR-managed
-ZeroClaw contract.
+This is the opt-in local-host path for validating the CAR-managed ZeroClaw
+contract that CAR can actually prove.
 
 ZeroClaw support in CAR is detect-only:
 
@@ -10,45 +10,81 @@ ZeroClaw support in CAR is detect-only:
 - The supported v1 path is a first-class CAR-managed `agent_workspace`, not a
   volatile wrapper around ad hoc user state.
 
-## Contract
+## Compatibility Contract
 
-For CAR-managed `agent_workspace` resources, ZeroClaw currently proves this
-contract:
+CAR only treats ZeroClaw as a durable `agent_workspace` runtime when the
+installed binary advertises a documented launch surface that CAR can verify.
 
-- CAR resolves the configured `zeroclaw` binary and launches it under
-  `ZEROCLAW_WORKSPACE=<workspace_root>/workspace`.
-- One agent workspace can back multiple durable CAR threads.
-- Chat surfaces bind to a consistent durable CAR thread under that workspace;
-  the workspace itself remains shared memory, not the conversation identity.
-- Workspace memory is shared at the workspace root.
-- Session state stays isolated per thread under
-  `<workspace_root>/threads/<session_id>/session-state.json`.
-- Queueing remains per managed thread. CAR does not serialize unrelated threads
-  just because they share one ZeroClaw workspace.
+Today that means:
 
-Current caveats:
+- `zeroclaw --version` must succeed.
+- `zeroclaw agent --help` must advertise
+  `zeroclaw agent --session-state-file`.
 
-- One ZeroClaw session still allows only one active turn at a time.
-- `interrupt`, `review`, and model-catalog features are not advertised.
-- The prove-out assumes CAR-managed workspace roots, not ambient
-  `~/.zeroclaw` state.
+If that flag is missing, CAR fails fast instead of guessing at a workspace-only
+or wrapper-only launch mode.
+
+On the current host example from issue #966:
+
+- `zeroclaw 0.2.0` is installed
+- `zeroclaw agent --help` does not advertise `--session-state-file`
+- CAR therefore reports the runtime as incompatible and keeps the durable-thread
+  contract disabled
 
 Unsupported in v1:
 
 - Treating ambient `~/.zeroclaw` state as the managed CAR workspace root
 - Claiming first-class support for volatile wrapper-only launches outside the
   managed `agent_workspace` path
+- Claiming that `ZEROCLAW_WORKSPACE` alone proves CAR-grade resume semantics
+
+## CLI Provisioning Flow
+
+The first-class CLI path is:
+
+```bash
+car hub agent-workspace create zc-main --runtime zeroclaw --disabled --path <hub_root>
+car hub agent-workspace show zc-main --path <hub_root>
+car doctor --hub --path <hub_root>
+```
+
+`create --disabled` lets you preprovision the workspace manifest entry even when
+the runtime is not ready yet. Enabling the workspace runs the same preflight
+used by doctor and launch-time checks.
+
+To remove the manifest entry while keeping files:
+
+```bash
+car hub agent-workspace remove zc-main --path <hub_root>
+```
+
+To also delete the managed workspace files:
+
+```bash
+car hub agent-workspace remove zc-main --delete-files --path <hub_root>
+```
 
 ## Install
 
-On macOS hosts with Homebrew:
+Install a stable ZeroClaw build that actually advertises
+`zeroclaw agent --session-state-file`.
+
+Do not assume `brew install zeroclaw` is sufficient. On the host from issue
+#966, Homebrew still provided `zeroclaw 0.2.0`, which was incompatible even
+though the raw CLI worked.
+
+As of March 15, 2026, the known-good stable example is the official
+`zeroclaw 0.3.1` release from the upstream project.
+
+After installing, validate the contract explicitly:
 
 ```bash
-brew install zeroclaw
+zeroclaw --version
+zeroclaw agent --help
 ```
 
 CAR's default config already resolves `agents.zeroclaw.binary: zeroclaw`, so no
-repo override is required when the Homebrew binary is on `PATH`.
+repo override is required when the installed binary is on `PATH`.
 
 ## Onboard
 
@@ -56,11 +92,16 @@ Run ZeroClaw's own one-time provider setup on the host if it is not already
 initialized. This setup is host-local and intentionally outside CAR's default
 CI path.
 
-Before running the live checks, confirm `zeroclaw config show` reports the
-provider/model you expect. A known-good example is:
+Before running live checks, confirm `zeroclaw config show` reports the
+provider/model you expect.
 
-- `default_provider: zai`
-- `default_model: glm-5`
+CAR launches managed workspaces with both:
+
+- `ZEROCLAW_WORKSPACE=<managed workspace>/workspace`
+- `ZEROCLAW_CONFIG_DIR=$HOME/.zeroclaw`
+
+This keeps the durable CAR workspace separate from ZeroClaw's canonical
+provider/auth config.
 
 ## Host Validation
 
@@ -72,6 +113,13 @@ zeroclaw agent -m "Reply with the exact text ZC-OK and nothing else." \
   --model glm-5
 ```
 
+Compatibility check:
+
+```bash
+zeroclaw --version
+zeroclaw agent --help
+```
+
 CAR harness integration check:
 
 ```bash
@@ -81,11 +129,9 @@ PYTHONPATH=src \
 .venv/bin/pytest -q tests/agents/zeroclaw/test_zeroclaw_host_integration.py -m integration
 ```
 
-Optional overrides:
-
-- `ZEROCLAW_TEST_MODEL`
-- `ZEROCLAW_TEST_PROMPT`
-- `ZEROCLAW_EXPECTED_SUBSTRING`
+If the installed ZeroClaw build does not advertise `--session-state-file`, this
+test now skips with the same compatibility message CAR surfaces in doctor and
+agent-workspace readiness.
 
 Focused local proof of the CAR-managed contract:
 
@@ -96,36 +142,9 @@ PYTHONPATH=src \
   tests/test_pma_managed_threads_messages.py
 ```
 
-## Manual Shared-Memory Checklist
-
-Use this when you want host evidence beyond the automated test suite.
-
-1. Create one CAR-managed ZeroClaw workspace and two CAR threads under it.
-2. In thread A, ask ZeroClaw to create `shared-memory.txt` inside the managed
-   workspace with a unique token.
-3. In thread B, ask ZeroClaw to read that same file and echo the token.
-4. Confirm both threads have distinct
-   `threads/<session_id>/session-state.json` files and that each file only
-   contains its own conversation state.
-5. Send work to both threads while one turn is still running. Confirm the
-   second thread starts immediately instead of being queued behind the first.
-
-## Manual Multi-Workspace Checklist
-
-1. Create two CAR-managed ZeroClaw workspaces on the same host.
-2. In workspace A, write a unique token into `shared-memory.txt`.
-3. In workspace B, ask ZeroClaw to read `shared-memory.txt` and confirm it does
-   not see workspace A's token.
-4. Confirm both workspaces are served by the same configured `zeroclaw` binary.
-
 ## Docker-backed Agent Workspaces
 
-For CAR-managed `agent_workspaces[]` with `destination.kind: docker`:
-
-- CAR still treats the managed workspace root as the durable identity.
-- CAR bind-mounts that workspace root into the container.
-- ZeroClaw runs with `ZEROCLAW_WORKSPACE=<workspace_root>/workspace`.
-- Durable session state remains under `<workspace_root>/threads/<session_id>/session-state.json`.
-
-This keeps the Docker path aligned with the local managed-workspace contract instead
-of introducing a separate container-only layout.
+For CAR-managed `agent_workspaces[]` with `destination.kind: docker`, CAR keeps
+the workspace root as the durable identity, but runtime compatibility is treated
+as deferred until launch unless CAR can probe the containerized binary through
+the configured destination.

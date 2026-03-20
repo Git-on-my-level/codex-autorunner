@@ -32,7 +32,13 @@ def build_flow_definition(
             config=config,
         )
         agent_pool = build_agent_pool(engine.config)
-        definition = build_ticket_flow_definition(agent_pool=agent_pool)
+        definition = build_ticket_flow_definition(
+            agent_pool=agent_pool,
+            auto_commit_default=engine.config.git_auto_commit,
+            include_previous_ticket_context_default=(
+                engine.config.ticket_flow.include_previous_ticket_context
+            ),
+        )
     else:
         from fastapi import HTTPException
 

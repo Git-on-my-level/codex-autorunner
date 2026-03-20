@@ -14,7 +14,7 @@ from urllib.parse import quote, unquote
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
-from ..chat.agents import normalize_chat_agent
+from ..chat.agents import VALID_CHAT_AGENT_VALUES, normalize_chat_agent
 
 logger = logging.getLogger("codex_autorunner.integrations.telegram.state")
 
@@ -23,7 +23,7 @@ TOPIC_ROOT = "root"
 APPROVAL_MODE_YOLO = "yolo"
 APPROVAL_MODE_SAFE = "safe"
 APPROVAL_MODES = {APPROVAL_MODE_YOLO, APPROVAL_MODE_SAFE}
-AGENT_VALUES = {"codex", "opencode"}
+AGENT_VALUES = set(VALID_CHAT_AGENT_VALUES)
 STALE_SCOPED_TOPIC_DAYS = 30
 MAX_SCOPED_TOPICS_PER_BASE = 5
 

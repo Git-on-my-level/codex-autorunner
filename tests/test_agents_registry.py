@@ -9,6 +9,7 @@ from codex_autorunner.agents.registry import (
     AgentDescriptor,
     _check_codex_health,
     _check_opencode_health,
+    _check_zeroclaw_health,
     _make_codex_harness,
     _make_opencode_harness,
     get_available_agents,
@@ -55,6 +56,22 @@ def app_ctx_missing_supervisors():
         app_server_supervisor = None
         app_server_events = None
         opencode_supervisor = None
+
+    return MockContext()
+
+
+@pytest.fixture
+def app_ctx_zeroclaw_ready():
+    class MockConfig:
+        @staticmethod
+        def agent_binary(_agent_id: str) -> str:
+            return "zeroclaw"
+
+    class MockContext:
+        app_server_supervisor = None
+        app_server_events = None
+        opencode_supervisor = None
+        config = MockConfig()
 
     return MockContext()
 
@@ -220,6 +237,50 @@ class TestGetAvailableAgents:
         with pytest.raises(AttributeError):
             get_available_agents(BadContext())
 
+    def test_zeroclaw_available_only_when_preflight_is_ready(
+        self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+            lambda _config: type(
+                "Result",
+                (),
+                {
+                    "status": "ready",
+                    "version": "zeroclaw test",
+                    "launch_mode": "session_state_file",
+                    "message": "ready",
+                    "fix": None,
+                },
+            )(),
+        )
+
+        available = get_available_agents(app_ctx_zeroclaw_ready)
+
+        assert "zeroclaw" in available
+
+    def test_zeroclaw_omitted_when_preflight_is_incompatible(
+        self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+            lambda _config: type(
+                "Result",
+                (),
+                {
+                    "status": "incompatible",
+                    "version": "zeroclaw 0.2.0",
+                    "launch_mode": None,
+                    "message": "incompatible",
+                    "fix": "Install a compatible ZeroClaw build.",
+                },
+            )(),
+        )
+
+        available = get_available_agents(app_ctx_zeroclaw_ready)
+
+        assert "zeroclaw" not in available
+
 
 class TestCheckCodexHealth:
     def test_healthy_context(self, app_ctx):
@@ -247,6 +308,63 @@ class TestCheckOpenCodeHealth:
             opencode_supervisor = None
 
         assert _check_opencode_health(NoneSupervisorContext()) is False
+
+
+class TestCheckZeroClawHealth:
+    def test_supervisor_short_circuits_preflight(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class ContextWithSupervisor:
+            zeroclaw_supervisor = object()
+            config = object()
+
+        def _unexpected_preflight(_config):
+            raise AssertionError("preflight should not run when supervisor exists")
+
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+            _unexpected_preflight,
+        )
+
+        assert _check_zeroclaw_health(ContextWithSupervisor()) is True
+
+    def test_preflight_ready_context(
+        self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+            lambda _config: type(
+                "Result",
+                (),
+                {
+                    "status": "ready",
+                    "version": "zeroclaw test",
+                    "launch_mode": "session_state_file",
+                    "message": "ready",
+                    "fix": None,
+                },
+            )(),
+        )
+        assert _check_zeroclaw_health(app_ctx_zeroclaw_ready) is True
+
+    def test_preflight_incompatible_context(
+        self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+            lambda _config: type(
+                "Result",
+                (),
+                {
+                    "status": "incompatible",
+                    "version": "zeroclaw 0.2.0",
+                    "launch_mode": None,
+                    "message": "incompatible",
+                    "fix": None,
+                },
+            )(),
+        )
+        assert _check_zeroclaw_health(app_ctx_zeroclaw_ready) is False
 
 
 class TestMakeCodexHarness:

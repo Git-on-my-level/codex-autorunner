@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { resolvePath, getAuthToken, api } from "./utils.js";
-import { extractContextRemainingPercent, readEventStream, parseMaybeJson } from "./streamUtils.js";
+import { readEventStream, handleStreamEvent, parseMaybeJson, } from "./streamUtils.js";
 export async function sendFileChat(target, message, controller, handlers = {}, options = {}) {
     const endpoint = resolvePath(options.basePath || "/api/file-chat");
     const headers = {
@@ -52,66 +52,17 @@ export async function sendFileChat(target, message, controller, handlers = {}, o
     }
 }
 async function readFileChatStream(res, handlers) {
-    await readEventStream(res, (event, raw) => handleStreamEvent(event, raw, handlers));
-}
-function handleStreamEvent(event, rawData, handlers) {
-    const parsed = parseMaybeJson(rawData);
-    switch (event) {
-        case "status": {
-            const status = typeof parsed === "string" ? parsed : parsed.status || "";
-            handlers.onStatus?.(status);
-            break;
-        }
-        case "token": {
-            const token = typeof parsed === "string"
-                ? parsed
-                : parsed.token || parsed.text || rawData || "";
-            handlers.onToken?.(token);
-            break;
-        }
-        case "token_usage": {
-            if (typeof parsed === "object" && parsed !== null) {
-                const usage = parsed;
-                const percent = extractContextRemainingPercent(usage);
-                if (percent !== null) {
-                    handlers.onTokenUsage?.(percent, usage);
-                }
-            }
-            break;
-        }
-        case "update": {
-            handlers.onUpdate?.(parsed);
-            break;
-        }
-        case "event":
-        case "app-server": {
-            handlers.onEvent?.(parsed);
-            break;
-        }
-        case "error": {
-            const msg = typeof parsed === "object" && parsed !== null
-                ? (parsed.detail || parsed.error || rawData || "File chat failed")
-                : rawData || "File chat failed";
-            handlers.onError?.(msg);
-            break;
-        }
-        case "interrupted": {
-            const msg = typeof parsed === "object" && parsed !== null
-                ? (parsed.detail || rawData || "File chat interrupted")
-                : rawData || "File chat interrupted";
-            handlers.onInterrupted?.(msg);
-            break;
-        }
-        case "done":
-        case "finish": {
-            handlers.onDone?.();
-            break;
-        }
-        default:
-            // treat unknown as event for visibility
-            handlers.onEvent?.(parsed);
-            break;
-    }
+    const adapter = {
+        onStatus: handlers.onStatus,
+        onToken: handlers.onToken,
+        onTokenUsage: handlers.onTokenUsage,
+        onUpdate: (payload) => handlers.onUpdate?.(payload),
+        onEvent: handlers.onEvent,
+        onError: handlers.onError,
+        onInterrupted: handlers.onInterrupted,
+        onDone: handlers.onDone,
+    };
+    await readEventStream(res, (event, raw) => handleStreamEvent(event, raw, adapter));
 }
 export async function fetchPendingDraft(target) {
     try {

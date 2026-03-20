@@ -23,6 +23,7 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
+from ...core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ...core.logging_utils import safe_log, setup_rotating_logger
 from ...core.optional_dependencies import require_optional_dependencies
 from ...core.runtime import RuntimeContext
@@ -243,36 +244,20 @@ def _save_hub_inbox_dismissals(
     atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def _resolve_workspace_and_runs(
-    record_input: dict[str, Any], repo_root: Path
-) -> tuple[Path, Path]:
-    workspace_raw = record_input.get("workspace_root")
-    workspace_root = Path(workspace_raw) if workspace_raw else repo_root
-    if not workspace_root.is_absolute():
-        workspace_root = (repo_root / workspace_root).resolve()
-    else:
-        workspace_root = workspace_root.resolve()
-    resolved_repo = repo_root.resolve()
-    if not (
-        workspace_root == resolved_repo
-        or str(workspace_root).startswith(str(resolved_repo) + os.sep)
-    ):
-        raise ValueError(f"workspace_root escapes repo boundary: {workspace_root}")
-    runs_raw = record_input.get("runs_dir") or ".codex-autorunner/runs"
-    runs_dir = Path(runs_raw)
-    if not runs_dir.is_absolute():
-        runs_dir = (workspace_root / runs_dir).resolve()
-    return workspace_root, runs_dir
+def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Path:
+    return resolve_ticket_flow_workspace_root(
+        record_input,
+        repo_root,
+        enforce_repo_boundary=True,
+    )
 
 
 def _latest_reply_history_seq(
     repo_root: Path, run_id: str, record_input: dict[str, Any]
 ) -> int:
-    workspace_root, runs_dir = _resolve_workspace_and_runs(record_input, repo_root)
+    workspace_root = _resolve_workspace_root(record_input, repo_root)
 
-    reply_paths = resolve_reply_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-    )
+    reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
     history_dir = reply_paths.reply_history_dir
     if not history_dir.exists() or not history_dir.is_dir():
         return 0
@@ -390,6 +375,7 @@ def _build_app_server_supervisor(
 ) -> tuple[Optional[WorkspaceAppServerSupervisor], Optional[float]]:
     if not config.command:
         return None, None
+    command = list(config.command)
 
     def _env_builder(
         workspace_root: Path, _workspace_id: str, state_dir: Path
@@ -397,7 +383,7 @@ def _build_app_server_supervisor(
         state_dir.mkdir(parents=True, exist_ok=True)
         base_env_dict: Optional[dict[str, str]] = dict(base_env) if base_env else None
         return build_app_server_env(
-            config.command,
+            command,
             workspace_root,
             state_dir,
             logger=logger,
@@ -411,7 +397,7 @@ def _build_app_server_supervisor(
         asyncio.set_event_loop(asyncio.new_event_loop())
 
     supervisor = WorkspaceAppServerSupervisor(
-        config.command,
+        command,
         state_root=config.state_root,
         env_builder=_env_builder,
         logger=logger,

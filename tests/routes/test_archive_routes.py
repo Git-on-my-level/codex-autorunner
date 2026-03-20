@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
@@ -75,7 +76,8 @@ def test_archive_snapshots_list_and_detail(tmp_path: Path) -> None:
     assert res.status_code == 200
     payload = res.json()
     snapshot_ids = {item["snapshot_id"] for item in payload["snapshots"]}
-    assert {"snap-no-meta", "snap-with-meta"} <= snapshot_ids
+    assert "snap-with-meta" in snapshot_ids
+    assert "snap-no-meta" not in snapshot_ids
 
     detail = client.get(
         "/api/archive/snapshots/snap-no-meta", params={"worktree_repo_id": "wt1"}
@@ -182,3 +184,37 @@ def test_local_archive_tree_reads_any_archived_run_content(tmp_path: Path) -> No
     )
     assert read.status_code == 200
     assert read.text.strip() == "Local archived context"
+
+
+def test_local_archive_symlink_escape_is_rejected(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    outside_root = tmp_path / "outside-run"
+    (outside_root / "contextspace").mkdir(parents=True, exist_ok=True)
+    (outside_root / "contextspace" / "active_context.md").write_text(
+        "Escaped local archived context", encoding="utf-8"
+    )
+
+    link_root = repo_root / ".codex-autorunner" / "archive" / "runs"
+    link_root.mkdir(parents=True, exist_ok=True)
+    try:
+        (link_root / "run-escape").symlink_to(outside_root, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    tree = client.get("/api/archive/local/tree", params={"run_id": "run-escape"})
+    assert tree.status_code == 400
+
+    read = client.get(
+        "/api/archive/local/file",
+        params={"run_id": "run-escape", "path": "contextspace/active_context.md"},
+    )
+    assert read.status_code == 400
+
+    download = client.get(
+        "/api/archive/local/download",
+        params={"run_id": "run-escape", "path": "contextspace/active_context.md"},
+    )
+    assert download.status_code == 400

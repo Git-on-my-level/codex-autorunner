@@ -12,6 +12,10 @@ from .definition import FlowDefinition
 from .models import FlowEvent, FlowRunRecord, FlowRunStatus
 from .runtime import FlowRuntime
 from .store import FlowStore
+from .workspace_root import (
+    normalize_ticket_flow_input_data,
+    resolve_ticket_flow_workspace_root,
+)
 
 
 def _find_hub_root(repo_root: Optional[Path] = None) -> Optional[Path]:
@@ -97,11 +101,17 @@ class FlowController:
                 raise ValueError(f"Flow run {run_id} already exists")
 
             self._prepare_artifacts_dir(run_id)
+            normalized_input = input_data
+            repo_root = self._repo_root()
+            if self.definition.flow_type == "ticket_flow" and repo_root is not None:
+                normalized_input = normalize_ticket_flow_input_data(
+                    repo_root, input_data
+                )
 
             record = self.store.create_flow_run(
                 run_id=run_id,
                 flow_type=self.definition.flow_type,
-                input_data=input_data,
+                input_data=normalized_input,
                 metadata=metadata,
                 state=initial_state or {},
                 current_step=self.definition.initial_step,
@@ -288,25 +298,8 @@ class FlowController:
         repo_root = self._repo_root()
         if repo_root is None:
             return False
-        raw_workspace = input_data.get("workspace_root")
-        if isinstance(raw_workspace, str) and raw_workspace.strip():
-            workspace_root = Path(raw_workspace)
-            if not workspace_root.is_absolute():
-                workspace_root = (repo_root / workspace_root).resolve()
-            else:
-                workspace_root = workspace_root.resolve()
-        else:
-            workspace_root = repo_root
-        runs_dir_raw = input_data.get("runs_dir")
-        runs_dir = (
-            Path(runs_dir_raw)
-            if isinstance(runs_dir_raw, str) and runs_dir_raw
-            else Path(".codex-autorunner/runs")
-        )
-        if not runs_dir.is_absolute():
-            run_dir = workspace_root / runs_dir / run_id
-        else:
-            run_dir = runs_dir / run_id
+        workspace_root = resolve_ticket_flow_workspace_root(input_data, repo_root)
+        run_dir = workspace_root / ".codex-autorunner" / "runs" / run_id
         return (run_dir / "USER_REPLY.md").exists()
 
     def _repo_changed_since_pause(self, engine: dict[str, Any]) -> bool:

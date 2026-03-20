@@ -16,7 +16,7 @@ import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor, TicketData } from "./ticketEditor.js";
-import { parseAppServerEvent, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
+import { parseAppServerEvent, resetOpenCodeEventState, type AgentEvent, type ParsedAgentEvent } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
 import { preserveScroll } from "./preserve.js";
@@ -145,7 +145,6 @@ function diffStatsSignature(
 }
 
 type TicketListPayload = {
-  ticket_dir?: string;
   tickets?: TicketFile[];
   lint_errors?: string[];
   activeTicket?: string | null;
@@ -181,7 +180,7 @@ let dispatchHistoryRunId: string | null = null;
 let eventSourceRetryAttempt = 0;
 let eventSourceRetryTimerId: ReturnType<typeof setTimeout> | null = null;
 const lastSeenSeqByRun: Record<string, number> = {};
-let ticketListCache: { ticket_dir?: string; tickets?: TicketFile[] } | null = null;
+let ticketListCache: { tickets?: TicketFile[] } | null = null;
 let ticketFlowLoaded = false;
 let loadTicketFlowRequestId = 0;
 
@@ -218,7 +217,6 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
       return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime, errors, diff].join("|");
     });
     return [
-      payload.ticket_dir ?? "",
       payload.activeTicket ?? "",
       payload.flowStatus ?? "",
       pieces.join(";"),
@@ -230,7 +228,6 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
       tickets,
       () => {
         renderTickets({
-          ticket_dir: payload.ticket_dir,
           tickets: payload.tickets,
         });
       },
@@ -239,7 +236,6 @@ const ticketListRefresh = createSmartRefresh<TicketListPayload>({
   },
   onSkip: (payload) => {
     ticketListCache = {
-      ticket_dir: payload.ticket_dir,
       tickets: payload.tickets,
     };
     updateScrollFade();
@@ -616,6 +612,8 @@ function addLiveOutputEvent(parsed: ParsedAgentEvent): void {
       existing.summary = `${existing.summary || ""}${event.summary}`;
     } else if (mergeStrategy === "newline") {
       existing.summary = `${existing.summary || ""}\n\n`;
+    } else if (mergeStrategy === "replace") {
+      existing.summary = event.summary;
     }
     existing.time = event.time;
     return;
@@ -798,6 +796,7 @@ function clearLiveOutput(): void {
   if (outputEl) outputEl.textContent = "";
   liveOutputEvents = [];
   liveOutputEventIndex = {};
+  resetOpenCodeEventState();
   scheduleLiveOutputRender();
 }
 
@@ -1143,11 +1142,11 @@ function truncate(text: string, max = 100): string {
   return `${text.slice(0, max).trim()}…`;
 }
 
-function renderTickets(data: { ticket_dir?: string; tickets?: TicketFile[]; lint_errors?: string[] } | null): void {
+function renderTickets(data: { tickets?: TicketFile[]; lint_errors?: string[] } | null): void {
   ticketListCache = data;
   clearTicketDragState();
   const { tickets, dir } = els();
-  if (dir) dir.textContent = data?.ticket_dir || "–";
+  if (dir) dir.textContent = ".codex-autorunner/tickets";
   if (!tickets) return;
   tickets.innerHTML = "";
 
@@ -1663,12 +1662,10 @@ async function loadTicketFiles(ctx?: RefreshContext): Promise<void> {
     await ticketListRefresh.refresh(
       async () => {
         const data = (await api("/api/flows/ticket_flow/tickets")) as {
-          ticket_dir?: string;
           tickets?: TicketFile[];
           lint_errors?: string[];
         };
         return {
-          ticket_dir: data.ticket_dir,
           tickets: data.tickets,
           lint_errors: data.lint_errors,
           activeTicket: currentActiveTicket,
@@ -2370,17 +2367,18 @@ async function archiveTicketFlow(): Promise<void> {
     flash("No ticket flow run to archive", "info");
     return;
   }
-  const confirmed = await confirmModal(
-    "Archive this flow? Tickets, contextspace, and run artifacts will move into the run archive and the live workspace state will be reset."
-  );
-  if (!confirmed) {
-    return;
+  const force = currentFlowStatus === "stopping" || currentFlowStatus === "paused";
+  if (force) {
+    const confirmed = await confirmModal(
+      "Archive this incomplete flow? Tickets, contextspace, and run artifacts will move into the run archive and the live workspace state will be reset."
+    );
+    if (!confirmed) {
+      return;
+    }
   }
   setButtonsDisabled(true);
   archiveBtn.textContent = "Archiving…";
   try {
-    // Force archive if flow is stuck in stopping or paused state
-    const force = currentFlowStatus === "stopping" || currentFlowStatus === "paused";
     const res = (await api(`/api/flows/${currentRunId}/archive?force=${force}`, {
       method: "POST",
       body: {},

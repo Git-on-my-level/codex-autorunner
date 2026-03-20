@@ -526,6 +526,42 @@ async def test_send_message_chunks_long_text() -> None:
 
 
 @pytest.mark.anyio
+async def test_send_chat_action_posts_typing_payload() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json={"ok": True, "result": True})
+    )
+    http_client = httpx.AsyncClient(transport=transport)
+    client = TelegramBotClient("test-token", client=http_client)
+    calls: list[dict[str, object]] = []
+
+    async def fake_request(self, method: str, payload: dict[str, object]) -> object:
+        calls.append({"method": method, "payload": payload})
+        return True
+
+    client._request = types.MethodType(fake_request, client)
+    try:
+        ok = await client.send_chat_action(
+            123,
+            action="typing",
+            message_thread_id=55,
+        )
+    finally:
+        await client.close()
+
+    assert ok is True
+    assert calls == [
+        {
+            "method": "sendChatAction",
+            "payload": {
+                "chat_id": 123,
+                "action": "typing",
+                "message_thread_id": 55,
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_request_retries_on_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"count": 0}
 
@@ -1029,6 +1065,28 @@ def test_api_schema_optional_fields() -> None:
     assert schema.from_user is None
     assert schema.caption is None
     assert schema.entities is None
+
+
+def test_api_schema_parse_message_forward_origin() -> None:
+    message = {
+        "message_id": 8,
+        "chat": {"id": 123, "type": "private"},
+        "text": "forwarded",
+        "date": 1234567890,
+        "forward_origin": {
+            "type": "channel",
+            "message_id": 91,
+            "chat": {"id": -1001, "title": "Deploys"},
+        },
+        "is_automatic_forward": True,
+    }
+
+    schema = parse_message_payload(message)
+
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.forward_origin is not None
+    assert schema.forward_origin["message_id"] == 91
+    assert schema.is_automatic_forward is True
 
 
 def test_api_schema_invalid_payload_returns_none() -> None:

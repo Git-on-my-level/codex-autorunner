@@ -1,15 +1,17 @@
 import asyncio
 import dataclasses
 import enum
+import importlib
 import json
 import logging
 import re
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, cast
 
 from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
@@ -25,10 +27,15 @@ from ..manifest import (
 )
 from ..tickets.outbox import set_lifecycle_emitter
 from .archive import (
-    archive_workspace_car_state,
+    ArchiveProfile,
+    archive_workspace_for_fresh_start,
+    archive_workspace_managed_threads,
     archive_worktree_snapshot,
     build_snapshot_id,
+    dirty_car_state_paths,
+    resolve_worktree_archive_intent,
 )
+from .archive_retention import resolve_worktree_archive_retention_policy
 from .chat_bindings import repo_has_active_non_pma_chat_binding
 from .config import HubConfig, RepoConfig, derive_repo_config, load_hub_config
 from .destinations import (
@@ -61,11 +68,13 @@ from .lifecycle_events import (
     LifecycleEventType,
 )
 from .locks import DEFAULT_RUNNER_CMD_HINTS, assess_lock, process_alive
+from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_store import DEFAULT_PMA_LANE_ID, PmaAutomationStore
 from .pma_dispatch_interceptor import PmaDispatchInterceptor
 from .pma_queue import PmaQueue
 from .pma_reactive import PmaReactiveStore
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
+from .pma_thread_store import PmaThreadStore
 from .ports.backend_orchestrator import (
     BackendOrchestrator as BackendOrchestratorProtocol,
 )
@@ -98,6 +107,89 @@ def _resolve_ref_sha(repo_root: Path, ref: str) -> str:
     if not sha:
         raise ValueError(f"Unable to resolve ref {ref}: empty output")
     return sha
+
+
+def _load_managed_runtime_module() -> Any:
+    try:
+        return importlib.import_module("codex_autorunner.agents.managed_runtime")
+    except Exception:
+        return None
+
+
+def _coerce_runtime_preflight_payload(result: Any) -> Optional[dict[str, Any]]:
+    if result is None:
+        return None
+    if isinstance(result, dict):
+        return dict(result)
+    payload: dict[str, Any] = {}
+    for field in ("runtime_id", "status", "version", "launch_mode", "message", "fix"):
+        value = getattr(result, field, None)
+        if value is not None:
+            payload[field] = value
+    return payload or None
+
+
+def known_agent_workspace_runtime_ids() -> tuple[str, ...]:
+    module = _load_managed_runtime_module()
+    if module is not None:
+        for attr in (
+            "managed_agent_workspace_runtime_ids",
+            "list_managed_agent_workspace_runtime_ids",
+            "known_agent_workspace_runtime_ids",
+        ):
+            func = getattr(module, attr, None)
+            if not callable(func):
+                continue
+            try:
+                raw_ids = func()
+            except Exception:
+                continue
+            normalized = tuple(
+                sorted(
+                    {
+                        str(item).strip().lower()
+                        for item in (raw_ids or ())
+                        if str(item).strip()
+                    }
+                )
+            )
+            if normalized:
+                return normalized
+    return ("zeroclaw",)
+
+
+def probe_agent_workspace_runtime(
+    hub_config: HubConfig,
+    workspace: ManifestAgentWorkspace,
+) -> Optional[dict[str, Any]]:
+    module = _load_managed_runtime_module()
+    if module is None:
+        return None
+    for attr in (
+        "probe_agent_workspace_runtime",
+        "preflight_agent_workspace_runtime",
+    ):
+        func = getattr(module, attr, None)
+        if not callable(func):
+            continue
+        for kwargs in (
+            {"hub_config": hub_config, "workspace": workspace},
+            {"config": hub_config, "workspace": workspace},
+        ):
+            try:
+                return _coerce_runtime_preflight_payload(func(**kwargs))
+            except TypeError:
+                continue
+    return None
+
+
+def _runtime_preflight_blocks_enable(
+    preflight: Optional[Mapping[str, Any]],
+) -> bool:
+    if not preflight:
+        return False
+    status = str(preflight.get("status") or "").strip().lower()
+    return bool(status and status not in {"ready", "deferred"})
 
 
 class RepoStatus(str, enum.Enum):
@@ -149,6 +241,7 @@ class RepoSnapshot:
     discord_chat_bound_thread_count: int = 0
     telegram_chat_bound_thread_count: int = 0
     non_pma_chat_bound_thread_count: int = 0
+    unbound_managed_thread_count: int = 0
     cleanup_blocked_by_chat_binding: bool = False
     has_car_state: bool = False
     resource_kind: str = "repo"
@@ -187,6 +280,7 @@ class RepoSnapshot:
             "discord_chat_bound_thread_count": self.discord_chat_bound_thread_count,
             "telegram_chat_bound_thread_count": self.telegram_chat_bound_thread_count,
             "non_pma_chat_bound_thread_count": self.non_pma_chat_bound_thread_count,
+            "unbound_managed_thread_count": self.unbound_managed_thread_count,
             "cleanup_blocked_by_chat_binding": self.cleanup_blocked_by_chat_binding,
             "has_car_state": self.has_car_state,
             "resource_kind": self.resource_kind,
@@ -427,6 +521,9 @@ class RepoRunner:
     def stop(self) -> None:
         self._controller.stop()
 
+    def reconcile(self) -> None:
+        self._controller.reconcile()
+
     def kill(self) -> Optional[int]:
         return self._controller.kill()
 
@@ -577,6 +674,7 @@ class HubSupervisor:
         workspace_id: str,
         runtime: str,
         display_name: Optional[str] = None,
+        enabled: bool = True,
     ) -> AgentWorkspaceSnapshot:
         self._invalidate_list_cache()
         raw_workspace_id = (workspace_id or "").strip()
@@ -587,6 +685,13 @@ class HubSupervisor:
             raise ValueError("runtime is required")
         normalized_workspace_id = sanitize_repo_id(raw_workspace_id)
         normalized_runtime = sanitize_repo_id(raw_runtime)
+        known_runtimes = set(known_agent_workspace_runtime_ids())
+        if normalized_runtime not in known_runtimes:
+            supported = ", ".join(sorted(known_runtimes))
+            raise ValueError(
+                f"Unknown agent workspace runtime '{normalized_runtime}'. "
+                f"Supported runtimes: {supported}"
+            )
 
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         existing = manifest.get_agent_workspace(normalized_workspace_id)
@@ -602,13 +707,27 @@ class HubSupervisor:
                     "Agent workspace id %s already exists for runtime %s at %s"
                     % (normalized_workspace_id, existing.runtime, existing.path)
                 )
-        target.mkdir(parents=True, exist_ok=True)
-        manifest.ensure_agent_workspace(
+        workspace = manifest.ensure_agent_workspace(
             self.hub_config.root,
             workspace_id=normalized_workspace_id,
             runtime=normalized_runtime,
             display_name=display_name or workspace_id,
         )
+        workspace.enabled = bool(enabled)
+        preflight = (
+            probe_agent_workspace_runtime(self.hub_config, workspace)
+            if workspace.enabled
+            else None
+        )
+        if _runtime_preflight_blocks_enable(preflight):
+            assert preflight is not None
+            message = str(preflight.get("message") or "").strip()
+            fix = str(preflight.get("fix") or "").strip()
+            detail = message or "runtime preflight failed"
+            if fix:
+                detail = f"{detail} Fix: {fix}"
+            raise ValueError(detail)
+        target.mkdir(parents=True, exist_ok=True)
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
         return self._snapshot_for_agent_workspace(normalized_workspace_id)
 
@@ -637,6 +756,15 @@ class HubSupervisor:
     def get_agent_workspace_snapshot(self, workspace_id: str) -> AgentWorkspaceSnapshot:
         return self._snapshot_for_agent_workspace(workspace_id)
 
+    def get_agent_workspace_runtime_readiness(
+        self, workspace_id: str
+    ) -> Optional[dict[str, Any]]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        workspace = manifest.get_agent_workspace(workspace_id)
+        if workspace is None:
+            raise ValueError(f"Agent workspace {workspace_id} not found in manifest")
+        return probe_agent_workspace_runtime(self.hub_config, workspace)
+
     def update_agent_workspace(
         self,
         workspace_id: str,
@@ -652,6 +780,19 @@ class HubSupervisor:
 
         if enabled is not None:
             workspace.enabled = bool(enabled)
+            preflight = (
+                probe_agent_workspace_runtime(self.hub_config, workspace)
+                if workspace.enabled
+                else None
+            )
+            if _runtime_preflight_blocks_enable(preflight):
+                assert preflight is not None
+                message = str(preflight.get("message") or "").strip()
+                fix = str(preflight.get("fix") or "").strip()
+                detail = message or "runtime preflight failed"
+                if fix:
+                    detail = f"{detail} Fix: {fix}"
+                raise ValueError(detail)
         if display_name is not None:
             normalized_display_name = str(display_name).strip()
             if not normalized_display_name:
@@ -719,6 +860,51 @@ class HubSupervisor:
         if runner:
             runner.stop()
         return self._snapshot_for_repo(repo_id)
+
+    def _stop_runner_and_wait_for_exit(
+        self,
+        *,
+        repo_id: str,
+        repo_path: Path,
+        timeout_seconds: float = 30.0,
+        poll_interval_seconds: float = 0.2,
+    ) -> None:
+        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
+        if not runner:
+            return
+
+        runner.stop()
+        deadline = time.monotonic() + max(timeout_seconds, poll_interval_seconds)
+        lock_path = repo_path / ".codex-autorunner" / "lock"
+        state_path = repo_path / ".codex-autorunner" / "state.sqlite3"
+        last_error: Optional[Exception] = None
+
+        while True:
+            runner.reconcile()
+
+            try:
+                lock_status = read_lock_status(lock_path)
+                runner_state = load_state(state_path) if state_path.exists() else None
+                last_error = None
+            except Exception as exc:
+                last_error = exc
+            else:
+                if lock_status != LockStatus.LOCKED_ALIVE and (
+                    runner_state is None
+                    or (
+                        runner_state.runner_pid is None
+                        and runner_state.status != "running"
+                    )
+                ):
+                    return
+
+            if time.monotonic() >= deadline:
+                message = f"Timed out waiting for repo runner to stop before proceeding: {repo_id}"
+                if last_error is not None:
+                    raise ValueError(f"{message} ({last_error})") from last_error
+                raise ValueError(message)
+
+            time.sleep(poll_interval_seconds)
 
     def resume_repo(self, repo_id: str, once: bool = False) -> RepoSnapshot:
         runner = self._ensure_runner(repo_id)
@@ -1168,6 +1354,8 @@ class HubSupervisor:
         worktree_repo_id: str,
         archive_note: Optional[str] = None,
         force: bool = False,
+        archive_profile: Optional[str] = None,
+        cleanup: bool = False,
     ):
         from .archive import ArchiveResult
 
@@ -1187,9 +1375,10 @@ class HubSupervisor:
         if not worktree_path.exists():
             raise ValueError(f"Worktree path does not exist: {worktree_path}")
 
-        runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
-        if runner:
-            runner.stop()
+        self._stop_runner_and_wait_for_exit(
+            repo_id=worktree_repo_id,
+            repo_path=worktree_path,
+        )
 
         branch_name = entry.branch or git_branch(worktree_path) or "unknown"
         head_sha = git_head_sha(worktree_path) or "unknown"
@@ -1198,6 +1387,14 @@ class HubSupervisor:
             "Hub archive worktree start id=%s snapshot_id=%s",
             worktree_repo_id,
             snapshot_id,
+        )
+        profile = cast(
+            ArchiveProfile,
+            archive_profile or self.hub_config.pma.worktree_archive_profile,
+        )
+        intent = resolve_worktree_archive_intent(profile=profile, cleanup=cleanup)
+        retention_policy = resolve_worktree_archive_retention_policy(
+            self.hub_config.pma
         )
         try:
             result: ArchiveResult = archive_worktree_snapshot(
@@ -1211,6 +1408,8 @@ class HubSupervisor:
                 snapshot_id=snapshot_id,
                 head_sha=head_sha,
                 source_path=entry.path,
+                intent=intent,
+                retention_policy=retention_policy,
             )
         except Exception as exc:
             logger.exception(
@@ -1229,6 +1428,127 @@ class HubSupervisor:
                 result.status,
             )
             return result
+
+    def _archive_bound_pma_threads(
+        self,
+        *,
+        worktree_repo_id: str,
+        worktree_path: Path,
+    ) -> list[str]:
+        return list(
+            archive_workspace_managed_threads(
+                hub_root=self.hub_config.root,
+                worktree_repo_id=worktree_repo_id,
+                worktree_path=worktree_path,
+            )
+        )
+
+    def _bound_thread_target_ids(self) -> set[str]:
+        try:
+            with open_orchestration_sqlite(self.hub_config.root) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT target_id
+                      FROM orch_bindings
+                     WHERE disabled_at IS NULL
+                       AND target_kind = 'thread'
+                       AND TRIM(COALESCE(target_id, '')) != ''
+                    """
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc).lower():
+                return set()
+            raise
+        return {
+            str(row["target_id"]).strip()
+            for row in rows
+            if isinstance(row["target_id"], str) and row["target_id"].strip()
+        }
+
+    def _base_repo_paths(self, manifest: Manifest) -> dict[str, Path]:
+        base_repo_paths: dict[str, Path] = {}
+        for entry in manifest.repos:
+            if entry.kind != "base":
+                continue
+            base_repo_paths[entry.id] = (self.hub_config.root / entry.path).resolve()
+        return base_repo_paths
+
+    def _collect_unbound_repo_threads(
+        self,
+        *,
+        manifest: Optional[Manifest] = None,
+    ) -> dict[str, list[str]]:
+        if manifest is None:
+            manifest = load_manifest(
+                self.hub_config.manifest_path,
+                self.hub_config.root,
+            )
+        base_repo_paths = self._base_repo_paths(manifest)
+        if not base_repo_paths:
+            return {}
+
+        store = PmaThreadStore(self.hub_config.root)
+        bound_thread_ids = self._bound_thread_target_ids()
+        seen_ids: set[str] = set()
+        workspace_to_repo_id = {
+            str(path): repo_id for repo_id, path in base_repo_paths.items()
+        }
+        thread_ids_by_repo: dict[str, list[str]] = {}
+
+        for thread in store.list_threads(status="active", limit=None):
+            managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
+            if not managed_thread_id or managed_thread_id in seen_ids:
+                continue
+            if managed_thread_id in bound_thread_ids:
+                continue
+
+            thread_repo_id = str(thread.get("repo_id") or "").strip()
+            workspace_root = str(thread.get("workspace_root") or "").strip()
+            matched_repo_id: Optional[str] = None
+            if thread_repo_id in base_repo_paths:
+                matched_repo_id = thread_repo_id
+            if workspace_root:
+                try:
+                    resolved_workspace = str(Path(workspace_root).resolve())
+                except Exception:
+                    resolved_workspace = ""
+                if not matched_repo_id and resolved_workspace:
+                    matched_repo_id = workspace_to_repo_id.get(resolved_workspace)
+            if not matched_repo_id:
+                continue
+
+            thread_ids_by_repo.setdefault(matched_repo_id, []).append(managed_thread_id)
+            seen_ids.add(managed_thread_id)
+
+        return thread_ids_by_repo
+
+    def _archive_unbound_repo_threads(
+        self,
+        *,
+        repo_id: str,
+        unbound_threads_by_repo: Optional[dict[str, list[str]]] = None,
+    ) -> list[str]:
+        thread_ids = list((unbound_threads_by_repo or {}).get(repo_id, ()))
+        if not thread_ids:
+            thread_ids = self._collect_unbound_repo_threads().get(repo_id, [])
+        if not thread_ids:
+            return []
+
+        store = PmaThreadStore(self.hub_config.root)
+        archived_thread_ids: list[str] = []
+        for managed_thread_id in thread_ids:
+            store.archive_thread(managed_thread_id)
+            archived_thread_ids.append(managed_thread_id)
+        return archived_thread_ids
+
+    def unbound_repo_thread_counts(self) -> dict[str, int]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        thread_ids_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
+        return {
+            repo_id: len(thread_ids)
+            for repo_id, thread_ids in thread_ids_by_repo.items()
+            if thread_ids
+        }
 
     def _ensure_worktree_clean_for_archive(
         self, *, worktree_repo_id: str, worktree_path: Path
@@ -1445,6 +1765,7 @@ class HubSupervisor:
         archive_note: Optional[str] = None,
         force: bool = False,
         force_attestation: Optional[Mapping[str, object]] = None,
+        archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
         if self.hub_config.pma.cleanup_require_archive and not archive:
             raise ValueError(
@@ -1495,9 +1816,10 @@ class HubSupervisor:
                 "Re-run with --force to proceed."
             )
 
-        runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
-        if runner:
-            runner.stop()
+        self._stop_runner_and_wait_for_exit(
+            repo_id=worktree_repo_id,
+            repo_path=worktree_path,
+        )
 
         if archive:
             self._ensure_worktree_clean_for_archive(
@@ -1508,6 +1830,8 @@ class HubSupervisor:
                 worktree_repo_id=worktree_repo_id,
                 archive_note=archive_note,
                 force=force_archive,
+                archive_profile=archive_profile,
+                cleanup=True,
             )
 
         repos_by_id = {repo.id: repo for repo in manifest.repos}
@@ -1574,6 +1898,10 @@ class HubSupervisor:
 
         manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
         save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
+        self._archive_bound_pma_threads(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
+        )
         return {"status": "ok", "docker_cleanup": docker_cleanup}
 
     def _has_active_chat_binding(self, repo_id: str) -> bool:
@@ -1588,6 +1916,7 @@ class HubSupervisor:
         *,
         worktree_repo_id: str,
         archive_note: Optional[str] = None,
+        archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
         entry = manifest.get(worktree_repo_id)
@@ -1609,6 +1938,11 @@ class HubSupervisor:
             worktree_repo_id=worktree_repo_id,
             archive_note=archive_note,
             force=False,
+            archive_profile=archive_profile,
+        )
+        self._archive_bound_pma_threads(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
         )
         if result is None:
             raise ValueError("Archive failed unexpectedly")
@@ -1623,46 +1957,62 @@ class HubSupervisor:
             "latest_flow_run_id": result.latest_flow_run_id,
         }
 
-    def archive_worktree_state(
+    def archive_repo_state(
         self,
         *,
-        worktree_repo_id: str,
+        repo_id: str,
         archive_note: Optional[str] = None,
+        archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(worktree_repo_id)
-        if not entry or entry.kind != "worktree":
-            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
-        if not entry.worktree_of:
-            raise ValueError("Worktree repo is missing worktree_of metadata")
-        base = manifest.get(entry.worktree_of)
-        if not base or base.kind != "base":
-            raise ValueError(f"Base repo not found: {entry.worktree_of}")
+        entry = manifest.get(repo_id)
+        if not entry:
+            raise ValueError(f"Repo not found: {repo_id}")
 
-        base_path = (self.hub_config.root / base.path).resolve()
-        worktree_path = (self.hub_config.root / entry.path).resolve()
-        if not worktree_path.exists():
-            raise ValueError(f"Worktree path does not exist: {worktree_path}")
+        repo_path = (self.hub_config.root / entry.path).resolve()
+        if not repo_path.exists():
+            raise ValueError(f"Repo path does not exist: {repo_path}")
 
-        runner = self._ensure_runner(worktree_repo_id, allow_uninitialized=True)
-        if runner:
-            runner.stop()
+        base_path = repo_path
+        base_repo_id = entry.id
+        worktree_of = entry.worktree_of or entry.id
+        if entry.kind == "worktree":
+            if not entry.worktree_of:
+                raise ValueError("Worktree repo is missing worktree_of metadata")
+            base = manifest.get(entry.worktree_of)
+            if not base or base.kind != "base":
+                raise ValueError(f"Base repo not found: {entry.worktree_of}")
+            base_path = (self.hub_config.root / base.path).resolve()
+            base_repo_id = base.id
 
-        branch_name = entry.branch or git_branch(worktree_path) or "unknown"
-        result = archive_workspace_car_state(
+        has_car_state = bool(dirty_car_state_paths(repo_path))
+        if has_car_state:
+            self._stop_runner_and_wait_for_exit(
+                repo_id=repo_id,
+                repo_path=repo_path,
+            )
+
+        branch_name = entry.branch or git_branch(repo_path) or "unknown"
+        result = archive_workspace_for_fresh_start(
+            hub_root=self.hub_config.root,
             base_repo_root=base_path,
-            base_repo_id=base.id,
-            worktree_repo_root=worktree_path,
-            worktree_repo_id=worktree_repo_id,
+            base_repo_id=base_repo_id,
+            worktree_repo_root=repo_path,
+            worktree_repo_id=repo_id,
             branch=branch_name,
-            worktree_of=entry.worktree_of,
+            worktree_of=worktree_of,
             note=archive_note,
             source_path=entry.path,
+            retention_policy=resolve_worktree_archive_retention_policy(
+                self.hub_config.pma
+            ),
         )
         return {
             "snapshot_id": result.snapshot_id,
-            "snapshot_path": str(result.snapshot_path),
-            "meta_path": str(result.meta_path),
+            "snapshot_path": (
+                str(result.snapshot_path) if result.snapshot_path else None
+            ),
+            "meta_path": str(result.meta_path) if result.meta_path else None,
             "status": result.status,
             "file_count": result.file_count,
             "total_bytes": result.total_bytes,
@@ -1670,6 +2020,112 @@ class HubSupervisor:
             "latest_flow_run_id": result.latest_flow_run_id,
             "archived_paths": list(result.archived_paths),
             "reset_paths": list(result.reset_paths),
+            "archived_thread_ids": list(result.archived_thread_ids),
+            "archived_thread_count": len(result.archived_thread_ids),
+        }
+
+    def archive_worktree_state(
+        self,
+        *,
+        worktree_repo_id: str,
+        archive_note: Optional[str] = None,
+        archive_profile: Optional[str] = None,
+    ) -> Dict[str, object]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(worktree_repo_id)
+        if not entry or entry.kind != "worktree":
+            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
+        return self.archive_repo_state(
+            repo_id=worktree_repo_id,
+            archive_note=archive_note,
+            archive_profile=archive_profile,
+        )
+
+    def cleanup_repo_threads(self, *, repo_id: str) -> Dict[str, object]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        entry = manifest.get(repo_id)
+        if not entry or entry.kind != "base":
+            raise ValueError(f"Base repo not found: {repo_id}")
+
+        repo_path = (self.hub_config.root / entry.path).resolve()
+        if not repo_path.exists():
+            raise ValueError(f"Repo path does not exist: {repo_path}")
+
+        unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
+        archived_thread_ids = self._archive_unbound_repo_threads(
+            repo_id=repo_id,
+            unbound_threads_by_repo=unbound_threads_by_repo,
+        )
+        archived_count = len(archived_thread_ids)
+        if archived_count == 0:
+            message = f"No stale non-chat-bound threads found for {repo_id}."
+        elif archived_count == 1:
+            message = f"Archived 1 stale non-chat-bound thread for {repo_id}."
+        else:
+            message = (
+                f"Archived {archived_count} stale non-chat-bound threads for {repo_id}."
+            )
+        return {
+            "status": "ok",
+            "repo_id": repo_id,
+            "archived_thread_ids": archived_thread_ids,
+            "archived_count": archived_count,
+            "message": message,
+        }
+
+    def cleanup_all_repo_threads(self) -> Dict[str, object]:
+        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
+        base_repo_paths = self._base_repo_paths(manifest)
+        unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
+        dirty_repo_ids: list[str] = []
+        results: list[dict[str, object]] = []
+        total_archived = 0
+
+        for repo_id, repo_path in base_repo_paths.items():
+            is_dirty = False
+            if repo_path.exists() and git_available(repo_path):
+                try:
+                    is_dirty = not git_is_clean(repo_path)
+                except Exception:
+                    is_dirty = False
+            if is_dirty:
+                dirty_repo_ids.append(repo_id)
+
+            archived_thread_ids = self._archive_unbound_repo_threads(
+                repo_id=repo_id,
+                unbound_threads_by_repo=unbound_threads_by_repo,
+            )
+            archived_count = len(archived_thread_ids)
+            total_archived += archived_count
+            if archived_count > 0 or is_dirty:
+                results.append(
+                    {
+                        "repo_id": repo_id,
+                        "archived_thread_ids": archived_thread_ids,
+                        "archived_count": archived_count,
+                        "is_dirty": is_dirty,
+                    }
+                )
+
+        cleaned_repo_count = 0
+        for item in results:
+            archived_count_value = item.get("archived_count")
+            if isinstance(archived_count_value, int) and archived_count_value > 0:
+                cleaned_repo_count += 1
+        if total_archived == 0:
+            message = "No stale non-chat-bound threads found across base repos."
+        elif total_archived == 1:
+            message = "Archived 1 stale non-chat-bound thread across base repos."
+        else:
+            message = f"Archived {total_archived} stale non-chat-bound threads across base repos."
+        return {
+            "status": "ok",
+            "archived_count": total_archived,
+            "cleaned_repo_count": cleaned_repo_count,
+            "dirty_repo_ids": dirty_repo_ids,
+            "dirty_repo_count": len(dirty_repo_ids),
+            "results": results,
+            "message": message,
         }
 
     def check_repo_removal(self, repo_id: str) -> Dict[str, object]:
@@ -1765,9 +2221,10 @@ class HubSupervisor:
             ):
                 raise ValueError("Repo has unpushed commits; use force to remove")
 
-        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
-        if runner:
-            runner.stop()
+        self._stop_runner_and_wait_for_exit(
+            repo_id=repo_id,
+            repo_path=repo_root,
+        )
         self._runners.pop(repo_id, None)
 
         if delete_dir and repo_root.exists():

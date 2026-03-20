@@ -26,7 +26,7 @@ def _append_marker(path: Optional[str], marker: str) -> None:
         file.write(marker + "\n")
 
 
-def _spawn_child_process() -> int:
+def _spawn_child_process() -> subprocess.Popen[bytes]:
     child_code = """
 import signal
 import time
@@ -36,12 +36,27 @@ signal.signal(signal.SIGTERM, signal.SIG_IGN)
 while True:
     time.sleep(1)
 """
-    proc = subprocess.Popen(
+    return subprocess.Popen(
         [sys.executable, "-c", child_code],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    return proc.pid
+
+
+def _reap_child_process(proc: subprocess.Popen[bytes]) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=0.5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        return
 
 
 def _auth_config() -> tuple[Optional[str], Optional[str]]:
@@ -145,18 +160,19 @@ def _serve() -> None:
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _FakeRequestHandler)
     host, port = server.server_address
     base_url = f"http://{host}:{port}"
-    print(f"listening on {base_url}", flush=True)
 
-    child_pid = _spawn_child_process()
-    _write_text_file(os.environ.get("OPENCODE_CHILD_PID_FILE"), f"{child_pid}\n")
+    child_proc = _spawn_child_process()
+    _write_text_file(os.environ.get("OPENCODE_CHILD_PID_FILE"), f"{child_proc.pid}\n")
     _append_marker(
         _marker_path(),
-        f"{base_url} {os.getpid()} child={child_pid}",
+        f"{base_url} {os.getpid()} child={child_proc.pid}",
     )
+    print(f"listening on {base_url}", flush=True)
 
     try:
         server.serve_forever()
     finally:
+        _reap_child_process(child_proc)
         server.server_close()
 
 

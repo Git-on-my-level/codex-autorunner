@@ -31,6 +31,7 @@ from .....core.text_delta_coalescer import TextDeltaCoalescer
 from ....app_server.client import (
     CodexAppServerDisconnected,
 )
+from ....chat.turn_metrics import compose_turn_response_with_footer
 from ...adapter import (
     InlineButton,
     TelegramMessage,
@@ -557,27 +558,36 @@ class GitHubCommands(SharedHelpers):
         )
         turn_id = turn_handle_id
         token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
-        metrics = self._format_turn_metrics_text(
-            token_usage, turn_context.turn_elapsed_seconds
-        )
-        metrics_mode = self._metrics_mode()
         response_text = response
-        if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
-            response_text = f"{response_text}\n\n{metrics}"
-        await self._deliver_turn_response(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            placeholder_id=turn_context.placeholder_id,
-            response=response_text,
+        intermediate_response = ""
+        render_final_turn_progress = getattr(self, "_render_final_turn_progress", None)
+        if turn_context.turn_key is not None and callable(render_final_turn_progress):
+            intermediate_response = render_final_turn_progress(turn_context.turn_key)
+        response_text = compose_turn_response_with_footer(
+            response_text,
+            summary_text=intermediate_response,
+            token_usage=token_usage,
+            elapsed_seconds=turn_context.turn_elapsed_seconds,
+            agent=self._effective_agent(record),
+            model=getattr(record, "model", None),
         )
-        if metrics and metrics_mode == "separate":
-            await self._send_turn_metrics(
+        try:
+            await self._deliver_turn_response(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
-                elapsed_seconds=turn_context.turn_elapsed_seconds,
-                token_usage=token_usage,
+                placeholder_id=turn_context.placeholder_id,
+                response=response_text,
+            )
+        except TypeError as exc:
+            if "intermediate_response" not in str(exc):
+                raise
+            await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=turn_context.placeholder_id,
+                response=response_text,
             )
         if turn_id:
             self._token_usage_by_turn.pop(turn_id, None)
@@ -1404,13 +1414,31 @@ class GitHubCommands(SharedHelpers):
             if turn_context.turn_id
             else None
         )
-        metrics = self._format_turn_metrics_text(
-            token_usage, turn_context.turn_elapsed_seconds
-        )
-        metrics_mode = self._metrics_mode()
         response_text = output or "No response."
-        if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
-            response_text = f"{response_text}\n\n{metrics}"
+        intermediate_response = ""
+        render_turn_progress_summary = getattr(
+            self, "_render_turn_progress_summary", None
+        )
+        if turn_context.turn_key is not None and callable(render_turn_progress_summary):
+            intermediate_response = render_turn_progress_summary(turn_context.turn_key)
+        elif turn_context.turn_key is not None:
+            render_final_turn_progress = getattr(
+                self, "_render_final_turn_progress", None
+            )
+            if callable(render_final_turn_progress):
+                intermediate_response = render_final_turn_progress(
+                    turn_context.turn_key
+                )
+        if response_text.strip() == "No response.":
+            response_text = ""
+        response_text = compose_turn_response_with_footer(
+            response_text,
+            summary_text=intermediate_response,
+            token_usage=token_usage,
+            elapsed_seconds=turn_context.turn_elapsed_seconds,
+            agent=self._effective_agent(record),
+            model=getattr(record, "model", None),
+        )
         await self._deliver_turn_response(
             chat_id=message.chat_id,
             thread_id=message.thread_id,
@@ -1418,14 +1446,6 @@ class GitHubCommands(SharedHelpers):
             placeholder_id=turn_context.placeholder_id,
             response=response_text,
         )
-        if metrics and metrics_mode == "separate":
-            await self._send_turn_metrics(
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                elapsed_seconds=turn_context.turn_elapsed_seconds,
-                token_usage=token_usage,
-            )
         if turn_context.turn_id:
             self._token_usage_by_turn.pop(turn_context.turn_id, None)
         await self._flush_outbox_files(

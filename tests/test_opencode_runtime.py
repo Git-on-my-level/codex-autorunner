@@ -711,7 +711,9 @@ async def test_collect_output_poll_treats_missing_status_as_idle() -> None:
         def __init__(self):
             self.session_status_calls = 0
 
-        def stream_events(self, *, directory, ready_event=None):
+        def stream_events(
+            self, *, directory=None, ready_event=None, paths=None, session_id=None
+        ):
             async def _gen():
                 while True:
                     await asyncio.sleep(3600)
@@ -751,6 +753,65 @@ async def test_collect_output_poll_treats_missing_status_as_idle() -> None:
     assert output.text == ""
     assert output.error is None
     assert client.session_status_calls >= 1
+
+
+@pytest.mark.anyio
+async def test_collect_output_uses_session_scoped_stream_endpoint() -> None:
+    class _FakeClient:
+        def __init__(self):
+            self.stream_calls: list[dict[str, object]] = []
+
+        def stream_events(
+            self, *, directory=None, ready_event=None, paths=None, session_id=None
+        ):
+            self.stream_calls.append(
+                {
+                    "directory": directory,
+                    "ready_event": ready_event,
+                    "paths": paths,
+                    "session_id": session_id,
+                }
+            )
+
+            async def _gen():
+                if ready_event is not None:
+                    ready_event.set()
+                yield SSEEvent(event="session.idle", data='{"sessionID":"s1"}')
+
+            return _gen()
+
+        async def session_status(self, *, directory):
+            return {"s1": {"type": "idle"}}
+
+        async def respond_permission(self, **kwargs):
+            return None
+
+        async def reply_question(self, *args, **kwargs):
+            return None
+
+        async def reject_question(self, *args, **kwargs):
+            return None
+
+        async def providers(self, **kwargs):
+            return {}
+
+    client = _FakeClient()
+    output = await collect_opencode_output(
+        client,
+        session_id="s1",
+        workspace_path=".",
+    )
+
+    assert output.text == ""
+    assert output.error is None
+    assert client.stream_calls == [
+        {
+            "directory": ".",
+            "ready_event": None,
+            "paths": None,
+            "session_id": "s1",
+        }
+    ]
 
 
 @pytest.mark.anyio

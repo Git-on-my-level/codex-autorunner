@@ -24,6 +24,7 @@ class TicketFrontmatter:
     keys are preserved in `extra` for forward compatibility.
     """
 
+    ticket_id: str
     agent: str
     done: bool
     title: Optional[str] = None
@@ -81,7 +82,6 @@ class DispatchRecord:
 @dataclass(frozen=True)
 class TicketRunConfig:
     ticket_dir: Path
-    runs_dir: Path
     max_total_turns: int = DEFAULT_MAX_TOTAL_TURNS
     max_lint_retries: int = 3
     max_commit_retries: int = 2

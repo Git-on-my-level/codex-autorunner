@@ -184,3 +184,65 @@ def test_hub_inbox_clear_targeted_apply(hub_root_only) -> None:
     assert len(calls) == 2
     assert calls[0][3] == 10.0
     assert calls[1][3] == 10.0
+
+
+def test_hub_inbox_clear_reports_unreachable_host_port(hub_root_only) -> None:
+    def _raise_connect_error(method: str, url: str, **kwargs):
+        _ = kwargs
+        raise httpx.ConnectError(
+            "[Errno 1] Operation not permitted", request=httpx.Request(method, url)
+        )
+
+    with patch("httpx.request", side_effect=_raise_connect_error):
+        result = runner.invoke(
+            app,
+            [
+                "hub",
+                "inbox",
+                "clear",
+                "--path",
+                str(hub_root_only),
+                "--stale",
+                "--json",
+            ],
+        )
+
+    assert result.exit_code == 1
+    assert "Failed to list hub inbox items." in result.output
+    assert "Resolved URL: http://" in result.output
+    assert "/hub/messages?limit=2000" in result.output
+    assert "Failure type: hub host/port unreachable." in result.output
+    assert "running in this runtime" in result.output
+    assert "server.host" in result.output
+    assert "server.port" in result.output
+
+
+def test_hub_inbox_clear_reports_base_path_mismatch(hub_root_only) -> None:
+    def _mock_request(method: str, url: str, **kwargs):
+        _ = kwargs
+        return httpx.Response(
+            404,
+            request=httpx.Request(method, url),
+            json={"detail": "Not Found"},
+        )
+
+    with patch("httpx.request", side_effect=_mock_request):
+        result = runner.invoke(
+            app,
+            [
+                "hub",
+                "inbox",
+                "clear",
+                "--path",
+                str(hub_root_only),
+                "--stale",
+                "--json",
+            ],
+        )
+
+    assert result.exit_code == 1
+    assert "Failed to list hub inbox items." in result.output
+    assert "Failure type: possible base-path mismatch." in result.output
+    assert "HTTP status: 404" in result.output
+    assert "server.base_path" in result.output
+    assert "--base-path /car" in result.output

@@ -310,6 +310,9 @@ Notes:
 - Slash command responses remain ephemeral.
 - In PMA mode, `/car flow status` and `/car flow runs` report hub-wide flow status (manifest-driven) without requiring `/pma off`.
 - If a ticket flow run is paused in repo mode, the next free-text message is treated as the flow reply and resumes that run.
+- If PMA itself answers a paused ticket-flow dispatch, CAR mirrors that PMA reply back into the repo's bound Discord/Telegram chat so the user can see that no manual reply is needed.
+- If PMA must escalate instead, CAR sends that escalation to a single PMA-bound chat for the repo. The selection rule is: freshest matching PMA Discord binding first, Telegram only as fallback.
+- PMA should escalate when ticket flow cannot finish with a clean post-ticket commit, including cases where the ticket is marked done but unrelated dirty files remain and ownership is ambiguous.
 - `/car ...` and `/pma ...` slash commands are normalized through CAR's shared command-ingress parser before dispatch.
 - Plain-text turns now require both collaboration-policy approval and an active execution target (`/car bind ...` or `/pma on`).
 - `plain_text_trigger: mentions` uses Discord bot mentions such as `<@bot-id>` and is the recommended trigger for shared channels.

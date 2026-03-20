@@ -375,6 +375,53 @@ class TestExceptionPropagation:
             pass
         assert circuit_breaker._state.failure_count == 1
 
+    @pytest.mark.asyncio
+    async def test_filtered_exception_does_not_count_as_failure(self, circuit_breaker):
+        try:
+            async with circuit_breaker.call(
+                should_record_failure=lambda exc: isinstance(exc, ValueError)
+            ):
+                raise RuntimeError("ignore me")
+        except RuntimeError:
+            pass
+        assert circuit_breaker._state.failure_count == 0
+
+    @pytest.mark.asyncio
+    async def test_filtered_exception_can_still_count_as_failure(self, circuit_breaker):
+        try:
+            async with circuit_breaker.call(
+                should_record_failure=lambda exc: isinstance(exc, ValueError)
+            ):
+                raise ValueError("count me")
+        except ValueError:
+            pass
+        assert circuit_breaker._state.failure_count == 1
+
+    @pytest.mark.asyncio
+    async def test_filtered_exception_closes_half_open_after_successful_contact(self):
+        config = CircuitBreakerConfig(
+            failure_threshold=1,
+            timeout_seconds=5,
+            half_open_attempts=1,
+        )
+        cb = CircuitBreaker("test-service", config=config)
+        try:
+            async with cb.call():
+                raise RuntimeError("failure")
+        except RuntimeError:
+            pass
+        with pytest.raises(CircuitOpenError):
+            async with cb.call():
+                pass
+        cb._state.last_failure_time = datetime.utcnow() - timedelta(seconds=10)
+        with pytest.raises(RuntimeError):
+            async with cb.call(
+                should_record_failure=lambda exc: isinstance(exc, ValueError)
+            ):
+                raise RuntimeError("service responded with non-breaker error")
+        assert cb._state.state == CircuitState.CLOSED
+        assert cb._state.failure_count == 0
+
 
 class TestServiceName:
     def test_service_name_stored(self, circuit_breaker):

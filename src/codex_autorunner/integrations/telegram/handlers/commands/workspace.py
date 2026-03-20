@@ -13,14 +13,12 @@ from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.git_utils import GitError, reset_branch_from_origin_main
 from .....core.logging_utils import log_event
+from .....core.pma_context import clear_pma_prompt_state_sessions
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
-from .....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from .....manifest import load_manifest
-from ....app_server.client import (
-    CodexAppServerClient,
-    CodexAppServerResponseError,
-)
+from ....app_server import is_missing_thread_error
+from ....app_server.client import CodexAppServerClient
 from ....chat.agents import (
     build_agent_switch_state,
     chat_agent_supports_effort,
@@ -116,16 +114,6 @@ class ResumeThreadData:
 
 
 class WorkspaceCommands(SharedHelpers):
-    def _is_missing_thread_error(self, exc: Exception) -> bool:
-        if not isinstance(exc, CodexAppServerResponseError):
-            return False
-        message = str(exc).lower()
-        missing_markers = (
-            "thread not found",
-            "no rollout found for thread id",
-        )
-        return any(marker in message for marker in missing_markers)
-
     def _resolve_workspace_path(
         self,
         record: Optional["TelegramTopicRecord"],
@@ -321,7 +309,7 @@ class WorkspaceCommands(SharedHelpers):
         try:
             result = await client.thread_resume(thread_id)
         except Exception as exc:
-            if self._is_missing_thread_error(exc):
+            if is_missing_thread_error(exc):
                 log_event(
                     self._logger,
                     logging.INFO,
@@ -1026,10 +1014,27 @@ class WorkspaceCommands(SharedHelpers):
         pma_enabled = bool(record and record.pma_enabled)
         if pma_enabled:
             registry = getattr(self, "_hub_thread_registry", None)
-            agent = self._effective_agent(record)
-            pma_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
-            if registry:
-                registry.reset_thread(pma_key)
+            if registry and hasattr(self, "_pma_registry_key"):
+                pma_key = self._pma_registry_key(record, message)
+                if pma_key:
+                    registry.reset_thread(pma_key)
+                    hub_root = getattr(self, "_hub_root", None)
+                    if hub_root is not None:
+                        try:
+                            clear_pma_prompt_state_sessions(
+                                Path(hub_root), keys=(pma_key,)
+                            )
+                        except Exception as exc:
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "telegram.pma.prompt_state.clear_failed",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                pma_key=pma_key,
+                                exc=exc,
+                            )
             await self._send_message(
                 message.chat_id,
                 "PMA thread reset. Send a message to start a fresh PMA turn.",
@@ -1195,10 +1200,27 @@ class WorkspaceCommands(SharedHelpers):
         pma_enabled = bool(record and record.pma_enabled)
         if pma_enabled:
             registry = getattr(self, "_hub_thread_registry", None)
-            agent = self._effective_agent(record)
-            pma_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
-            if registry:
-                registry.reset_thread(pma_key)
+            if registry and hasattr(self, "_pma_registry_key"):
+                pma_key = self._pma_registry_key(record, message)
+                if pma_key:
+                    registry.reset_thread(pma_key)
+                    hub_root = getattr(self, "_hub_root", None)
+                    if hub_root is not None:
+                        try:
+                            clear_pma_prompt_state_sessions(
+                                Path(hub_root), keys=(pma_key,)
+                            )
+                        except Exception as exc:
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "telegram.pma.prompt_state.clear_failed",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                pma_key=pma_key,
+                                exc=exc,
+                            )
             await self._send_message(
                 message.chat_id,
                 "PMA session reset. Send a message to start a fresh PMA turn.",
@@ -1718,7 +1740,7 @@ class WorkspaceCommands(SharedHelpers):
 
     async def _handle_archive(self, message: TelegramMessage) -> None:
         from .....core.archive import (
-            archive_workspace_car_state,
+            archive_workspace_for_fresh_start,
             resolve_workspace_archive_target,
         )
 
@@ -1763,7 +1785,8 @@ class WorkspaceCommands(SharedHelpers):
                 manifest_path=manifest_path,
             )
             result = await asyncio.to_thread(
-                archive_workspace_car_state,
+                archive_workspace_for_fresh_start,
+                hub_root=self._hub_root,
                 base_repo_root=target.base_repo_root,
                 base_repo_id=target.base_repo_id,
                 worktree_repo_root=workspace_root,
@@ -1812,8 +1835,16 @@ class WorkspaceCommands(SharedHelpers):
             message.chat_id,
             "\n".join(
                 [
-                    f"Archived workspace state to snapshot `{result.snapshot_id}`.",
+                    (
+                        f"Archived workspace state to snapshot `{result.snapshot_id}`."
+                        if result.snapshot_id
+                        else "Workspace CAR state was already clean."
+                    ),
                     f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
+                    (
+                        f"Archived {len(result.archived_thread_ids)} managed thread"
+                        f"{'' if len(result.archived_thread_ids) == 1 else 's'}."
+                    ),
                     "The binding remains active for fresh work.",
                 ]
             ),
@@ -2579,7 +2610,7 @@ class WorkspaceCommands(SharedHelpers):
         try:
             result = await client.thread_resume(thread_id)
         except Exception as exc:
-            if self._is_missing_thread_error(exc):
+            if is_missing_thread_error(exc):
                 log_event(
                     self._logger,
                     logging.INFO,

@@ -10,6 +10,10 @@ from typer.testing import CliRunner
 
 from codex_autorunner.cli import app
 from codex_autorunner.core.report_retention import prune_report_directory
+from codex_autorunner.integrations.chat.turn_metrics import (
+    compose_turn_response_with_footer,
+    format_turn_footer,
+)
 from codex_autorunner.integrations.telegram.helpers import (
     _coerce_thread_list,
     _extract_context_usage_percent,
@@ -445,6 +449,34 @@ def test_cross_surface_shared_chat_primitive_behavior_characterization() -> None
     assert (
         _format_turn_metrics(token_usage, 12.34)
         == "Turn time: 12.3s\nToken usage: total 80 input 60 output 20 ctx 20%"
+    )
+    assert (
+        format_turn_footer(
+            summary_text="done · agent codex · gpt-5.3-codex · 6m 19s · step 7228",
+            token_usage=token_usage,
+            elapsed_seconds=None,
+        )
+        == "done · agent codex · gpt-5.3-codex · 6m 19s · step 7228 · ctx 20%\n"
+        "Token usage: total 80 input 60 output 20 ctx 20%"
+    )
+    assert (
+        compose_turn_response_with_footer(
+            "Addressed and pushed.",
+            summary_text="done · agent codex · gpt-5.3-codex · 6m 19s · step 7228",
+            token_usage=token_usage,
+            elapsed_seconds=None,
+        )
+        == "Addressed and pushed.\n\n"
+        "done · agent codex · gpt-5.3-codex · 6m 19s · step 7228 · ctx 20%\n"
+        "Token usage: total 80 input 60 output 20 ctx 20%"
+    )
+    assert (
+        format_turn_footer(
+            summary_text="done · agent codex · gpt-4.1-mini · 6m 19s · step 7",
+            token_usage=None,
+            elapsed_seconds=None,
+        )
+        == "done · agent codex · gpt-4.1-mini · 6m 19s · step 7"
     )
 
     assert _parse_review_commit_log("abc1234\x1fFix routing\x1e9876543\x1f") == [

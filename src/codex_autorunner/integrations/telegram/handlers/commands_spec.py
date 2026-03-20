@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from ....core.update_targets import update_target_values
 from ..adapter import TelegramMessage
 
 
@@ -161,7 +162,10 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "update": CommandSpec(
             "update",
-            "update CAR (prompt or both|web|chat|telegram|discord)",
+            (
+                "update CAR (prompt or "
+                f"{'|'.join(update_target_values(include_status=True))})"
+            ),
             handlers._handle_update,
         ),
         "logout": CommandSpec(

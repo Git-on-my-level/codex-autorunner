@@ -9,6 +9,7 @@ from codex_autorunner.agents.zeroclaw.harness import ZeroClawHarness
 from codex_autorunner.agents.zeroclaw.supervisor import (
     build_zeroclaw_supervisor_from_config,
     zeroclaw_binary_available,
+    zeroclaw_runtime_preflight,
 )
 from codex_autorunner.core.config import load_repo_config
 
@@ -24,8 +25,9 @@ def skip_unless_opted_in() -> None:
 @pytest.mark.asyncio
 async def test_zeroclaw_host_managed_workspace_round_trip(tmp_path: Path) -> None:
     config = load_repo_config(Path("."))
+    preflight = zeroclaw_runtime_preflight(config)
     if not zeroclaw_binary_available(config):
-        pytest.skip("ZeroClaw binary not available through CAR config.")
+        pytest.skip(preflight.message)
 
     model = os.environ.get("ZEROCLAW_TEST_MODEL", "zai/glm-5")
     prompt = os.environ.get(
@@ -104,3 +106,4 @@ async def test_zeroclaw_host_managed_workspace_round_trip(tmp_path: Path) -> Non
     assert (
         workspace_root / "threads" / conversation.id / "session-state.json"
     ).exists()
+    assert preflight.launch_mode == "session_state_file"

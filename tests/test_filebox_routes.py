@@ -5,7 +5,7 @@ from codex_autorunner.core import filebox
 from codex_autorunner.server import create_hub_app
 
 
-def test_hub_filebox_delete_removes_only_resolved_file(hub_env) -> None:
+def test_hub_filebox_delete_ignores_legacy_duplicates(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
     client = TestClient(app)
 
@@ -28,6 +28,27 @@ def test_hub_filebox_delete_removes_only_resolved_file(hub_env) -> None:
     assert resp.json() == {"status": "ok"}
     assert not (filebox.outbox_dir(hub_env.repo_root) / "shared.txt").exists()
     assert (legacy_topic_pending / "shared.txt").exists()
+
+
+def test_hub_filebox_legacy_only_file_returns_404(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    legacy_topic_pending = (
+        hub_env.repo_root
+        / ".codex-autorunner"
+        / "uploads"
+        / "telegram-files"
+        / "topic-1"
+        / "outbox"
+        / "pending"
+    )
+    legacy_topic_pending.mkdir(parents=True, exist_ok=True)
+    (legacy_topic_pending / "legacy.txt").write_bytes(b"legacy")
+
+    resp = client.get(f"/hub/filebox/{hub_env.repo_id}/outbox/legacy.txt")
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "File not found"}
 
 
 def test_filebox_upload_invalid_filename_parity_between_repo_and_hub(hub_env) -> None:

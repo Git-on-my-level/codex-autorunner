@@ -2,104 +2,41 @@
 
 from typing import Any, Optional
 
-from ....agents.opencode.constants import (
-    OPENCODE_CONTEXT_WINDOW_KEYS,
-    OPENCODE_USAGE_CACHED_KEYS,
-    OPENCODE_USAGE_INPUT_KEYS,
-    OPENCODE_USAGE_OUTPUT_KEYS,
-    OPENCODE_USAGE_REASONING_KEYS,
-    OPENCODE_USAGE_TOTAL_KEYS,
+from ....agents.opencode.constants import OPENCODE_CONTEXT_WINDOW_KEYS
+from ....agents.opencode.usage_decoder import (
+    extract_usage,
+    extract_usage_field,
+    flatten_usage,
 )
-from ....core.coercion import coerce_int
 
 
-def _coerce_int(value: Any) -> Optional[int]:
-    return coerce_int(value)
+def _extract_opencode_usage_payload(
+    payload: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    return extract_usage(payload)
 
 
-def _flatten_opencode_tokens(tokens: dict[str, Any]) -> Optional[dict[str, Any]]:
-    usage: dict[str, Any] = {}
-    total_tokens = _coerce_int(tokens.get("total"))
-    if total_tokens is not None:
-        usage["totalTokens"] = total_tokens
-    input_tokens = _coerce_int(tokens.get("input"))
-    if input_tokens is not None:
-        usage["inputTokens"] = input_tokens
-    output_tokens = _coerce_int(tokens.get("output"))
-    if output_tokens is not None:
-        usage["outputTokens"] = output_tokens
-    reasoning_tokens = _coerce_int(tokens.get("reasoning"))
-    if reasoning_tokens is not None:
-        usage["reasoningTokens"] = reasoning_tokens
-    cache = tokens.get("cache")
-    if isinstance(cache, dict):
-        cached_read = _coerce_int(cache.get("read"))
-        if cached_read is not None:
-            usage["cachedInputTokens"] = cached_read
-        cached_write = _coerce_int(cache.get("write"))
-        if cached_write is not None:
-            usage["cacheWriteTokens"] = cached_write
-    if "totalTokens" not in usage:
-        components = [
-            usage.get("inputTokens"),
-            usage.get("outputTokens"),
-            usage.get("reasoningTokens"),
-            usage.get("cachedInputTokens"),
-            usage.get("cacheWriteTokens"),
-        ]
-        numeric = [value for value in components if isinstance(value, int)]
-        if numeric:
-            usage["totalTokens"] = sum(numeric)
-    return usage or None
-
-
-def _extract_opencode_usage_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    for key in (
-        "usage",
-        "tokenUsage",
-        "token_usage",
-        "usage_stats",
-        "usageStats",
-        "stats",
-    ):
-        usage = payload.get(key)
-        if isinstance(usage, dict):
-            return usage
-    tokens = payload.get("tokens")
-    if isinstance(tokens, dict):
-        flattened = _flatten_opencode_tokens(tokens)
-        if flattened:
-            return flattened
-    return payload
+def _flatten_opencode_tokens(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
+    return flatten_usage(payload)
 
 
 def _extract_opencode_usage_value(
     payload: dict[str, Any], keys: tuple[str, ...]
 ) -> Optional[int]:
-    for key in keys:
-        value = _coerce_int(payload.get(key))
-        if value is not None:
-            return value
-    return None
+    return extract_usage_field(payload, keys)
 
 
 def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, Any]]:
-    usage_payload = _extract_opencode_usage_payload(payload)
-    total_tokens = _extract_opencode_usage_value(
-        usage_payload, OPENCODE_USAGE_TOTAL_KEYS
-    )
-    input_tokens = _extract_opencode_usage_value(
-        usage_payload, OPENCODE_USAGE_INPUT_KEYS
-    )
-    cached_tokens = _extract_opencode_usage_value(
-        usage_payload, OPENCODE_USAGE_CACHED_KEYS
-    )
-    output_tokens = _extract_opencode_usage_value(
-        usage_payload, OPENCODE_USAGE_OUTPUT_KEYS
-    )
-    reasoning_tokens = _extract_opencode_usage_value(
-        usage_payload, OPENCODE_USAGE_REASONING_KEYS
-    )
+    usage_payload = extract_usage(payload)
+    if usage_payload is None:
+        usage_payload = flatten_usage(payload)
+    if usage_payload is None:
+        return None
+    total_tokens = usage_payload.get("totalTokens")
+    input_tokens = usage_payload.get("inputTokens")
+    cached_tokens = usage_payload.get("cachedInputTokens")
+    output_tokens = usage_payload.get("outputTokens")
+    reasoning_tokens = usage_payload.get("reasoningTokens")
     if total_tokens is None:
         components = [
             value
@@ -125,13 +62,19 @@ def _build_opencode_token_usage(payload: dict[str, Any]) -> Optional[dict[str, A
     if reasoning_tokens is not None:
         usage_line["reasoningTokens"] = reasoning_tokens
     token_usage: dict[str, Any] = {"last": usage_line}
-    context_window = _extract_opencode_usage_value(
-        payload, OPENCODE_CONTEXT_WINDOW_KEYS
-    )
+    context_window = extract_usage_field(payload, OPENCODE_CONTEXT_WINDOW_KEYS)
     if context_window is None:
-        context_window = _extract_opencode_usage_value(
+        context_window = extract_usage_field(
             usage_payload, OPENCODE_CONTEXT_WINDOW_KEYS
         )
     if context_window is not None and context_window > 0:
         token_usage["modelContextWindow"] = context_window
     return token_usage
+
+
+__all__ = [
+    "_extract_opencode_usage_payload",
+    "_flatten_opencode_tokens",
+    "_extract_opencode_usage_value",
+    "_build_opencode_token_usage",
+]

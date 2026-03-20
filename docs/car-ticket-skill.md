@@ -24,6 +24,7 @@ Prompt pattern:
 
 ```yaml
 ---
+ticket_id: "tkt_0123456789abcdef"
 agent: "codex"
 done: false
 ---
@@ -31,6 +32,7 @@ done: false
 
 Required (linted):
 
+- `ticket_id`: stable logical ticket identity used by CAR state; normal CAR writer flows auto-generate this, and repair tools can backfill it for older tickets
 - `agent`: registered CAR agent id for this repo (for example `codex`, `opencode`) or the special value `user`
 - `done`: boolean
 

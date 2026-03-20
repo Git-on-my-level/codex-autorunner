@@ -64,6 +64,7 @@ class TelegramTicketFlowBridge:
         self._runtime_services = runtime_services
         self._hub_raw_config = hub_raw_config
         self._last_default_notification: dict[Path, str] = {}
+        self._scan_failure_markers: dict[tuple[str, Path], str] = {}
 
     @staticmethod
     def _select_ticket_flow_topic(
@@ -172,7 +173,14 @@ class TelegramTicketFlowBridge:
                 exc=exc,
                 workspace_root=str(workspace_root),
             )
+            await self._notify_scan_failure(
+                workspace_root,
+                entries,
+                error=exc,
+                failure_kind="pause",
+            )
             return
+        self._clear_scan_failure_marker("pause", workspace_root)
         if pause is None:
             return
         run_id, seq, content, archived_dir = pause[:4]
@@ -363,7 +371,14 @@ class TelegramTicketFlowBridge:
                 exc=exc,
                 workspace_root=str(workspace_root),
             )
+            await self._notify_scan_failure(
+                workspace_root,
+                [],
+                error=exc,
+                failure_kind="pause",
+            )
             return
+        self._clear_scan_failure_marker("pause", workspace_root)
         if pause is None:
             return
         run_id, seq, content, archived_dir = pause[:4]
@@ -714,7 +729,14 @@ class TelegramTicketFlowBridge:
                 exc=exc,
                 workspace_root=str(workspace_root),
             )
+            await self._notify_scan_failure(
+                workspace_root,
+                entries,
+                error=exc,
+                failure_kind="terminal",
+            )
             return
+        self._clear_scan_failure_marker("terminal", workspace_root)
         if terminal_run is None:
             return
         run_id, status, error_message = terminal_run
@@ -836,3 +858,85 @@ class TelegramTicketFlowBridge:
             topic.last_terminal_run_id = value
 
         return apply
+
+    async def _notify_scan_failure(
+        self,
+        workspace_root: Path,
+        entries: list[tuple[str, object]],
+        *,
+        error: Exception,
+        failure_kind: str,
+    ) -> None:
+        marker_key = (failure_kind, workspace_root)
+        marker = f"{type(error).__name__}:{error}"
+        if self._scan_failure_markers.get(marker_key) == marker:
+            return
+
+        message = self._format_scan_failure_message(
+            workspace_root=workspace_root,
+            error=error,
+            failure_kind=failure_kind,
+        )
+        sent = await self._send_scan_failure_message(
+            workspace_root=workspace_root,
+            entries=entries,
+            message=message,
+        )
+        if sent:
+            self._scan_failure_markers[marker_key] = marker
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.ticket_flow.degraded_notified",
+                workspace_root=str(workspace_root),
+                failure_kind=failure_kind,
+            )
+
+    def _clear_scan_failure_marker(
+        self, failure_kind: str, workspace_root: Path
+    ) -> None:
+        self._scan_failure_markers.pop((failure_kind, workspace_root), None)
+
+    def _format_scan_failure_message(
+        self,
+        *,
+        workspace_root: Path,
+        error: Exception,
+        failure_kind: str,
+    ) -> str:
+        label = "paused dispatches" if failure_kind == "pause" else "terminal runs"
+        error_text = self._truncate_error(str(error) or type(error).__name__)
+        return (
+            f"Ticket flow status is degraded for `{workspace_root}`.\n"
+            f"I couldn't scan {label}: {error_text}\n"
+            "Check the workspace flow state and recover the bridge before relying on this topic."
+        )
+
+    async def _send_scan_failure_message(
+        self,
+        *,
+        workspace_root: Path,
+        entries: list[tuple[str, object]],
+        message: str,
+    ) -> bool:
+        primary = self._select_ticket_flow_topic(entries)
+        if primary is not None:
+            primary_key, _primary_record = primary
+            try:
+                chat_id, thread_id, _scope = parse_topic_key(primary_key)
+            except Exception as exc:
+                self._logger.debug("Failed to parse topic key: %s", exc)
+            else:
+                sent = await self._send_message_with_outbox(
+                    chat_id, message, thread_id=thread_id, reply_to=None
+                )
+                return bool(sent)
+        if self._default_notification_chat_id is None:
+            return False
+        sent = await self._send_message_with_outbox(
+            self._default_notification_chat_id,
+            message,
+            thread_id=None,
+            reply_to=None,
+        )
+        return bool(sent)

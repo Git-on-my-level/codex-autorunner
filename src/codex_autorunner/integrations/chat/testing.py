@@ -11,6 +11,7 @@ from .models import (
     ChatAction,
     ChatAttachment,
     ChatEvent,
+    ChatForwardInfo,
     ChatInteractionEvent,
     ChatInteractionRef,
     ChatMessageEvent,
@@ -76,6 +77,9 @@ def deserialize_chat_event(payload: dict[str, object]) -> ChatEvent:
             attachments=tuple(
                 _deserialize_attachment(item)
                 for item in _coerce_list(payload.get("attachments"))
+            ),
+            forwarded_from=_deserialize_optional_forward_info(
+                payload.get("forwarded_from")
             ),
         )
     if event_type == "interaction":
@@ -172,6 +176,7 @@ class FakeChatAdapter(ChatAdapter):
         is_edited: bool = False,
         reply_to: Optional[ChatMessageRef] = None,
         attachments: Sequence[ChatAttachment] = (),
+        forwarded_from: Optional[ChatForwardInfo] = None,
     ) -> ChatMessageEvent:
         event = ChatMessageEvent(
             update_id=update_id,
@@ -182,6 +187,7 @@ class FakeChatAdapter(ChatAdapter):
             is_edited=is_edited,
             reply_to=reply_to,
             attachments=tuple(attachments),
+            forwarded_from=forwarded_from,
         )
         self._events.append(event)
         return event
@@ -224,6 +230,11 @@ class FakeChatAdapter(ChatAdapter):
         return message
 
 
+# Keep an explicit module-level reference so dead-code heuristics treat the
+# in-memory contract test adapter as part of the intended test support surface.
+_CHAT_TESTING_SURFACE = (FakeChatAdapter,)
+
+
 def _validate_text_limit(text: str, limit: Optional[int]) -> None:
     if limit is not None and len(text) > limit:
         raise ValueError(f"text length {len(text)} exceeds max_text_length {limit}")
@@ -262,6 +273,17 @@ def _deserialize_optional_message_ref(value: object) -> Optional[ChatMessageRef]
     if value is None:
         return None
     return _deserialize_message_ref(value)
+
+
+def _deserialize_optional_forward_info(value: object) -> Optional[ChatForwardInfo]:
+    if not isinstance(value, dict):
+        return None
+    return ChatForwardInfo(
+        source_label=_string_or_none(value.get("source_label")),
+        message_id=_string_or_none(value.get("message_id")),
+        text=_string_or_none(value.get("text")),
+        is_automatic=bool(value.get("is_automatic", False)),
+    )
 
 
 def _deserialize_interaction_ref(value: object) -> ChatInteractionRef:

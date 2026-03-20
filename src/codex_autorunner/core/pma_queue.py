@@ -98,7 +98,7 @@ class PmaQueue:
         self._lane_events: dict[str, asyncio.Event] = {}
         self._lane_known_ids: dict[str, set[str]] = {}
         self._replayed_lanes: set[str] = set()
-        self._lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._initialize_canonical_state()
 
@@ -113,6 +113,13 @@ class PmaQueue:
     def _lane_queue_lock_path(self, lane_id: str) -> Path:
         path = self._lane_queue_path(lane_id)
         return path.with_suffix(path.suffix + ".lock")
+
+    def _ensure_lock(self) -> asyncio.Lock:
+        lock = self._lock
+        if lock is None:
+            lock = asyncio.Lock()
+            self._lock = lock
+        return lock
 
     def _ensure_lane_lock(self, lane_id: str) -> asyncio.Lock:
         lock = self._lane_locks.get(lane_id)
@@ -156,7 +163,7 @@ class PmaQueue:
         idempotency_key: str,
         payload: dict[str, Any],
     ) -> tuple[PmaQueueItem, Optional[str]]:
-        async with self._lock:
+        async with self._ensure_lock():
             self._record_loop()
             existing = await self._find_by_idempotency_key(lane_id, idempotency_key)
             if existing:

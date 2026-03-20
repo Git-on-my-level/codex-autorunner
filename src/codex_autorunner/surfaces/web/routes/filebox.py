@@ -13,7 +13,6 @@ from ....core.filebox import (
     FileBoxEntry,
     ensure_structure,
     list_filebox,
-    migrate_legacy,
     resolve_file,
     save_file,
 )
@@ -88,10 +87,6 @@ def build_filebox_routes() -> APIRouter:
     def list_box(request: Request) -> dict[str, Any]:
         repo_root = _resolve_repo_root(request)
         ensure_structure(repo_root)
-        try:
-            migrate_legacy(repo_root)
-        except Exception:
-            logger.debug("FileBox legacy migration skipped", exc_info=True)
         entries = list_filebox(repo_root)
         return _serialize_listing(entries, request=request)
 
@@ -187,10 +182,6 @@ def build_hub_filebox_routes() -> APIRouter:
     @router.get("/{repo_id}")
     def list_repo_filebox(repo_id: str, request: Request) -> dict[str, Any]:
         repo_root = _resolve_hub_repo_root(request, repo_id)
-        try:
-            migrate_legacy(repo_root)
-        except Exception:
-            logger.debug("Hub FileBox legacy migration skipped", exc_info=True)
         entries = list_filebox(repo_root)
         serialized = {
             box: [

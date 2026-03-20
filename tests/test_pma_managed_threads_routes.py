@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import ActiveWorkSummary, ThreadTarget
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_threads
 from tests.conftest import write_test_config
@@ -22,7 +23,18 @@ def _disable_pma(hub_root: Path) -> None:
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
-def test_create_managed_thread_with_repo_id(hub_env) -> None:
+def _set_default_terminal_followup(hub_root: Path, enabled: bool) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["managed_thread_terminal_followup_default"] = enabled
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+
+def _repo_owner(hub_env) -> dict[str, str]:
+    return {"resource_kind": "repo", "resource_id": hub_env.repo_id}
+
+
+def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
@@ -30,7 +42,7 @@ def test_create_managed_thread_with_repo_id(hub_env) -> None:
             "/hub/pma/threads",
             json={
                 "agent": "codex",
-                "repo_id": hub_env.repo_id,
+                **_repo_owner(hub_env),
                 "name": "Primary thread",
                 "backend_thread_id": "thread-backend-1",
             },
@@ -46,10 +58,22 @@ def test_create_managed_thread_with_repo_id(hub_env) -> None:
     assert thread["name"] == "Primary thread"
     assert thread["backend_thread_id"] == "thread-backend-1"
     assert thread["status"] == "idle"
+    assert thread["operator_status"] == "idle"
+    assert thread["is_reusable"] is True
     assert thread["lifecycle_status"] == "active"
     assert thread["status_reason"] == "thread_created"
     assert thread["status_terminal"] is False
+    assert thread["context_profile"] == "car_ambient"
     assert thread["managed_thread_id"]
+    notification = resp.json().get("notification") or {}
+    subscription = notification.get("subscription") or {}
+    assert subscription.get("thread_id") == thread["managed_thread_id"]
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(
+        thread_id=thread["managed_thread_id"]
+    )
+    assert len(subscriptions) == 1
 
 
 def test_create_managed_thread_with_workspace_root(hub_env) -> None:
@@ -74,10 +98,20 @@ def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     assert thread["resource_id"] is None
     assert thread["workspace_root"] == str((hub_env.hub_root / rel_workspace).resolve())
     assert thread["name"] == "Workspace thread"
+    assert thread["context_profile"] == "car_ambient"
 
 
-def test_create_managed_thread_with_agent_workspace_owner(hub_env) -> None:
+def test_create_managed_thread_with_agent_workspace_owner(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
     app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "ready",
+            "message": "ZeroClaw runtime is ready",
+        },
+    )
     workspace = app.state.hub_supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -101,12 +135,38 @@ def test_create_managed_thread_with_agent_workspace_owner(hub_env) -> None:
     assert thread["resource_kind"] == "agent_workspace"
     assert thread["resource_id"] == workspace.id
     assert thread["workspace_root"] == str(workspace.path.resolve())
+    assert thread["context_profile"] == "none"
+
+
+def test_create_managed_thread_accepts_explicit_context_profile(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "context_profile": "car_core",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["thread"]["context_profile"] == "car_core"
 
 
 def test_create_managed_thread_rejects_mismatched_agent_workspace_runtime(
     hub_env,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "ready",
+            "message": "ZeroClaw runtime is ready",
+        },
+    )
     workspace = app.state.hub_supervisor.create_agent_workspace(
         workspace_id="zc-main",
         runtime="zeroclaw",
@@ -127,6 +187,66 @@ def test_create_managed_thread_rejects_mismatched_agent_workspace_runtime(
     assert "agent workspace runtime" in (resp.json().get("detail") or "").lower()
 
 
+def test_create_managed_thread_rejects_incompatible_agent_workspace_runtime(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.hub.probe_agent_workspace_runtime",
+        lambda _config, _workspace: {
+            "status": "ready",
+            "message": "ZeroClaw runtime is ready",
+        },
+    )
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+    monkeypatch.setattr(
+        app.state.hub_supervisor,
+        "get_agent_workspace_runtime_readiness",
+        lambda _workspace_id: {
+            "status": "incompatible",
+            "message": "ZeroClaw CLI is incompatible",
+        },
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "incompatible" in (resp.json().get("detail") or "").lower()
+
+
+def test_create_managed_thread_rejects_disabled_agent_workspace(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+        enabled=False,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert "disabled" in (resp.json().get("detail") or "").lower()
+
+
 def test_create_managed_thread_rejects_unknown_agent(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
@@ -135,7 +255,7 @@ def test_create_managed_thread_rejects_unknown_agent(hub_env) -> None:
             "/hub/pma/threads",
             json={
                 "agent": "bogus",
-                "repo_id": hub_env.repo_id,
+                **_repo_owner(hub_env),
                 "name": "Invalid thread",
             },
         )
@@ -159,18 +279,31 @@ def test_create_managed_thread_rejects_invalid_notify_on_without_side_effect(
             "/hub/pma/threads",
             json={
                 "agent": "codex",
-                "repo_id": hub_env.repo_id,
+                **_repo_owner(hub_env),
                 "notify_on": "invalid",
             },
         )
-        assert create_resp.status_code == 400
-        assert "notify_on" in (create_resp.json().get("detail") or "")
+        assert create_resp.status_code == 422
+        assert "notify_on" in str(create_resp.json())
 
         after_resp = client.get("/hub/pma/threads")
         assert after_resp.status_code == 200
         after_count = len(after_resp.json().get("threads") or [])
 
     assert after_count == before_count
+
+
+def test_create_managed_thread_rejects_legacy_repo_owner_alias(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", "repo_id": hub_env.repo_id},
+        )
+
+    assert resp.status_code == 422
+    assert "repo_id" in str(resp.json())
 
 
 def test_create_managed_thread_rejects_missing_or_both_inputs(hub_env) -> None:
@@ -182,7 +315,7 @@ def test_create_managed_thread_rejects_missing_or_both_inputs(hub_env) -> None:
             "/hub/pma/threads",
             json={
                 "agent": "codex",
-                "repo_id": hub_env.repo_id,
+                **_repo_owner(hub_env),
                 "workspace_root": str(hub_env.repo_root),
             },
         )
@@ -205,7 +338,7 @@ def test_list_managed_threads_returns_created_thread(hub_env) -> None:
             "/hub/pma/threads",
             json={
                 "agent": "codex",
-                "repo_id": hub_env.repo_id,
+                **_repo_owner(hub_env),
                 "name": "List me",
             },
         )
@@ -214,7 +347,7 @@ def test_list_managed_threads_returns_created_thread(hub_env) -> None:
 
         list_resp = client.get(
             "/hub/pma/threads",
-            params={"agent": "codex", "repo_id": hub_env.repo_id, "limit": 200},
+            params={"agent": "codex", **_repo_owner(hub_env), "limit": 200},
         )
 
     assert list_resp.status_code == 200
@@ -229,7 +362,7 @@ def test_list_managed_threads_supports_normalized_status_filter(hub_env) -> None
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
 
@@ -245,6 +378,40 @@ def test_list_managed_threads_supports_normalized_status_filter(hub_env) -> None
     assert len(active_resp.json()["threads"]) == 1
 
 
+def test_list_managed_threads_includes_ticket_flow_threads_for_repo(hub_env) -> None:
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="ticket-flow:codex",
+        metadata={
+            "thread_kind": "ticket_flow",
+            "flow_type": "ticket_flow",
+            "run_id": "run-123",
+        },
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        list_resp = client.get(
+            "/hub/pma/threads",
+            params={**_repo_owner(hub_env), "limit": 200},
+        )
+
+    assert list_resp.status_code == 200
+    threads = list_resp.json()["threads"]
+    thread = next(
+        item
+        for item in threads
+        if item["managed_thread_id"] == created["managed_thread_id"]
+    )
+    assert thread["name"] == "ticket-flow:codex"
+    assert thread["repo_id"] == hub_env.repo_id
+    assert thread["resource_kind"] == "repo"
+    assert thread["resource_id"] == hub_env.repo_id
+
+
 def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
@@ -253,7 +420,7 @@ def test_get_managed_thread_returns_created_thread(hub_env) -> None:
             "/hub/pma/threads",
             json={
                 "agent": "codex",
-                "repo_id": hub_env.repo_id,
+                **_repo_owner(hub_env),
             },
         )
         assert create_resp.status_code == 200
@@ -267,6 +434,8 @@ def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     assert fetched["repo_id"] == hub_env.repo_id
     assert fetched["resource_kind"] == "repo"
     assert fetched["resource_id"] == hub_env.repo_id
+    assert fetched["operator_status"] == "idle"
+    assert fetched["is_reusable"] is True
 
 
 def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) -> None:
@@ -277,7 +446,7 @@ def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) 
             "/hub/pma/threads",
             json={
                 "agent": "codex",
-                "repo_id": hub_env.repo_id,
+                **_repo_owner(hub_env),
                 "notify_on": "terminal",
                 "notify_lane": "pma:lane-next",
                 "notify_once": True,
@@ -298,6 +467,99 @@ def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) 
     assert len(subscriptions) == 1
 
 
+def test_create_managed_thread_terminal_followup_false_opts_out(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "terminal_followup": False,
+            },
+        )
+        assert create_resp.status_code == 200
+        payload = create_resp.json()
+        thread = payload["thread"]
+        assert "notification" not in payload
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(
+        thread_id=thread["managed_thread_id"]
+    )
+    assert subscriptions == []
+
+
+def test_create_managed_thread_respects_config_disabled_default_followup(
+    hub_env,
+) -> None:
+    _set_default_terminal_followup(hub_env.hub_root, False)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        payload = create_resp.json()
+        thread = payload["thread"]
+        assert "notification" not in payload
+
+    automation_store = app.state.hub_supervisor.get_pma_automation_store()
+    subscriptions = automation_store.list_subscriptions(
+        thread_id=thread["managed_thread_id"]
+    )
+    assert subscriptions == []
+
+
+def test_create_managed_thread_with_explicit_notify_lane_requires_subscription(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    class PartialAutomationStore:
+        def create_subscription(self) -> None:
+            return None
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: PartialAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "notify_lane": "pma:lane-next",
+            },
+        )
+
+    assert create_resp.status_code == 503
+
+
+def test_create_managed_thread_default_followup_ignores_partial_automation_store(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    class PartialAutomationStore:
+        def create_subscription(self) -> None:
+            return None
+
+    app.state.hub_supervisor.get_pma_automation_store = lambda: PartialAutomationStore()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+
+    assert create_resp.status_code == 200
+    payload = create_resp.json()
+    assert "notification" not in payload
+
+
 def test_managed_thread_routes_respect_pma_enabled_flag(hub_env) -> None:
     _disable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -306,7 +568,7 @@ def test_managed_thread_routes_respect_pma_enabled_flag(hub_env) -> None:
         list_resp = client.get("/hub/pma/threads")
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
 
     assert list_resp.status_code == 404
@@ -373,7 +635,7 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -389,6 +651,8 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
         assert resume_resp.status_code == 200
         resumed_thread = resume_resp.json()["thread"]
         assert resumed_thread["status"] == "idle"
+        assert resumed_thread["operator_status"] == "idle"
+        assert resumed_thread["is_reusable"] is True
         assert resumed_thread["lifecycle_status"] == "active"
         assert resumed_thread["backend_thread_id"] == resumed_backend_id
 
@@ -404,6 +668,8 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
         get_resp = client.get(f"/hub/pma/threads/{managed_thread_id}")
         assert get_resp.status_code == 200
         assert get_resp.json()["thread"]["status"] == "completed"
+        assert get_resp.json()["thread"]["operator_status"] == "reusable"
+        assert get_resp.json()["thread"]["is_reusable"] is True
         assert get_resp.json()["thread"]["lifecycle_status"] == "active"
 
     assert fake_supervisor.client.resume_calls == [resumed_backend_id]
@@ -441,6 +707,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             resource_id=None,
             display_name=None,
             backend_thread_id=None,
+            metadata=None,
         ):
             self.calls.append(
                 (
@@ -453,6 +720,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                         "resource_id": resource_id,
                         "display_name": display_name,
                         "backend_thread_id": backend_thread_id,
+                        "metadata": metadata,
                     },
                 )
             )
@@ -559,14 +827,14 @@ def test_managed_thread_crud_routes_use_orchestration_service(
             "/hub/pma/threads",
             json={
                 "agent": "codex",
-                "repo_id": hub_env.repo_id,
+                **_repo_owner(hub_env),
                 "name": "Orchestrated thread",
                 "backend_thread_id": "backend-thread-1",
             },
         )
         list_resp = client.get(
             "/hub/pma/threads",
-            params={"agent": "codex", "status": "idle", "repo_id": hub_env.repo_id},
+            params={"agent": "codex", "status": "idle", **_repo_owner(hub_env)},
         )
         get_resp = client.get("/hub/pma/threads/thread-orch-1")
         resume_resp = client.post(
@@ -589,6 +857,10 @@ def test_managed_thread_crud_routes_use_orchestration_service(
     assert resume_resp.json()["thread"]["backend_thread_id"] == "backend-thread-2"
     assert archive_resp.json()["thread"]["lifecycle_status"] == "archived"
     assert archive_resp.json()["thread"]["status"] == "archived"
+    assert created["operator_status"] == "idle"
+    assert created["is_reusable"] is True
+    assert archive_resp.json()["thread"]["operator_status"] == "archived"
+    assert archive_resp.json()["thread"]["is_reusable"] is False
 
     assert fake_service.calls == [
         (
@@ -601,6 +873,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 "resource_id": hub_env.repo_id,
                 "display_name": "Orchestrated thread",
                 "backend_thread_id": "backend-thread-1",
+                "metadata": {"context_profile": "car_ambient"},
             },
         ),
         (
@@ -688,7 +961,7 @@ def test_list_bindings_work_route_returns_busy_work_summaries(
     with TestClient(app) as client:
         resp = client.get(
             "/hub/pma/bindings/work",
-            params={"agent": "codex", "repo_id": hub_env.repo_id, "limit": 25},
+            params={"agent": "codex", **_repo_owner(hub_env), "limit": 25},
         )
 
     assert resp.status_code == 200

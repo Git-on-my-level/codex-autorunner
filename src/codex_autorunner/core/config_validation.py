@@ -917,6 +917,7 @@ def _validate_hub_config(cfg: Dict[str, Any], *, root: Path) -> None:
                 raise ConfigError(f"server_log.{key} must be an integer")
     _validate_static_assets_config(cfg, scope="hub")
     _validate_housekeeping_config(cfg)
+    _validate_pma_config(cfg)
     _validate_collaboration_policy_config(cfg)
     _validate_telegram_bot_config(cfg)
     _validate_discord_bot_config(cfg)
@@ -1034,6 +1035,30 @@ def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:
                 _validate_optional_int_ge(
                     rule, key, 0, path=f"housekeeping.rules[{idx}]"
                 )
+
+
+def _validate_pma_config(cfg: Dict[str, Any]) -> None:
+    pma_cfg = cfg.get("pma")
+    if pma_cfg is None:
+        return
+    if not isinstance(pma_cfg, dict):
+        raise ConfigError("pma section must be a mapping if provided")
+    for key in ("cleanup_require_archive", "cleanup_auto_delete_orphans"):
+        _validate_optional_type(pma_cfg, key, bool, path="pma")
+    _validate_optional_type(pma_cfg, "worktree_archive_profile", str, path="pma")
+    profile = pma_cfg.get("worktree_archive_profile")
+    if isinstance(profile, str) and profile.strip().lower() not in {"portable", "full"}:
+        raise ConfigError("pma.worktree_archive_profile must be 'portable' or 'full'")
+    for key in (
+        "worktree_archive_max_snapshots_per_repo",
+        "worktree_archive_max_age_days",
+        "worktree_archive_max_total_bytes",
+        "run_archive_max_entries",
+        "run_archive_max_age_days",
+        "run_archive_max_total_bytes",
+    ):
+        _validate_optional_type(pma_cfg, key, int, path="pma")
+        _validate_optional_int_ge(pma_cfg, key, 0, path="pma")
 
 
 def _validate_static_assets_config(cfg: Dict[str, Any], scope: str) -> None:

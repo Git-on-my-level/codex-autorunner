@@ -35,6 +35,7 @@ from ....core.flows.failure_diagnostics import (
 )
 from ....core.flows.models import FlowRunRecord, FlowRunStatus
 from ....core.flows.store import FlowStore
+from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.utils import find_repo_root
 from ....tickets.files import safe_relpath
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
@@ -53,29 +54,11 @@ def _flows_db_path(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "flows.db"
 
 
-def _resolve_workspace_and_runs(
-    record_input: dict[str, Any], repo_root: Path
-) -> tuple[Path, Path]:
-    """
-    Normalize workspace_root/runs_dir with sensible fallbacks.
-
-    - workspace_root defaults to the current repo_root.
-    - runs_dir defaults to .codex-autorunner/runs.
-    - If runs_dir is absolute, keep it as-is; otherwise join to workspace_root.
-    """
-
-    raw_workspace = record_input.get("workspace_root")
-    workspace_root = Path(raw_workspace) if raw_workspace else repo_root
-    if not workspace_root.is_absolute():
-        workspace_root = (repo_root / workspace_root).resolve()
-    else:
-        workspace_root = workspace_root.resolve()
-
-    runs_dir_raw = record_input.get("runs_dir") or ".codex-autorunner/runs"
-    runs_dir_path = Path(runs_dir_raw)
-    if not runs_dir_path.is_absolute():
-        runs_dir_path = (workspace_root / runs_dir_path).resolve()
-    return workspace_root, runs_dir_path
+def _resolve_workspace_root(record_input: dict[str, Any], repo_root: Path) -> Path:
+    try:
+        return resolve_ticket_flow_workspace_root(record_input, repo_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _timestamp(path: Path) -> Optional[str]:
@@ -123,10 +106,8 @@ def _collect_dispatch_history(
     *, repo_root: Path, run_id: str, record_input: dict[str, Any]
 ) -> list[dict[str, Any]]:
     """Collect all dispatches from the dispatch history directory."""
-    workspace_root, runs_dir = _resolve_workspace_and_runs(record_input, repo_root)
-    outbox_paths = resolve_outbox_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-    )
+    workspace_root = _resolve_workspace_root(record_input, repo_root)
+    outbox_paths = resolve_outbox_paths(workspace_root=workspace_root, run_id=run_id)
     history: list[dict[str, Any]] = []
     for seq, entry_dir in reversed(_iter_seq_dirs(outbox_paths.dispatch_history_dir)):
         dispatch_path = entry_dir / "DISPATCH.md"
@@ -180,10 +161,8 @@ def _collect_dispatch_history(
 def _collect_reply_history(
     *, repo_root: Path, run_id: str, record_input: dict[str, Any]
 ):
-    workspace_root, runs_dir = _resolve_workspace_and_runs(record_input, repo_root)
-    reply_paths = resolve_reply_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-    )
+    workspace_root = _resolve_workspace_root(record_input, repo_root)
+    reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
     history: list[dict[str, Any]] = []
     for seq, entry_dir in reversed(_iter_seq_dirs(reply_paths.reply_history_dir)):
         reply_path = entry_dir / "USER_REPLY.md"
@@ -433,10 +412,8 @@ def build_messages_routes() -> APIRouter:
             raise HTTPException(status_code=404, detail="Run not found")
 
         input_data = dict(record.input_data or {})
-        workspace_root, runs_dir = _resolve_workspace_and_runs(input_data, repo_root)
-        reply_paths = resolve_reply_paths(
-            workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
-        )
+        workspace_root = _resolve_workspace_root(input_data, repo_root)
+        reply_paths = resolve_reply_paths(workspace_root=workspace_root, run_id=run_id)
         ensure_reply_dirs(reply_paths)
 
         cleaned_title = (

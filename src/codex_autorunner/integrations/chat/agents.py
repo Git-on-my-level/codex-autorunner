@@ -19,6 +19,21 @@ AgentModelResetMode = Literal["clear", "agent_default"]
 
 
 @dataclass(frozen=True)
+class ChatAgentDefinition:
+    value: str
+    description: str
+
+
+CHAT_AGENT_DEFINITIONS: tuple[ChatAgentDefinition, ...] = (
+    ChatAgentDefinition(value="codex", description="Default Codex agent"),
+    ChatAgentDefinition(
+        value="opencode",
+        description="OpenCode agent (requires opencode binary)",
+    ),
+)
+
+
+@dataclass(frozen=True)
 class ChatAgentSwitchState:
     """Normalized runtime state that should apply after an agent switch."""
 
@@ -50,6 +65,17 @@ def default_chat_model_for_agent(agent: object) -> Optional[str]:
     if normalized is None:
         return None
     return DEFAULT_CHAT_AGENT_MODELS.get(normalized)
+
+
+def chat_agent_command_choices() -> tuple[dict[str, str], ...]:
+    return tuple(
+        {"name": definition.value, "value": definition.value}
+        for definition in CHAT_AGENT_DEFINITIONS
+    )
+
+
+def chat_agent_description() -> str:
+    return " or ".join(VALID_CHAT_AGENT_VALUES)
 
 
 def build_agent_switch_state(

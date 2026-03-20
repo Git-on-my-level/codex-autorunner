@@ -42,6 +42,9 @@ class AgentBackendFactory:
         state: RunnerState,
         notification_handler: Optional[NotificationHandler],
     ) -> AgentBackend:
+        approval_handler = getattr(notification_handler, "approval_handler", None)
+        if not callable(approval_handler):
+            approval_handler = None
         if agent_id == "codex":
             if not self._config.app_server.command:
                 raise ValueError("app_server.command is required for codex backend")
@@ -90,6 +93,7 @@ class AgentBackendFactory:
                     restart_backoff_jitter_ratio=self._config.app_server.client.restart_backoff_jitter_ratio,
                     output_policy=self._config.app_server.output.policy,
                     notification_handler=notification_handler,
+                    approval_handler=approval_handler,
                     logger=self._logger,
                     default_approval_decision=default_approval_decision,
                 )
@@ -103,6 +107,7 @@ class AgentBackendFactory:
                         reasoning_effort=reasoning_effort,
                         turn_timeout_seconds=turn_timeout_seconds,
                         notification_handler=notification_handler,
+                        approval_handler=approval_handler,
                         default_approval_decision=default_approval_decision,
                     )
             return cached

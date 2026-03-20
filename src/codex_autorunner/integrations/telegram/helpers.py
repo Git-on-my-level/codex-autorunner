@@ -42,6 +42,7 @@ from .constants import (
     DEFAULT_MODEL_LIST_LIMIT,
     DEFAULT_PAGE_SIZE,
     DEFAULT_SKILLS_LIST_LIMIT,
+    REASONING_EFFORT_VALUES,
     RESUME_PREVIEW_ASSISTANT_LIMIT,
     RESUME_PREVIEW_SCAN_LINES,
     RESUME_PREVIEW_USER_LIMIT,
@@ -49,7 +50,6 @@ from .constants import (
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THREAD_LIST_PAGE_LIMIT,
     TRACE_MESSAGE_TOKENS,
-    VALID_REASONING_EFFORTS,
 )
 from .handlers.commands_spec import CommandSpec
 from .state import TelegramState, TelegramTopicRecord, ThreadSummary, topic_key
@@ -692,7 +692,7 @@ def _coerce_model_options(
                 efforts.append(default_effort)
             efforts = [effort for effort in efforts if effort]
             if not efforts:
-                efforts = sorted(VALID_REASONING_EFFORTS)
+                efforts = list(REASONING_EFFORT_VALUES)
             efforts = list(dict.fromkeys(efforts))
             if default_effort:
                 label = f"{label} (default {default_effort})"

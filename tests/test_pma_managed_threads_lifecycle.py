@@ -88,7 +88,11 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -213,7 +217,11 @@ def test_compact_rejects_oversize_summary(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -253,7 +261,11 @@ def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -271,9 +283,11 @@ def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:
 
     assert interrupt_resp.status_code == 200
     payload = interrupt_resp.json()
+    assert payload["status"] == "error"
+    assert payload["interrupt_state"] == "failed"
     assert payload["backend_error"] == "Failed to interrupt backend turn"
     assert "sensitive-interrupt-error" not in (payload.get("backend_error") or "")
     updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
     assert updated_turn is not None
-    assert updated_turn["status"] == "interrupted"
-    assert updated_turn["finished_at"] is not None
+    assert updated_turn["status"] == "running"
+    assert updated_turn["finished_at"] is None

@@ -34,6 +34,49 @@ class DispatchContext:
 DispatchRoute = Callable[[Any, TelegramUpdate, DispatchContext], Awaitable[None]]
 
 
+async def _run_with_typing_indicator(
+    handlers: Any,
+    *,
+    chat_id: Optional[int],
+    thread_id: Optional[int],
+    work: Callable[[], Awaitable[None]],
+) -> None:
+    if chat_id is None:
+        await work()
+        return
+    begin = getattr(handlers, "_begin_typing_indicator", None)
+    end = getattr(handlers, "_end_typing_indicator", None)
+    began = False
+    if callable(begin):
+        try:
+            await begin(chat_id, thread_id)
+            began = True
+        except Exception as exc:
+            log_event(
+                handlers._logger,
+                logging.DEBUG,
+                "telegram.typing.begin.failed",
+                chat_id=chat_id,
+                thread_id=thread_id,
+                exc=exc,
+            )
+    try:
+        await work()
+    finally:
+        if began and callable(end):
+            try:
+                await end(chat_id, thread_id)
+            except Exception as exc:
+                log_event(
+                    handlers._logger,
+                    logging.DEBUG,
+                    "telegram.typing.end.failed",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    exc=exc,
+                )
+
+
 async def _build_context(handlers: Any, update: TelegramUpdate) -> DispatchContext:
     chat_id = None
     user_id = None
@@ -111,6 +154,10 @@ async def _dispatch_callback(
     callback = update.callback
     if callback is None:
         return
+
+    async def _handle() -> None:
+        await handlers._handle_callback(callback)
+
     parsed = parse_callback_data(callback.data)
     should_bypass_queue = isinstance(
         parsed,
@@ -126,11 +173,21 @@ async def _dispatch_callback(
         if not should_bypass_queue:
             handlers._enqueue_topic_work(
                 context.topic_key,
-                lambda: handlers._handle_callback(callback),
+                lambda: _run_with_typing_indicator(
+                    handlers,
+                    chat_id=callback.chat_id,
+                    thread_id=callback.thread_id,
+                    work=_handle,
+                ),
                 force_queue=True,
             )
             return
-    await handlers._handle_callback(callback)
+    await _run_with_typing_indicator(
+        handlers,
+        chat_id=callback.chat_id,
+        thread_id=callback.thread_id,
+        work=_handle,
+    )
 
 
 async def _dispatch_message(
@@ -139,20 +196,39 @@ async def _dispatch_message(
     message = update.message
     if message is None:
         return
+
+    async def _handle() -> None:
+        await handlers._handle_message(message)
+
     if context.topic_key:
         if handlers._should_bypass_topic_queue(message):
-            await handlers._handle_message(message)
+            await _run_with_typing_indicator(
+                handlers,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                work=_handle,
+            )
             return
         await handlers._maybe_send_queued_placeholder(
             message, topic_key=context.topic_key
         )
         handlers._enqueue_topic_work(
             context.topic_key,
-            lambda: handlers._handle_message(message),
+            lambda: _run_with_typing_indicator(
+                handlers,
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                work=_handle,
+            ),
             force_queue=True,
         )
         return
-    await handlers._handle_message(message)
+    await _run_with_typing_indicator(
+        handlers,
+        chat_id=message.chat_id,
+        thread_id=message.thread_id,
+        work=_handle,
+    )
 
 
 _ROUTES: tuple[tuple[str, DispatchRoute], ...] = (

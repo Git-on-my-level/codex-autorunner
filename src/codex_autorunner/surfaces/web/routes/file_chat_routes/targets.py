@@ -8,12 +8,15 @@ from typing import TYPE_CHECKING, Optional
 from fastapi import HTTPException, Request
 
 from .....contextspace.paths import (
-    CONTEXTSPACE_DOC_KINDS,
     contextspace_doc_path,
-    normalize_contextspace_rel_path,
+    normalize_contextspace_doc_kind,
 )
 from .....core import drafts as draft_utils
-from .....core.context_awareness import CAR_AWARENESS_BLOCK, format_file_role_addendum
+from .....core.car_context import DEFAULT_REPO_THREAD_CONTEXT_PROFILE
+from .....core.context_awareness import (
+    format_file_role_addendum,
+    maybe_inject_car_awareness,
+)
 from .....core.file_chat_keys import ticket_chat_scope, ticket_state_key
 from .....core.utils import find_repo_root
 
@@ -54,8 +57,19 @@ def _resolve_repo_root(request: Optional[Request] = None) -> Path:
     return find_repo_root()
 
 
+def resolve_repo_root(request: Optional[Request] = None) -> Path:
+    return _resolve_repo_root(request)
+
+
 def _ticket_path(repo_root: Path, index: int) -> Path:
     return repo_root / ".codex-autorunner" / "tickets" / f"TICKET-{index:03d}.md"
+
+
+def _parse_contextspace_kind(raw: str) -> str:
+    value = (raw or "").strip().lower()
+    if value.endswith(".md"):
+        value = value[:-3]
+    return normalize_contextspace_doc_kind(value)
 
 
 @dataclass(frozen=True)
@@ -101,17 +115,12 @@ def parse_target(repo_root: Path, raw: str) -> _Target:
         suffix_raw = target.split(":", 1)[1].strip()
         if not suffix_raw:
             raise HTTPException(status_code=400, detail="invalid contextspace target")
-
-        if suffix_raw.lower() in CONTEXTSPACE_DOC_KINDS:
-            path = contextspace_doc_path(repo_root, suffix_raw)
-            rel_suffix = f"{suffix_raw}.md"
-        else:
-            try:
-                path, rel_suffix = normalize_contextspace_rel_path(
-                    repo_root, suffix_raw
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            kind = _parse_contextspace_kind(suffix_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        path = contextspace_doc_path(repo_root, kind)
+        rel_suffix = f"{kind}.md"
 
         rel = (
             str(path.relative_to(repo_root))
@@ -131,23 +140,58 @@ def parse_target(repo_root: Path, raw: str) -> _Target:
     raise HTTPException(status_code=400, detail=f"invalid target: {target}")
 
 
-def build_file_chat_prompt(*, target: _Target, message: str, before: str) -> str:
+def build_file_chat_prompt(
+    *,
+    target: _Target,
+    message: str,
+    before: str,
+    editable_rel_path: Optional[str] = None,
+) -> str:
+    prompt_path = editable_rel_path or target.rel_path
+    draft_path_block = ""
+    instruction_lines = [
+        "- This is a single-turn edit request. Don't ask the user questions.",
+        "- You may read other files for context, but only modify the editable path.",
+        "- Do not modify the live target file directly; prepare the deferred-apply draft instead.",
+        "- If no changes are needed, explain why without editing the file.",
+        "- Respond with a short summary of what you did.",
+    ]
+    instructions = "\n".join(instruction_lines)
+    declared_profile = DEFAULT_REPO_THREAD_CONTEXT_PROFILE
     if target.kind == "ticket":
+        declared_profile = "car_core"
         file_role_context = (
             f"{format_file_role_addendum('ticket', target.rel_path)}\n"
             "Edits here change what ticket flow agent will do; keep YAML "
             "frontmatter valid."
         )
     elif target.kind == "contextspace":
+        declared_profile = "car_core"
         file_role_context = (
             f"{format_file_role_addendum('contextspace', target.rel_path)}\n"
             "These docs act as shared memory across ticket turns."
         )
     else:
         file_role_context = format_file_role_addendum("other", target.rel_path)
+    car_context, _ = maybe_inject_car_awareness(
+        "",
+        declared_profile=declared_profile,
+        target_path=target.rel_path,
+    )
+    context_prefix = f"{car_context}\n\n" if car_context else ""
+
+    if editable_rel_path and editable_rel_path != target.rel_path:
+        draft_path_block = (
+            "<live_target_path>\n"
+            f"{target.rel_path}\n"
+            "</live_target_path>\n\n"
+            "<editable_path>\n"
+            f"{editable_rel_path}\n"
+            "</editable_path>\n\n"
+        )
 
     return (
-        f"{CAR_AWARENESS_BLOCK}\n\n"
+        f"{context_prefix}"
         "<file_role_context>\n"
         f"{file_role_context}\n"
         "</file_role_context>\n\n"
@@ -155,14 +199,12 @@ def build_file_chat_prompt(*, target: _Target, message: str, before: str) -> str
         "<target>\n"
         f"{target.target}\n"
         "</target>\n\n"
+        f"{draft_path_block}"
         "<path>\n"
-        f"{target.rel_path}\n"
+        f"{prompt_path}\n"
         "</path>\n\n"
         "<instructions>\n"
-        "- This is a single-turn edit request. Don't ask the user questions.\n"
-        "- You may read other files for context, but only modify the target file.\n"
-        "- If no changes are needed, explain why without editing the file.\n"
-        "- Respond with a short summary of what you did.\n"
+        f"{instructions}\n"
         "</instructions>\n\n"
         "<user_request>\n"
         f"{message}\n"

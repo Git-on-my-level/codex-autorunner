@@ -310,6 +310,15 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
             reply_markup=reply_markup,
         )
 
+    async def _chat_delete_message(
+        self,
+        *,
+        chat_id: int,
+        thread_id: int | None,
+        message_id: int,
+    ) -> bool:
+        return await self._delete_message(chat_id, message_id, thread_id)
+
     @staticmethod
     def _chat_thread_ref(chat_id: int, thread_id: int | None):
         from ...chat.models import ChatThreadRef

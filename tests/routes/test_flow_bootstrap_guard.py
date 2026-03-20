@@ -122,7 +122,8 @@ def test_start_reuses_active_run_when_latest_is_terminal(tmp_path, monkeypatch):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---\n", encoding="utf-8"
+        '---\nticket_id: "tkt_guard001"\nagent: codex\ndone: false\n---\n',
+        encoding="utf-8",
     )
 
     artifacts_dir = tmp_path / ".codex-autorunner" / "flows" / active_run_id
@@ -471,7 +472,8 @@ def test_ticket_flow_start_allows_with_tickets(tmp_path, monkeypatch):
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---\n", encoding="utf-8"
+        '---\nticket_id: "tkt_guard002"\nagent: codex\ndone: false\n---\n',
+        encoding="utf-8",
     )
 
     db_path = tmp_path / ".codex-autorunner" / "flows.db"

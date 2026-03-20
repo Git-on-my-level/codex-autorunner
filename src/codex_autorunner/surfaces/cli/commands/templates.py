@@ -92,12 +92,6 @@ def register_templates_commands(
         template: str = typer.Argument(
             ..., help="Template ref formatted as REPO_ID:PATH[@REF]"
         ),
-        ticket_dir: Optional[Path] = typer.Option(
-            None,
-            "--out",
-            "--ticket-dir",
-            help="Output ticket directory (default .codex-autorunner/tickets)",
-        ),
         at: Optional[int] = typer.Option(None, "--at", help="Explicit ticket index"),
         next_index: bool = typer.Option(
             True, "--next/--no-next", help="Use next available index (default)"
@@ -128,7 +122,7 @@ def register_templates_commands(
             template, ctx, hub, ctx.config, raise_exit, resolve_hub_config_path_for_cli
         )
 
-        resolved_dir = _resolve_ticket_dir(ctx.repo_root, ticket_dir)
+        resolved_dir = ctx.repo_root / ".codex-autorunner" / "tickets"
         if resolved_dir.exists() and not resolved_dir.is_dir():
             raise_exit(f"Ticket dir is not a directory: {resolved_dir}")
         try:
@@ -255,14 +249,6 @@ def _fetch_template_with_scan(
                 raise_exit(format_template_scan_rejection(scan_record))
 
     return fetched, scan_record, hub_root
-
-
-def _resolve_ticket_dir(repo_root: Path, ticket_dir: Optional[Path]) -> Path:
-    if ticket_dir is None:
-        return repo_root / ".codex-autorunner" / "tickets"
-    if ticket_dir.is_absolute():
-        return ticket_dir
-    return repo_root / ticket_dir
 
 
 def _collect_ticket_indices(ticket_dir: Path) -> list[int]:

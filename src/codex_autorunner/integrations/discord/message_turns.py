@@ -10,6 +10,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, cast
 
+from ...agents.base import (
+    harness_progress_event_stream,
+    harness_supports_progress_event_stream,
+)
 from ...agents.registry import get_registered_agents
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
@@ -26,11 +30,10 @@ from ...core.orchestration import (
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
+    recover_post_completion_outcome,
     terminal_run_event_from_outcome,
 )
 from ...core.orchestration.runtime_threads import (
-    RUNTIME_THREAD_INTERRUPTED_ERROR,
-    RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
     await_runtime_thread_outcome,
@@ -61,7 +64,14 @@ from ...core.utils import canonicalize_path
 from ...integrations.chat.collaboration_policy import CollaborationEvaluationResult
 from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
+from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.models import ChatMessageEvent
+from ...integrations.chat.runtime_thread_errors import (
+    resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
+)
+from ...integrations.chat.runtime_thread_errors import (
+    sanitize_runtime_thread_error,
+)
 from ..chat.managed_thread_progress import (
     ProgressRuntimeState,
     apply_run_event_to_progress_tracker,
@@ -69,7 +79,7 @@ from ..chat.managed_thread_progress import (
 from ..chat.progress_primitives import TurnProgressTracker, render_progress_text
 from ..chat.turn_metrics import (
     _extract_context_usage_percent,
-    _format_turn_metrics,
+    compose_turn_response_with_footer,
 )
 from .components import build_cancel_turn_button
 from .rendering import (
@@ -90,8 +100,51 @@ DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 class DiscordMessageTurnResult:
     final_message: str
     preview_message_id: Optional[str] = None
+    intermediate_message: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
     elapsed_seconds: Optional[float] = None
+    send_final_message: bool = True
+
+
+_APPROVAL_MODE_POLICY_PRESETS: dict[str, tuple[str, str]] = {
+    "yolo": ("never", "dangerFullAccess"),
+    "safe": ("on-request", "workspaceWrite"),
+    "auto": ("on-request", "workspaceWrite"),
+    "read-only": ("on-request", "readOnly"),
+    "full-access": ("never", "dangerFullAccess"),
+}
+
+_sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
+
+
+def _resolve_discord_turn_policies(
+    binding: Optional[dict[str, Any]],
+    *,
+    default_approval_policy: str,
+    default_sandbox_policy: str,
+) -> tuple[str, Any]:
+    approval_policy = default_approval_policy
+    sandbox_policy: Any = default_sandbox_policy
+    approval_mode = "yolo"
+    if isinstance(binding, dict):
+        binding_mode = str(binding.get("approval_mode") or "").strip()
+        if binding_mode:
+            approval_mode = binding_mode
+        binding_policy = binding.get("approval_policy")
+        if isinstance(binding_policy, str) and binding_policy.strip():
+            approval_policy = binding_policy.strip()
+        binding_sandbox = binding.get("sandbox_policy")
+        if isinstance(binding_sandbox, str) and binding_sandbox.strip():
+            sandbox_policy = binding_sandbox.strip()
+    preset_policy, preset_sandbox = _APPROVAL_MODE_POLICY_PRESETS.get(
+        approval_mode.lower(),
+        (None, None),
+    )
+    if approval_policy == default_approval_policy and preset_policy is not None:
+        approval_policy = preset_policy
+    if sandbox_policy == default_sandbox_policy and preset_sandbox is not None:
+        sandbox_policy = preset_sandbox
+    return approval_policy, sandbox_policy
 
 
 async def _apply_discord_progress_run_event(
@@ -164,6 +217,7 @@ async def handle_message_event(
     build_ticket_flow_controller_fn: Any,
     ensure_worker_fn: Any,
 ) -> None:
+    turn_text = compose_forwarded_message_text(text, event.forwarded_from)
     binding, workspace_root = await resolve_bound_workspace_root(
         service,
         channel_id=channel_id,
@@ -265,7 +319,7 @@ async def handle_message_event(
         paused_record = paused_records.get(flow_target.run_id)
         if paused_record is None:
             return
-        reply_text = text
+        reply_text = turn_text
         if has_attachments:
             (
                 reply_text,
@@ -274,7 +328,7 @@ async def handle_message_event(
                 transcript_message,
                 _native_input_items,
             ) = await service._with_attachment_context(
-                prompt_text=text,
+                prompt_text=turn_text,
                 workspace_root=workspace_root,
                 attachments=event.attachments,
                 channel_id=channel_id,
@@ -355,7 +409,7 @@ async def handle_message_event(
     async def _submit_thread_message(
         _request: SurfaceThreadMessageRequest,
     ) -> DiscordMessageTurnResult:
-        prompt_text = text
+        prompt_text = turn_text
         (
             prompt_text,
             saved_attachments,
@@ -395,10 +449,16 @@ async def handle_message_event(
                         ),
                     },
                 )
-            return DiscordMessageTurnResult(final_message="")
+            return DiscordMessageTurnResult(
+                final_message="",
+                send_final_message=False,
+            )
 
         if not pma_enabled:
-            prompt_text, injected = maybe_inject_car_awareness(prompt_text)
+            prompt_text, injected = maybe_inject_car_awareness(
+                prompt_text,
+                declared_profile="car_ambient",
+            )
             if injected:
                 log_event_fn(
                     service._logger,
@@ -428,6 +488,7 @@ async def handle_message_event(
                     snapshot,
                     prompt_text,
                     hub_root=service._config.root,
+                    prompt_state_key=session_key,
                 )
             except Exception as exc:
                 log_event_fn(
@@ -441,12 +502,15 @@ async def handle_message_event(
                     channel_id,
                     {"content": "Failed to build PMA context. Please try again."},
                 )
-                return DiscordMessageTurnResult(final_message="")
+                return DiscordMessageTurnResult(
+                    final_message="",
+                    send_final_message=False,
+                )
 
         prompt_text, _github_injected = await service._maybe_inject_github_context(
             prompt_text,
             workspace_root,
-            link_source_text=text,
+            link_source_text=turn_text,
             allow_cross_repo=pma_enabled,
         )
         if pending_compact_seed:
@@ -495,13 +559,16 @@ async def handle_message_event(
                     )
                 },
             )
-            return DiscordMessageTurnResult(final_message="")
+            return DiscordMessageTurnResult(
+                final_message="",
+                send_final_message=False,
+            )
 
     result = await ingress.submit_message(
         SurfaceThreadMessageRequest(
             surface_kind="discord",
             workspace_root=workspace_root,
-            prompt_text=text,
+            prompt_text=turn_text,
             agent_id=agent,
             pma_enabled=pma_enabled,
         ),
@@ -516,44 +583,48 @@ async def handle_message_event(
     if isinstance(turn_result, DiscordMessageTurnResult):
         response_text = turn_result.final_message
         preview_message_id = turn_result.preview_message_id
-        metrics_text = _format_turn_metrics(
-            turn_result.token_usage,
-            turn_result.elapsed_seconds,
+        send_final_message = turn_result.send_final_message
+        intermediate_text = (
+            turn_result.intermediate_message.strip()
+            if isinstance(turn_result.intermediate_message, str)
+            else ""
         )
-        if metrics_text:
-            if response_text.strip():
-                response_text = f"{response_text}\n\n{metrics_text}"
-            else:
-                response_text = f"(No response text returned.)\n\n{metrics_text}"
+        response_text = compose_turn_response_with_footer(
+            response_text,
+            summary_text=intermediate_text,
+            token_usage=turn_result.token_usage,
+            elapsed_seconds=turn_result.elapsed_seconds,
+            agent=agent,
+            model=model_override,
+        )
     else:
         response_text = str(turn_result or "")
         preview_message_id = None
+        send_final_message = True
+        intermediate_text = ""
 
-    chunks = chunk_discord_message(
-        response_text or "(No response text returned.)",
-        max_len=service._config.max_message_length,
-        with_numbering=False,
-    )
-    if not chunks:
-        chunks = ["(No response text returned.)"]
-    for idx, chunk in enumerate(chunks, 1):
-        await service._send_channel_message_safe(
-            channel_id,
-            {"content": chunk},
-            record_id=f"turn:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
-        )
     if isinstance(preview_message_id, str) and preview_message_id:
         await service._delete_channel_message_safe(
             channel_id=channel_id,
             message_id=preview_message_id,
             record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
         )
+    if send_final_message:
+        await _send_discord_turn_section(
+            service,
+            channel_id=channel_id,
+            text=response_text or "(No response text returned.)",
+            record_prefix=f"turn:final:{session_key}",
+            attachment_filename="final-response.md",
+            attachment_caption="Final response too long; attached as final-response.md.",
+        )
     if pending_compact_seed is not None:
         await service._store.clear_pending_compact_seed(channel_id=channel_id)
-    await service._flush_outbox_files(
-        workspace_root=workspace_root,
-        channel_id=channel_id,
-    )
+    if send_final_message:
+        await service._flush_outbox_files(
+            workspace_root=workspace_root,
+            channel_id=channel_id,
+        )
 
 
 async def run_agent_turn_for_message(
@@ -578,6 +649,12 @@ async def run_agent_turn_for_message(
         heartbeat_interval_seconds,
         log_event_fn,
     )
+    binding = await service._store.get_binding(channel_id=orchestrator_channel_key)
+    approval_mode, sandbox_policy = _resolve_discord_turn_policies(
+        binding,
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    )
     return await _run_discord_orchestrated_turn_for_message(
         service,
         workspace_root=workspace_root,
@@ -594,29 +671,12 @@ async def run_agent_turn_for_message(
         public_execution_error=DISCORD_REPO_PUBLIC_EXECUTION_ERROR,
         timeout_error="Discord turn timed out",
         interrupted_error="Discord turn interrupted",
-        approval_mode="never",
-        sandbox_policy="dangerFullAccess",
+        approval_mode=approval_mode,
+        sandbox_policy=sandbox_policy,
         max_actions=max_actions,
         min_edit_interval_seconds=min_edit_interval_seconds,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
     )
-
-
-def _sanitize_runtime_thread_result_error(
-    detail: Any,
-    *,
-    public_error: str,
-    timeout_error: str,
-    interrupted_error: str,
-) -> str:
-    sanitized = str(detail or "").strip()
-    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, timeout_error}:
-        return timeout_error
-    if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, interrupted_error}:
-        return interrupted_error
-    if sanitized in {timeout_error, interrupted_error}:
-        return sanitized
-    return public_error
 
 
 def _note_runtime_event_state(
@@ -634,8 +694,15 @@ def _note_runtime_event_state(
     if isinstance(run_event, TokenUsage) and isinstance(run_event.usage, dict):
         event_state.token_usage = dict(run_event.usage)
         return
-    if isinstance(run_event, Completed) and isinstance(run_event.final_message, str):
-        event_state.note_message_text(run_event.final_message)
+    if isinstance(run_event, Completed):
+        event_state.completed_seen = True
+        if isinstance(run_event.final_message, str):
+            event_state.note_message_text(run_event.final_message)
+        return
+    if isinstance(run_event, Failed):
+        error_message = str(run_event.error_message or "").strip()
+        if error_message:
+            event_state.last_error_message = error_message
 
 
 def _build_managed_thread_input_items(
@@ -1027,14 +1094,15 @@ async def _finalize_discord_thread_execution(
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
 
     if (
-        started.harness.supports("event_streaming")
+        harness_supports_progress_event_stream(started.harness)
         and stream_backend_thread_id
         and stream_backend_turn_id
     ):
 
         async def _pump_runtime_events() -> None:
             try:
-                async for raw_event in started.harness.stream_events(
+                async for raw_event in harness_progress_event_stream(
+                    started.harness,
                     started.workspace_root,
                     stream_backend_thread_id,
                     stream_backend_turn_id,
@@ -1092,6 +1160,16 @@ async def _finalize_discord_thread_execution(
             stream_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await stream_task
+
+    recovered_outcome = recover_post_completion_outcome(outcome, event_state)
+    if recovered_outcome is not outcome:
+        service._logger.warning(
+            "Discord runtime turn recovered from post-completion error: thread=%s turn=%s error=%s",
+            managed_thread_id,
+            managed_turn_id,
+            outcome.error,
+        )
+        outcome = recovered_outcome
 
     if on_progress_event is not None:
         with contextlib.suppress(Exception):
@@ -1162,8 +1240,9 @@ async def _finalize_discord_thread_execution(
             if finalized_status == "interrupted":
                 detail = interrupted_error
             elif finalized_status == "error" and finalized_execution is not None:
-                detail = _sanitize_runtime_thread_result_error(
-                    finalized_execution.error,
+                detail = _resolve_runtime_thread_result_error_detail(
+                    execution_error=getattr(finalized_execution, "error", None),
+                    event_error=event_state.last_error_message,
                     public_error=public_execution_error,
                     timeout_error=timeout_error,
                     interrupted_error=interrupted_error,
@@ -1209,8 +1288,9 @@ async def _finalize_discord_thread_execution(
             "token_usage": event_state.token_usage,
         }
 
-    detail = _sanitize_runtime_thread_result_error(
-        outcome.error,
+    detail = _resolve_runtime_thread_result_error_detail(
+        outcome_error=outcome.error,
+        event_error=event_state.last_error_message,
         public_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
@@ -1259,6 +1339,17 @@ def _ensure_discord_thread_queue_worker(
 
     worker_task: Optional[asyncio.Task[Any]] = None
 
+    async def _run_with_discord_typing_indicator(
+        *,
+        channel_id: str,
+        work: Any,
+    ) -> None:
+        run_with_typing = getattr(service, "_run_with_typing_indicator", None)
+        if callable(run_with_typing):
+            await run_with_typing(channel_id=channel_id, work=work)
+            return
+        await work()
+
     async def _queue_worker() -> None:
         try:
             while True:
@@ -1274,36 +1365,56 @@ def _ensure_discord_thread_queue_worker(
                 )
                 if started is None:
                     break
-                finalized = await _finalize_discord_thread_execution(
-                    service,
-                    orchestration_service=orchestration_service,
-                    started=started,
+
+                async def _process_started_execution(
+                    started_execution: RuntimeThreadExecution = started,
+                ) -> None:
+                    service._register_discord_turn_approval_context(
+                        started_execution=started_execution,
+                        channel_id=channel_id,
+                    )
+                    try:
+                        finalized = await _finalize_discord_thread_execution(
+                            service,
+                            orchestration_service=orchestration_service,
+                            started=started_execution,
+                            channel_id=channel_id,
+                            public_execution_error=public_execution_error,
+                            timeout_error=timeout_error,
+                            interrupted_error=interrupted_error,
+                        )
+                    finally:
+                        service._clear_discord_turn_approval_context(
+                            started_execution=started_execution
+                        )
+                    if finalized["status"] == "ok":
+                        message = str(finalized.get("assistant_text") or "").strip()
+                        if message:
+                            await service._send_channel_message_safe(
+                                channel_id,
+                                {"content": message},
+                                record_id=(
+                                    "discord-queued:"
+                                    f"{managed_thread_id}:{finalized['managed_turn_id']}"
+                                ),
+                            )
+                        return
+                    await service._send_channel_message_safe(
+                        channel_id,
+                        {
+                            "content": (
+                                f"Turn failed: {finalized.get('error') or public_execution_error}"
+                            )
+                        },
+                        record_id=(
+                            "discord-queued-error:"
+                            f"{managed_thread_id}:{finalized['managed_turn_id']}"
+                        ),
+                    )
+
+                await _run_with_discord_typing_indicator(
                     channel_id=channel_id,
-                    public_execution_error=public_execution_error,
-                    timeout_error=timeout_error,
-                    interrupted_error=interrupted_error,
-                )
-                if finalized["status"] == "ok":
-                    message = str(finalized.get("assistant_text") or "").strip()
-                    if message:
-                        await service._send_channel_message_safe(
-                            channel_id,
-                            {"content": message},
-                            record_id=(
-                                f"discord-queued:{managed_thread_id}:{finalized['managed_turn_id']}"
-                            ),
-                        )
-                    continue
-                await service._send_channel_message_safe(
-                    channel_id,
-                    {
-                        "content": (
-                            f"Turn failed: {finalized.get('error') or public_execution_error}"
-                        )
-                    },
-                    record_id=(
-                        f"discord-queued-error:{managed_thread_id}:{finalized['managed_turn_id']}"
-                    ),
+                    work=_process_started_execution,
                 )
         finally:
             if (
@@ -1496,6 +1607,10 @@ async def _run_discord_orchestrated_turn_for_message(
     except Exception:
         progress_message_id = None
 
+    service._register_discord_turn_approval_context(
+        started_execution=started_execution,
+        channel_id=channel_id,
+    )
     try:
         finalized = await _finalize_discord_thread_execution(
             service,
@@ -1514,6 +1629,9 @@ async def _run_discord_orchestrated_turn_for_message(
             ),
         )
     finally:
+        service._clear_discord_turn_approval_context(
+            started_execution=started_execution
+        )
         if progress_heartbeat_task is not None:
             progress_heartbeat_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -1530,12 +1648,68 @@ async def _run_discord_orchestrated_turn_for_message(
     )
     if finalized["status"] != "ok":
         raise RuntimeError(str(finalized.get("error") or public_execution_error))
+    summary_snapshot = render_progress_text(
+        tracker,
+        max_length=max_progress_len,
+        now=time.monotonic(),
+        render_mode="live",
+    )
+    intermediate_message = (
+        summary_snapshot.splitlines()[0].strip() if summary_snapshot else ""
+    )
+    if not intermediate_message:
+        intermediate_message = render_progress_text(
+            tracker,
+            max_length=max_progress_len,
+            now=time.monotonic(),
+            render_mode="final",
+        )
     return DiscordMessageTurnResult(
         final_message=str(finalized.get("assistant_text") or ""),
         preview_message_id=progress_message_id,
+        intermediate_message=intermediate_message,
         token_usage=cast(Optional[dict[str, Any]], finalized.get("token_usage")),
         elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),
     )
+
+
+async def _send_discord_turn_section(
+    service: Any,
+    *,
+    channel_id: str,
+    text: str,
+    record_prefix: str,
+    attachment_filename: str,
+    attachment_caption: str,
+) -> None:
+    chunks = chunk_discord_message(
+        text,
+        max_len=service._config.max_message_length,
+        with_numbering=False,
+    )
+    if (
+        service._config.message_overflow == "document"
+        and len(chunks) > 3
+        and text.strip()
+    ):
+        try:
+            await service._rest.create_channel_message_with_attachment(
+                channel_id=channel_id,
+                data=text.encode("utf-8"),
+                filename=attachment_filename,
+                caption=attachment_caption,
+            )
+            return
+        except Exception:
+            pass
+    if not chunks:
+        chunks = ["(No response text returned.)"]
+    for idx, chunk in enumerate(chunks, 1):
+        await service._send_channel_message_safe(
+            channel_id,
+            {"content": chunk},
+            record_id=f"{record_prefix}:{idx}:{uuid.uuid4().hex[:8]}",
+        )
 
 
 async def run_managed_thread_turn_for_message(
@@ -1556,6 +1730,12 @@ async def run_managed_thread_turn_for_message(
         f"{prompt_text}\n"
         "</user_message>\n"
     )
+    binding = await service._store.get_binding(channel_id=orchestrator_channel_key)
+    approval_mode, sandbox_policy = _resolve_discord_turn_policies(
+        binding,
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    )
     return await _run_discord_orchestrated_turn_for_message(
         service,
         workspace_root=workspace_root,
@@ -1572,8 +1752,8 @@ async def run_managed_thread_turn_for_message(
         public_execution_error=DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
         timeout_error="Discord PMA turn timed out",
         interrupted_error="Discord PMA turn interrupted",
-        approval_mode="on-request",
-        sandbox_policy="dangerFullAccess",
+        approval_mode=approval_mode,
+        sandbox_policy=sandbox_policy,
         max_actions=DISCORD_PMA_PROGRESS_MAX_ACTIONS,
         min_edit_interval_seconds=DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
         heartbeat_interval_seconds=DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,

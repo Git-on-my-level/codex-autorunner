@@ -25,6 +25,7 @@ from codex_autorunner.core.orchestration.service import (
 )
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
 
 
 @dataclass
@@ -56,6 +57,7 @@ class _FakeHarness:
     start_turn_calls: list[dict[str, Any]] = field(default_factory=list)
     start_review_calls: list[dict[str, Any]] = field(default_factory=list)
     interrupt_calls: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
+    interrupt_error: Optional[Exception] = None
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         self.ensure_ready_calls.append(workspace_root)
@@ -133,6 +135,8 @@ class _FakeHarness:
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
     ) -> None:
         self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
+        if self.interrupt_error is not None:
+            raise self.interrupt_error
 
     async def wait_for_turn(
         self,
@@ -231,6 +235,38 @@ def test_service_supports_agent_workspace_thread_targets(tmp_path: Path) -> None
     assert created.resource_id == "zc-main"
     assert created.repo_id is None
     assert [thread.thread_target_id for thread in listed] == [created.thread_target_id]
+
+
+def test_service_persists_thread_context_profile(tmp_path: Path) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    created = service.create_thread_target(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        context_profile="car_core",
+    )
+
+    assert created.context_profile == "car_core"
+
+
+def test_service_preserves_thread_context_profile_from_metadata(tmp_path: Path) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    created = service.create_thread_target(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        metadata={"context_profile": "car_core"},
+    )
+
+    assert created.context_profile == "car_core"
 
 
 def test_create_thread_target_supports_durable_zeroclaw_agent_workspace(
@@ -600,6 +636,46 @@ async def test_interrupt_thread_uses_harness_and_marks_execution(
         (workspace_root, "backend-conversation-1", "backend-turn-1")
     ]
     assert interrupted.status == "interrupted"
+
+
+async def test_stop_thread_recovers_missing_backend_thread_error(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(
+        interrupt_error=CodexAppServerResponseError(
+            method="turn/interrupt",
+            code=-32600,
+            message="thread not found: backend-conversation-1",
+            data=None,
+        )
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    outcome = await service.stop_thread(thread.thread_target_id)
+
+    assert harness.interrupt_calls == [
+        (workspace_root, "backend-conversation-1", "backend-turn-1")
+    ]
+    assert outcome.interrupted_active is False
+    assert outcome.recovered_lost_backend is True
+    assert outcome.execution is not None
+    assert outcome.execution.execution_id == execution.execution_id
+    assert outcome.execution.status == "error"
+    assert outcome.execution.error == "Backend thread lost after restart"
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+    assert refreshed_thread is not None
+    assert refreshed_thread.backend_thread_id is None
+    assert service.get_running_execution(thread.thread_target_id) is None
 
 
 async def test_cancel_queued_executions_marks_queued_rows_interrupted(

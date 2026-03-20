@@ -5,9 +5,16 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.agents.managed_runtime import (
+    RuntimeLaunchSpec,
+    build_managed_workspace_launch_spec,
+    preflight_managed_workspace_runtime,
+    sync_managed_workspace_compat_files,
+)
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.agents.zeroclaw.supervisor import ZeroClawSupervisor
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.car_context import build_car_context_bundle
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.destinations import DockerDestination
 
@@ -17,20 +24,17 @@ class _FakeZeroClawClient:
 
     def __init__(
         self,
-        command,
+        launch_spec: RuntimeLaunchSpec,
         *,
-        runtime_workspace_root: Path,
-        session_state_file: Path,
         logger=None,
-        base_env=None,
         launch_provider: str | None = None,
         launch_model: str | None = None,
     ) -> None:
-        self.command = list(command)
-        self.runtime_workspace_root = runtime_workspace_root
-        self.session_state_file = session_state_file
+        self.command = list(launch_spec.command)
+        self.runtime_workspace_root = launch_spec.runtime_workspace_root
+        self.session_state_file = launch_spec.session_state_file
         self.logger = logger
-        self.base_env = base_env
+        self.base_env = dict(launch_spec.env)
         self.launch_provider = launch_provider
         self.launch_model = launch_model
         self.started: list[tuple[str, str | None, str | None]] = []
@@ -115,11 +119,83 @@ def _session_state_path(workspace_root: Path, session_id: str) -> Path:
     return workspace_root / "threads" / session_id / "session-state.json"
 
 
+def test_sync_managed_workspace_compat_files_writes_agents_md_for_core(
+    tmp_path: Path,
+) -> None:
+    runtime_workspace_root = tmp_path / "workspace"
+
+    sync_managed_workspace_compat_files(
+        "zeroclaw",
+        runtime_workspace_root=runtime_workspace_root,
+        bundle=build_car_context_bundle("car_core"),
+    )
+
+    agents_path = runtime_workspace_root / "AGENTS.md"
+    assert agents_path.exists()
+    assert "Codex Autorunner (CAR)" in agents_path.read_text(encoding="utf-8")
+
+
+def test_sync_managed_workspace_compat_files_removes_agents_md_for_none(
+    tmp_path: Path,
+) -> None:
+    runtime_workspace_root = tmp_path / "workspace"
+    runtime_workspace_root.mkdir(parents=True, exist_ok=True)
+    agents_path = runtime_workspace_root / "AGENTS.md"
+    agents_path.write_text("stale", encoding="utf-8")
+
+    sync_managed_workspace_compat_files(
+        "zeroclaw",
+        runtime_workspace_root=runtime_workspace_root,
+        bundle=build_car_context_bundle("none"),
+    )
+
+    assert not agents_path.exists()
+
+
+def _patch_launch_spec_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_build_launch_spec(
+        runtime_id: str,
+        *,
+        command,
+        runtime_workspace_root: Path,
+        session_state_file: Path,
+        base_env=None,
+        embed_workspace_env: bool = True,
+    ) -> RuntimeLaunchSpec:
+        env = dict(base_env or {})
+        if embed_workspace_env:
+            env["ZEROCLAW_WORKSPACE"] = str(runtime_workspace_root)
+            env["ZEROCLAW_CONFIG_DIR"] = str(Path.home() / ".zeroclaw")
+        return RuntimeLaunchSpec(
+            runtime_id=runtime_id,
+            command=tuple(
+                [
+                    *list(command),
+                    "agent",
+                    "--session-state-file",
+                    str(session_state_file),
+                ]
+            ),
+            cwd=runtime_workspace_root,
+            env=env,
+            launch_mode="session_state_file",
+            runtime_version="zeroclaw test",
+            runtime_workspace_root=runtime_workspace_root,
+            session_state_file=session_state_file,
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor.build_managed_workspace_launch_spec",
+        _fake_build_launch_spec,
+    )
+
+
 @pytest.mark.asyncio
 async def test_supervisor_persists_managed_workspace_launch_metadata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
     monkeypatch.setattr(
         "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
         _FakeZeroClawClient,
@@ -146,6 +222,8 @@ async def test_supervisor_persists_managed_workspace_launch_metadata(
     assert payload["title"] == "ZeroClaw Main"
     assert payload["launch_provider"] == "openrouter"
     assert payload["launch_model"] == "gpt-5"
+    assert payload["runtime_version"] == "zeroclaw test"
+    assert payload["launch_mode"] == "session_state_file"
 
 
 @pytest.mark.asyncio
@@ -153,6 +231,7 @@ async def test_supervisor_rehydrates_durable_session_after_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
     monkeypatch.setattr(
         "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
         _FakeZeroClawClient,
@@ -199,6 +278,7 @@ async def test_supervisor_multiple_sessions_share_workspace_memory_but_keep_sess
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
     monkeypatch.setattr(
         "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
         _FakeZeroClawClient,
@@ -302,6 +382,7 @@ async def test_supervisor_keeps_workspace_memory_isolated_across_workspaces_with
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
     monkeypatch.setattr(
         "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
         _FakeZeroClawClient,
@@ -342,9 +423,8 @@ async def test_supervisor_keeps_workspace_memory_isolated_across_workspaces_with
     ) == "workspace-b"
 
     assert len(_FakeZeroClawClient.instances) == 2
-    assert {tuple(client.command) for client in _FakeZeroClawClient.instances} == {
-        ("zeroclaw",)
-    }
+    for client in _FakeZeroClawClient.instances:
+        assert client.command[:3] == ["zeroclaw", "agent", "--session-state-file"]
     assert {
         client.runtime_workspace_root for client in _FakeZeroClawClient.instances
     } == {
@@ -358,6 +438,7 @@ async def test_supervisor_rejects_cross_workspace_attach(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
     monkeypatch.setattr(
         "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
         _FakeZeroClawClient,
@@ -377,6 +458,7 @@ async def test_supervisor_wraps_workspace_launch_for_docker_destination(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
     monkeypatch.setattr(
         "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
         _FakeZeroClawClient,
@@ -409,10 +491,98 @@ async def test_supervisor_wraps_workspace_launch_for_docker_destination(
     runtime_workspace_root = workspace_root / "workspace"
     assert captured["repo_root"] == workspace_root
     assert captured["command_workdir"] == runtime_workspace_root
-    assert captured["extra_env"] == {"ZEROCLAW_WORKSPACE": str(runtime_workspace_root)}
+    assert captured["extra_env"] == {
+        "ZEROCLAW_WORKSPACE": str(runtime_workspace_root),
+        "ZEROCLAW_CONFIG_DIR": str(Path.home() / ".zeroclaw"),
+    }
 
     client = _FakeZeroClawClient.instances[0]
     assert client.command[:4] == ["docker", "exec", "zc-main", "zeroclaw"]
+
+
+@pytest.mark.asyncio
+async def test_supervisor_preserves_explicit_docker_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
+        _FakeZeroClawClient,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _fake_wrap_command_for_destination(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return type(
+            "Wrapped", (), {"command": ["docker", "exec", "zc-main", "zeroclaw"]}
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor._wrap_command_for_destination",
+        _fake_wrap_command_for_destination,
+    )
+
+    workspace_root = tmp_path / "runtimes" / "zeroclaw" / "zc-main"
+    supervisor = ZeroClawSupervisor(
+        ["zeroclaw"],
+        destination_resolver=lambda _root: DockerDestination(
+            image="ghcr.io/acme/zeroclaw:latest",
+            env={"ZEROCLAW_CONFIG_DIR": "/mounted/zeroclaw"},
+        ),
+    )
+
+    session_id = await supervisor.create_session(workspace_root)
+    await supervisor.start_turn(workspace_root, session_id, "hello")
+
+    runtime_workspace_root = workspace_root / "workspace"
+    assert captured["extra_env"] == {
+        "ZEROCLAW_WORKSPACE": str(runtime_workspace_root),
+    }
+
+
+@pytest.mark.asyncio
+async def test_supervisor_preserves_passthrough_docker_config_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
+        _FakeZeroClawClient,
+    )
+    monkeypatch.setenv("ZEROCLAW_CONFIG_DIR", "/env/zeroclaw")
+
+    captured: dict[str, object] = {}
+
+    def _fake_wrap_command_for_destination(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        return type(
+            "Wrapped", (), {"command": ["docker", "exec", "zc-main", "zeroclaw"]}
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.zeroclaw.supervisor._wrap_command_for_destination",
+        _fake_wrap_command_for_destination,
+    )
+
+    workspace_root = tmp_path / "runtimes" / "zeroclaw" / "zc-main"
+    supervisor = ZeroClawSupervisor(
+        ["zeroclaw"],
+        destination_resolver=lambda _root: DockerDestination(
+            image="ghcr.io/acme/zeroclaw:latest",
+            env_passthrough=("ZEROCLAW_CONFIG_DIR",),
+        ),
+    )
+
+    session_id = await supervisor.create_session(workspace_root)
+    await supervisor.start_turn(workspace_root, session_id, "hello")
+
+    runtime_workspace_root = workspace_root / "workspace"
+    assert captured["extra_env"] == {
+        "ZEROCLAW_WORKSPACE": str(runtime_workspace_root),
+    }
 
 
 @pytest.mark.asyncio
@@ -420,6 +590,7 @@ async def test_build_supervisor_from_hub_config_uses_agent_workspace_destination
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _FakeZeroClawClient.instances.clear()
+    _patch_launch_spec_builder(monkeypatch)
     monkeypatch.setattr(
         "codex_autorunner.agents.zeroclaw.supervisor.ZeroClawClient",
         _FakeZeroClawClient,
@@ -476,3 +647,76 @@ async def test_build_supervisor_from_hub_config_uses_agent_workspace_destination
     await supervisor.start_turn(workspace_root, session_id, "hello")
 
     assert isinstance(captured["destination"], DockerDestination)
+
+
+def test_managed_runtime_preflight_reports_incompatible_when_session_state_flag_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        command = _args[0]
+        if command[-1] == "--version":
+            return type(
+                "Completed",
+                (),
+                {"stdout": "zeroclaw 0.2.0\n", "stderr": "", "returncode": 0},
+            )()
+        return type(
+            "Completed",
+            (),
+            {
+                "stdout": "Usage: zeroclaw agent [OPTIONS]\n",
+                "stderr": "",
+                "returncode": 0,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.managed_runtime.subprocess.run",
+        _fake_run,
+    )
+
+    result = preflight_managed_workspace_runtime("zeroclaw", command=["zeroclaw"])
+
+    assert result.status == "incompatible"
+    assert result.version == "zeroclaw 0.2.0"
+    assert result.launch_mode is None
+    assert "--session-state-file" in result.message
+
+
+def test_build_launch_spec_sets_canonical_config_dir_for_managed_workspace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def _fake_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        command = _args[0]
+        if command[-1] == "--version":
+            return type(
+                "Completed",
+                (),
+                {"stdout": "zeroclaw 0.3.1\n", "stderr": "", "returncode": 0},
+            )()
+        return type(
+            "Completed",
+            (),
+            {
+                "stdout": "Usage: zeroclaw agent [OPTIONS]\n      --session-state-file <SESSION_STATE_FILE>\n",
+                "stderr": "",
+                "returncode": 0,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.managed_runtime.subprocess.run",
+        _fake_run,
+    )
+
+    runtime_workspace_root = tmp_path / "workspace"
+    launch_spec = build_managed_workspace_launch_spec(
+        "zeroclaw",
+        command=["zeroclaw"],
+        runtime_workspace_root=runtime_workspace_root,
+        session_state_file=tmp_path / "session-state.json",
+        base_env={"HOME": "/tmp/zc-home"},
+    )
+
+    assert launch_spec.env["ZEROCLAW_WORKSPACE"] == str(runtime_workspace_root)
+    assert launch_spec.env["ZEROCLAW_CONFIG_DIR"] == "/tmp/zc-home/.zeroclaw"

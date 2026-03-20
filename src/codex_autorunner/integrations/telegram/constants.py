@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from ...core.update_targets import update_target_label_pairs
 from ..chat.agents import (
     DEFAULT_CHAT_AGENT,
     DEFAULT_CHAT_AGENT_MODELS,
     VALID_CHAT_AGENT_VALUES,
+)
+from ..chat.model_selection import (
+    REASONING_EFFORT_VALUES as CHAT_REASONING_EFFORT_VALUES,
+)
+from ..chat.model_selection import (
+    VALID_REASONING_EFFORTS as CHAT_VALID_REASONING_EFFORTS,
 )
 
 DEFAULT_PAGE_SIZE = 10
@@ -74,13 +81,7 @@ REVIEW_COMMIT_PICKER_PROMPT = (
 )
 FLOW_RUNS_PICKER_PROMPT = "Select a ticket flow run (buttons below)."
 REVIEW_COMMIT_BUTTON_LABEL_LIMIT = 80
-UPDATE_TARGET_OPTIONS = (
-    ("both", "Both (Web + Chat Apps)"),
-    ("web", "Web only"),
-    ("chat", "Chat Apps (Telegram + Discord)"),
-    ("telegram", "Telegram only"),
-    ("discord", "Discord only"),
-)
+UPDATE_TARGET_OPTIONS = update_target_label_pairs()
 TRACE_MESSAGE_TOKENS = (
     "failed",
     "error",
@@ -126,7 +127,8 @@ STATUS_ICONS = {
 }
 COMMAND_DISABLED_TEMPLATE = "'/{name}' is disabled while a task is in progress."
 MAX_MENTION_BYTES = 200_000
-VALID_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
+REASONING_EFFORT_VALUES = CHAT_REASONING_EFFORT_VALUES
+VALID_REASONING_EFFORTS = CHAT_VALID_REASONING_EFFORTS
 VALID_AGENT_VALUES = set(VALID_CHAT_AGENT_VALUES)
 DEFAULT_AGENT_MODELS = dict(DEFAULT_CHAT_AGENT_MODELS)
 LEGACY_DEFAULT_AGENT_MODELS = DEFAULT_AGENT_MODELS

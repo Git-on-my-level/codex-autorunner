@@ -21,6 +21,9 @@ from ...core.flows.worker_process import (
     clear_worker_metadata,
     spawn_flow_worker,
 )
+from ...core.flows.workspace_root import (
+    normalize_ticket_flow_input_data as _normalize_ticket_flow_input_data,
+)
 from ...core.runtime import RuntimeContext
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.build_agent_pool import build_agent_pool
@@ -46,7 +49,13 @@ def build_ticket_flow_runtime_resources(repo_root: Path) -> TicketFlowRuntimeRes
         backend_orchestrator=backend_orchestrator,
     )
     agent_pool = build_agent_pool(engine.config)
-    definition = build_ticket_flow_definition(agent_pool=agent_pool)
+    definition = build_ticket_flow_definition(
+        agent_pool=agent_pool,
+        auto_commit_default=config.git_auto_commit,
+        include_previous_ticket_context_default=(
+            config.ticket_flow.include_previous_ticket_context
+        ),
+    )
     definition.validate()
     controller: FlowController = FlowController(
         definition=definition,
@@ -85,14 +94,21 @@ async def start_ticket_flow_run(
     metadata: Optional[dict[str, Any]] = None,
     run_id: Optional[str] = None,
 ) -> FlowRunRecord:
+    normalized_input = normalize_ticket_flow_input_data(repo_root, input_data)
     async with ticket_flow_runtime_session(repo_root) as resources:
         record = await resources.controller.start_flow(
-            input_data=input_data or {},
+            input_data=normalized_input,
             run_id=run_id,
             metadata=metadata,
         )
     ensure_ticket_flow_worker(repo_root, record.id, is_terminal=False)
     return record
+
+
+def normalize_ticket_flow_input_data(
+    repo_root: Path, input_data: Optional[dict[str, Any]]
+) -> dict[str, Any]:
+    return _normalize_ticket_flow_input_data(repo_root, input_data)
 
 
 async def resume_ticket_flow_run(

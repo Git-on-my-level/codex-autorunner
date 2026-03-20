@@ -14,6 +14,7 @@ from ...chat.handlers.questions import (
     handle_custom_text_input as handle_custom_text_input_chat,
 )
 from ...chat.models import (
+    ChatForwardInfo,
     ChatInteractionEvent,
     ChatInteractionRef,
     ChatMessageEvent,
@@ -395,4 +396,18 @@ def _chat_message_event_from_telegram(message: TelegramMessage) -> ChatMessageEv
         ),
         text=message.text,
         is_edited=message.is_edited,
+        forwarded_from=(
+            ChatForwardInfo(
+                source_label=message.forward_origin.source_label,
+                message_id=(
+                    str(message.forward_origin.message_id)
+                    if message.forward_origin.message_id is not None
+                    else None
+                ),
+                text=message.text,
+                is_automatic=message.forward_origin.is_automatic,
+            )
+            if message.forward_origin is not None
+            else None
+        ),
     )

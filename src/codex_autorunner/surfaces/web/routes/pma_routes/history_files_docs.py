@@ -21,6 +21,7 @@ from .....bootstrap import (
     pma_prompt_content,
 )
 from .....core import filebox
+from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_audit import PmaActionType
 from .....core.pma_context import get_active_context_auto_prune_meta
 from .....core.pma_dispatches import (
@@ -159,6 +160,7 @@ def build_history_files_docs_router(
         transcript = store.read_transcript(turn_id)
         if not transcript:
             raise HTTPException(status_code=404, detail="Transcript not found")
+        transcript["timeline"] = list_turn_timeline(hub_root, execution_id=turn_id)
         return transcript
 
     def _serialize_pma_entry(
@@ -184,9 +186,7 @@ def build_history_files_docs_router(
         hub_root = request.app.state.config.root
         result: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
         async with await _get_pma_lock():
-            listing = await asyncio.to_thread(
-                filebox.list_filebox, hub_root, include_legacy=True
-            )
+            listing = await asyncio.to_thread(filebox.list_filebox, hub_root)
         for box in ("inbox", "outbox"):
             entries = listing.get(box, [])
             result[box] = [
@@ -316,9 +316,7 @@ def build_history_files_docs_router(
         hub_root = request.app.state.config.root
         deleted_files: list[str] = []
         async with await _get_pma_lock():
-            entries = await asyncio.to_thread(
-                filebox.list_filebox, hub_root, include_legacy=True
-            )
+            entries = await asyncio.to_thread(filebox.list_filebox, hub_root)
             for entry in entries.get(box, []):
                 try:
                     await asyncio.to_thread(entry.path.unlink)

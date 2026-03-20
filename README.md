@@ -13,7 +13,7 @@ What this looks like in practice:
 ## How it works
 CAR is very simple. At its core, CAR is a state machine which checks to see if there are any incomplete tickets. If yes, pick the next one and run it against an agent. Tickets can be pre-populated by the user, but agents can also write tickets. _Tickets are the control plane for CAR_.
 
-When each agent wakes up, it gets knowledge about CAR and how to operate within CAR, a pre-defined set of context (workspace files), the current ticket, and optionally the final output of the previous agent. This simple loop ensures that agents know enough to use CAR while also focusing them on the task at hand.
+When each agent wakes up, it gets knowledge about CAR and how to operate within CAR, a pre-defined set of context (internally referred to as `contextspace`), the current ticket, and optionally the final output of the previous agent. This simple loop ensures that agents know enough to use CAR while also focusing them on the task at hand.
 
 ## Philosophy
 The philosophy behind CAR is to let the agents do what they do best, and get out of their way. CAR is _very bitter-lesson-pilled_. As models and agents get more powerful, CAR should serve as a form of leverage, and avoid constraining models and their harnesses. This is why we treat the filesystem as the first class data plane and utilize tools and languages the models are already very familiar with (git, python).
@@ -21,7 +21,7 @@ The philosophy behind CAR is to let the agents do what they do best, and get out
 CAR treats tickets as the control plane and models as the execution layer. This means that we rely on agents to follow the instructions written in the tickets. If you use a sufficiently weak model, CAR may not work well for you. CAR is an amplifier for agent capabilities. Agents who like to scope creep (create too many new tickets) or reward hack (mark a ticket as done despite it being incomplete) are not a good fit for CAR.
 
 ## Tickets as code
-Since tickets are the control plane, you should write and treat tickets as a new "software layer" that operates within CAR. For example you can write at ticket which scopes a feature and generates other tickets, a ticket which spawns subagents (if the agent supports them) to do a code review, a ticket which repays tech debt, etc... The tickets can be repo-agnostic or specific to your own repository. I maintain a "blessed" set of ticket templates that can be accessed from any CAR deployment [on github](https://github.com/Git-on-my-level/car-ticket-templates) but you can write and configure your own for your own workflows and projects. If you have a ticket that's well generalized and works well across agents and models feel free to contribute it to the blessed template set.
+Since tickets are the control plane, you should write and treat tickets as a new "software layer" that operates within CAR. For example you can write at ticket which scopes a feature and generates other tickets, a ticket which spawns subagents (if the agent supports them) to do a code review, a ticket which repays tech debt, etc... The tickets can be repo-agnostic or specific to your own repository. I maintain a ["blessed" set of ticket templates that can be accessed from any CAR deployment on github](https://github.com/Git-on-my-level/car-ticket-templates) but you can write and configure your own for your own workflows and projects. If you have a ticket that's well generalized and works well across agents and models feel free to contribute it to the blessed template set.
 
 ## Interaction patterns
 CAR's core is a set of python functions surfaced as a CLI, operating on a file system and sqlite database. There are currently 3 ways to interact with this core.
@@ -71,19 +71,6 @@ If you're working from a fresh clone of this repo, you can run the repo-local CL
 ```
 
 The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will bootstrap a local `.venv` and install CAR.
-
-### Markdown + Mermaid export (MVP)
-
-Render Markdown with Mermaid fences into static artifacts:
-
-```bash
-./car render markdown docs/demo.md \
-  --out-dir .codex-autorunner/filebox/outbox
-```
-
-Defaults are `--diagram-format png` and `--doc-format html`; add repeated format flags when you also want `pdf`/`svg` diagrams or additional document formats.
-
-See the scoped design note: [docs/ops/markdown-mermaid-exports.md](docs/ops/markdown-mermaid-exports.md).
 
 ## Architecture docs
 - [Interactively explore the architecture on Principal Forks](https://app.principal-ade.com/Principal-Forks/codex-autorunner)

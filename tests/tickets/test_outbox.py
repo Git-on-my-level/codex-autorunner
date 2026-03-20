@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.lifecycle_events import (
@@ -12,6 +13,7 @@ from codex_autorunner.core.lifecycle_events import (
 )
 from codex_autorunner.tickets.outbox import (
     archive_dispatch,
+    create_turn_summary,
     ensure_outbox_dirs,
     parse_dispatch,
     resolve_outbox_paths,
@@ -32,7 +34,6 @@ def test_archive_dispatch_no_dispatch_file_is_noop(tmp_path: Path) -> None:
     """When no dispatch file exists, archive_dispatch returns (None, [])."""
     paths = resolve_outbox_paths(
         workspace_root=tmp_path,
-        runs_dir=Path(".codex-autorunner/runs"),
         run_id="run-1",
     )
     ensure_outbox_dirs(paths)
@@ -46,7 +47,6 @@ def test_archive_dispatch_archives_dispatch_and_attachments(tmp_path: Path) -> N
     """Archiving moves dispatch file and attachments to dispatch history."""
     paths = resolve_outbox_paths(
         workspace_root=tmp_path,
-        runs_dir=Path(".codex-autorunner/runs"),
         run_id="run-1",
     )
     ensure_outbox_dirs(paths)
@@ -75,13 +75,58 @@ def test_archive_dispatch_archives_dispatch_and_attachments(tmp_path: Path) -> N
     assert errors2 == []
 
 
+def test_archive_dispatch_preserves_supplied_ticket_reference(tmp_path: Path) -> None:
+    paths = resolve_outbox_paths(
+        workspace_root=tmp_path,
+        run_id="run-1",
+    )
+    ensure_outbox_dirs(paths)
+    _write_dispatch(paths.dispatch_path, mode="pause", body="Review attached")
+
+    record, errors = archive_dispatch(
+        paths,
+        next_seq=1,
+        ticket_id=".codex-autorunner/tickets/TICKET-001.md",
+    )
+
+    assert errors == []
+    assert record is not None
+    assert record.dispatch.extra["ticket_id"] == (
+        ".codex-autorunner/tickets/TICKET-001.md"
+    )
+
+
+def test_create_turn_summary_preserves_supplied_ticket_reference(
+    tmp_path: Path,
+) -> None:
+    paths = resolve_outbox_paths(
+        workspace_root=tmp_path,
+        run_id="run-1",
+    )
+    ensure_outbox_dirs(paths)
+
+    record, errors = create_turn_summary(
+        paths,
+        next_seq=1,
+        agent_output="Completed the ticket.",
+        ticket_id=".codex-autorunner/tickets/TICKET-001.md",
+        agent_id="codex",
+        turn_number=2,
+    )
+
+    assert errors == []
+    assert record is not None
+    assert record.dispatch.extra["ticket_id"] == (
+        ".codex-autorunner/tickets/TICKET-001.md"
+    )
+
+
 def test_archive_dispatch_invalid_frontmatter_does_not_delete(
     tmp_path: Path,
 ) -> None:
     """Invalid dispatch frontmatter returns errors but doesn't delete file."""
     paths = resolve_outbox_paths(
         workspace_root=tmp_path,
-        runs_dir=Path(".codex-autorunner/runs"),
         run_id="run-1",
     )
     ensure_outbox_dirs(paths)
@@ -114,13 +159,13 @@ def test_parse_dispatch_reports_non_utf8_file(tmp_path: Path) -> None:
 def test_archive_dispatch_emits_lifecycle_event(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
     supervisor = HubSupervisor(load_hub_config(hub_root))
 
     try:
         workspace_root = tmp_path / "repo"
         paths = resolve_outbox_paths(
             workspace_root=workspace_root,
-            runs_dir=Path(".codex-autorunner/runs"),
             run_id="run-1",
         )
         ensure_outbox_dirs(paths)

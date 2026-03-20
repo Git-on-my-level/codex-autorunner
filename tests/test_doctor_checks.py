@@ -942,8 +942,18 @@ def test_zeroclaw_doctor_checks_report_missing_binary_for_enabled_workspaces(
 
     hub_config = load_hub_config(hub_root)
     monkeypatch.setattr(
-        "codex_autorunner.core.runtime.resolve_executable",
-        lambda _binary: None,
+        "codex_autorunner.core.runtime.zeroclaw_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "missing_binary",
+                "version": None,
+                "launch_mode": None,
+                "message": "ZeroClaw binary 'zeroclaw' is not available on PATH.",
+                "fix": "Install ZeroClaw on the host.",
+            },
+        )(),
     )
 
     checks = zeroclaw_doctor_checks(hub_config)
@@ -955,6 +965,56 @@ def test_zeroclaw_doctor_checks_report_missing_binary_for_enabled_workspaces(
     assert check.severity == "error"
     assert "zc-main" in check.message
     assert "Install ZeroClaw" in (check.fix or "")
+
+
+def test_zeroclaw_doctor_checks_report_incompatible_runtime_for_enabled_workspaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos: []",
+                "agent_workspaces:",
+                "  - id: zc-main",
+                "    runtime: zeroclaw",
+                "    path: .codex-autorunner/runtimes/zeroclaw/zc-main",
+                "    enabled: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    hub_config = load_hub_config(hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.zeroclaw_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "incompatible",
+                "version": "zeroclaw 0.2.0",
+                "launch_mode": None,
+                "message": "ZeroClaw zeroclaw 0.2.0 does not advertise `zeroclaw agent --session-state-file` in `zeroclaw agent --help`.",
+                "fix": "Install a compatible ZeroClaw build.",
+            },
+        )(),
+    )
+
+    checks = zeroclaw_doctor_checks(hub_config)
+
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.passed is False
+    assert check.severity == "error"
+    assert "session-state-file" in check.message
+    assert "zc-main" in check.message
 
 
 def test_zeroclaw_doctor_checks_skip_default_binary_without_workspaces(

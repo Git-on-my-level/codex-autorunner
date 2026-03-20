@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import time
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Optional, Sequence
@@ -19,7 +20,7 @@ from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.flows.models import FlowRunRecord
 from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_seq
 from ...core.hub import HubSupervisor
-from ...core.locks import process_matches_identity
+from ...core.locks import FileLock, FileLockBusy
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
@@ -115,7 +116,7 @@ from .types import (
 from .voice import TelegramVoiceManager
 
 TICKET_FLOW_WATCH_INTERVAL_SECONDS = 20
-_TELEGRAM_LOCK_CMD_HINTS = ("codex_autorunner", "codex-autorunner", "car ")
+TYPING_HEARTBEAT_INTERVAL_SECONDS = 4.0
 
 
 def _build_opencode_supervisor(
@@ -323,13 +324,21 @@ class TelegramBotService(
         self._turn_preview_updated_at: dict[TurnKey, float] = {}
         self._turn_progress_trackers: dict[TurnKey, "TurnProgressTracker"] = {}
         self._turn_progress_rendered: dict[TurnKey, str] = {}
+        self._turn_progress_final_rendered: dict[TurnKey, str] = {}
+        self._turn_progress_final_summary: dict[TurnKey, str] = {}
         self._turn_progress_updated_at: dict[TurnKey, float] = {}
+        self._turn_progress_backoff_until: dict[TurnKey, float] = {}
+        self._turn_progress_failure_streaks: dict[TurnKey, int] = {}
+        self._turn_progress_suppressed_counts: dict[TurnKey, int] = {}
         self._turn_progress_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._turn_progress_heartbeat_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._turn_progress_locks: dict[TurnKey, asyncio.Lock] = {}
         self._oversize_warnings: set[TurnKey] = set()
         self._pending_approvals: dict[str, PendingApproval] = {}
         self._pending_questions: dict[str, PendingQuestion] = {}
+        self._typing_sessions: dict[tuple[int, Optional[int]], int] = {}
+        self._typing_tasks: dict[tuple[int, Optional[int]], asyncio.Task[None]] = {}
+        self._typing_lock: Optional[asyncio.Lock] = None
         self._ticket_flow_pause_targets: dict[str, str] = {}
         self._ticket_flow_bridge = TelegramTicketFlowBridge(
             logger=self._logger,
@@ -409,6 +418,7 @@ class TelegramBotService(
         self._housekeeping_task: Optional[asyncio.Task[None]] = None
         self._command_specs = build_command_specs(self)
         self._instance_lock_path: Optional[Path] = None
+        self._instance_lock: Optional[FileLock] = None
 
     async def _housekeeping_roots(self) -> list[Path]:
         roots: set[Path] = set()
@@ -632,45 +642,23 @@ class TelegramBotService(
         }
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as exc:
+            lock = FileLock(lock_path)
+            lock.acquire(blocking=False)
+        except FileLockBusy as exc:
             existing = _read_lock_payload(lock_path)
-            pid = existing.get("pid") if isinstance(existing, dict) else None
-            if isinstance(pid, int) and process_matches_identity(
-                pid,
-                expected_cmd_substrings=_TELEGRAM_LOCK_CMD_HINTS,
-            ):
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "telegram.lock.contended",
-                    lock_path=str(lock_path),
-                    **_lock_payload_summary(existing),
-                )
-                raise TelegramBotLockError(
-                    "Telegram bot already running for this token."
-                ) from exc
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
-            try:
-                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError as exc:
-                existing = _read_lock_payload(lock_path)
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "telegram.lock.contended",
-                    lock_path=str(lock_path),
-                    **_lock_payload_summary(existing),
-                )
-                raise TelegramBotLockError(
-                    "Telegram bot already running for this token."
-                ) from exc
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload) + "\n")
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.lock.contended",
+                lock_path=str(lock_path),
+                **_lock_payload_summary(existing),
+            )
+            raise TelegramBotLockError(
+                "Telegram bot already running for this token."
+            ) from exc
+        lock.write_text(json.dumps(payload) + "\n")
         self._instance_lock_path = lock_path
+        self._instance_lock = lock
         log_event(
             self._logger,
             logging.INFO,
@@ -680,19 +668,20 @@ class TelegramBotService(
         )
 
     def _release_instance_lock(self) -> None:
+        lock = self._instance_lock
         lock_path = self._instance_lock_path
-        if lock_path is None:
+        if lock is None or lock_path is None:
             return
-        existing = _read_lock_payload(lock_path)
-        if isinstance(existing, dict):
-            pid = existing.get("pid")
-            if isinstance(pid, int) and pid != os.getpid():
-                return
         try:
-            lock_path.unlink()
-        except OSError:
-            pass
+            existing = _read_lock_payload(lock_path)
+            if isinstance(existing, dict):
+                pid = existing.get("pid")
+                if isinstance(pid, int) and pid == os.getpid():
+                    lock.write_text("")
+        finally:
+            lock.release()
         self._instance_lock_path = None
+        self._instance_lock = None
 
     def _ensure_turn_semaphore(self) -> asyncio.Semaphore:
         if self._turn_semaphore is None:
@@ -879,7 +868,12 @@ class TelegramBotService(
             elif cache_name == "progress_trackers":
                 self._turn_progress_trackers.pop(key, None)
                 self._turn_progress_rendered.pop(key, None)
+                self._turn_progress_final_rendered.pop(key, None)
+                self._turn_progress_final_summary.pop(key, None)
                 self._turn_progress_updated_at.pop(key, None)
+                self._turn_progress_backoff_until.pop(key, None)
+                self._turn_progress_failure_streaks.pop(key, None)
+                self._turn_progress_suppressed_counts.pop(key, None)
                 task = self._turn_progress_tasks.pop(key, None)
                 if task and not task.done():
                     task.cancel()
@@ -1070,15 +1064,8 @@ class TelegramBotService(
         files: Optional[list[tuple[str, bytes]]] = None,
     ) -> tuple[bool, str]:
         try:
-            input_data = dict(run_record.input_data or {})
-            runs_dir_raw = input_data.get("runs_dir")
-            runs_dir = (
-                Path(runs_dir_raw)
-                if isinstance(runs_dir_raw, str) and runs_dir_raw
-                else Path(".codex-autorunner/runs")
-            )
             reply_paths = resolve_reply_paths(
-                workspace_root=workspace_root, runs_dir=runs_dir, run_id=run_id
+                workspace_root=workspace_root, run_id=run_id
             )
             ensure_reply_dirs(reply_paths)
 
@@ -1519,6 +1506,101 @@ class TelegramBotService(
 
         await self._store.update_topic(key, apply)
         self._last_update_persisted_at[key] = now
+
+    def _ensure_typing_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        lock = self._typing_lock
+        lock_loop = getattr(lock, "_loop", None) if lock else None
+        if (
+            lock is None
+            or lock_loop is None
+            or lock_loop is not loop
+            or lock_loop.is_closed()
+        ):
+            lock = asyncio.Lock()
+            self._typing_lock = lock
+        return lock
+
+    async def _typing_session_active(self, key: tuple[int, Optional[int]]) -> bool:
+        lock = self._ensure_typing_lock()
+        async with lock:
+            return self._typing_sessions.get(key, 0) > 0
+
+    async def _typing_indicator_loop(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> None:
+        key = (chat_id, thread_id)
+        send_chat_action = getattr(self._bot, "send_chat_action", None)
+        if not callable(send_chat_action):
+            return
+        try:
+            while True:
+                try:
+                    await send_chat_action(
+                        chat_id,
+                        action="typing",
+                        message_thread_id=thread_id,
+                    )
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "telegram.typing.send.failed",
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        exc=exc,
+                    )
+                await asyncio.sleep(TYPING_HEARTBEAT_INTERVAL_SECONDS)
+                if not await self._typing_session_active(key):
+                    return
+        finally:
+            lock = self._ensure_typing_lock()
+            async with lock:
+                task = self._typing_tasks.get(key)
+                if task is asyncio.current_task():
+                    self._typing_tasks.pop(key, None)
+
+    async def _begin_typing_indicator(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> None:
+        key = (chat_id, thread_id)
+        lock = self._ensure_typing_lock()
+        async with lock:
+            self._typing_sessions[key] = self._typing_sessions.get(key, 0) + 1
+            task = self._typing_tasks.get(key)
+            if task is not None and not task.done():
+                return
+            typing_coro = self._typing_indicator_loop(chat_id, thread_id)
+            try:
+                self._typing_tasks[key] = self._spawn_task(typing_coro)
+            except Exception:
+                typing_coro.close()
+                count = self._typing_sessions.get(key, 0)
+                if count <= 1:
+                    self._typing_sessions.pop(key, None)
+                else:
+                    self._typing_sessions[key] = count - 1
+                raise
+
+    async def _end_typing_indicator(
+        self, chat_id: int, thread_id: Optional[int]
+    ) -> None:
+        key = (chat_id, thread_id)
+        task_to_cancel: Optional[asyncio.Task[None]] = None
+        lock = self._ensure_typing_lock()
+        async with lock:
+            count = self._typing_sessions.get(key)
+            if count is None:
+                return
+            if count > 1:
+                self._typing_sessions[key] = count - 1
+                return
+            self._typing_sessions.pop(key, None)
+            task_to_cancel = self._typing_tasks.pop(key, None)
+        if task_to_cancel is not None and not task_to_cancel.done():
+            task_to_cancel.cancel()
+            with suppress(asyncio.CancelledError):
+                await task_to_cancel
 
     async def _handle_callback(self, callback: TelegramCallbackQuery) -> None:
         await callback_handlers.handle_callback(self, callback)

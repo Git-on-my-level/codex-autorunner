@@ -6,6 +6,7 @@ from codex_autorunner.integrations.chat.adapter import SendTextRequest
 from codex_autorunner.integrations.chat.capabilities import ChatCapabilities
 from codex_autorunner.integrations.chat.models import (
     ChatAttachment,
+    ChatForwardInfo,
     ChatInteractionEvent,
     ChatMessageEvent,
     ChatThreadRef,
@@ -37,6 +38,11 @@ async def test_message_event_round_trip_without_required_field_mutation() -> Non
                 size_bytes=321,
             ),
         ),
+        forwarded_from=ChatForwardInfo(
+            source_label="channel c-9",
+            message_id="m-0",
+            text="forwarded body",
+        ),
     )
 
     polled = await adapter.poll_events()
@@ -52,6 +58,9 @@ async def test_message_event_round_trip_without_required_field_mutation() -> Non
     assert restored.thread.chat_id == "c-1"
     assert restored.message.message_id == "m-1"
     assert restored.attachments[0].file_id == "f-1"
+    assert restored.forwarded_from is not None
+    assert restored.forwarded_from.source_label == "channel c-9"
+    assert restored.forwarded_from.text == "forwarded body"
 
 
 @pytest.mark.asyncio

@@ -16,6 +16,7 @@ from ..ports.run_event import (
     RunNotice,
     TokenUsage,
     ToolCall,
+    ToolResult,
 )
 from ..sse import SSEEvent, parse_sse_lines
 from ..time_utils import now_iso
@@ -25,6 +26,36 @@ _APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
     "item/fileChange/requestApproval",
 }
+
+
+def _runtime_raw_event_key(raw_event: Any) -> str:
+    if isinstance(raw_event, (dict, list)):
+        return json.dumps(
+            raw_event,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+    return str(raw_event)
+
+
+def merge_runtime_thread_raw_events(
+    streamed_raw_events: list[Any] | tuple[Any, ...],
+    result_raw_events: list[Any] | tuple[Any, ...],
+) -> list[Any]:
+    streamed = list(streamed_raw_events or [])
+    result = list(result_raw_events or [])
+    if not streamed:
+        return result
+    if not result:
+        return streamed
+    streamed_keys = [_runtime_raw_event_key(item) for item in streamed]
+    result_keys = [_runtime_raw_event_key(item) for item in result]
+    max_overlap = min(len(streamed_keys), len(result_keys))
+    for overlap in range(max_overlap, 0, -1):
+        if streamed_keys[-overlap:] == result_keys[:overlap]:
+            return streamed + result[overlap:]
+    return streamed + result
 
 
 def _merge_assistant_stream(current: str, incoming: str) -> str:
@@ -49,6 +80,8 @@ class RuntimeThreadRunEventState:
     assistant_stream_text: str = ""
     assistant_message_text: str = ""
     token_usage: Optional[dict[str, Any]] = None
+    last_error_message: Optional[str] = None
+    completed_seen: bool = False
     message_roles: dict[str, str] = field(default_factory=dict)
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
     pending_stream_no_id: str = ""
@@ -76,7 +109,10 @@ class RuntimeThreadRunEventState:
         self,
         message_id: Optional[str],
         role: Optional[str],
+        *,
+        timestamp: Optional[str] = None,
     ) -> list[RunEvent]:
+        event_timestamp = timestamp or now_iso()
         if not message_id or not role:
             return []
         self.message_roles[message_id] = role
@@ -91,7 +127,7 @@ class RuntimeThreadRunEventState:
             self.note_stream_text(pending)
             events.append(
                 OutputDelta(
-                    timestamp=now_iso(),
+                    timestamp=event_timestamp,
                     content=pending,
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                 )
@@ -102,7 +138,7 @@ class RuntimeThreadRunEventState:
             self.note_stream_text(pending_no_id)
             events.append(
                 OutputDelta(
-                    timestamp=now_iso(),
+                    timestamp=event_timestamp,
                     content=pending_no_id,
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                 )
@@ -113,7 +149,10 @@ class RuntimeThreadRunEventState:
         self,
         message_id: Optional[str],
         text: str,
+        *,
+        timestamp: Optional[str] = None,
     ) -> list[RunEvent]:
+        event_timestamp = timestamp or now_iso()
         if not isinstance(text, str) or not text:
             return []
         if message_id is None:
@@ -121,7 +160,7 @@ class RuntimeThreadRunEventState:
                 self.note_stream_text(text)
                 return [
                     OutputDelta(
-                        timestamp=now_iso(),
+                        timestamp=event_timestamp,
                         content=text,
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                     )
@@ -138,7 +177,7 @@ class RuntimeThreadRunEventState:
             self.note_stream_text(text)
             return [
                 OutputDelta(
-                    timestamp=now_iso(),
+                    timestamp=event_timestamp,
                     content=text,
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                 )
@@ -151,13 +190,47 @@ class RuntimeThreadRunEventState:
 
 
 async def normalize_runtime_thread_raw_event(
-    raw_event: str,
+    raw_event: Any,
     state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
+    if isinstance(raw_event, dict):
+        return normalize_runtime_thread_message_payload(
+            raw_event,
+            state,
+            timestamp=timestamp,
+        )
     events: list[RunEvent] = []
     async for sse_event in _parse_runtime_thread_sse(raw_event):
-        events.extend(_normalize_sse_event(sse_event, state))
+        events.extend(_normalize_sse_event(sse_event, state, timestamp=timestamp))
     return events
+
+
+def normalize_runtime_thread_message_payload(
+    payload: dict[str, Any],
+    state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
+) -> list[RunEvent]:
+    if isinstance(payload.get("message"), dict):
+        message = payload["message"]
+        return normalize_runtime_thread_message(
+            str(message.get("method") or ""),
+            _coerce_dict(message.get("params")),
+            state,
+            timestamp=timestamp,
+        )
+    method = payload.get("method")
+    params = payload.get("params")
+    if isinstance(method, str) and isinstance(params, dict):
+        return normalize_runtime_thread_message(
+            method,
+            params,
+            state,
+            timestamp=timestamp,
+        )
+    return []
 
 
 def terminal_run_event_from_outcome(
@@ -175,11 +248,58 @@ def terminal_run_event_from_outcome(
     )
 
 
+def recover_post_completion_outcome(
+    outcome: RuntimeThreadOutcome,
+    state: RuntimeThreadRunEventState,
+) -> RuntimeThreadOutcome:
+    """Prefer a streamed completion over a later transport error."""
+
+    if outcome.status != "error" or not state.completed_seen:
+        return outcome
+    assistant_text = outcome.assistant_text or state.assistant_message_text
+    if not isinstance(assistant_text, str) or not assistant_text.strip():
+        return outcome
+    return RuntimeThreadOutcome(
+        status="ok",
+        assistant_text=assistant_text,
+        error=None,
+        backend_thread_id=outcome.backend_thread_id,
+        backend_turn_id=outcome.backend_turn_id,
+    )
+
+
 def _public_terminal_error_message(outcome: RuntimeThreadOutcome) -> str:
     detail = str(outcome.error or "").strip()
     if detail in {"Runtime thread timed out", "Runtime thread interrupted"}:
         return detail
     return "Runtime thread failed"
+
+
+def _extract_status_value(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in ("type", "status", "state"):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate
+    return None
+
+
+def _status_indicates_successful_completion(
+    status: Any, *, assume_true_when_missing: bool
+) -> bool:
+    normalized = _extract_status_value(status)
+    if not isinstance(normalized, str):
+        return assume_true_when_missing
+    return normalized.lower() in {
+        "completed",
+        "complete",
+        "done",
+        "success",
+        "succeeded",
+        "idle",
+    }
 
 
 async def _parse_runtime_thread_sse(raw_event: str):
@@ -195,28 +315,35 @@ async def _parse_runtime_thread_sse(raw_event: str):
 def _normalize_sse_event(
     sse_event: SSEEvent,
     state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     payload = _load_json_object(sse_event.data)
     if sse_event.event in {"app-server", "event"}:
         message = payload.get("message")
         if isinstance(message, dict):
-            return _normalize_message_event(
+            return normalize_runtime_thread_message(
                 str(message.get("method") or ""),
                 _coerce_dict(message.get("params")),
                 state,
+                timestamp=timestamp,
             )
-    return _normalize_message_event(
+    return normalize_runtime_thread_message(
         sse_event.event,
         payload,
         state,
+        timestamp=timestamp,
     )
 
 
-def _normalize_message_event(
+def normalize_runtime_thread_message(
     method: str,
     params: dict[str, Any],
     state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
+    event_timestamp = timestamp or now_iso()
     method_lower = method.lower()
     if not method:
         return []
@@ -229,7 +356,7 @@ def _normalize_message_event(
         if key:
             delta = f"{state.reasoning_buffers.get(key, '')}{delta}"
             state.reasoning_buffers[key] = delta
-        return [RunNotice(timestamp=now_iso(), kind="thinking", message=delta)]
+        return [RunNotice(timestamp=event_timestamp, kind="thinking", message=delta)]
 
     if method == "item/completed":
         item = params.get("item")
@@ -248,7 +375,7 @@ def _normalize_message_event(
             state.note_message_text(content)
             return [
                 OutputDelta(
-                    timestamp=now_iso(),
+                    timestamp=event_timestamp,
                     content=content,
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
                 )
@@ -257,7 +384,7 @@ def _normalize_message_event(
         if tool_name:
             return [
                 ToolCall(
-                    timestamp=now_iso(),
+                    timestamp=event_timestamp,
                     tool_name=tool_name,
                     tool_input=tool_input,
                 )
@@ -265,17 +392,21 @@ def _normalize_message_event(
         return []
 
     if method == "item/agentMessage/delta":
-        return _assistant_stream_events(params, state)
+        return _assistant_stream_events(params, state, timestamp=event_timestamp)
 
     if method == "message.part.updated":
-        return _normalize_message_part_updated(params, state)
+        return _normalize_message_part_updated(
+            params,
+            state,
+            timestamp=event_timestamp,
+        )
 
     if method in _APPROVAL_METHODS:
         request_id = _request_id_for_event(method, params)
         summary = _approval_summary(method, params)
         return [
             ApprovalRequested(
-                timestamp=now_iso(),
+                timestamp=event_timestamp,
                 request_id=request_id,
                 description=summary,
                 context=dict(params),
@@ -286,21 +417,32 @@ def _normalize_message_event(
         tool_name, tool_input = _normalize_tool_name(params)
         return [
             ToolCall(
-                timestamp=now_iso(),
+                timestamp=event_timestamp,
                 tool_name=tool_name or "toolCall",
                 tool_input=tool_input,
             )
         ]
 
     if method == "item/toolCall/end":
-        return []
+        tool_name, _tool_input = _normalize_tool_name(params)
+        result = params.get("result")
+        error = params.get("error")
+        return [
+            ToolResult(
+                timestamp=event_timestamp,
+                tool_name=tool_name or str(params.get("name") or "toolCall"),
+                status="error" if error else "completed",
+                result=result,
+                error=error,
+            )
+        ]
 
     if method == "usage":
         usage = _extract_usage(params)
         if usage is None:
             return []
         state.token_usage = dict(usage)
-        return [TokenUsage(timestamp=now_iso(), usage=dict(usage))]
+        return [TokenUsage(timestamp=event_timestamp, usage=dict(usage))]
 
     if method == "permission":
         request_id = _request_id_for_event(method, params)
@@ -309,7 +451,7 @@ def _normalize_message_event(
         ).strip()
         return [
             ApprovalRequested(
-                timestamp=now_iso(),
+                timestamp=event_timestamp,
                 request_id=request_id,
                 description=description or "Approval requested",
                 context=dict(params),
@@ -321,7 +463,7 @@ def _normalize_message_event(
         question = str(params.get("question") or "").strip()
         return [
             ApprovalRequested(
-                timestamp=now_iso(),
+                timestamp=event_timestamp,
                 request_id=request_id,
                 description=question or "Question pending",
                 context=dict(params),
@@ -332,6 +474,7 @@ def _normalize_message_event(
         role_events = state.note_message_role(
             _extract_message_id(params),
             _extract_message_role(params),
+            timestamp=event_timestamp,
         )
         content = _extract_message_text(params)
         if not content:
@@ -341,17 +484,22 @@ def _normalize_message_event(
         state.note_message_text(content)
         return role_events + [
             OutputDelta(
-                timestamp=now_iso(),
+                timestamp=event_timestamp,
                 content=content,
                 delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
             )
         ]
 
     if method == "message.delta":
-        return _assistant_stream_events(params, state)
+        return _assistant_stream_events(params, state, timestamp=event_timestamp)
 
     if method == "turn/streamDelta" or "outputdelta" in method_lower:
-        return _output_delta_events(method, params, state)
+        return _output_delta_events(
+            method,
+            params,
+            state,
+            timestamp=event_timestamp,
+        )
 
     if method in {
         "turn/tokenUsage",
@@ -362,15 +510,41 @@ def _normalize_message_event(
         if usage is None:
             return []
         state.token_usage = dict(usage)
-        return [TokenUsage(timestamp=now_iso(), usage=dict(usage))]
+        return [TokenUsage(timestamp=event_timestamp, usage=dict(usage))]
 
-    if method in {"turn/completed", "turn/error", "error", "session.idle"}:
+    if method == "turn/error":
+        error_message = params.get("message")
+        if not isinstance(error_message, str) or not error_message.strip():
+            error_message = "Turn error"
+        state.last_error_message = str(error_message)
+        return [Failed(timestamp=event_timestamp, error_message=str(error_message))]
+
+    if method == "error":
+        error = _coerce_dict(params.get("error"))
+        error_message = error.get("message") or params.get("message")
+        if not isinstance(error_message, str) or not error_message.strip():
+            error_message = "Turn error"
+        state.last_error_message = str(error_message)
+        return [Failed(timestamp=event_timestamp, error_message=str(error_message))]
+
+    if method == "turn/completed":
+        if _status_indicates_successful_completion(
+            params.get("status") or params.get("turn"),
+            assume_true_when_missing=True,
+        ):
+            state.completed_seen = True
+        return []
+
+    if method == "session.idle":
+        state.completed_seen = True
         return []
 
     if method == "session.status":
         status = _coerce_dict(params.get("status"))
-        status_type = str(status.get("type") or status.get("status") or "").strip()
-        if status_type.lower() == "idle":
+        if _status_indicates_successful_completion(
+            status, assume_true_when_missing=False
+        ):
+            state.completed_seen = True
             return []
         return []
 
@@ -380,6 +554,8 @@ def _normalize_message_event(
 def _assistant_stream_events(
     params: dict[str, Any],
     state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     content = _extract_output_delta(params)
     if not content:
@@ -387,7 +563,7 @@ def _assistant_stream_events(
     state.note_stream_text(content)
     return [
         OutputDelta(
-            timestamp=now_iso(),
+            timestamp=timestamp or now_iso(),
             content=content,
             delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
         )
@@ -397,13 +573,19 @@ def _assistant_stream_events(
 def _normalize_message_part_updated(
     params: dict[str, Any],
     state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     part = _extract_message_part(params)
     if not part:
         content = _extract_output_delta(params)
         if not content:
             return []
-        return state.note_message_part_text(_extract_part_message_id(params), content)
+        return state.note_message_part_text(
+            _extract_part_message_id(params),
+            content,
+            timestamp=timestamp,
+        )
 
     if bool(part.get("ignored")):
         return []
@@ -413,26 +595,36 @@ def _normalize_message_part_updated(
         content = _extract_output_delta(params)
         if not content:
             return []
-        return state.note_message_part_text(_extract_part_message_id(params), content)
+        return state.note_message_part_text(
+            _extract_part_message_id(params),
+            content,
+            timestamp=timestamp,
+        )
 
     if part_type == "reasoning":
         content = _extract_opencode_reasoning_text(params, part, state)
         if not content:
             return []
-        return [RunNotice(timestamp=now_iso(), kind="thinking", message=content)]
+        return [
+            RunNotice(
+                timestamp=timestamp or now_iso(),
+                kind="thinking",
+                message=content,
+            )
+        ]
 
     if part_type == "tool":
-        return _normalize_opencode_tool_part(part, state)
+        return _normalize_opencode_tool_part(part, state, timestamp=timestamp)
 
     if part_type == "patch":
-        return _normalize_opencode_patch_part(part, state)
+        return _normalize_opencode_patch_part(part, state, timestamp=timestamp)
 
     if part_type == "usage":
         usage = _extract_opencode_usage_part(part)
         if usage is None:
             return []
         state.token_usage = dict(usage)
-        return [TokenUsage(timestamp=now_iso(), usage=dict(usage))]
+        return [TokenUsage(timestamp=timestamp or now_iso(), usage=dict(usage))]
 
     return []
 
@@ -441,6 +633,8 @@ def _output_delta_events(
     method: str,
     params: dict[str, Any],
     state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     content = _extract_output_delta(params)
     if not content:
@@ -450,7 +644,7 @@ def _output_delta_events(
         state.note_stream_text(content)
     return [
         OutputDelta(
-            timestamp=now_iso(),
+            timestamp=timestamp or now_iso(),
             content=content,
             delta_type=delta_type,
         )
@@ -562,7 +756,10 @@ def _output_delta_type_for_method(method: str) -> str:
 def _normalize_opencode_tool_part(
     part: dict[str, Any],
     state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
+    event_timestamp = timestamp or now_iso()
     tool_name = part.get("tool") or part.get("name") or ""
     if not isinstance(tool_name, str) or not tool_name.strip():
         return []
@@ -596,30 +793,48 @@ def _normalize_opencode_tool_part(
         if last_status != status_text:
             events.append(
                 ToolCall(
-                    timestamp=now_iso(),
+                    timestamp=event_timestamp,
                     tool_name=tool_name.strip(),
                     tool_input=input_payload,
                 )
             )
 
     if status_text == "completed" and last_status != status_text:
+        events.append(
+            ToolResult(
+                timestamp=event_timestamp,
+                tool_name=tool_name.strip(),
+                status=status_text,
+                result=dict(state_payload),
+                error=None,
+            )
+        )
         exit_code = state_payload.get("exitCode")
         if exit_code is not None:
             events.append(
                 OutputDelta(
-                    timestamp=now_iso(),
+                    timestamp=event_timestamp,
                     content=f"exit {exit_code}",
                     delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
                 )
             )
     elif status_text in {"error", "failed"} and last_status != status_text:
+        events.append(
+            ToolResult(
+                timestamp=event_timestamp,
+                tool_name=tool_name.strip(),
+                status=status_text,
+                result=dict(state_payload),
+                error=state_payload.get("error"),
+            )
+        )
         error = state_payload.get("error")
         if isinstance(error, dict):
             error = error.get("message") or error.get("error")
         if isinstance(error, str) and error.strip():
             events.append(
                 OutputDelta(
-                    timestamp=now_iso(),
+                    timestamp=event_timestamp,
                     content=f"error: {error.strip()}",
                     delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
                 )
@@ -633,6 +848,8 @@ def _normalize_opencode_tool_part(
 def _normalize_opencode_patch_part(
     part: dict[str, Any],
     state: RuntimeThreadRunEventState,
+    *,
+    timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     patch_hash = part.get("hash")
     if isinstance(patch_hash, str) and patch_hash:
@@ -657,7 +874,7 @@ def _normalize_opencode_patch_part(
 
     return [
         OutputDelta(
-            timestamp=now_iso(),
+            timestamp=timestamp or now_iso(),
             content=line,
             delta_type=RUN_EVENT_DELTA_TYPE_LOG_LINE,
         )
@@ -816,6 +1033,19 @@ def _extract_message_text(params: dict[str, Any]) -> str:
         value = params.get(key)
         if isinstance(value, str) and value.strip():
             return value
+    parts = params.get("parts")
+    if isinstance(parts, list):
+        text_parts: list[str] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") != "text":
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text:
+                text_parts.append(text)
+        if text_parts:
+            return "".join(text_parts)
     return ""
 
 
@@ -864,6 +1094,16 @@ def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
 
 __all__ = [
     "RuntimeThreadRunEventState",
+    "merge_runtime_thread_raw_events",
+    "normalize_runtime_thread_message",
+    "normalize_runtime_thread_message_payload",
     "normalize_runtime_thread_raw_event",
+    "recover_post_completion_outcome",
     "terminal_run_event_from_outcome",
+    "_extract_output_delta",
+    "_output_delta_type_for_method",
+    "_normalize_tool_name",
+    "_extract_agent_message_text",
+    "_extract_usage",
+    "_coerce_dict",
 ]

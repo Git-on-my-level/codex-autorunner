@@ -194,14 +194,31 @@ class _ProgressCadenceHarness(TelegramNotificationHandlers):
                 max_output_chars=300,
             )
         )
+        self._logger = logging.getLogger("test.telegram.progress_cadence")
         self._turn_progress_locks: dict[tuple[str, str], Any] = {}
         self._turn_progress_trackers: dict[tuple[str, str], Any] = {
-            ("turn-1", "thread-1"): SimpleNamespace(finalized=False)
+            ("turn-1", "thread-1"): TurnProgressTracker(
+                started_at=0.0,
+                agent="codex",
+                model="mock-model",
+                label="working",
+                max_actions=4,
+                max_output_chars=300,
+            )
         }
+        self._turn_progress_rendered: dict[tuple[str, str], str] = {}
         self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
+        self._turn_progress_backoff_until: dict[tuple[str, str], float] = {}
+        self._turn_progress_failure_streaks: dict[tuple[str, str], int] = {}
+        self._turn_progress_suppressed_counts: dict[tuple[str, str], int] = {}
         self._turn_progress_tasks: dict[tuple[str, str], Any] = {}
         self._turn_contexts: dict[tuple[str, str], Any] = {
-            ("turn-1", "thread-1"): SimpleNamespace(placeholder_message_id=100)
+            ("turn-1", "thread-1"): SimpleNamespace(
+                chat_id=1,
+                thread_id=2,
+                topic_key="topic-1",
+                placeholder_message_id=100,
+            )
         }
         self.emitted: list[tuple[tuple[str, str], float]] = []
         self.delayed: list[tuple[tuple[str, str], float]] = []
@@ -240,6 +257,9 @@ class _StartTurnProgressHarness(TelegramNotificationHandlers):
         self._turn_progress_trackers: dict[tuple[str, str], Any] = {}
         self._turn_progress_rendered: dict[tuple[str, str], str] = {}
         self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
+        self._turn_progress_backoff_until: dict[tuple[str, str], float] = {}
+        self._turn_progress_failure_streaks: dict[tuple[str, str], int] = {}
+        self._turn_progress_suppressed_counts: dict[tuple[str, str], int] = {}
         self._turn_progress_tasks: dict[tuple[str, str], Any] = {}
         self._turn_progress_heartbeat_tasks: dict[tuple[str, str], Any] = {}
         self._turn_progress_locks: dict[tuple[str, str], Any] = {}
@@ -287,6 +307,7 @@ class _TurnCompletionProgressHarness(TelegramNotificationHandlers):
             )
         )
         self._turn_key = ("turn-1", "thread-1")
+        self._logger = logging.getLogger("test.telegram.turn_completion")
         self._turn_progress_trackers: dict[tuple[str, str], Any] = {
             self._turn_key: TurnProgressTracker(
                 started_at=0.0,
@@ -297,6 +318,9 @@ class _TurnCompletionProgressHarness(TelegramNotificationHandlers):
                 max_output_chars=400,
             )
         }
+        self._turn_progress_backoff_until: dict[tuple[str, str], float] = {}
+        self._turn_progress_failure_streaks: dict[tuple[str, str], int] = {}
+        self._turn_progress_suppressed_counts: dict[tuple[str, str], int] = {}
         self._turn_contexts: dict[tuple[str, str], Any] = {self._turn_key: object()}
         self.edits: list[tuple[tuple[str, str], bool, str]] = []
         self.cleared: list[tuple[str, str]] = []
@@ -353,6 +377,15 @@ class _OutputDeltaProgressHarness(TelegramNotificationHandlers):
 class _ProgressMarkupHarness(TelegramNotificationHandlers):
     def __init__(self, *, label: str) -> None:
         self._turn_key = ("turn-1", "thread-1")
+        self._config = SimpleNamespace(
+            progress_stream=SimpleNamespace(
+                enabled=True,
+                min_edit_interval_seconds=1.0,
+                max_actions=8,
+                max_output_chars=400,
+            )
+        )
+        self._logger = logging.getLogger("test.telegram.progress_markup")
         self._turn_progress_trackers: dict[tuple[str, str], Any] = {
             self._turn_key: TurnProgressTracker(
                 started_at=0.0,
@@ -365,6 +398,9 @@ class _ProgressMarkupHarness(TelegramNotificationHandlers):
         }
         self._turn_progress_rendered: dict[tuple[str, str], str] = {}
         self._turn_progress_updated_at: dict[tuple[str, str], float] = {}
+        self._turn_progress_backoff_until: dict[tuple[str, str], float] = {}
+        self._turn_progress_failure_streaks: dict[tuple[str, str], int] = {}
+        self._turn_progress_suppressed_counts: dict[tuple[str, str], int] = {}
         self._turn_contexts: dict[tuple[str, str], Any] = {
             self._turn_key: SimpleNamespace(
                 chat_id=1,
@@ -404,6 +440,24 @@ class _ProgressMarkupHarness(TelegramNotificationHandlers):
             }
         )
         return True
+
+
+class _FailingProgressMarkupHarness(_ProgressMarkupHarness):
+    def __init__(self, *, label: str = "working") -> None:
+        super().__init__(label=label)
+        self.fail_edit = True
+
+    async def _edit_message_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        *,
+        message_thread_id: Optional[int] = None,
+        reply_markup: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        _ = (chat_id, message_id, text, message_thread_id, reply_markup)
+        return False
 
 
 @pytest.mark.anyio
@@ -611,6 +665,42 @@ async def test_emit_progress_edit_clears_keyboard_for_terminal_label() -> None:
 
     assert harness.edits
     assert harness.edits[-1]["reply_markup"] == {"inline_keyboard": []}
+
+
+@pytest.mark.anyio
+async def test_emit_progress_edit_records_backoff_after_failed_edit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _FailingProgressMarkupHarness()
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        lambda: 10.0,
+    )
+
+    await harness._emit_progress_edit(harness._turn_key, force=False)
+
+    assert harness._turn_progress_failure_streaks[harness._turn_key] == 1
+    assert harness._turn_progress_backoff_until[harness._turn_key] == 25.0
+
+
+@pytest.mark.anyio
+async def test_progress_edit_cadence_defers_while_backoff_is_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _ProgressCadenceHarness(min_interval=2.0)
+    key = ("turn-1", "thread-1")
+    harness._turn_progress_backoff_until[key] = 20.0
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.telegram.notifications.time.monotonic",
+        lambda: 12.0,
+    )
+
+    await harness._schedule_progress_edit(key)
+    await asyncio.sleep(0)
+
+    assert not harness.emitted
+    assert harness.delayed == [(key, 8.0)]
+    assert harness._turn_progress_suppressed_counts[key] == 1
 
 
 class _FlowStatusHandler(FlowCommands):

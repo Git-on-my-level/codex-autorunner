@@ -6,7 +6,6 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
-from ..core.utils import resolve_executable
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .base import AgentHarness
 from .codex.harness import CodexHarness
@@ -16,6 +15,7 @@ from .zeroclaw.harness import ZEROCLAW_CAPABILITIES, ZeroClawHarness
 from .zeroclaw.supervisor import (
     build_zeroclaw_supervisor_from_config,
     zeroclaw_binary_available,
+    zeroclaw_runtime_preflight,
 )
 
 _logger = logging.getLogger(__name__)
@@ -101,10 +101,16 @@ def _check_zeroclaw_health(ctx: Any) -> bool:
         return True
     config = getattr(ctx, "config", None)
     if config is not None:
-        return zeroclaw_binary_available(config)
+        return zeroclaw_runtime_preflight(config).status == "ready"
     binary = getattr(ctx, "zeroclaw_binary", None)
     if isinstance(binary, str) and binary.strip():
-        return resolve_executable(binary.strip()) is not None
+        return zeroclaw_binary_available(
+            type(
+                "_InlineConfig",
+                (),
+                {"agent_binary": staticmethod(lambda _agent_id: binary.strip())},
+            )()
+        )
     return False
 
 

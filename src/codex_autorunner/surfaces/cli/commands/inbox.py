@@ -5,6 +5,8 @@ from typing import Any, Callable, Optional
 import httpx
 import typer
 
+from .utils import format_hub_request_error
+
 
 def register_inbox_commands(
     app: typer.Typer,
@@ -16,9 +18,12 @@ def register_inbox_commands(
 ) -> None:
     def _hub_request_error(message: str, url: str, exc: BaseException) -> None:
         raise_exit(
-            f"{message}\nAttempted: {url}\n"
-            "If the hub UI is served under a base path (commonly /car), either set "
-            "`server.base_path` in the hub config or pass `--base-path /car`.",
+            format_hub_request_error(
+                action=message,
+                url=url,
+                exc=exc,
+                base_path_cli_hint="--base-path /car",
+            ),
             cause=exc,
         )
 

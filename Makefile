@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-chat-platform-contract check check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
+.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -85,6 +85,20 @@ test-chat-platform-contract:
 		tests/test_telegram_command_contract.py \
 		tests/test_doctor_checks.py::test_chat_doctor_checks_use_parity_contract_group \
 		tests/test_doctor_checks.py::test_chat_doctor_checks_failures_are_actionable
+
+test-managed-thread-cutover:
+	$(PYTHON) -m pytest -q \
+		tests/test_backend_run_event_contract.py \
+		tests/test_hub_supervisor.py \
+		tests/test_pma_managed_threads_lifecycle.py \
+		tests/test_pma_managed_threads_turns.py \
+		tests/test_telegram_pma_routing.py \
+		tests/test_telegram_bot_integration.py \
+		tests/test_telegram_turn_queue.py \
+		tests/test_telegram_status_rate_limits.py \
+		tests/integrations/discord/test_service_routing.py \
+		tests/integrations/discord/test_message_turns.py \
+		tests/test_redaction.py
 
 test-integration:
 	$(PYTHON) -m pytest -m integration

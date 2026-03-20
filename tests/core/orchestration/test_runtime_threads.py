@@ -4,6 +4,7 @@ import asyncio
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from codex_autorunner.agents.registry import AgentDescriptor
@@ -369,6 +370,181 @@ async def test_runtime_threads_use_wait_for_turn_contract_for_session_runtimes(
     assert outcome.status == "ok"
     assert harness.wait_calls == [(workspace_root, "session-1", "stream-turn-1")]
     assert outcome.assistant_text == "hello world"
+
+
+async def test_runtime_threads_allow_missing_interrupt_event(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "assistant-output"
+
+
+async def test_runtime_threads_allow_wait_results_without_raw_events(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+
+    async def _wait_without_raw_events(
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = timeout
+        harness.wait_calls.append((workspace_root, conversation_id, turn_id))
+        return SimpleNamespace(
+            status="ok", assistant_text="assistant-output", errors=[]
+        )
+
+    harness.wait_for_turn = _wait_without_raw_events  # type: ignore[method-assign]
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "assistant-output"
+    assert outcome.raw_events == ()
+
+
+async def test_runtime_threads_prefer_final_output_over_post_completion_errors(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+
+    async def _wait_with_final_output_and_error(
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = timeout
+        harness.wait_calls.append((workspace_root, conversation_id, turn_id))
+        return SimpleNamespace(
+            status="completed",
+            assistant_text="assistant-output",
+            errors=["transport disconnected after completion"],
+            raw_events=[
+                {
+                    "message": {
+                        "method": "turn/completed",
+                        "params": {"status": "completed"},
+                    }
+                }
+            ],
+        )
+
+    harness.wait_for_turn = _wait_with_final_output_and_error  # type: ignore[method-assign]
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "assistant-output"
+    assert outcome.error is None
+
+
+async def test_runtime_threads_recovers_from_top_level_completion_raw_event(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+
+    async def _wait_with_top_level_completion(
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> SimpleNamespace:
+        _ = timeout
+        harness.wait_calls.append((workspace_root, conversation_id, turn_id))
+        return SimpleNamespace(
+            status="completed",
+            assistant_text="assistant-output",
+            errors=["transport disconnected after completion"],
+            raw_events=[
+                {"method": "turn/completed", "params": {"status": "completed"}}
+            ],
+        )
+
+    harness.wait_for_turn = _wait_with_top_level_completion  # type: ignore[method-assign]
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "ok"
+    assert outcome.assistant_text == "assistant-output"
+    assert outcome.error is None
 
 
 async def test_stream_runtime_thread_events_proxies_harness_stream(

@@ -9,37 +9,46 @@ from codex_autorunner.tickets.lint import (
 )
 
 
+def _ticket_frontmatter(**extra):
+    payload = {"ticket_id": "tkt_test123", **extra}
+    return payload
+
+
 def test_lint_ticket_frontmatter_requires_agent_and_done() -> None:
     fm, errors = lint_ticket_frontmatter({})
     assert fm is None
     assert errors
 
-    fm, errors = lint_ticket_frontmatter({"agent": "codex"})
+    fm, errors = lint_ticket_frontmatter({"ticket_id": "tkt_test123", "agent": "codex"})
     assert fm is None
     assert any("done" in e for e in errors)
 
-    fm, errors = lint_ticket_frontmatter({"done": False})
+    fm, errors = lint_ticket_frontmatter({"ticket_id": "tkt_test123", "done": False})
     assert fm is None
     assert any("agent" in e for e in errors)
 
 
 def test_lint_ticket_frontmatter_accepts_known_agents_and_user() -> None:
-    fm, errors = lint_ticket_frontmatter({"agent": "codex", "done": False})
+    fm, errors = lint_ticket_frontmatter(_ticket_frontmatter(agent="codex", done=False))
     assert errors == []
     assert fm is not None
     assert fm.agent == "codex"
 
-    fm, errors = lint_ticket_frontmatter({"agent": "opencode", "done": True})
+    fm, errors = lint_ticket_frontmatter(
+        _ticket_frontmatter(agent="opencode", done=True)
+    )
     assert errors == []
     assert fm is not None
     assert fm.agent == "opencode"
 
-    fm, errors = lint_ticket_frontmatter({"agent": "user", "done": False})
+    fm, errors = lint_ticket_frontmatter(_ticket_frontmatter(agent="user", done=False))
     assert errors == []
     assert fm is not None
     assert fm.agent == "user"
 
-    fm, errors = lint_ticket_frontmatter({"agent": "unknown", "done": False})
+    fm, errors = lint_ticket_frontmatter(
+        _ticket_frontmatter(agent="unknown", done=False)
+    )
     assert fm is None
     assert any("invalid" in e for e in errors)
 
@@ -47,6 +56,7 @@ def test_lint_ticket_frontmatter_accepts_known_agents_and_user() -> None:
 def test_lint_ticket_frontmatter_preserves_extra() -> None:
     fm, errors = lint_ticket_frontmatter(
         {
+            "ticket_id": "tkt_test123",
             "agent": "codex",
             "done": False,
             "custom": {"a": 1},
@@ -60,6 +70,7 @@ def test_lint_ticket_frontmatter_preserves_extra() -> None:
 def test_lint_ticket_frontmatter_allows_depends_on_as_extra() -> None:
     fm, errors = lint_ticket_frontmatter(
         {
+            "ticket_id": "tkt_test123",
             "agent": "codex",
             "done": False,
             "depends_on": ["TICKET-001"],
@@ -73,6 +84,7 @@ def test_lint_ticket_frontmatter_allows_depends_on_as_extra() -> None:
 def test_lint_ticket_frontmatter_validates_context_entries() -> None:
     fm, errors = lint_ticket_frontmatter(
         {
+            "ticket_id": "tkt_test123",
             "agent": "codex",
             "done": False,
             "context": [
@@ -95,6 +107,7 @@ def test_lint_ticket_frontmatter_validates_context_entries() -> None:
 def test_lint_ticket_frontmatter_rejects_invalid_context_entries() -> None:
     fm, errors = lint_ticket_frontmatter(
         {
+            "ticket_id": "tkt_test123",
             "agent": "codex",
             "done": False,
             "context": [
@@ -134,10 +147,12 @@ def test_lint_ticket_directory_detects_duplicate_indices(tmp_path: Path) -> None
 
     # Create duplicate ticket files with same index
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_dupe_a"\n---',
+        encoding="utf-8",
     )
     (ticket_dir / "TICKET-001-duplicate.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_dupe_b"\n---',
+        encoding="utf-8",
     )
 
     errors = lint_ticket_directory(ticket_dir)
@@ -154,13 +169,16 @@ def test_lint_ticket_directory_no_duplicates(tmp_path: Path) -> None:
 
     # Create tickets with unique indices (suffixes allowed)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_one"\n---',
+        encoding="utf-8",
     )
     (ticket_dir / "TICKET-002-foo.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_two"\n---',
+        encoding="utf-8",
     )
     (ticket_dir / "TICKET-003.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_three"\n---',
+        encoding="utf-8",
     )
 
     errors = lint_ticket_directory(ticket_dir)
@@ -173,19 +191,24 @@ def test_lint_ticket_directory_multiple_duplicates(tmp_path: Path) -> None:
 
     # Create multiple duplicate indices
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_alpha"\n---',
+        encoding="utf-8",
     )
     (ticket_dir / "TICKET-001-copy.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_beta"\n---',
+        encoding="utf-8",
     )
     (ticket_dir / "TICKET-005.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_gamma"\n---',
+        encoding="utf-8",
     )
     (ticket_dir / "TICKET-005-v2.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_delta"\n---',
+        encoding="utf-8",
     )
     (ticket_dir / "TICKET-005-v3.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_epsilon"\n---',
+        encoding="utf-8",
     )
 
     errors = lint_ticket_directory(ticket_dir)
@@ -203,7 +226,8 @@ def test_lint_ticket_directory_ignores_non_ticket_files(tmp_path: Path) -> None:
 
     # Create valid tickets and ignore other files
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ndone: false\n---", encoding="utf-8"
+        '---\nagent: codex\ndone: false\nticket_id: "tkt_ignore"\n---',
+        encoding="utf-8",
     )
     (ticket_dir / "README.md").write_text("readme", encoding="utf-8")
     (ticket_dir / "notes.txt").write_text("notes", encoding="utf-8")

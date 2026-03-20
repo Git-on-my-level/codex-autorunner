@@ -1,9 +1,11 @@
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from codex_autorunner.core.app_server_threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -109,3 +111,32 @@ def test_hub_opencode_prune_interval_uses_opencode_ttl(
     app = create_hub_app(hub_root)
 
     assert app.state.opencode_prune_interval == 120.0
+
+
+def test_build_app_server_supervisor_prefers_global_env_override(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+    monkeypatch.setenv(GLOBAL_APP_SERVER_COMMAND_ENV, "/env/codex app-server --web")
+    config = web_app_state_module.load_hub_config(hub_root)
+
+    captured: dict[str, object] = {}
+
+    class _FakeSupervisor:
+        def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
+            captured["command"] = list(command)
+
+    monkeypatch.setattr(
+        web_app_state_module, "WorkspaceAppServerSupervisor", _FakeSupervisor
+    )
+
+    supervisor, _interval = web_app_state_module._build_app_server_supervisor(
+        config.app_server,
+        logger=logging.getLogger("test.hub.app_server"),
+        event_prefix="hub",
+    )
+
+    assert supervisor is not None
+    assert captured["command"] == ["/env/codex", "app-server", "--web"]

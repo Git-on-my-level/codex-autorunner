@@ -47,6 +47,15 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class ToolResult:
+    timestamp: str
+    tool_name: str
+    status: str
+    result: Any = None
+    error: Any = None
+
+
+@dataclass(frozen=True)
 class ApprovalRequested:
     timestamp: str
     request_id: str
@@ -84,6 +93,7 @@ RunEvent = Union[
     Started,
     OutputDelta,
     ToolCall,
+    ToolResult,
     ApprovalRequested,
     TokenUsage,
     RunNotice,
@@ -97,11 +107,11 @@ def is_terminal_run_event(event: RunEvent) -> bool:
 
 
 __all__ = [
-    "RUN_EVENT_DELTA_TYPES",
     "RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE",
     "RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM",
     "RUN_EVENT_DELTA_TYPE_LOG_LINE",
     "RUN_EVENT_DELTA_TYPE_USER_MESSAGE",
+    "RUN_EVENT_DELTA_TYPES",
     "ApprovalRequested",
     "Completed",
     "Failed",
@@ -111,6 +121,7 @@ __all__ = [
     "Started",
     "TokenUsage",
     "ToolCall",
+    "ToolResult",
     "is_terminal_run_event",
     "now_iso",
 ]

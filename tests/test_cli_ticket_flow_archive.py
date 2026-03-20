@@ -46,7 +46,7 @@ def _seed_ticket(repo_root: Path) -> None:
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: user\ndone: false\n---\n\nStatus ticket\n",
+        '---\nticket_id: "tkt_archive001"\nagent: user\ndone: false\n---\n\nStatus ticket\n',
         encoding="utf-8",
     )
 
@@ -81,6 +81,11 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
     _seed_repo_run(repo_root, run_id, FlowRunStatus.STOPPED)
     _seed_ticket(repo_root)
     _seed_contextspace(repo_root)
+    github_context_dir = repo_root / ".codex-autorunner" / "github_context"
+    github_context_dir.mkdir(parents=True, exist_ok=True)
+    (github_context_dir / "issue-123.md").write_text(
+        "Issue context\n", encoding="utf-8"
+    )
 
     run_dir = (
         repo_root / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / "0001"
@@ -165,6 +170,15 @@ def test_ticket_flow_archive_moves_run_artifacts_and_deletes_run(
         / "chat"
         / "outbound.jsonl"
     ).read_text(encoding="utf-8") == "{}"
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_id
+        / "github_context"
+        / "issue-123.md"
+    ).read_text(encoding="utf-8") == "Issue context\n"
     assert not (repo_root / ".codex-autorunner" / "flows" / run_id).exists()
     assert not (repo_root / ".codex-autorunner" / "tickets" / "TICKET-001.md").exists()
     assert (

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
+from ..car_context import CarContextProfile, normalize_car_context_profile
+from ..logging_utils import log_event
 from ..pma_thread_store import PmaThreadStore
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
@@ -27,11 +30,37 @@ from .models import (
     FlowTarget,
     MessageRequest,
     MessageRequestKind,
+    ThreadStopOutcome,
     ThreadTarget,
 )
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 
 MessagePreviewLimit = 120
+LOST_BACKEND_THREAD_ERROR = "Backend thread lost after restart"
+MISSING_BACKEND_THREAD_ERROR = "Backend thread missing from orchestration state"
+_MISSING_THREAD_MARKERS = (
+    "thread not found",
+    "no rollout found for thread id",
+)
+logger = logging.getLogger(__name__)
+
+
+class BusyInterruptFailedError(RuntimeError):
+    """Busy-policy interrupt failed while the original execution remained active."""
+
+    def __init__(
+        self,
+        *,
+        thread_target_id: str,
+        active_execution_id: Optional[str],
+        backend_thread_id: Optional[str],
+        detail: str = "Interrupt attempt failed; original turn is still running",
+    ) -> None:
+        super().__init__(detail)
+        self.thread_target_id = thread_target_id
+        self.active_execution_id = active_execution_id
+        self.backend_thread_id = backend_thread_id
+        self.detail = detail
 
 
 def _truncate_text(value: str, limit: int = MessagePreviewLimit) -> str:
@@ -51,6 +80,10 @@ def _normalize_request_kind(value: Any) -> MessageRequestKind:
     if normalized == "review":
         return "review"
     return "message"
+
+
+def _is_missing_thread_error(exc: Exception) -> bool:
+    return any(marker in str(exc).lower() for marker in _MISSING_THREAD_MARKERS)
 
 
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
@@ -98,8 +131,13 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
+        metadata_payload = dict(metadata or {})
+        normalized_context_profile = normalize_car_context_profile(context_profile)
+        if normalized_context_profile is not None:
+            metadata_payload["context_profile"] = normalized_context_profile
         created = self._store.create_thread(
             agent_id,
             workspace_root,
@@ -108,7 +146,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
             resource_id=resource_id,
             name=display_name,
             backend_thread_id=backend_thread_id,
-            metadata=metadata,
+            metadata=metadata_payload,
         )
         return _thread_target_from_store_row(created)
 
@@ -389,6 +427,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
     def list_bindings(
         self,
         *,
+        thread_target_id: Optional[str] = None,
         repo_id: Optional[str] = None,
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
@@ -400,6 +439,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         if self.binding_store is None:
             return []
         return self.binding_store.list_bindings(
+            thread_target_id=thread_target_id,
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -448,6 +488,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
         definition = self.get_agent_definition(agent_id)
@@ -465,6 +506,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             resource_id=resource_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
+            context_profile=context_profile,
             metadata=metadata,
         )
 
@@ -479,6 +521,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         resource_id: Optional[str] = None,
         display_name: Optional[str] = None,
         backend_thread_id: Optional[str] = None,
+        context_profile: Optional[CarContextProfile] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ThreadTarget:
         if thread_target_id:
@@ -494,6 +537,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             resource_id=resource_id,
             display_name=display_name,
             backend_thread_id=backend_thread_id,
+            context_profile=context_profile,
             metadata=metadata,
         )
 
@@ -571,6 +615,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 else None
             ),
             input_items=normalized_input_items,
+            context_profile=normalize_car_context_profile(
+                request_data.get("context_profile")
+            ),
             metadata=dict(metadata),
         )
         return request, payload.get("client_request_id"), payload.get("sandbox_policy")
@@ -716,7 +763,32 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
         running = self.get_running_execution(thread.thread_target_id)
         if running is not None and request.busy_policy == "interrupt":
-            await self.interrupt_thread(thread.thread_target_id)
+            try:
+                await self.stop_thread(thread.thread_target_id)
+            except Exception as exc:
+                current_running = self.get_running_execution(thread.thread_target_id)
+                current_thread = (
+                    self.get_thread_target(thread.thread_target_id) or thread
+                )
+                raise BusyInterruptFailedError(
+                    thread_target_id=thread.thread_target_id,
+                    active_execution_id=(
+                        current_running.execution_id
+                        if current_running is not None
+                        else running.execution_id
+                    ),
+                    backend_thread_id=current_thread.backend_thread_id,
+                ) from exc
+            current_running = self.get_running_execution(thread.thread_target_id)
+            if current_running is not None:
+                current_thread = (
+                    self.get_thread_target(thread.thread_target_id) or thread
+                )
+                raise BusyInterruptFailedError(
+                    thread_target_id=thread.thread_target_id,
+                    active_execution_id=current_running.execution_id,
+                    backend_thread_id=current_thread.backend_thread_id,
+                )
             thread = self.get_thread_target(thread.thread_target_id) or thread
 
         execution = self.thread_store.create_execution(
@@ -812,6 +884,103 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
         return self.thread_store.record_execution_interrupted(
             thread_target_id, execution.execution_id
+        )
+
+    def _recover_lost_backend_execution(
+        self,
+        *,
+        thread_target_id: str,
+        execution: ExecutionRecord,
+        backend_thread_id: Optional[str],
+        error_message: str,
+        reason: str,
+    ) -> ExecutionRecord:
+        recovered = self.thread_store.record_execution_result(
+            thread_target_id,
+            execution.execution_id,
+            status="error",
+            assistant_text="",
+            error=error_message,
+            backend_turn_id=execution.backend_id,
+            transcript_turn_id=None,
+        )
+        self.thread_store.set_thread_backend_id(thread_target_id, None)
+        log_event(
+            logger,
+            logging.INFO,
+            "orchestration.thread.recovered_lost_backend",
+            thread_target_id=thread_target_id,
+            execution_id=execution.execution_id,
+            backend_thread_id=backend_thread_id,
+            backend_turn_id=execution.backend_id,
+            reason=reason,
+            error=error_message,
+        )
+        return recovered
+
+    async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome:
+        thread = self.get_thread_target(thread_target_id)
+        if thread is None:
+            raise KeyError(f"Unknown thread target '{thread_target_id}'")
+
+        cancelled_queued = self.cancel_queued_executions(thread_target_id)
+        execution = self.get_running_execution(thread_target_id)
+        if execution is None:
+            return ThreadStopOutcome(
+                thread_target_id=thread_target_id,
+                cancelled_queued=cancelled_queued,
+            )
+
+        backend_thread_id = thread.backend_thread_id
+        if not backend_thread_id:
+            recovered = self._recover_lost_backend_execution(
+                thread_target_id=thread_target_id,
+                execution=execution,
+                backend_thread_id=None,
+                error_message=MISSING_BACKEND_THREAD_ERROR,
+                reason="missing_backend_thread_id",
+            )
+            return ThreadStopOutcome(
+                thread_target_id=thread_target_id,
+                cancelled_queued=cancelled_queued,
+                execution=recovered,
+                recovered_lost_backend=True,
+            )
+
+        try:
+            interrupted = await self.interrupt_thread(thread_target_id)
+        except Exception as exc:
+            if not _is_missing_thread_error(exc):
+                raise
+            log_event(
+                logger,
+                logging.INFO,
+                "orchestration.thread.interrupt_missing_backend",
+                thread_target_id=thread_target_id,
+                execution_id=execution.execution_id,
+                backend_thread_id=backend_thread_id,
+                backend_turn_id=execution.backend_id,
+                exc=exc,
+            )
+            recovered = self._recover_lost_backend_execution(
+                thread_target_id=thread_target_id,
+                execution=execution,
+                backend_thread_id=backend_thread_id,
+                error_message=LOST_BACKEND_THREAD_ERROR,
+                reason="interrupt_thread_not_found",
+            )
+            return ThreadStopOutcome(
+                thread_target_id=thread_target_id,
+                cancelled_queued=cancelled_queued,
+                execution=recovered,
+                recovered_lost_backend=True,
+            )
+
+        return ThreadStopOutcome(
+            thread_target_id=thread_target_id,
+            cancelled_queued=cancelled_queued,
+            execution=interrupted,
+            interrupted_active=True,
         )
 
     def get_execution(

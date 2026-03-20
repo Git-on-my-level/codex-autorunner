@@ -38,9 +38,209 @@ from .helpers import (
 from .progress_stream import TurnProgressTracker, render_progress_text
 
 _ACTIVE_PROGRESS_LABELS = {"working", "queued", "running", "review"}
+_DEGRADED_PROGRESS_MARKERS = (
+    "reconnecting",
+    "stalled",
+    "stall timeout",
+    "session idle",
+)
+_DEGRADED_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 30.0
+_PROGRESS_EDIT_FAILURE_INITIAL_BACKOFF_SECONDS = 15.0
+_PROGRESS_EDIT_FAILURE_MAX_BACKOFF_SECONDS = 120.0
 
 
 class TelegramNotificationHandlers:
+    def _progress_tracker_is_degraded(
+        self,
+        turn_key: tuple[str, str],
+        tracker: Any,
+    ) -> bool:
+        texts: list[str] = []
+        for candidate in (
+            getattr(tracker, "transient_action", None),
+            getattr(tracker, "last_tool_trace", None),
+            getattr(tracker, "last_thinking_trace", None),
+        ):
+            text = getattr(candidate, "text", None)
+            if isinstance(text, str) and text.strip():
+                texts.append(text)
+        latest_output = getattr(tracker, "latest_output_text", None)
+        if callable(latest_output):
+            value = latest_output()
+            if isinstance(value, str) and value.strip():
+                texts.append(value)
+        rendered = self._turn_progress_rendered.get(turn_key)
+        if isinstance(rendered, str) and rendered.strip():
+            texts.append(rendered)
+        if not texts:
+            return False
+        normalized = " ".join(" ".join(texts).lower().split())
+        return any(marker in normalized for marker in _DEGRADED_PROGRESS_MARKERS)
+
+    def _progress_edit_min_interval(
+        self,
+        turn_key: tuple[str, str],
+        tracker: Any,
+    ) -> float:
+        min_interval = self._config.progress_stream.min_edit_interval_seconds
+        if TelegramNotificationHandlers._progress_tracker_is_degraded(
+            self, turn_key, tracker
+        ):
+            min_interval = max(
+                min_interval,
+                _DEGRADED_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+            )
+        blocked_until = getattr(self, "_turn_progress_backoff_until", {}).get(
+            turn_key, 0.0
+        )
+        now = time.monotonic()
+        if blocked_until > now:
+            min_interval = max(min_interval, blocked_until - now)
+        return min_interval
+
+    def _record_progress_edit_suppressed(self, turn_key: tuple[str, str]) -> None:
+        suppressed = getattr(self, "_turn_progress_suppressed_counts", None)
+        if not isinstance(suppressed, dict):
+            suppressed = {}
+            self._turn_progress_suppressed_counts = suppressed
+        suppressed[turn_key] = int(suppressed.get(turn_key, 0)) + 1
+
+    def _record_progress_edit_failure(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        ctx: Optional[Any],
+        now: float,
+        degraded: bool,
+    ) -> None:
+        failure_streaks = getattr(self, "_turn_progress_failure_streaks", None)
+        if not isinstance(failure_streaks, dict):
+            failure_streaks = {}
+            self._turn_progress_failure_streaks = failure_streaks
+        streak = int(failure_streaks.get(turn_key, 0)) + 1
+        failure_streaks[turn_key] = streak
+
+        backoff_until = getattr(self, "_turn_progress_backoff_until", None)
+        if not isinstance(backoff_until, dict):
+            backoff_until = {}
+            self._turn_progress_backoff_until = backoff_until
+        base_delay = max(
+            self._config.progress_stream.min_edit_interval_seconds,
+            _PROGRESS_EDIT_FAILURE_INITIAL_BACKOFF_SECONDS,
+        )
+        if degraded:
+            base_delay = max(
+                base_delay,
+                _DEGRADED_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+            )
+        delay = min(
+            base_delay * (2 ** (streak - 1)),
+            _PROGRESS_EDIT_FAILURE_MAX_BACKOFF_SECONDS,
+        )
+        backoff_until[turn_key] = now + delay
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.progress.edit_backoff",
+            chat_id=getattr(ctx, "chat_id", None),
+            thread_id=getattr(ctx, "thread_id", None),
+            topic_key=getattr(ctx, "topic_key", None),
+            turn_id=turn_key[0],
+            backend_thread_id=turn_key[1],
+            delay_seconds=round(delay, 3),
+            failure_streak=streak,
+            degraded=degraded,
+        )
+
+    def _clear_progress_edit_failure_state(
+        self,
+        turn_key: tuple[str, str],
+        *,
+        log_recovery: bool = True,
+    ) -> None:
+        backoff_until = getattr(self, "_turn_progress_backoff_until", None)
+        if isinstance(backoff_until, dict):
+            backoff_until.pop(turn_key, None)
+        failure_streaks = getattr(self, "_turn_progress_failure_streaks", None)
+        if isinstance(failure_streaks, dict):
+            streak = int(failure_streaks.pop(turn_key, 0))
+        else:
+            streak = 0
+        suppressed = getattr(self, "_turn_progress_suppressed_counts", None)
+        if isinstance(suppressed, dict):
+            suppressed_count = int(suppressed.pop(turn_key, 0))
+        else:
+            suppressed_count = 0
+        if log_recovery and (streak > 0 or suppressed_count > 0):
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.progress.edit_recovered",
+                turn_id=turn_key[0],
+                backend_thread_id=turn_key[1],
+                failure_streak=streak,
+                suppressed_edits=suppressed_count,
+            )
+
+    def _render_turn_progress_summary(self, turn_key: tuple[str, str]) -> str:
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            cached_map = getattr(self, "_turn_progress_final_summary", None)
+            if not isinstance(cached_map, dict):
+                return ""
+            cached = cached_map.pop(turn_key, "")
+            return cached if isinstance(cached, str) else ""
+        rendered = render_progress_text(
+            tracker,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
+            now=time.monotonic(),
+            render_mode="live",
+        )
+        line = rendered.splitlines()[0].strip() if rendered else ""
+        return line
+
+    def _render_final_turn_progress(self, turn_key: tuple[str, str]) -> str:
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            cached_map = getattr(self, "_turn_progress_final_rendered", None)
+            if not isinstance(cached_map, dict):
+                return ""
+            cached = cached_map.pop(turn_key, "")
+            return cached if isinstance(cached, str) else ""
+        return render_progress_text(
+            tracker,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
+            now=time.monotonic(),
+            render_mode="final",
+        )
+
+    def _cache_final_turn_progress(self, turn_key: tuple[str, str]) -> None:
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if tracker is None:
+            return
+        cached_map = getattr(self, "_turn_progress_final_rendered", None)
+        if not isinstance(cached_map, dict):
+            cached_map = {}
+            self._turn_progress_final_rendered = cached_map
+        rendered = render_progress_text(
+            tracker,
+            max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
+            now=time.monotonic(),
+            render_mode="final",
+        )
+        if rendered.strip():
+            cached_map[turn_key] = rendered
+            summary_map = getattr(self, "_turn_progress_final_summary", None)
+            if not isinstance(summary_map, dict):
+                summary_map = {}
+                self._turn_progress_final_summary = summary_map
+            summary_line = self._render_turn_progress_summary(turn_key)
+            if summary_line:
+                summary_map[turn_key] = summary_line
+            touch_cache_timestamp = getattr(self, "_touch_cache_timestamp", None)
+            if callable(touch_cache_timestamp):
+                touch_cache_timestamp("progress_trackers", turn_key)
+
     def _cache_token_usage(
         self,
         token_usage: dict[str, Any],
@@ -291,6 +491,11 @@ class TelegramNotificationHandlers:
         self._turn_progress_rendered.pop(turn_key, None)
         self._turn_progress_updated_at.pop(turn_key, None)
         self._turn_progress_locks.pop(turn_key, None)
+        TelegramNotificationHandlers._clear_progress_edit_failure_state(
+            self,
+            turn_key,
+            log_recovery=False,
+        )
         pending_context_usage: dict[tuple[str, str], int] = getattr(
             self, "_pending_context_usage", {}
         )
@@ -490,6 +695,7 @@ class TelegramNotificationHandlers:
             tracker.drop_terminal_output_if_duplicate(final_text)
         tracker.clear_transient_action()
         tracker.finalized = True
+        self._cache_final_turn_progress(turn_key)
         await self._emit_progress_edit(turn_key, force=True, render_mode="final")
         self._clear_turn_progress(turn_key)
 
@@ -520,6 +726,7 @@ class TelegramNotificationHandlers:
             return
         if outcome.terminal:
             tracker.finalized = True
+            self._cache_final_turn_progress(turn_key)
             await self._emit_progress_edit(
                 turn_key,
                 force=outcome.force,
@@ -557,8 +764,26 @@ class TelegramNotificationHandlers:
                 return
             if tracker.finalized:
                 return
-            min_interval = self._config.progress_stream.min_edit_interval_seconds
             now = time.monotonic()
+            blocked_until = getattr(self, "_turn_progress_backoff_until", {}).get(
+                turn_key, 0.0
+            )
+            if blocked_until > now:
+                TelegramNotificationHandlers._record_progress_edit_suppressed(
+                    self,
+                    turn_key,
+                )
+                if turn_key in self._turn_progress_tasks:
+                    return
+                delay = max(blocked_until - now, 0.0)
+                task = self._spawn_task(self._delayed_progress_edit(turn_key, delay))
+                self._turn_progress_tasks[turn_key] = task
+                return
+            min_interval = TelegramNotificationHandlers._progress_edit_min_interval(
+                self,
+                turn_key,
+                tracker,
+            )
             last_updated = self._turn_progress_updated_at.get(turn_key, 0.0)
             if (now - last_updated) >= min_interval:
                 await self._emit_progress_edit(turn_key, ctx=ctx, now=now)
@@ -588,10 +813,7 @@ class TelegramNotificationHandlers:
                 ctx = self._turn_contexts.get(turn_key)
                 if ctx is None or ctx.placeholder_message_id is None:
                     continue
-                now = time.monotonic()
-                last_updated = self._turn_progress_updated_at.get(turn_key, 0.0)
-                if (now - last_updated) >= PROGRESS_HEARTBEAT_INTERVAL_SECONDS:
-                    await self._emit_progress_edit(turn_key, ctx=ctx, now=now)
+                await self._schedule_progress_edit(turn_key)
         finally:
             self._turn_progress_heartbeat_tasks.pop(turn_key, None)
 
@@ -613,6 +835,20 @@ class TelegramNotificationHandlers:
             return
         if now is None:
             now = time.monotonic()
+        blocked_until = getattr(self, "_turn_progress_backoff_until", {}).get(
+            turn_key, 0.0
+        )
+        if not force and blocked_until > now:
+            TelegramNotificationHandlers._record_progress_edit_suppressed(
+                self,
+                turn_key,
+            )
+            return
+        degraded = TelegramNotificationHandlers._progress_tracker_is_degraded(
+            self,
+            turn_key,
+            tracker,
+        )
         rendered = render_progress_text(
             tracker,
             max_length=TELEGRAM_MAX_MESSAGE_LENGTH,
@@ -627,16 +863,29 @@ class TelegramNotificationHandlers:
                 reply_markup = self._interrupt_keyboard()
             except Exception:
                 reply_markup = None
-        ok = await self._edit_message_text(
+        edit_result = await self._edit_message_text(
             ctx.chat_id,
             ctx.placeholder_message_id,
             rendered,
             reply_markup=reply_markup,
         )
+        ok = edit_result is not False
         if ok:
+            TelegramNotificationHandlers._clear_progress_edit_failure_state(
+                self,
+                turn_key,
+            )
             self._turn_progress_rendered[turn_key] = rendered
             self._turn_progress_updated_at[turn_key] = now
             self._touch_cache_timestamp("progress_trackers", turn_key)
+            return
+        TelegramNotificationHandlers._record_progress_edit_failure(
+            self,
+            turn_key,
+            ctx=ctx,
+            now=now,
+            degraded=degraded,
+        )
 
 
 def _extract_command_text(

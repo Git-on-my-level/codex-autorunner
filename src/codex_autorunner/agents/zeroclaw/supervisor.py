@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -17,9 +19,16 @@ from ...core.destinations import (
     LocalDestination,
     resolve_effective_agent_workspace_destination,
 )
-from ...core.utils import atomic_write, resolve_executable
+from ...core.utils import atomic_write
 from ...manifest import load_manifest
 from ...workspace import canonical_workspace_root, workspace_id_for_path
+from ..managed_runtime import (
+    ManagedWorkspaceRuntimeError,
+    RuntimePreflightResult,
+    build_managed_workspace_launch_spec,
+    preflight_managed_workspace_runtime,
+    zeroclaw_managed_workspace_env,
+)
 from ..types import TerminalTurnResult
 from .client import ZeroClawClient, split_zeroclaw_model
 
@@ -42,6 +51,22 @@ def _wrap_command_for_destination(**kwargs):
     return wrap_command_for_destination(**kwargs)
 
 
+def _docker_destination_supplies_env(
+    destination: DockerDestination,
+    env_key: str,
+) -> bool:
+    explicit_value = str(destination.env.get(env_key) or "").strip()
+    if explicit_value:
+        return True
+    for pattern in destination.env_passthrough:
+        normalized = str(pattern or "").strip()
+        if not normalized or not fnmatch.fnmatchcase(env_key, normalized):
+            continue
+        if os.environ.get(env_key):
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class ZeroClawSessionMetadata:
     session_id: str
@@ -51,6 +76,8 @@ class ZeroClawSessionMetadata:
     last_used_at: float
     launch_provider: Optional[str] = None
     launch_model: Optional[str] = None
+    runtime_version: Optional[str] = None
+    launch_mode: Optional[str] = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "ZeroClawSessionMetadata":
@@ -76,6 +103,8 @@ class ZeroClawSessionMetadata:
         title = payload.get("title")
         launch_provider = payload.get("launch_provider")
         launch_model = payload.get("launch_model")
+        runtime_version = payload.get("runtime_version")
+        launch_mode = payload.get("launch_mode")
         return cls(
             session_id=session_id,
             workspace_id=workspace_id,
@@ -90,6 +119,16 @@ class ZeroClawSessionMetadata:
             launch_model=(
                 str(launch_model)
                 if isinstance(launch_model, str) and launch_model.strip()
+                else None
+            ),
+            runtime_version=(
+                str(runtime_version)
+                if isinstance(runtime_version, str) and runtime_version.strip()
+                else None
+            ),
+            launch_mode=(
+                str(launch_mode)
+                if isinstance(launch_mode, str) and launch_mode.strip()
                 else None
             ),
         )
@@ -107,6 +146,10 @@ class ZeroClawSessionMetadata:
             payload["launch_provider"] = self.launch_provider
         if self.launch_model:
             payload["launch_model"] = self.launch_model
+        if self.runtime_version:
+            payload["runtime_version"] = self.runtime_version
+        if self.launch_mode:
+            payload["launch_mode"] = self.launch_mode
         return payload
 
 
@@ -134,6 +177,8 @@ class ZeroClawSessionHandle:
     last_used_at: float
     launch_provider: Optional[str] = None
     launch_model: Optional[str] = None
+    runtime_version: Optional[str] = None
+    launch_mode: Optional[str] = None
 
 
 class ZeroClawSupervisor:
@@ -252,6 +297,17 @@ class ZeroClawSupervisor:
         async for event in handle.client.stream_turn_events(turn_id):
             yield event
 
+    async def list_turn_events(
+        self,
+        workspace_root: Path,
+        session_id: str,
+        turn_id: str,
+    ) -> list[dict[str, str]]:
+        handle = await self._get_handle(workspace_root, session_id)
+        handle.last_used_at = time.time()
+        self._persist_metadata(handle)
+        return handle.client.list_turn_events(turn_id)
+
     async def close_all(self) -> None:
         async with self._lock:
             handles = list(self._handles.values())
@@ -286,23 +342,52 @@ class ZeroClawSupervisor:
         runtime_workspace_root = self._runtime_workspace_root(workspace_root)
         client_command = list(self._command)
         destination = self._resolve_destination(workspace_root)
+        embed_workspace_env = True
         if isinstance(destination, DockerDestination):
+            docker_extra_env = zeroclaw_managed_workspace_env(
+                runtime_workspace_root,
+                base_env=self._base_env,
+            )
+            if _docker_destination_supplies_env(
+                destination,
+                "ZEROCLAW_CONFIG_DIR",
+            ):
+                docker_extra_env.pop("ZEROCLAW_CONFIG_DIR", None)
             wrapped = _wrap_command_for_destination(
                 command=self._command,
                 destination=destination,
                 repo_root=workspace_root,
                 command_workdir=runtime_workspace_root,
-                extra_env={"ZEROCLAW_WORKSPACE": str(runtime_workspace_root)},
+                extra_env=docker_extra_env,
             )
             client_command = wrapped.command
+            embed_workspace_env = False
+        session_state_file = self._session_state_file(
+            workspace_root, metadata.session_id
+        )
+        try:
+            launch_spec = build_managed_workspace_launch_spec(
+                "zeroclaw",
+                command=client_command,
+                runtime_workspace_root=runtime_workspace_root,
+                session_state_file=session_state_file,
+                base_env=self._base_env,
+                embed_workspace_env=embed_workspace_env,
+            )
+        except ManagedWorkspaceRuntimeError as exc:
+            raise ZeroClawSupervisorError(str(exc)) from exc
+        if (
+            metadata.launch_mode
+            and launch_spec.launch_mode
+            and metadata.launch_mode != launch_spec.launch_mode
+        ):
+            raise ZeroClawSupervisorError(
+                "ZeroClaw relaunch metadata is incompatible with the current runtime "
+                f"launch mode ({metadata.launch_mode} != {launch_spec.launch_mode})"
+            )
         client = ZeroClawClient(
-            client_command,
-            runtime_workspace_root=runtime_workspace_root,
-            session_state_file=self._session_state_file(
-                workspace_root, metadata.session_id
-            ),
+            launch_spec,
             logger=self._logger,
-            base_env=self._base_env,
             launch_provider=metadata.launch_provider,
             launch_model=metadata.launch_model,
         )
@@ -312,15 +397,15 @@ class ZeroClawSupervisor:
             workspace_root=workspace_root,
             runtime_workspace_root=runtime_workspace_root,
             session_root=session_root,
-            session_state_file=self._session_state_file(
-                workspace_root, metadata.session_id
-            ),
+            session_state_file=session_state_file,
             client=client,
             title=metadata.title,
             created_at=metadata.created_at,
             last_used_at=metadata.last_used_at,
             launch_provider=metadata.launch_provider,
             launch_model=metadata.launch_model,
+            runtime_version=launch_spec.runtime_version or metadata.runtime_version,
+            launch_mode=launch_spec.launch_mode or metadata.launch_mode,
         )
 
     def _resolve_destination(self, workspace_root: Path) -> Destination:
@@ -347,6 +432,8 @@ class ZeroClawSupervisor:
             last_used_at=handle.last_used_at,
             launch_provider=handle.launch_provider,
             launch_model=handle.launch_model,
+            runtime_version=handle.runtime_version,
+            launch_mode=handle.launch_mode,
         )
         atomic_write(
             self._metadata_path(handle.workspace_root, handle.session_id),
@@ -445,14 +532,47 @@ def build_zeroclaw_supervisor_from_config(
     )
 
 
-def zeroclaw_binary_available(config: Optional[RepoConfig | HubConfig]) -> bool:
+def zeroclaw_runtime_preflight(
+    config: Optional[RepoConfig | HubConfig],
+) -> RuntimePreflightResult:
     if config is None:
-        return False
+        return RuntimePreflightResult(
+            runtime_id="zeroclaw",
+            status="missing_binary",
+            version=None,
+            launch_mode=None,
+            message="ZeroClaw binary is not configured.",
+            fix="Set agents.zeroclaw.binary in the repo or hub config.",
+        )
     try:
-        binary = config.agent_binary("zeroclaw")
+        binary = config.agent_binary("zeroclaw").strip()
     except Exception:
-        return False
-    return resolve_executable(binary) is not None
+        return RuntimePreflightResult(
+            runtime_id="zeroclaw",
+            status="missing_binary",
+            version=None,
+            launch_mode=None,
+            message="ZeroClaw binary is not configured.",
+            fix="Set agents.zeroclaw.binary in the repo or hub config.",
+        )
+    if not binary:
+        return RuntimePreflightResult(
+            runtime_id="zeroclaw",
+            status="missing_binary",
+            version=None,
+            launch_mode=None,
+            message="ZeroClaw binary is not configured.",
+            fix="Set agents.zeroclaw.binary in the repo or hub config.",
+        )
+    return preflight_managed_workspace_runtime(
+        "zeroclaw",
+        command=[binary],
+    )
+
+
+def zeroclaw_binary_available(config: Optional[RepoConfig | HubConfig]) -> bool:
+    result = zeroclaw_runtime_preflight(config)
+    return result.status == "ready"
 
 
 __all__ = [
@@ -461,4 +581,5 @@ __all__ = [
     "ZeroClawSupervisorError",
     "build_zeroclaw_supervisor_from_config",
     "zeroclaw_binary_available",
+    "zeroclaw_runtime_preflight",
 ]

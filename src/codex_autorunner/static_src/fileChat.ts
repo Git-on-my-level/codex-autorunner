@@ -1,5 +1,10 @@
 import { resolvePath, getAuthToken, api } from "./utils.js";
-import { extractContextRemainingPercent, readEventStream, parseMaybeJson } from "./streamUtils.js";
+import {
+  readEventStream,
+  handleStreamEvent,
+  parseMaybeJson,
+  type StreamEventHandler,
+} from "./streamUtils.js";
 
 export interface FileChatOptions {
   agent?: string;
@@ -104,70 +109,17 @@ export async function sendFileChat(
 }
 
 async function readFileChatStream(res: Response, handlers: FileChatHandlers): Promise<void> {
-  await readEventStream(res, (event, raw) => handleStreamEvent(event, raw, handlers));
-}
-
-function handleStreamEvent(event: string, rawData: string, handlers: FileChatHandlers): void {
-  const parsed = parseMaybeJson(rawData) as Record<string, unknown> | string;
-  switch (event) {
-    case "status": {
-      const status = typeof parsed === "string" ? parsed : (parsed.status as string) || "";
-      handlers.onStatus?.(status);
-      break;
-    }
-    case "token": {
-      const token =
-        typeof parsed === "string"
-          ? parsed
-          : (parsed.token as string) || (parsed.text as string) || rawData || "";
-      handlers.onToken?.(token);
-      break;
-    }
-    case "token_usage": {
-      if (typeof parsed === "object" && parsed !== null) {
-        const usage = parsed as Record<string, unknown>;
-        const percent = extractContextRemainingPercent(usage);
-        if (percent !== null) {
-          handlers.onTokenUsage?.(percent, usage);
-        }
-      }
-      break;
-    }
-    case "update": {
-      handlers.onUpdate?.(parsed as FileChatUpdate);
-      break;
-    }
-    case "event":
-    case "app-server": {
-      handlers.onEvent?.(parsed);
-      break;
-    }
-    case "error": {
-      const msg =
-        typeof parsed === "object" && parsed !== null
-          ? ((parsed.detail as string) || (parsed.error as string) || rawData || "File chat failed")
-          : rawData || "File chat failed";
-      handlers.onError?.(msg);
-      break;
-    }
-    case "interrupted": {
-      const msg =
-        typeof parsed === "object" && parsed !== null
-          ? ((parsed.detail as string) || rawData || "File chat interrupted")
-          : rawData || "File chat interrupted";
-      handlers.onInterrupted?.(msg);
-      break;
-    }
-    case "done":
-    case "finish": {
-      handlers.onDone?.();
-      break;
-    }
-    default:
-      // treat unknown as event for visibility
-      handlers.onEvent?.(parsed);
-      break;
-  }
+  const adapter: StreamEventHandler = {
+    onStatus: handlers.onStatus,
+    onToken: handlers.onToken,
+    onTokenUsage: handlers.onTokenUsage,
+    onUpdate: (payload) => handlers.onUpdate?.(payload as FileChatUpdate),
+    onEvent: handlers.onEvent,
+    onError: handlers.onError,
+    onInterrupted: handlers.onInterrupted,
+    onDone: handlers.onDone,
+  };
+  await readEventStream(res, (event, raw) => handleStreamEvent(event, raw, adapter));
 }
 
 export async function fetchPendingDraft(target: string): Promise<FileDraft | null> {

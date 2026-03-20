@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from codex_autorunner.integrations.chat.agents import CHAT_AGENT_DEFINITIONS
+from codex_autorunner.integrations.chat.model_selection import REASONING_EFFORT_VALUES
 from codex_autorunner.integrations.discord.components import (
     DISCORD_BUTTON_STYLE_DANGER,
     DISCORD_BUTTON_STYLE_SECONDARY,
@@ -108,12 +110,12 @@ class TestBuildAgentPicker:
         picker = build_agent_picker(current_agent="opencode")
         menu = picker["components"][0]
         assert menu["custom_id"] == "agent_select"
-        assert len(menu["options"]) == 2
+        assert [opt["value"] for opt in menu["options"]] == [
+            definition.value for definition in CHAT_AGENT_DEFINITIONS
+        ]
         codex = menu["options"][0]
         opencode = menu["options"][1]
-        assert codex["value"] == "codex"
         assert codex["default"] is False
-        assert opencode["value"] == "opencode"
         assert opencode["default"] is True
 
 
@@ -148,7 +150,7 @@ class TestBuildModelEffortPicker:
         menu = picker["components"][0]
         assert menu["custom_id"] == "model_effort_select"
         values = [opt["value"] for opt in menu["options"]]
-        assert values == ["none", "minimal", "low", "medium", "high", "xhigh"]
+        assert values == list(REASONING_EFFORT_VALUES)
 
 
 class TestBuildFlowStatusButtons:
@@ -232,3 +234,5 @@ class TestBuildUpdateTargetPicker:
         assert menu["custom_id"] == "update_target_select"
         values = {opt["value"] for opt in menu["options"]}
         assert values == {"both", "web", "chat", "telegram", "discord", "status"}
+        all_option = next(opt for opt in menu["options"] if opt["value"] == "both")
+        assert all_option["label"] == "All"

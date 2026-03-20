@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from codex_autorunner.integrations.telegram.config import (
     DEFAULT_APP_SERVER_COMMAND,
     DEFAULT_MEDIA_MAX_FILE_BYTES,
@@ -50,6 +51,51 @@ def test_telegram_bot_config_app_server_command_env_override(tmp_path: Path) -> 
     }
     cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
     assert cfg.app_server_command == ["/opt/codex/bin/codex", "app-server", "--flag"]
+
+
+def test_telegram_bot_config_prefers_global_app_server_command_env(
+    tmp_path: Path,
+) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "app_server_command_env": "TEST_APP_SERVER_COMMAND",
+        "app_server_command": ["config-codex", "app-server"],
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "-100",
+        "TEST_APP_SERVER_COMMAND": "/opt/legacy/codex app-server",
+        GLOBAL_APP_SERVER_COMMAND_ENV: "/opt/global/codex app-server --flag",
+    }
+
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+
+    assert cfg.app_server_command == ["/opt/global/codex", "app-server", "--flag"]
+
+
+def test_telegram_bot_config_invalid_env_override_falls_back_to_config(
+    tmp_path: Path,
+) -> None:
+    raw = {
+        "enabled": True,
+        "bot_token_env": "TEST_BOT_TOKEN",
+        "chat_id_env": "TEST_CHAT_ID",
+        "allowed_user_ids": [123],
+        "app_server_command_env": "TEST_APP_SERVER_COMMAND",
+        "app_server_command": ["config-codex", "app-server"],
+    }
+    env = {
+        "TEST_BOT_TOKEN": "token",
+        "TEST_CHAT_ID": "-100",
+        "TEST_APP_SERVER_COMMAND": '"unterminated',
+    }
+
+    cfg = TelegramBotConfig.from_raw(raw, root=tmp_path, env=env)
+
+    assert cfg.app_server_command == ["config-codex", "app-server"]
 
 
 def test_telegram_bot_config_uses_explicit_opencode_lifecycle_settings(

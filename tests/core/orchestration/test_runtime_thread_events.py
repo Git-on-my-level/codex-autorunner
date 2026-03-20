@@ -3,6 +3,7 @@ from __future__ import annotations
 from codex_autorunner.core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
+    recover_post_completion_outcome,
     terminal_run_event_from_outcome,
 )
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
@@ -14,6 +15,7 @@ from codex_autorunner.core.ports.run_event import (
     RunNotice,
     TokenUsage,
     ToolCall,
+    ToolResult,
 )
 from codex_autorunner.core.sse import format_sse
 
@@ -98,6 +100,90 @@ async def test_normalize_runtime_thread_raw_event_handles_codex_app_server_updat
     assert isinstance(output[0], OutputDelta)
     assert output[0].content == "partial reply"
     assert state.best_assistant_text() == "partial reply"
+
+
+async def test_normalize_runtime_thread_raw_event_surfaces_generic_error_notifications() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "error",
+                    "params": {"error": {"message": "Auth required"}},
+                }
+            },
+        ),
+        state,
+    )
+
+    assert isinstance(output[0], Failed)
+    assert output[0].error_message == "Auth required"
+    assert state.last_error_message == "Auth required"
+
+
+async def test_normalize_runtime_thread_raw_event_marks_only_successful_turn_completed() -> (
+    None
+):
+    failed_state = RuntimeThreadRunEventState()
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "turn/completed",
+                    "params": {"status": "failed"},
+                }
+            },
+        ),
+        failed_state,
+    )
+    assert failed_state.completed_seen is False
+
+    completed_state = RuntimeThreadRunEventState()
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "turn/completed",
+                    "params": {"status": "completed"},
+                }
+            },
+        ),
+        completed_state,
+    )
+    assert completed_state.completed_seen is True
+
+
+async def test_recover_post_completion_outcome_requires_canonical_final_message() -> (
+    None
+):
+    outcome = RuntimeThreadOutcome(
+        status="error",
+        assistant_text="",
+        error="App-server disconnected",
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+
+    partial_only_state = RuntimeThreadRunEventState(
+        assistant_stream_text="partial output",
+        completed_seen=True,
+    )
+    assert recover_post_completion_outcome(outcome, partial_only_state) == outcome
+
+    final_message_state = RuntimeThreadRunEventState(
+        assistant_stream_text="partial output",
+        assistant_message_text="final canonical output",
+        completed_seen=True,
+    )
+    recovered = recover_post_completion_outcome(outcome, final_message_state)
+    assert recovered.status == "ok"
+    assert recovered.assistant_text == "final canonical output"
 
 
 async def test_terminal_run_event_from_outcome_uses_streamed_fallback_text() -> None:
@@ -262,6 +348,70 @@ async def test_normalize_runtime_thread_raw_event_maps_opencode_tool_parts_to_to
     assert isinstance(output[0], ToolCall)
     assert output[0].tool_name == "bash"
     assert output[0].tool_input == {"input": "pwd"}
+
+
+async def test_normalize_runtime_thread_raw_event_maps_codex_tool_end_to_tool_result() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "item/toolCall/end",
+                    "params": {
+                        "name": "shell",
+                        "result": {"stdout": "/tmp"},
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], ToolResult)
+    assert output[0].tool_name == "shell"
+    assert output[0].status == "completed"
+    assert output[0].result == {"stdout": "/tmp"}
+
+
+async def test_normalize_runtime_thread_raw_event_maps_opencode_tool_completion_to_tool_result() -> (
+    None
+):
+    state = RuntimeThreadRunEventState(opencode_tool_status={"tool-1": "running"})
+
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "tool-1",
+                                "type": "tool",
+                                "tool": "bash",
+                                "input": "pwd",
+                                "state": {"status": "completed", "exitCode": 0},
+                            }
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 2
+    assert isinstance(output[0], ToolResult)
+    assert output[0].tool_name == "bash"
+    assert output[0].status == "completed"
+    assert isinstance(output[1], OutputDelta)
+    assert output[1].content == "exit 0"
 
 
 async def test_normalize_runtime_thread_raw_event_maps_opencode_patch_parts_to_log_lines() -> (

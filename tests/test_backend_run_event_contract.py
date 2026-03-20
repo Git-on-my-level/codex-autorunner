@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -154,6 +155,35 @@ async def test_codex_backend_approval_handler_emits_canonical_run_event(
     assert event.description == "turn/approvalRequested"
     assert event.context["command"] == ["rm", "-rf", "tmp"]
     assert event.context["sandboxPolicy"] == "workspace-write"
+
+
+@pytest.mark.asyncio
+async def test_codex_backend_approval_handler_uses_external_override_when_present(
+    tmp_path: Path,
+) -> None:
+    captured: list[dict[str, Any]] = []
+
+    async def _approval_handler(request: dict[str, Any]) -> str:
+        captured.append(request)
+        return "decline"
+
+    backend = CodexAppServerBackend(
+        supervisor=MagicMock(),
+        workspace_root=tmp_path,
+        default_approval_decision="accept",
+        approval_handler=_approval_handler,
+    )
+
+    decision = await backend._handle_approval_request(
+        {
+            "id": "approval-1",
+            "method": "turn/approvalRequested",
+            "params": {"type": "command"},
+        }
+    )
+
+    assert captured
+    assert decision == "decline"
 
 
 @pytest.mark.asyncio
@@ -505,7 +535,9 @@ class _FakeOpenCodeClient:
     def __init__(self, events: list[SSEEvent]):
         self._events = events
 
-    async def stream_events(self, *, directory=None, ready_event=None, paths=None):
+    async def stream_events(
+        self, *, directory=None, ready_event=None, paths=None, session_id=None
+    ):
         if ready_event is not None:
             ready_event.set()
         for event in self._events:

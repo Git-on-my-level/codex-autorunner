@@ -11,7 +11,7 @@ from ..ticket_flow_projection import (
     build_canonical_state_v1,
     select_authoritative_run_record,
 )
-from .models import FlowEventType, FlowRunRecord
+from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 from .store import FlowStore
 from .worker_process import (
     check_worker_health,
@@ -207,6 +207,18 @@ def select_default_ticket_flow_run(
     return select_authoritative_run_record(records)
 
 
+def resolve_ticket_flow_archive_mode(record: FlowRunRecord) -> str:
+    if record.status.is_terminal():
+        return "ready"
+    if record.status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}:
+        return "confirm"
+    return "blocked"
+
+
+def ticket_flow_archive_requires_force(record: FlowRunRecord) -> bool:
+    return record.status in {FlowRunStatus.PAUSED, FlowRunStatus.STOPPING}
+
+
 def _canonical_flow_status_state(
     repo_root: Path,
     record: FlowRunRecord,
@@ -384,9 +396,11 @@ __all__ = [
     "format_issue_as_markdown",
     "issue_md_has_content",
     "issue_md_path",
+    "resolve_ticket_flow_archive_mode",
     "seed_issue_from_github",
     "seed_issue_from_text",
     "select_default_ticket_flow_run",
     "summarize_flow_freshness",
+    "ticket_flow_archive_requires_force",
     "ticket_progress",
 ]

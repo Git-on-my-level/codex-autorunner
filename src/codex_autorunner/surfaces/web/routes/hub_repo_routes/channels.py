@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import sqlite3
@@ -18,17 +17,17 @@ from .....core.chat_bindings import (
 from .....core.flows import FlowEventType, FlowStore
 from .....core.git_utils import git_is_clean
 from .....core.logging_utils import safe_log
+from .....core.orchestration.sqlite import resolve_orchestration_sqlite_path
 from .....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
 from .....core.pma_thread_store import default_pma_threads_db_path
 from .....integrations.app_server.threads import (
-    FILE_CHAT_OPENCODE_PREFIX,
-    FILE_CHAT_PREFIX,
-    PMA_KEY,
-    PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
     default_app_server_threads_path,
+    file_chat_discord_key,
+    pma_base_key,
+    pma_topic_scoped_key,
 )
 from .....integrations.chat.channel_directory import (
     ChannelDirectoryStore,
@@ -265,6 +264,7 @@ class HubChannelService:
                 binding = {
                     "platform": "discord",
                     "chat_id": channel_id.strip(),
+                    "surface_key": channel_id.strip(),
                     "workspace_path": workspace_path,
                     "repo_id": repo_id,
                     "resource_kind": (
@@ -453,6 +453,7 @@ class HubChannelService:
                             if isinstance(parsed_thread_id, int)
                             else None
                         ),
+                        "surface_key": row["topic_key"],
                         "workspace_path": workspace_path,
                         "repo_id": repo_id,
                         "resource_kind": resource_kind,
@@ -477,6 +478,98 @@ class HubChannelService:
                 except Exception:
                     pass
         return bindings
+
+    def _read_orchestration_bindings(
+        self, hub_root: Path, *, surface_kind: str
+    ) -> dict[str, dict[str, Any]]:
+        db_path = resolve_orchestration_sqlite_path(hub_root)
+        if not db_path.exists():
+            return {}
+        conn: Optional[sqlite3.Connection] = None
+        try:
+            conn = self._open_sqlite_read_only(db_path)
+            columns = self._table_columns(conn, "orch_bindings")
+            if not columns:
+                return {}
+            select_cols = [
+                "surface_key",
+                "target_id",
+                "agent_id",
+                "repo_id",
+                "resource_kind",
+                "resource_id",
+                "mode",
+                "updated_at",
+            ]
+            select_exprs = [col for col in select_cols if col in columns]
+            if "surface_key" not in select_exprs or "target_id" not in select_exprs:
+                return {}
+            query = (
+                "SELECT "
+                + ", ".join(select_exprs)
+                + " FROM orch_bindings"
+                + " WHERE disabled_at IS NULL"
+                + " AND target_kind = 'thread'"
+                + " AND surface_kind = ?"
+            )
+            if "updated_at" in columns:
+                query += " ORDER BY updated_at DESC, rowid DESC"
+            bindings: dict[str, dict[str, Any]] = {}
+            for row in conn.execute(query, (surface_kind,)).fetchall():
+                surface_key = row["surface_key"]
+                target_id = row["target_id"]
+                if (
+                    not isinstance(surface_key, str)
+                    or not surface_key.strip()
+                    or not isinstance(target_id, str)
+                    or not target_id.strip()
+                ):
+                    continue
+                bindings.setdefault(
+                    surface_key.strip(),
+                    {
+                        "thread_target_id": target_id.strip(),
+                        "agent": self._normalize_agent(row["agent_id"]),
+                        "repo_id": (
+                            row["repo_id"].strip()
+                            if isinstance(row["repo_id"], str)
+                            and row["repo_id"].strip()
+                            else None
+                        ),
+                        "resource_kind": (
+                            row["resource_kind"].strip()
+                            if isinstance(row["resource_kind"], str)
+                            and row["resource_kind"].strip()
+                            else None
+                        ),
+                        "resource_id": (
+                            row["resource_id"].strip()
+                            if isinstance(row["resource_id"], str)
+                            and row["resource_id"].strip()
+                            else None
+                        ),
+                        "mode": (
+                            row["mode"].strip()
+                            if isinstance(row["mode"], str) and row["mode"].strip()
+                            else None
+                        ),
+                    },
+                )
+            return bindings
+        except Exception as exc:
+            safe_log(
+                self._context.logger,
+                logging.WARNING,
+                f"Hub channel enrichment failed reading orchestration bindings from {db_path}",
+                exc=exc,
+            )
+            return {}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def _read_active_pma_threads(
         self, hub_root: Path, repo_id_by_workspace: dict[str, str]
@@ -834,7 +927,7 @@ class HubChannelService:
         agent = self._normalize_agent(binding.get("agent"))
         pma_enabled = bool(binding.get("pma_enabled"))
         if pma_enabled:
-            base_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+            base_key = pma_base_key(agent)
             if platform != "telegram" or not telegram_require_topics:
                 return base_key
             chat_id_raw = entry.get("chat_id")
@@ -855,7 +948,9 @@ class HubChannelService:
                     thread_id = int(str(thread_id_raw))
                 except (TypeError, ValueError):
                     thread_id = None
-            return f"{base_key}.{topic_key(chat_id, thread_id)}"
+            return pma_topic_scoped_key(
+                agent, chat_id, thread_id, topic_key_fn=topic_key
+            )
 
         if platform != "discord":
             return None
@@ -865,9 +960,7 @@ class HubChannelService:
             return None
         if not isinstance(workspace_path, str) or not workspace_path.strip():
             return None
-        digest = hashlib.sha256(workspace_path.encode("utf-8")).hexdigest()[:12]
-        prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
-        return f"{prefix}discord.{channel_id.strip()}.{digest}"
+        return file_chat_discord_key(agent, channel_id, workspace_path)
 
     def _registry_thread_id(
         self,
@@ -1005,14 +1098,32 @@ class HubChannelService:
         telegram_bindings_task = asyncio.to_thread(
             self._read_telegram_bindings, telegram_state_path, repo_id_by_workspace
         )
+        discord_thread_bindings_task = asyncio.to_thread(
+            self._read_orchestration_bindings,
+            self._context.config.root,
+            surface_kind="discord",
+        )
+        telegram_thread_bindings_task = asyncio.to_thread(
+            self._read_orchestration_bindings,
+            self._context.config.root,
+            surface_kind="telegram",
+        )
         pma_threads_task = asyncio.to_thread(
             self._read_active_pma_threads,
             self._context.config.root,
             repo_id_by_workspace,
         )
-        discord_bindings, telegram_bindings, pma_threads = await asyncio.gather(
+        (
+            discord_bindings,
+            telegram_bindings,
+            discord_thread_bindings,
+            telegram_thread_bindings,
+            pma_threads,
+        ) = await asyncio.gather(
             discord_bindings_task,
             telegram_bindings_task,
+            discord_thread_bindings_task,
+            telegram_thread_bindings_task,
             pma_threads_task,
             return_exceptions=False,
         )
@@ -1020,6 +1131,7 @@ class HubChannelService:
         usage_cache: dict[str, dict[str, dict[str, Any]]] = {}
         thread_map_cache: dict[str, dict[str, str]] = {}
         seen_keys: set[str] = set()
+        represented_managed_thread_ids: set[str] = set()
 
         rows: list[dict[str, Any]] = []
         for entry in entries:
@@ -1061,12 +1173,37 @@ class HubChannelService:
                     pma_enabled = bool(binding.get("pma_enabled"))
                     agent = self._normalize_agent(binding.get("agent"))
                     if pma_enabled:
-                        managed_thread_id = self._resolve_pma_managed_thread_id(
-                            pma_threads=pma_threads,
-                            repo_id=repo_id,
-                            workspace_path=workspace_path,
-                            agent=agent,
-                        )
+                        managed_thread_id: Optional[str] = None
+                        binding_surface_key = binding.get("surface_key")
+                        if isinstance(binding_surface_key, str) and binding_surface_key:
+                            surface_binding = (
+                                discord_thread_bindings.get(binding_surface_key)
+                                if platform == "discord"
+                                else telegram_thread_bindings.get(binding_surface_key)
+                            )
+                            thread_target_id = (
+                                surface_binding.get("thread_target_id")
+                                if isinstance(surface_binding, dict)
+                                else None
+                            )
+                            binding_mode = (
+                                str(surface_binding.get("mode") or "").strip().lower()
+                                if isinstance(surface_binding, dict)
+                                else ""
+                            )
+                            if (
+                                binding_mode == "pma"
+                                and isinstance(thread_target_id, str)
+                                and thread_target_id.strip()
+                            ):
+                                managed_thread_id = thread_target_id.strip()
+                        if managed_thread_id is None:
+                            managed_thread_id = self._resolve_pma_managed_thread_id(
+                                pma_threads=pma_threads,
+                                repo_id=repo_id,
+                                workspace_path=workspace_path,
+                                agent=agent,
+                            )
                         row["source"] = "pma_thread"
                         row["provenance"] = {
                             "source": "pma_thread",
@@ -1107,6 +1244,13 @@ class HubChannelService:
                                 active_thread_id = resolved
                     if isinstance(active_thread_id, str) and active_thread_id:
                         row["active_thread_id"] = active_thread_id
+                        managed_thread_id = (
+                            row.get("provenance", {}).get("managed_thread_id")
+                            if isinstance(row.get("provenance"), dict)
+                            else None
+                        )
+                        if isinstance(managed_thread_id, str) and managed_thread_id:
+                            represented_managed_thread_ids.add(managed_thread_id)
 
                     run_data: dict[str, Any] = {}
                     if isinstance(workspace_path, str) and workspace_path:
@@ -1181,6 +1325,8 @@ class HubChannelService:
         for thread in pma_threads:
             managed_thread_id = thread.get("managed_thread_id")
             if not isinstance(managed_thread_id, str) or not managed_thread_id:
+                continue
+            if managed_thread_id in represented_managed_thread_ids:
                 continue
             key = f"pma_thread:{managed_thread_id}"
             if key in seen_keys:

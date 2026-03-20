@@ -10,6 +10,7 @@ from typing import Any, Dict, Generator, List, Optional, cast
 
 from ..sqlite_utils import SQLITE_PRAGMAS, SQLITE_PRAGMAS_DURABLE
 from ..time_utils import now_iso
+from .app_server_event_compaction import normalize_persisted_event_data
 from .models import (
     FlowArtifact,
     FlowEvent,
@@ -425,6 +426,7 @@ class FlowStore:
         step_id: Optional[str] = None,
     ) -> FlowEvent:
         timestamp = now_iso()
+        normalized_data = normalize_persisted_event_data(event_type, data)
 
         with self.transaction() as conn:
             conn.execute(
@@ -437,7 +439,7 @@ class FlowStore:
                     run_id,
                     event_type.value,
                     timestamp,
-                    json.dumps(data or {}),
+                    json.dumps(normalized_data),
                     step_id,
                 ),
             )

@@ -14,9 +14,16 @@ FILE_CHAT_PREFIX = _threads.FILE_CHAT_PREFIX
 FILE_CHAT_OPENCODE_PREFIX = _threads.FILE_CHAT_OPENCODE_PREFIX
 PMA_KEY = _threads.PMA_KEY
 PMA_OPENCODE_KEY = _threads.PMA_OPENCODE_KEY
+PMA_PREFIX = _threads.PMA_PREFIX
+PMA_OPENCODE_PREFIX = _threads.PMA_OPENCODE_PREFIX
 FEATURE_KEYS = _threads.FEATURE_KEYS
 default_app_server_threads_path = _threads.default_app_server_threads_path
 normalize_feature_key = _threads.normalize_feature_key
+pma_base_key = _threads.pma_base_key
+pma_prefix_for_agent = _threads.pma_prefix_for_agent
+pma_prefixes_for_reset = _threads.pma_prefixes_for_reset
+pma_topic_scoped_key = _threads.pma_topic_scoped_key
+file_chat_discord_key = _threads.file_chat_discord_key
 AppServerThreadRegistry = _threads.AppServerThreadRegistry
 
 __all__ = [
@@ -24,6 +31,7 @@ __all__ = [
     "APP_SERVER_THREADS_FILENAME",
     "APP_SERVER_THREADS_NOTICE_SUFFIX",
     "APP_SERVER_THREADS_VERSION",
+    "AppServerThreadRegistry",
     "FEATURE_KEYS",
     "FILE_CHAT_KEY",
     "FILE_CHAT_OPENCODE_KEY",
@@ -31,7 +39,13 @@ __all__ = [
     "FILE_CHAT_PREFIX",
     "PMA_KEY",
     "PMA_OPENCODE_KEY",
-    "AppServerThreadRegistry",
+    "PMA_OPENCODE_PREFIX",
+    "PMA_PREFIX",
     "default_app_server_threads_path",
+    "file_chat_discord_key",
     "normalize_feature_key",
+    "pma_base_key",
+    "pma_prefix_for_agent",
+    "pma_prefixes_for_reset",
+    "pma_topic_scoped_key",
 ]

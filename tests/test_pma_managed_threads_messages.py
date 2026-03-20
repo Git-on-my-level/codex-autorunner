@@ -10,11 +10,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import (
     ManagedThreadNotActiveError,
     PmaThreadStore,
 )
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
+from codex_autorunner.integrations.discord.state import DiscordStateStore
+from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
 from tests.conftest import write_test_config
 
@@ -38,6 +41,67 @@ def _enable_pma(
     if max_text_chars is not None:
         cfg["pma"]["max_text_chars"] = max_text_chars
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+
+def _repo_owner(hub_env) -> dict[str, str]:
+    return {"resource_kind": "repo", "resource_id": hub_env.repo_id}
+
+
+async def _bind_thread_to_discord(
+    hub_env,
+    *,
+    managed_thread_id: str,
+    channel_id: str,
+) -> None:
+    OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
+        surface_kind="discord",
+        surface_key=channel_id,
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+        mode="repo",
+    )
+    store = DiscordStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await store.upsert_binding(
+            channel_id=channel_id,
+            guild_id="guild-1",
+            workspace_path=str(hub_env.repo_root.resolve()),
+            repo_id=hub_env.repo_id,
+        )
+    finally:
+        await store.close()
+
+
+async def _bind_thread_to_telegram(
+    hub_env,
+    *,
+    managed_thread_id: str,
+    chat_id: int,
+    thread_id: int | None,
+) -> None:
+    surface_key = topic_key(chat_id, thread_id)
+    OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
+        surface_kind="telegram",
+        surface_key=surface_key,
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+        mode="repo",
+    )
+    store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        await store.bind_topic(
+            surface_key,
+            str(hub_env.repo_root.resolve()),
+            repo_id=hub_env.repo_id,
+        )
+    finally:
+        await store.close()
 
 
 def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
@@ -116,7 +180,7 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -206,13 +270,221 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert transcript["content"].strip() == "assistant-output-1"
 
 
+@pytest.mark.anyio
+async def test_send_message_enqueues_assistant_output_to_bound_chat_outboxes(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        create_resp = await client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        await _bind_thread_to_discord(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            channel_id="discord-123",
+        )
+        await _bind_thread_to_telegram(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            chat_id=1001,
+            thread_id=2002,
+        )
+
+        message_resp = await client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "cross-surface prompt"},
+        )
+
+    assert message_resp.status_code == 200
+    payload = message_resp.json()
+    assert payload["status"] == "ok"
+    assert payload["assistant_text"] == "assistant-output"
+
+    discord_store = DiscordStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    telegram_store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        discord_outbox = await discord_store.list_outbox()
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await discord_store.close()
+        await telegram_store.close()
+
+    assert any(
+        record.channel_id == "discord-123"
+        and record.payload_json.get("content") == "assistant-output"
+        for record in discord_outbox
+    )
+    assert any(
+        record.chat_id == 1001
+        and record.thread_id == 2002
+        and record.text == "assistant-output"
+        for record in telegram_outbox
+    )
+
+
+@pytest.mark.anyio
+async def test_send_message_continues_bound_chat_delivery_after_one_surface_fails(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        turn_id = "backend-turn-1"
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            return {"id": "backend-thread-1"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = thread_id, prompt, approval_policy, sandbox_policy, turn_kwargs
+            return FakeTurnHandle()
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    async def _fail_discord_enqueue(self, record):
+        _ = self, record
+        raise RuntimeError("discord enqueue failed")
+
+    app.state.app_server_supervisor = FakeSupervisor()
+    app.state.app_server_events = object()
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        create_resp = await client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        await _bind_thread_to_discord(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            channel_id="discord-123",
+        )
+        await _bind_thread_to_telegram(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            chat_id=1001,
+            thread_id=2002,
+        )
+        monkeypatch.setattr(
+            DiscordStateStore,
+            "enqueue_outbox",
+            _fail_discord_enqueue,
+        )
+
+        message_resp = await client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "cross-surface prompt"},
+        )
+
+    assert message_resp.status_code == 200
+    assert message_resp.json()["status"] == "ok"
+
+    telegram_store = TelegramStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "telegram_state.sqlite3"
+    )
+    try:
+        telegram_outbox = await telegram_store.list_outbox()
+    finally:
+        await telegram_store.close()
+
+    assert any(
+        record.chat_id == 1001
+        and record.thread_id == 2002
+        and record.text == "assistant-output"
+        for record in telegram_outbox
+    )
+
+
 def test_send_message_rejects_archived_thread(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -228,6 +500,26 @@ def test_send_message_rejects_archived_thread(hub_env) -> None:
 
     assert resp.status_code == 409
     assert "archived" in (resp.json().get("detail") or "").lower()
+
+
+def test_send_message_rejects_legacy_background_alias(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "legacy flag", "background": True},
+        )
+
+    assert resp.status_code == 422
+    assert "background" in str(resp.json())
 
 
 def test_send_message_compact_seed_used_only_before_backend_thread_exists(
@@ -292,7 +584,7 @@ def test_send_message_compact_seed_used_only_before_backend_thread_exists(
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -335,7 +627,7 @@ def test_send_message_queues_when_running_turn_exists(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -371,7 +663,7 @@ def test_send_message_rejects_when_running_turn_exists_if_busy_reject(hub_env) -
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -391,6 +683,60 @@ def test_send_message_rejects_when_running_turn_exists_if_busy_reject(hub_env) -
     assert resp.json().get("managed_turn_id") == running_turn["managed_turn_id"]
 
 
+def test_send_message_reports_interrupt_failure_without_marking_turn_failed(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeClient:
+        async def turn_interrupt(
+            self, turn_id: str, *, thread_id: str | None = None
+        ) -> None:
+            _ = turn_id, thread_id
+            raise RuntimeError("backend interrupt exploded")
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    running_turn = store.create_turn(managed_thread_id, prompt="still running")
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_turn_backend_turn_id(running_turn["managed_turn_id"], "backend-turn-1")
+
+    with TestClient(app) as client:
+        resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "blocked", "busy_policy": "interrupt"},
+        )
+
+    assert resp.status_code == 409
+    payload = resp.json()
+    assert payload["status"] == "error"
+    assert payload["send_state"] == "rejected"
+    assert payload["interrupt_state"] == "failed"
+    assert payload["active_turn_status"] == "running"
+    assert payload["active_managed_turn_id"] == running_turn["managed_turn_id"]
+    assert "still running" in payload["detail"].lower()
+
+    updated_turn = store.get_turn(managed_thread_id, running_turn["managed_turn_id"])
+    assert updated_turn is not None
+    assert updated_turn["status"] == "running"
+    assert updated_turn["finished_at"] is None
+
+
 def test_send_message_handles_not_active_race(hub_env, monkeypatch) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -398,7 +744,7 @@ def test_send_message_handles_not_active_race(hub_env, monkeypatch) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -446,7 +792,7 @@ def test_send_message_rejects_oversize_message(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -516,7 +862,7 @@ def test_send_message_finalizes_turn_when_transcript_write_fails(
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -621,7 +967,7 @@ def test_send_message_does_not_report_ok_when_turn_already_interrupted(
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -677,7 +1023,7 @@ def test_send_message_sanitizes_unexpected_execution_errors(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -755,7 +1101,7 @@ def test_send_message_notifies_automation_on_completion(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -820,7 +1166,7 @@ def test_send_message_notifies_automation_on_failure(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -958,6 +1304,14 @@ def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> No
     ]
     assert len(fake_supervisor.turn_calls) == 2
     assert fake_supervisor.turn_calls[0]["conversation_id"] == "zeroclaw-session-1"
+    first_prompt = str(fake_supervisor.turn_calls[0]["prompt"])
+    second_prompt = str(fake_supervisor.turn_calls[1]["prompt"])
+    assert first_prompt == "first zeroclaw prompt"
+    assert second_prompt == "second zeroclaw prompt"
+    assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in first_prompt
+    assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in second_prompt
+    assert "<pma_workspace_docs>" not in first_prompt
+    assert "<user_message>" not in first_prompt
 
     store = PmaThreadStore(hub_env.hub_root)
     thread = store.get_thread(managed_thread_id)
@@ -979,6 +1333,112 @@ def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> No
     assert metadata["resource_id"] == workspace.id
     assert metadata["workspace_root"] == str(workspace.path.resolve())
     assert metadata["backend_thread_id"] == "zeroclaw-session-1"
+
+
+def test_zeroclaw_managed_threads_keep_compaction_seed_without_pma_discoverability(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    workspace = app.state.hub_supervisor.create_agent_workspace(
+        workspace_id="zc-main",
+        runtime="zeroclaw",
+        display_name="ZeroClaw Main",
+    )
+
+    class FakeZeroClawSupervisor:
+        def __init__(self) -> None:
+            self.turn_calls: list[dict[str, object]] = []
+
+        async def create_session(
+            self, workspace_root: Path, title: str | None = None
+        ) -> str:
+            _ = workspace_root, title
+            return "zeroclaw-session-1"
+
+        async def attach_session(self, workspace_root: Path, session_id: str) -> str:
+            _ = workspace_root
+            return session_id
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            *,
+            model: str | None = None,
+        ) -> str:
+            self.turn_calls.append(
+                {
+                    "workspace_root": workspace_root,
+                    "conversation_id": conversation_id,
+                    "prompt": prompt,
+                    "model": model,
+                }
+            )
+            return f"zeroclaw-turn-{len(self.turn_calls)}"
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+            *,
+            timeout: float | None = None,
+        ):
+            _ = workspace_root, conversation_id, turn_id, timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "ok",
+                    "assistant_text": f"zeroclaw-output-{len(self.turn_calls)}",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def stream_turn_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield None
+
+    app.state.zeroclaw_supervisor = FakeZeroClawSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "resource_kind": "agent_workspace",
+                "resource_id": workspace.id,
+                "name": "ZeroClaw thread",
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        compact_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/compact",
+            json={"summary": "summary seed"},
+        )
+        assert compact_resp.status_code == 200
+
+        first_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "first zeroclaw prompt"},
+        )
+        assert first_resp.status_code == 200
+        assert first_resp.json()["status"] == "ok"
+
+    first_prompt = str(app.state.zeroclaw_supervisor.turn_calls[0]["prompt"])
+    assert "Context summary (from compaction):" in first_prompt
+    assert "summary seed" in first_prompt
+    assert "User message:\nfirst zeroclaw prompt" in first_prompt
+    assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in first_prompt
+    assert "<pma_workspace_docs>" not in first_prompt
+    assert "<user_message>" not in first_prompt
 
 
 @pytest.mark.anyio
@@ -1212,7 +1672,7 @@ def test_managed_thread_completion_subscription_enqueues_wakeup(hub_env) -> None
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -1313,7 +1773,7 @@ def test_send_message_notify_on_terminal_auto_subscribes_once(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -1399,10 +1859,15 @@ async def test_send_message_defer_execution_completes_in_background(hub_env) -> 
     ) as client:
         create_resp = await client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+        await _bind_thread_to_discord(
+            hub_env,
+            managed_thread_id=managed_thread_id,
+            channel_id="discord-background",
+        )
 
         message_resp = await client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
@@ -1449,6 +1914,23 @@ async def test_send_message_defer_execution_completes_in_background(hub_env) -> 
         with anyio.fail_after(2):
             while len(getattr(app.state, "pma_managed_thread_tasks", set())) != 0:
                 await anyio.sleep(0.05)
+
+    discord_store = DiscordStateStore(
+        hub_env.hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        with anyio.fail_after(2):
+            while True:
+                discord_outbox = await discord_store.list_outbox()
+                if any(
+                    record.channel_id == "discord-background"
+                    and record.payload_json.get("content") == "assistant-output"
+                    for record in discord_outbox
+                ):
+                    break
+                await anyio.sleep(0.05)
+    finally:
+        await discord_store.close()
 
 
 @pytest.mark.anyio
@@ -1520,7 +2002,7 @@ async def test_queued_message_runs_after_background_turn_finishes(hub_env) -> No
     ) as client:
         create_resp = await client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]

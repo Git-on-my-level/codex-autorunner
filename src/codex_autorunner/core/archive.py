@@ -1,41 +1,43 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, Literal, Optional
+from typing import Callable, Iterable, Literal, Mapping, Optional
+from uuid import uuid4
 
 from ..manifest import load_manifest
 from ..workspace import workspace_id_for_path
+from .archive_retention import (
+    WorktreeArchiveRetentionPolicy,
+    prune_worktree_archive_root,
+)
 from .git_utils import git_branch, git_head_sha
 from .state import load_state, now_iso
 from .utils import atomic_write
 
 ArchiveStatus = Literal["complete", "partial", "failed"]
+WorkspaceFreshArchiveStatus = Literal["complete", "partial", "failed", "threads_only"]
 ArchiveMode = Literal["copy", "move"]
+ArchiveProfile = Literal["portable", "full"]
+ArchiveIntent = Literal[
+    "review_snapshot",
+    "review_snapshot_full",
+    "cleanup_snapshot",
+    "cleanup_snapshot_full",
+    "reset_car_state",
+]
+CarStatePayloadKind = Literal["review_relevant", "runtime_only", "both"]
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONTEXTSPACE_DOCS = frozenset({"active_context.md", "decisions.md", "spec.md"})
 DEFAULT_TICKETS_FILES = frozenset({"AGENTS.md"})
 SQLITE_SIDE_SUFFIXES = ("-wal", "-shm")
-CAR_STATE_PATHS = (
-    "tickets",
-    "contextspace",
-    "runs",
-    "flows",
-    "flows.db",
-    "state.sqlite3",
-    "app_server_threads.json",
-    "app_server_workspaces",
-    "github_context",
-    "filebox",
-    "codex-autorunner.log",
-    "codex-server.log",
-    "lock",
-    "workspace",
-)
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,21 @@ class ArchivedCarStateResult:
 
 
 @dataclass(frozen=True)
+class WorkspaceFreshArchiveResult:
+    snapshot_id: Optional[str]
+    snapshot_path: Optional[Path]
+    meta_path: Optional[Path]
+    status: WorkspaceFreshArchiveStatus
+    file_count: int
+    total_bytes: int
+    flow_run_count: int
+    latest_flow_run_id: Optional[str]
+    archived_paths: tuple[str, ...]
+    reset_paths: tuple[str, ...]
+    archived_thread_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ArchiveEntrySpec:
     label: str
     source: Path
@@ -94,6 +111,18 @@ class WorkspaceArchiveTarget:
     workspace_repo_id: str
     worktree_of: str
     source_path: Path | str
+
+
+@dataclass(frozen=True)
+class CarStatePathSpec:
+    key: str
+    archive_dest: str
+    dirty_check: Callable[[Path], bool]
+    archive_intents: frozenset[ArchiveIntent]
+    payload_kind: CarStatePayloadKind
+    reset_paths: tuple[str, ...]
+    source_resolver: Optional[Callable[[Path], Path]] = None
+    required: bool = True
 
 
 def _snapshot_timestamp() -> str:
@@ -123,6 +152,17 @@ def _copy_file(src: Path, dest: Path, stats: dict[str, int]) -> None:
     shutil.copy2(src, dest)
     stats["file_count"] += 1
     stats["total_bytes"] += dest.stat().st_size
+
+
+def _copy_sqlite_sidecars(src: Path, dest: Path, stats: dict[str, int]) -> None:
+    if not (src.name.endswith(".sqlite3") or src.name.endswith(".db")):
+        return
+    for suffix in SQLITE_SIDE_SUFFIXES:
+        sidecar_src = src.with_name(f"{src.name}{suffix}")
+        if not sidecar_src.exists() or not sidecar_src.is_file():
+            continue
+        sidecar_dest = dest.with_name(f"{dest.name}{suffix}")
+        _copy_file(sidecar_src, sidecar_dest, stats)
 
 
 def _copy_tree(
@@ -203,6 +243,7 @@ def _copy_entry(
 
     if src.is_file():
         _copy_file(src, dest, stats)
+        _copy_sqlite_sidecars(src, dest, stats)
         return True
 
     return False
@@ -314,27 +355,204 @@ def _log_file_is_dirty(path: Path) -> bool:
     return path.exists() and path.is_file() and path.stat().st_size > 0
 
 
-def _car_state_path_is_dirty(car_root: Path, rel_path: str) -> bool:
-    path = car_root / rel_path
-    if rel_path == "tickets":
-        return _tickets_are_dirty(path)
-    if rel_path == "contextspace":
-        return _contextspace_is_dirty(path)
-    if rel_path in {"runs", "flows"}:
-        return _directory_has_any_entries(path)
-    if rel_path in {"github_context", "filebox", "app_server_workspaces", "workspace"}:
-        return _tree_has_payload(path)
-    if rel_path == "state.sqlite3":
-        return _runner_state_is_dirty(path)
-    if rel_path == "app_server_threads.json":
-        return _json_state_file_is_dirty(path)
-    if rel_path in {"codex-autorunner.log", "codex-server.log"}:
-        return _log_file_is_dirty(path)
-    if rel_path == "lock":
-        return path.exists()
-    if rel_path == "flows.db":
-        return path.exists()
-    return path.exists()
+CAR_STATE_PATH_SPECS = (
+    CarStatePathSpec(
+        key="tickets",
+        archive_dest="tickets",
+        dirty_check=_tickets_are_dirty,
+        archive_intents=frozenset(
+            {
+                "review_snapshot",
+                "review_snapshot_full",
+                "cleanup_snapshot",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="review_relevant",
+        reset_paths=("tickets",),
+    ),
+    CarStatePathSpec(
+        key="contextspace",
+        archive_dest="contextspace",
+        dirty_check=_contextspace_is_dirty,
+        archive_intents=frozenset(
+            {
+                "review_snapshot",
+                "review_snapshot_full",
+                "cleanup_snapshot",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="review_relevant",
+        reset_paths=("contextspace", "workspace"),
+        source_resolver=lambda source_root: _contextspace_source(source_root),
+    ),
+    CarStatePathSpec(
+        key="runs",
+        archive_dest="runs",
+        dirty_check=_directory_has_any_entries,
+        archive_intents=frozenset(
+            {
+                "review_snapshot",
+                "review_snapshot_full",
+                "cleanup_snapshot",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="review_relevant",
+        reset_paths=("runs",),
+    ),
+    CarStatePathSpec(
+        key="flows",
+        archive_dest="flows",
+        dirty_check=_directory_has_any_entries,
+        archive_intents=frozenset(
+            {
+                "review_snapshot",
+                "review_snapshot_full",
+                "cleanup_snapshot",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="review_relevant",
+        reset_paths=("flows",),
+    ),
+    CarStatePathSpec(
+        key="flows.db",
+        archive_dest="flows.db",
+        dirty_check=lambda path: path.exists(),
+        archive_intents=frozenset(
+            {
+                "review_snapshot_full",
+                "cleanup_snapshot",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="both",
+        reset_paths=("flows.db",),
+    ),
+    CarStatePathSpec(
+        key="state.sqlite3",
+        archive_dest="state/state.sqlite3",
+        dirty_check=_runner_state_is_dirty,
+        archive_intents=frozenset(
+            {
+                "review_snapshot_full",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="runtime_only",
+        reset_paths=("state.sqlite3",),
+    ),
+    CarStatePathSpec(
+        key="app_server_threads.json",
+        archive_dest="state/app_server_threads.json",
+        dirty_check=_json_state_file_is_dirty,
+        archive_intents=frozenset(
+            {
+                "review_snapshot_full",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="runtime_only",
+        reset_paths=("app_server_threads.json",),
+        required=False,
+    ),
+    CarStatePathSpec(
+        key="app_server_workspaces",
+        archive_dest="app_server_workspaces",
+        dirty_check=_tree_has_payload,
+        archive_intents=frozenset({"reset_car_state"}),
+        payload_kind="runtime_only",
+        reset_paths=("app_server_workspaces",),
+    ),
+    CarStatePathSpec(
+        key="github_context",
+        archive_dest="github_context",
+        dirty_check=_tree_has_payload,
+        archive_intents=frozenset(
+            {
+                "review_snapshot",
+                "review_snapshot_full",
+                "cleanup_snapshot",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="review_relevant",
+        reset_paths=("github_context",),
+        required=False,
+    ),
+    CarStatePathSpec(
+        key="filebox",
+        archive_dest="filebox",
+        dirty_check=_tree_has_payload,
+        archive_intents=frozenset({"reset_car_state"}),
+        payload_kind="both",
+        reset_paths=("filebox",),
+    ),
+    CarStatePathSpec(
+        key="codex-autorunner.log",
+        archive_dest="logs/codex-autorunner.log",
+        dirty_check=_log_file_is_dirty,
+        archive_intents=frozenset(
+            {
+                "review_snapshot_full",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="runtime_only",
+        reset_paths=("codex-autorunner.log",),
+    ),
+    CarStatePathSpec(
+        key="codex-server.log",
+        archive_dest="logs/codex-server.log",
+        dirty_check=_log_file_is_dirty,
+        archive_intents=frozenset(
+            {
+                "review_snapshot_full",
+                "cleanup_snapshot_full",
+                "reset_car_state",
+            }
+        ),
+        payload_kind="runtime_only",
+        reset_paths=("codex-server.log",),
+    ),
+    CarStatePathSpec(
+        key="lock",
+        archive_dest="state/lock",
+        dirty_check=lambda path: path.exists() or path.is_symlink(),
+        archive_intents=frozenset({"reset_car_state"}),
+        payload_kind="runtime_only",
+        reset_paths=("lock",),
+    ),
+)
+
+
+def _resolve_car_state_source(spec: CarStatePathSpec, source_root: Path) -> Path:
+    if spec.source_resolver is not None:
+        return spec.source_resolver(source_root)
+    return source_root / spec.key
+
+
+def resolve_worktree_archive_intent(
+    *,
+    profile: ArchiveProfile = "portable",
+    cleanup: bool = False,
+) -> ArchiveIntent:
+    if profile not in {"portable", "full"}:
+        raise ValueError(f"Unsupported archive profile: {profile}")
+    if cleanup:
+        return "cleanup_snapshot_full" if profile == "full" else "cleanup_snapshot"
+    return "review_snapshot_full" if profile == "full" else "review_snapshot"
 
 
 def dirty_car_state_paths(worktree_root: Path) -> tuple[str, ...]:
@@ -342,9 +560,9 @@ def dirty_car_state_paths(worktree_root: Path) -> tuple[str, ...]:
     if not car_root.exists():
         return ()
     return tuple(
-        rel_path
-        for rel_path in CAR_STATE_PATHS
-        if _car_state_path_is_dirty(car_root, rel_path)
+        spec.key
+        for spec in CAR_STATE_PATH_SPECS
+        if spec.dirty_check(_resolve_car_state_source(spec, car_root))
     )
 
 
@@ -352,123 +570,36 @@ def has_car_state(worktree_root: Path) -> bool:
     return bool(dirty_car_state_paths(worktree_root))
 
 
-def _car_state_archive_entries(
+def _build_car_state_archive_entries(
     source_root: Path,
     snapshot_root: Path,
-    dirty_paths: Iterable[str],
+    *,
+    intent: ArchiveIntent,
+    path_filter: Optional[Iterable[str]] = None,
+    include_config: bool = False,
 ) -> list[ArchiveEntrySpec]:
     entries: list[ArchiveEntrySpec] = []
-    selected = set(dirty_paths)
-    if "tickets" in selected:
+    selected_paths = set(path_filter) if path_filter is not None else None
+    for spec in CAR_STATE_PATH_SPECS:
+        if intent not in spec.archive_intents:
+            continue
+        if selected_paths is not None and spec.key not in selected_paths:
+            continue
         entries.append(
             ArchiveEntrySpec(
-                label="tickets",
-                source=source_root / "tickets",
-                dest=snapshot_root / "tickets",
+                label=spec.key,
+                source=_resolve_car_state_source(spec, source_root),
+                dest=snapshot_root / spec.archive_dest,
+                required=spec.required,
             )
         )
-    if "contextspace" in selected:
+    if include_config:
         entries.append(
             ArchiveEntrySpec(
-                label="contextspace",
-                source=_contextspace_source(source_root),
-                dest=snapshot_root / "contextspace",
-            )
-        )
-    if "runs" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="runs",
-                source=source_root / "runs",
-                dest=snapshot_root / "runs",
-            )
-        )
-    if "flows" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="flows",
-                source=source_root / "flows",
-                dest=snapshot_root / "flows",
-            )
-        )
-    if "flows.db" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="flows.db",
-                source=source_root / "flows.db",
-                dest=snapshot_root / "flows.db",
-            )
-        )
-    if "state.sqlite3" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="state.sqlite3",
-                source=source_root / "state.sqlite3",
-                dest=snapshot_root / "state" / "state.sqlite3",
-            )
-        )
-    if "app_server_threads.json" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="app_server_threads.json",
-                source=source_root / "app_server_threads.json",
-                dest=snapshot_root / "state" / "app_server_threads.json",
-            )
-        )
-    if "app_server_workspaces" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="app_server_workspaces",
-                source=source_root / "app_server_workspaces",
-                dest=snapshot_root / "app_server_workspaces",
-            )
-        )
-    if "github_context" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="github_context",
-                source=source_root / "github_context",
-                dest=snapshot_root / "github_context",
-            )
-        )
-    if "filebox" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="filebox",
-                source=source_root / "filebox",
-                dest=snapshot_root / "filebox",
-            )
-        )
-    if "codex-autorunner.log" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="codex-autorunner.log",
-                source=source_root / "codex-autorunner.log",
-                dest=snapshot_root / "logs" / "codex-autorunner.log",
-            )
-        )
-    if "codex-server.log" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="codex-server.log",
-                source=source_root / "codex-server.log",
-                dest=snapshot_root / "logs" / "codex-server.log",
-            )
-        )
-    if "lock" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="lock",
-                source=source_root / "lock",
-                dest=snapshot_root / "state" / "lock",
-            )
-        )
-    if "workspace" in selected:
-        entries.append(
-            ArchiveEntrySpec(
-                label="workspace",
-                source=source_root / "workspace",
-                dest=snapshot_root / "workspace",
+                label="config.yml",
+                source=source_root / "config.yml",
+                dest=snapshot_root / "config" / "config.yml",
+                required=False,
             )
         )
     return entries
@@ -484,17 +615,30 @@ def _remove_with_sidecars(path: Path) -> None:
                 sidecar.unlink()
 
 
+def _planned_reset_car_state_paths(worktree_root: Path) -> tuple[str, ...]:
+    car_root = worktree_root / ".codex-autorunner"
+    reset_paths: list[str] = []
+    seen: set[str] = set()
+    for spec in CAR_STATE_PATH_SPECS:
+        for rel_path in spec.reset_paths:
+            if rel_path in seen:
+                continue
+            target = car_root / rel_path
+            if not target.exists() and not target.is_symlink():
+                continue
+            reset_paths.append(rel_path)
+            seen.add(rel_path)
+    return tuple(reset_paths)
+
+
 def _reset_car_state(worktree_root: Path) -> tuple[str, ...]:
     from ..bootstrap import seed_repo_files
 
     car_root = worktree_root / ".codex-autorunner"
-    reset_paths: list[str] = []
-    for rel_path in CAR_STATE_PATHS:
+    reset_paths = list(_planned_reset_car_state_paths(worktree_root))
+    for rel_path in reset_paths:
         target = car_root / rel_path
-        if not target.exists() and not target.is_symlink():
-            continue
         _remove_with_sidecars(target)
-        reset_paths.append(rel_path)
     seed_repo_files(worktree_root, force=False, git_required=False)
     return tuple(reset_paths)
 
@@ -544,6 +688,80 @@ def resolve_workspace_archive_target(
     )
 
 
+def archive_workspace_managed_threads(
+    *,
+    hub_root: Optional[Path],
+    worktree_repo_id: str,
+    worktree_path: Path,
+    skip_chat_bound: bool = False,
+) -> tuple[str, ...]:
+    import sqlite3
+
+    from .config import find_nearest_hub_config_path
+    from .orchestration.sqlite import open_orchestration_sqlite
+    from .pma_thread_store import PmaThreadStore
+
+    resolved_hub_root = hub_root
+    if resolved_hub_root is None:
+        config_path = find_nearest_hub_config_path(worktree_path)
+        resolved_hub_root = config_path.parent if config_path is not None else None
+    if resolved_hub_root is None:
+        return ()
+
+    bound_thread_ids: set[str] = set()
+    if skip_chat_bound:
+        try:
+            with open_orchestration_sqlite(resolved_hub_root) as conn:
+                rows = conn.execute(
+                    """
+                    SELECT DISTINCT target_id
+                      FROM orch_bindings
+                     WHERE disabled_at IS NULL
+                       AND target_kind = 'thread'
+                       AND TRIM(COALESCE(target_id, '')) != ''
+                    """
+                ).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+        else:
+            bound_thread_ids = {
+                str(row["target_id"]).strip()
+                for row in rows
+                if isinstance(row["target_id"], str) and row["target_id"].strip()
+            }
+
+    store = PmaThreadStore(resolved_hub_root)
+    archived_thread_ids: list[str] = []
+    seen_ids: set[str] = set()
+    canonical_worktree = worktree_path.resolve()
+
+    for thread in store.list_threads(status="active", limit=None):
+        managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
+        if not managed_thread_id or managed_thread_id in seen_ids:
+            continue
+        if skip_chat_bound and managed_thread_id in bound_thread_ids:
+            continue
+
+        thread_repo_id = str(thread.get("repo_id") or "").strip()
+        workspace_root = str(thread.get("workspace_root") or "").strip()
+        matches_repo = thread_repo_id == worktree_repo_id
+        matches_workspace = False
+        if workspace_root:
+            try:
+                matches_workspace = Path(workspace_root).resolve() == canonical_worktree
+            except Exception:
+                matches_workspace = False
+        if not matches_repo and not matches_workspace:
+            continue
+
+        store.archive_thread(managed_thread_id)
+        archived_thread_ids.append(managed_thread_id)
+        seen_ids.add(managed_thread_id)
+
+    return tuple(archived_thread_ids)
+
+
 def _move_entry(
     src: Path,
     dest: Path,
@@ -581,10 +799,11 @@ def build_common_car_archive_entries(
     dest_root: Path,
     *,
     include_contextspace: bool = True,
-    include_flow_store: bool = True,
-    include_repo_state: bool = True,
-    include_logs: bool = True,
-    include_github_context: bool = True,
+    include_flow_store: bool = False,
+    include_config: bool = False,
+    include_runtime_state: bool = False,
+    include_logs: bool = False,
+    include_github_context: bool = False,
 ) -> list[ArchiveEntrySpec]:
     entries: list[ArchiveEntrySpec] = []
     if include_contextspace:
@@ -603,14 +822,17 @@ def build_common_car_archive_entries(
                 dest=dest_root / "flows.db",
             )
         )
-    if include_repo_state:
+    if include_config:
+        entries.append(
+            ArchiveEntrySpec(
+                label="config.yml",
+                source=source_root / "config.yml",
+                dest=dest_root / "config" / "config.yml",
+            )
+        )
+    if include_runtime_state:
         entries.extend(
             [
-                ArchiveEntrySpec(
-                    label="config.yml",
-                    source=source_root / "config.yml",
-                    dest=dest_root / "config" / "config.yml",
-                ),
                 ArchiveEntrySpec(
                     label="state.sqlite3",
                     source=source_root / "state.sqlite3",
@@ -723,6 +945,7 @@ def _flow_summary(flows_dir: Path) -> tuple[int, Optional[str]]:
 def _build_meta(
     *,
     snapshot_id: str,
+    archive_intent: ArchiveIntent,
     created_at: str,
     status: ArchiveStatus,
     base_repo_id: str,
@@ -734,13 +957,14 @@ def _build_meta(
     copied_paths: Iterable[str],
     missing_paths: Iterable[str],
     skipped_symlinks: Iterable[str],
-    summary: dict[str, object],
+    summary: Mapping[str, object],
     note: Optional[str] = None,
     error: Optional[str] = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": 1,
         "snapshot_id": snapshot_id,
+        "archive_intent": archive_intent,
         "created_at": created_at,
         "status": status,
         "base_repo_id": base_repo_id,
@@ -768,6 +992,26 @@ def build_snapshot_id(branch: Optional[str], head_sha: str) -> str:
     return f"{_snapshot_timestamp()}--{_sanitize_branch(branch)}--{head_short}"
 
 
+def _prepare_snapshot_roots(final_snapshot_root: Path) -> tuple[Path, Path]:
+    final_snapshot_root.parent.mkdir(parents=True, exist_ok=True)
+    if final_snapshot_root.exists():
+        raise FileExistsError(f"Snapshot already exists: {final_snapshot_root}")
+    staging_root = final_snapshot_root.parent / (
+        f".{final_snapshot_root.name}.tmp-{uuid4().hex}"
+    )
+    staging_root.mkdir(parents=False, exist_ok=False)
+    return final_snapshot_root, staging_root
+
+
+def _finalize_snapshot_root(staging_root: Path, final_snapshot_root: Path) -> None:
+    staging_root.rename(final_snapshot_root)
+
+
+def _cleanup_staging_snapshot_root(staging_root: Path) -> None:
+    if staging_root.exists():
+        shutil.rmtree(staging_root, ignore_errors=True)
+
+
 def archive_worktree_snapshot(
     *,
     base_repo_root: Path,
@@ -780,13 +1024,16 @@ def archive_worktree_snapshot(
     snapshot_id: Optional[str] = None,
     head_sha: Optional[str] = None,
     source_path: Optional[Path | str] = None,
+    intent: Optional[ArchiveIntent] = None,
+    profile: ArchiveProfile = "portable",
+    retention_policy: Optional[WorktreeArchiveRetentionPolicy] = None,
 ) -> ArchiveResult:
     base_repo_root = base_repo_root.resolve()
     worktree_repo_root = worktree_repo_root.resolve()
     branch_name = branch or git_branch(worktree_repo_root) or "unknown"
     resolved_head_sha = head_sha or git_head_sha(worktree_repo_root) or "unknown"
     snapshot_id = snapshot_id or build_snapshot_id(branch_name, resolved_head_sha)
-    snapshot_root = (
+    final_snapshot_root = (
         base_repo_root
         / ".codex-autorunner"
         / "archive"
@@ -794,37 +1041,30 @@ def archive_worktree_snapshot(
         / worktree_repo_id
         / snapshot_id
     )
-    snapshot_root.mkdir(parents=True, exist_ok=False)
+    resolved_intent = intent or resolve_worktree_archive_intent(profile=profile)
+    if resolved_intent not in {
+        "review_snapshot",
+        "review_snapshot_full",
+        "cleanup_snapshot",
+        "cleanup_snapshot_full",
+    }:
+        raise ValueError(f"Unsupported worktree archive intent: {resolved_intent}")
+    _, staging_root = _prepare_snapshot_roots(final_snapshot_root)
 
     source_root = worktree_repo_root / ".codex-autorunner"
     created_at = now_iso()
-    meta_path = snapshot_root / "META.json"
-    summary: dict[str, object] = {}
-    entries = build_common_car_archive_entries(source_root, snapshot_root)
-    entries.extend(
-        [
-            ArchiveEntrySpec(
-                label="tickets",
-                source=source_root / "tickets",
-                dest=snapshot_root / "tickets",
-            ),
-            ArchiveEntrySpec(
-                label="runs",
-                source=source_root / "runs",
-                dest=snapshot_root / "runs",
-            ),
-            ArchiveEntrySpec(
-                label="flows",
-                source=source_root / "flows",
-                dest=snapshot_root / "flows",
-            ),
-        ]
-    )
+    meta_path = staging_root / "META.json"
 
     try:
+        entries = _build_car_state_archive_entries(
+            source_root,
+            staging_root,
+            intent=resolved_intent,
+            include_config=True,
+        )
         execution = execute_archive_entries(entries, worktree_root=worktree_repo_root)
 
-        flow_run_count, latest_flow_run_id = _flow_summary(snapshot_root / "flows")
+        flow_run_count, latest_flow_run_id = _flow_summary(staging_root / "flows")
         status: ArchiveStatus = "complete" if not execution.missing_paths else "partial"
         summary = {
             "file_count": execution.file_count,
@@ -834,6 +1074,7 @@ def archive_worktree_snapshot(
         }
         meta = _build_meta(
             snapshot_id=snapshot_id,
+            archive_intent=resolved_intent,
             created_at=created_at,
             status=status,
             base_repo_id=base_repo_id,
@@ -851,39 +1092,34 @@ def archive_worktree_snapshot(
             note=note,
         )
         atomic_write(meta_path, json.dumps(meta, indent=2) + "\n")
+        _finalize_snapshot_root(staging_root, final_snapshot_root)
+        if retention_policy is not None:
+            try:
+                prune_worktree_archive_root(
+                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    policy=retention_policy,
+                    preserve_paths=(final_snapshot_root,),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to prune worktree archives under %s",
+                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    exc_info=True,
+                )
     except Exception as exc:
-        summary = {
-            "file_count": 0,
-            "total_bytes": 0,
-            "flow_run_count": 0,
-            "latest_flow_run_id": None,
-        }
-        meta = _build_meta(
-            snapshot_id=snapshot_id,
-            created_at=created_at,
-            status="failed",
-            base_repo_id=base_repo_id,
-            worktree_repo_id=worktree_repo_id,
-            worktree_of=worktree_of,
-            branch=branch_name,
-            head_sha=resolved_head_sha,
-            source_path=(
-                Path(source_path) if source_path is not None else worktree_repo_root
-            ),
-            copied_paths=(),
-            missing_paths=(),
-            skipped_symlinks=(),
-            summary=summary,
-            note=note,
-            error=str(exc),
+        logger.warning(
+            "Failed to finalize worktree archive snapshot %s intent=%s: %s",
+            snapshot_id,
+            resolved_intent,
+            exc,
         )
-        atomic_write(meta_path, json.dumps(meta, indent=2) + "\n")
+        _cleanup_staging_snapshot_root(staging_root)
         raise
 
     return ArchiveResult(
         snapshot_id=snapshot_id,
-        snapshot_path=snapshot_root,
-        meta_path=meta_path,
+        snapshot_path=final_snapshot_root,
+        meta_path=final_snapshot_root / "META.json",
         status=status,
         file_count=execution.file_count,
         total_bytes=execution.total_bytes,
@@ -906,9 +1142,13 @@ def archive_workspace_car_state(
     snapshot_id: Optional[str] = None,
     head_sha: Optional[str] = None,
     source_path: Optional[Path | str] = None,
+    intent: ArchiveIntent = "reset_car_state",
+    retention_policy: Optional[WorktreeArchiveRetentionPolicy] = None,
 ) -> ArchivedCarStateResult:
     base_repo_root = base_repo_root.resolve()
     worktree_repo_root = worktree_repo_root.resolve()
+    if intent != "reset_car_state":
+        raise ValueError(f"Unsupported workspace CAR-state archive intent: {intent}")
     dirty_paths = dirty_car_state_paths(worktree_repo_root)
     if not dirty_paths:
         raise ValueError("No CAR state to archive. Workspace is already clean.")
@@ -916,7 +1156,7 @@ def archive_workspace_car_state(
     branch_name = branch or git_branch(worktree_repo_root) or "unknown"
     resolved_head_sha = head_sha or git_head_sha(worktree_repo_root) or "unknown"
     snapshot_id = snapshot_id or build_snapshot_id(branch_name, resolved_head_sha)
-    snapshot_root = (
+    final_snapshot_root = (
         base_repo_root
         / ".codex-autorunner"
         / "archive"
@@ -924,17 +1164,23 @@ def archive_workspace_car_state(
         / worktree_repo_id
         / snapshot_id
     )
-    snapshot_root.mkdir(parents=True, exist_ok=False)
+    _, staging_root = _prepare_snapshot_roots(final_snapshot_root)
 
     source_root = worktree_repo_root / ".codex-autorunner"
     created_at = now_iso()
-    meta_path = snapshot_root / "META.json"
-    entries = _car_state_archive_entries(source_root, snapshot_root, dirty_paths)
+    meta_path = staging_root / "META.json"
+    planned_reset_paths = _planned_reset_car_state_paths(worktree_repo_root)
 
     try:
+        entries = _build_car_state_archive_entries(
+            source_root,
+            staging_root,
+            intent=intent,
+            path_filter=dirty_paths,
+            include_config=True,
+        )
         execution = execute_archive_entries(entries, worktree_root=worktree_repo_root)
-        reset_paths = _reset_car_state(worktree_repo_root)
-        flow_run_count, latest_flow_run_id = _flow_summary(snapshot_root / "flows")
+        flow_run_count, latest_flow_run_id = _flow_summary(staging_root / "flows")
         status: ArchiveStatus = "complete" if not execution.missing_paths else "partial"
         execution_summary: dict[str, object] = {
             "file_count": execution.file_count,
@@ -942,10 +1188,11 @@ def archive_workspace_car_state(
             "flow_run_count": flow_run_count,
             "latest_flow_run_id": latest_flow_run_id,
             "archived_paths": list(execution.copied_paths),
-            "reset_paths": list(reset_paths),
+            "reset_paths": list(planned_reset_paths),
         }
         meta = _build_meta(
             snapshot_id=snapshot_id,
+            archive_intent=intent,
             created_at=created_at,
             status=status,
             base_repo_id=base_repo_id,
@@ -963,41 +1210,51 @@ def archive_workspace_car_state(
             note=note,
         )
         atomic_write(meta_path, json.dumps(meta, indent=2) + "\n")
+        _finalize_snapshot_root(staging_root, final_snapshot_root)
+        reset_paths = _reset_car_state(worktree_repo_root)
+        if retention_policy is not None:
+            try:
+                prune_worktree_archive_root(
+                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    policy=retention_policy,
+                    preserve_paths=(final_snapshot_root,),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to prune worktree archives under %s",
+                    base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
+                    exc_info=True,
+                )
+        if reset_paths != planned_reset_paths:
+            final_meta = dict(meta)
+            final_summary = dict(execution_summary)
+            final_summary["reset_paths"] = list(reset_paths)
+            final_meta["summary"] = final_summary
+            try:
+                atomic_write(
+                    final_snapshot_root / "META.json",
+                    json.dumps(final_meta, indent=2) + "\n",
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to refresh reset_paths in archive metadata for %s",
+                    final_snapshot_root,
+                    exc_info=True,
+                )
     except Exception as exc:
-        failed_summary: dict[str, object] = {
-            "file_count": 0,
-            "total_bytes": 0,
-            "flow_run_count": 0,
-            "latest_flow_run_id": None,
-            "archived_paths": [],
-            "reset_paths": [],
-        }
-        meta = _build_meta(
-            snapshot_id=snapshot_id,
-            created_at=created_at,
-            status="failed",
-            base_repo_id=base_repo_id,
-            worktree_repo_id=worktree_repo_id,
-            worktree_of=worktree_of,
-            branch=branch_name,
-            head_sha=resolved_head_sha,
-            source_path=(
-                Path(source_path) if source_path is not None else worktree_repo_root
-            ),
-            copied_paths=(),
-            missing_paths=(),
-            skipped_symlinks=(),
-            summary=failed_summary,
-            note=note,
-            error=str(exc),
+        logger.warning(
+            "Failed to finalize CAR state archive snapshot %s intent=%s: %s",
+            snapshot_id,
+            intent,
+            exc,
         )
-        atomic_write(meta_path, json.dumps(meta, indent=2) + "\n")
+        _cleanup_staging_snapshot_root(staging_root)
         raise
 
     return ArchivedCarStateResult(
         snapshot_id=snapshot_id,
-        snapshot_path=snapshot_root,
-        meta_path=meta_path,
+        snapshot_path=final_snapshot_root,
+        meta_path=final_snapshot_root / "META.json",
         status=status,
         file_count=execution.file_count,
         total_bytes=execution.total_bytes,
@@ -1007,4 +1264,74 @@ def archive_workspace_car_state(
         reset_paths=reset_paths,
         missing_paths=execution.missing_paths,
         skipped_symlinks=execution.skipped_symlinks,
+    )
+
+
+def archive_workspace_for_fresh_start(
+    *,
+    hub_root: Optional[Path],
+    base_repo_root: Path,
+    base_repo_id: str,
+    worktree_repo_root: Path,
+    worktree_repo_id: str,
+    branch: Optional[str],
+    worktree_of: str,
+    note: Optional[str] = None,
+    source_path: Optional[Path | str] = None,
+    retention_policy: Optional[WorktreeArchiveRetentionPolicy] = None,
+) -> WorkspaceFreshArchiveResult:
+    state_result: Optional[ArchivedCarStateResult] = None
+    if dirty_car_state_paths(worktree_repo_root):
+        state_result = archive_workspace_car_state(
+            base_repo_root=base_repo_root,
+            base_repo_id=base_repo_id,
+            worktree_repo_root=worktree_repo_root,
+            worktree_repo_id=worktree_repo_id,
+            branch=branch,
+            worktree_of=worktree_of,
+            note=note,
+            source_path=source_path,
+            intent="reset_car_state",
+            retention_policy=retention_policy,
+        )
+
+    archived_thread_ids = archive_workspace_managed_threads(
+        hub_root=hub_root,
+        worktree_repo_id=worktree_repo_id,
+        worktree_path=worktree_repo_root,
+        skip_chat_bound=True,
+    )
+
+    if state_result is None and not archived_thread_ids:
+        raise ValueError(
+            "No CAR state or managed threads to archive. Workspace is already clean."
+        )
+
+    if state_result is None:
+        return WorkspaceFreshArchiveResult(
+            snapshot_id=None,
+            snapshot_path=None,
+            meta_path=None,
+            status="threads_only",
+            file_count=0,
+            total_bytes=0,
+            flow_run_count=0,
+            latest_flow_run_id=None,
+            archived_paths=(),
+            reset_paths=(),
+            archived_thread_ids=archived_thread_ids,
+        )
+
+    return WorkspaceFreshArchiveResult(
+        snapshot_id=state_result.snapshot_id,
+        snapshot_path=state_result.snapshot_path,
+        meta_path=state_result.meta_path,
+        status=state_result.status,
+        file_count=state_result.file_count,
+        total_bytes=state_result.total_bytes,
+        flow_run_count=state_result.flow_run_count,
+        latest_flow_run_id=state_result.latest_flow_run_id,
+        archived_paths=state_result.archived_paths,
+        reset_paths=state_result.reset_paths,
+        archived_thread_ids=archived_thread_ids,
     )

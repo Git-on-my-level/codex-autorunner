@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from textwrap import dedent
 
+from ..ticket_helper_script_common import portable_ticket_validation_source
+
 LINTER_BASENAME = "lint_tickets.py"
 LINTER_REL_PATH = Path(".codex-autorunner/bin") / LINTER_BASENAME
+_COMMON_VALIDATION = portable_ticket_validation_source()
 
 # Self-contained portable linter (PyYAML optional but preferred).
 _SCRIPT = dedent(
@@ -14,15 +17,17 @@ _SCRIPT = dedent(
 
     - Validates ticket filenames (TICKET-<number>[suffix].md, e.g. TICKET-001-foo.md)
     - Parses YAML frontmatter for each .codex-autorunner/tickets/TICKET-*.md
-    - Validates required keys: agent (string) and done (bool)
-    - Rejects deprecated keys like depends_on
+    - Validates required keys: ticket_id, agent, and done
+    - Validates agent ids against the runtime agents that seeded this repo
     - Exits non-zero on any error
     \"\"\"
 
     from __future__ import annotations
 
+    import argparse
     import re
     import sys
+    import uuid
     from pathlib import Path
     from typing import Any, List, Optional, Tuple
 
@@ -37,7 +42,7 @@ _SCRIPT = dedent(
 
 
     _TICKET_NAME_RE = re.compile(r"^TICKET-(\\d{3,})(?:[^/]*)\\.md$", re.IGNORECASE)
-    _IGNORED_NON_TICKET_FILENAMES = {"AGENTS.md", "ingest_state.json"}
+    __COMMON_VALIDATION__
 
 
     def _ticket_paths(tickets_dir: Path) -> Tuple[List[Path], List[str]]:
@@ -121,26 +126,6 @@ _SCRIPT = dedent(
 
         return loaded, []
 
-
-    def _lint_frontmatter(data: dict[str, Any]) -> List[str]:
-        errors: List[str] = []
-
-        if "depends_on" in data:
-            errors.append(
-                "frontmatter.depends_on is no longer supported; order tickets by filename (TICKET-###)."
-            )
-
-        agent = data.get("agent")
-        if not isinstance(agent, str) or not agent.strip():
-            errors.append("frontmatter.agent is required and must be a non-empty string.")
-
-        done = data.get("done")
-        if not isinstance(done, bool):
-            errors.append("frontmatter.done is required and must be a boolean.")
-
-        return errors
-
-
     def lint_ticket(path: Path) -> List[str]:
         try:
             raw = path.read_text(encoding="utf-8")
@@ -159,7 +144,70 @@ _SCRIPT = dedent(
         return [f"{path}: {msg}" for msg in lint_errors]
 
 
-    def main() -> int:
+    def _read_ticket_id(path: Path) -> Optional[str]:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            return None
+        fm_yaml, fm_errors = _split_frontmatter(raw)
+        if fm_errors:
+            return None
+        data, parse_errors = _parse_yaml(fm_yaml)
+        if parse_errors:
+            return None
+        return _sanitize_ticket_id(data.get("ticket_id"))
+
+
+    def _render_ticket(data: dict[str, Any], body: str) -> str:
+        fm_yaml = yaml.safe_dump(data, sort_keys=False).rstrip()
+        return f"---\\n{fm_yaml}\\n---\\n{body}"
+
+
+    def _fix_ticket_id(path: Path) -> Tuple[bool, List[str]]:
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001
+            return False, [f"{path}: Unable to read file ({exc})."]
+
+        fm_yaml, fm_errors = _split_frontmatter(raw)
+        if fm_errors:
+            return False, [f"{path}: {msg}" for msg in fm_errors]
+
+        data, parse_errors = _parse_yaml(fm_yaml)
+        if parse_errors:
+            return False, [f"{path}: {msg}" for msg in parse_errors]
+
+        ticket_id = data.get("ticket_id")
+        if isinstance(ticket_id, str) and _TICKET_ID_RE.match(ticket_id.strip()):
+            return False, []
+
+        lines = raw.splitlines()
+        end_idx = None
+        for idx in range(1, len(lines)):
+            if lines[idx].strip() in ("---", "..."):
+                end_idx = idx
+                break
+        if end_idx is None:
+            return False, [f"{path}: Frontmatter is not closed (missing trailing '---')."]
+        body = "\\n".join(lines[end_idx + 1 :])
+        data = dict(data)
+        data["ticket_id"] = f"tkt_{uuid.uuid4().hex}"
+        rendered = _render_ticket(data, body)
+        if rendered != raw:
+            path.write_text(rendered, encoding="utf-8")
+            return True, []
+        return False, []
+
+
+    def main(argv: Optional[List[str]] = None) -> int:
+        parser = argparse.ArgumentParser(description="Lint CAR ticket frontmatter.")
+        parser.add_argument(
+            "--fix-ticket-ids",
+            action="store_true",
+            help="Backfill missing or invalid ticket_id values before linting.",
+        )
+        args = parser.parse_args(argv)
+
         script_dir = Path(__file__).resolve().parent
         tickets_dir = script_dir.parent / "tickets"
 
@@ -174,8 +222,31 @@ _SCRIPT = dedent(
         ticket_paths, name_errors = _ticket_paths(tickets_dir)
         errors.extend(name_errors)
 
+        fixed = 0
+        if args.fix_ticket_ids:
+            for path in ticket_paths:
+                changed, fix_errors = _fix_ticket_id(path)
+                if changed:
+                    fixed += 1
+                errors.extend(fix_errors)
+
         for path in ticket_paths:
             errors.extend(lint_ticket(path))
+
+        ticket_id_to_paths: dict[str, List[Path]] = {}
+        for path in ticket_paths:
+            ticket_id = _read_ticket_id(path)
+            if not ticket_id:
+                continue
+            ticket_id_to_paths.setdefault(ticket_id, []).append(path)
+
+        for ticket_id, paths in ticket_id_to_paths.items():
+            if len(paths) > 1:
+                paths_str = ", ".join(str(path) for path in paths)
+                errors.append(
+                    f"Duplicate ticket_id {ticket_id!r}: multiple files share the same logical ticket identity ({paths_str}). "
+                    "Backfill or rewrite one of the ticket_ids so ticket-owned state remains unambiguous."
+                )
 
         if not ticket_paths:
             if errors:
@@ -190,6 +261,8 @@ _SCRIPT = dedent(
                 sys.stderr.write(msg + "\\n")
             return 1
 
+        if fixed:
+            sys.stdout.write(f"Backfilled ticket_id in {fixed} ticket(s).\\n")
         sys.stdout.write(f\"OK: {len(ticket_paths)} ticket(s) linted.\\n\")
         return 0
 
@@ -197,7 +270,7 @@ _SCRIPT = dedent(
     if __name__ == \"__main__\":  # pragma: no cover
         sys.exit(main())
     """
-)
+).replace("__COMMON_VALIDATION__", _COMMON_VALIDATION)
 
 
 def ensure_ticket_linter(repo_root: Path, *, force: bool = False) -> Path:

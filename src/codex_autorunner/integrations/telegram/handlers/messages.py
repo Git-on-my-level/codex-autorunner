@@ -28,6 +28,10 @@ from ..adapter import (
 )
 from ..config import TelegramMediaCandidate
 from ..constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from ..forwarding import (
+    format_forwarded_telegram_message_text,
+    is_forwarded_telegram_message,
+)
 from ..trigger_mode import should_trigger_run
 from .questions import handle_custom_text_input
 
@@ -76,6 +80,35 @@ def _event_logger(handlers: Any) -> logging.Logger:
     if hasattr(candidate, "log"):
         return candidate
     return logging.getLogger(__name__)
+
+
+async def _run_with_typing_indicator(
+    handlers: Any,
+    *,
+    chat_id: Optional[int],
+    thread_id: Optional[int],
+    work: Any,
+) -> None:
+    if chat_id is None:
+        await work()
+        return
+    begin = getattr(handlers, "_begin_typing_indicator", None)
+    end = getattr(handlers, "_end_typing_indicator", None)
+    began = False
+    if callable(begin):
+        try:
+            await begin(chat_id, thread_id)
+            began = True
+        except Exception:
+            began = False
+    try:
+        await work()
+    finally:
+        if began and callable(end):
+            try:
+                await end(chat_id, thread_id)
+            except Exception:
+                pass
 
 
 def _paused_flow_status(run_record: Any) -> str:
@@ -183,6 +216,37 @@ async def _enqueue_or_run_topic_work(
     key: str,
     *,
     chat_id: int,
+    thread_id: Optional[int],
+    placeholder_id: Optional[int],
+    work: Any,
+) -> None:
+    async def _run_wrapped() -> None:
+        await _run_placeholder_wrapped_work(
+            handlers,
+            chat_id=chat_id,
+            placeholder_id=placeholder_id,
+            work=work,
+        )
+
+    async def _run_wrapped_with_typing() -> None:
+        await _run_with_typing_indicator(
+            handlers,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            work=_run_wrapped,
+        )
+
+    enqueue = getattr(handlers, "_enqueue_topic_work", None)
+    if callable(enqueue):
+        enqueue(key, _run_wrapped_with_typing)
+        return
+    await _run_wrapped_with_typing()
+
+
+async def _run_placeholder_wrapped_work(
+    handlers: Any,
+    *,
+    chat_id: int,
     placeholder_id: Optional[int],
     work: Any,
 ) -> None:
@@ -194,11 +258,10 @@ async def _enqueue_or_run_topic_work(
             placeholder_id=placeholder_id,
             work=work,
         )
-    enqueue = getattr(handlers, "_enqueue_topic_work", None)
-    if callable(enqueue):
-        enqueue(key, wrapped)
+    if callable(wrapped):
+        await wrapped()
         return
-    await wrapped()
+    await wrapped
 
 
 async def handle_message(handlers: Any, message: TelegramMessage) -> None:
@@ -212,6 +275,7 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
     _raw_text, text_candidate, entities = _message_text_candidate(message)
     trimmed_text = text_candidate.strip()
     has_media = message_has_media(message)
+    is_forwarded = is_forwarded_telegram_message(message)
     if not trimmed_text and not has_media:
         if placeholder_id is not None:
             await handlers._delete_message(message.chat_id, placeholder_id)
@@ -223,7 +287,7 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
                 handlers,
                 message,
                 text=trimmed_text,
-                is_explicit_command=True,
+                is_explicit_command=not is_forwarded,
             )
             if not policy_result.command_allowed:
                 _log_message_policy_result(handlers, message, policy_result)
@@ -236,11 +300,11 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
 
     should_bypass = False
     if trimmed_text:
-        if is_interrupt_alias(trimmed_text):
+        if is_interrupt_alias(trimmed_text) and not is_forwarded:
             should_bypass = True
-        elif trimmed_text.startswith("!") and not has_media:
+        elif trimmed_text.startswith("!") and not has_media and not is_forwarded:
             should_bypass = True
-        elif parse_command(
+        elif not is_forwarded and parse_command(
             text_candidate, entities=entities, bot_username=handlers._bot_username
         ):
             should_bypass = True
@@ -266,6 +330,11 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
         await handle_message_inner(handlers, message, placeholder_id=placeholder_id)
         return
 
+    if is_forwarded:
+        await flush_coalesced_message(handlers, message)
+        await handle_message_inner(handlers, message, placeholder_id=placeholder_id)
+        return
+
     await buffer_coalesced_message(
         handlers, message, text_candidate, placeholder_id=placeholder_id
     )
@@ -284,6 +353,8 @@ def should_bypass_topic_queue(handlers: Any, message: TelegramMessage) -> bool:
         return False
     trimmed_text = text_candidate.strip()
     if not trimmed_text:
+        return False
+    if is_forwarded_telegram_message(message):
         return False
     if is_interrupt_alias(trimmed_text):
         return True
@@ -332,13 +403,13 @@ async def handle_edited_message(
             placeholder_id=placeholder_id,
         )
 
-    handlers._enqueue_topic_work(
+    await _enqueue_or_run_topic_work(
+        handlers,
         key,
-        handlers._wrap_placeholder_work(
-            chat_id=message.chat_id,
-            placeholder_id=placeholder_id,
-            work=work,
-        ),
+        chat_id=message.chat_id,
+        thread_id=message.thread_id,
+        placeholder_id=placeholder_id,
+        work=work,
     )
 
 
@@ -372,12 +443,14 @@ async def handle_message_inner(
         key = await handlers._resolve_topic_key(message.chat_id, message.thread_id)
     runtime = handlers._router.runtime_for(key)
     actor_id = str(message.from_user_id) if message.from_user_id is not None else None
+    is_forwarded = is_forwarded_telegram_message(message)
+    turn_text = format_forwarded_telegram_message_text(message, text)
 
     command_policy_result = _evaluate_message_policy(
         handlers,
         message,
         text=text,
-        is_explicit_command=True,
+        is_explicit_command=not is_forwarded,
     )
 
     if text and not command_policy_result.command_allowed:
@@ -407,7 +480,7 @@ async def handle_message_inner(
         await _clear_placeholder()
         return
 
-    if text and is_interrupt_alias(text):
+    if text and is_interrupt_alias(text) and not is_forwarded:
         if not command_policy_result.command_allowed:
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_placeholder()
@@ -416,7 +489,7 @@ async def handle_message_inner(
         await _clear_placeholder()
         return
 
-    if text and text.startswith("!") and not has_media:
+    if text and text.startswith("!") and not has_media and not is_forwarded:
         if not command_policy_result.command_allowed:
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_placeholder()
@@ -435,6 +508,7 @@ async def handle_message_inner(
             handlers,
             key,
             chat_id=message.chat_id,
+            thread_id=message.thread_id,
             placeholder_id=placeholder_id,
             work=work,
         )
@@ -454,7 +528,7 @@ async def handle_message_inner(
         parse_command(
             command_text, entities=entities, bot_username=handlers._bot_username
         )
-        if command_text
+        if command_text and not is_forwarded
         else None
     )
     if await handlers._handle_pending_review_custom(
@@ -516,17 +590,20 @@ async def handle_message_inner(
             await handlers._handle_command(command, message, runtime)
 
         if spec and spec.allow_during_turn:
-            wrapped = handlers._wrap_placeholder_work(
-                chat_id=message.chat_id,
-                placeholder_id=placeholder_id,
-                work=work,
+            handlers._spawn_task(
+                _run_placeholder_wrapped_work(
+                    handlers,
+                    chat_id=message.chat_id,
+                    placeholder_id=placeholder_id,
+                    work=work,
+                )
             )
-            handlers._spawn_task(wrapped())
         else:
             await _enqueue_or_run_topic_work(
                 handlers,
                 key,
                 chat_id=message.chat_id,
+                thread_id=message.thread_id,
                 placeholder_id=placeholder_id,
                 work=work,
             )
@@ -566,13 +643,13 @@ async def handle_message_inner(
                 placeholder_id=placeholder_id,
             )
 
-        handlers._enqueue_topic_work(
+        await _enqueue_or_run_topic_work(
+            handlers,
             key,
-            handlers._wrap_placeholder_work(
-                chat_id=message.chat_id,
-                placeholder_id=placeholder_id,
-                work=work,
-            ),
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            placeholder_id=placeholder_id,
+            work=work,
         )
         return
 
@@ -619,7 +696,11 @@ async def handle_message_inner(
             return
         run_id, run_record = paused
         success, result = await handlers._write_user_reply_from_telegram(
-            workspace_root or Path("."), run_id, run_record, message, text
+            workspace_root or Path("."),
+            run_id,
+            run_record,
+            message,
+            turn_text,
         )
         await handlers._send_message(
             message.chat_id,
@@ -638,7 +719,7 @@ async def handle_message_inner(
         await handlers._handle_normal_message(
             message,
             runtime,
-            text_override=text,
+            text_override=turn_text,
             placeholder_id=placeholder_id,
         )
 
@@ -647,7 +728,7 @@ async def handle_message_inner(
             SurfaceThreadMessageRequest(
                 surface_kind="telegram",
                 workspace_root=workspace_root or Path("."),
-                prompt_text=text,
+                prompt_text=turn_text,
                 agent_id=getattr(record, "agent", None),
                 pma_enabled=pma_enabled,
             ),
@@ -660,6 +741,7 @@ async def handle_message_inner(
         handlers,
         key,
         chat_id=message.chat_id,
+        thread_id=message.thread_id,
         placeholder_id=placeholder_id,
         work=work,
     )
@@ -798,11 +880,20 @@ async def flush_coalesced_key(handlers: Any, key: str) -> None:
     if task is not None and task is not asyncio.current_task():
         task.cancel()
     combined_message = build_coalesced_message(buffer)
-    await handle_message_inner(
+
+    async def _handle() -> None:
+        await handle_message_inner(
+            handlers,
+            combined_message,
+            topic_key=buffer.topic_key,
+            placeholder_id=buffer.placeholder_id,
+        )
+
+    await _run_with_typing_indicator(
         handlers,
-        combined_message,
-        topic_key=buffer.topic_key,
-        placeholder_id=buffer.placeholder_id,
+        chat_id=combined_message.chat_id,
+        thread_id=combined_message.thread_id,
+        work=_handle,
     )
 
 
@@ -946,13 +1037,13 @@ async def buffer_media_batch(
             ) -> None:
                 await handlers._handle_media_batch(msgs, placeholder_id=pid)
 
-            handlers._enqueue_topic_work(
+            await _enqueue_or_run_topic_work(
+                handlers,
                 buffer.topic_key,
-                handlers._wrap_placeholder_work(
-                    chat_id=message.chat_id,
-                    placeholder_id=buffer.placeholder_id,
-                    work=work,
-                ),
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                placeholder_id=buffer.placeholder_id,
+                work=work,
             )
             handlers._media_batch_buffers.pop(key, None)
             buffer = None
@@ -1025,13 +1116,14 @@ async def flush_media_batch_key(handlers: Any, key: str) -> None:
                 buffer.messages, placeholder_id=buffer.placeholder_id
             )
 
-        handlers._enqueue_topic_work(
+        first_message = buffer.messages[0]
+        await _enqueue_or_run_topic_work(
+            handlers,
             buffer.topic_key,
-            handlers._wrap_placeholder_work(
-                chat_id=buffer.messages[0].chat_id,
-                placeholder_id=buffer.placeholder_id,
-                work=work,
-            ),
+            chat_id=first_message.chat_id,
+            thread_id=first_message.thread_id,
+            placeholder_id=buffer.placeholder_id,
+            work=work,
         )
 
 
@@ -1077,6 +1169,7 @@ async def handle_media_message(
 
     pma_enabled = bool(getattr(record, "pma_enabled", False))
     workspace_root = canonicalize_path(Path(record.workspace_path))
+    turn_caption_text = format_forwarded_telegram_message_text(message, caption_text)
     paused = None
     if not pma_enabled:
         preferred_run_id = handlers._ticket_flow_pause_targets.get(
@@ -1195,7 +1288,12 @@ async def handle_media_message(
             )
             return
         success, result = await handlers._write_user_reply_from_telegram(
-            workspace_root, run_id, run_record, message, reply_text, files
+            workspace_root,
+            run_id,
+            run_record,
+            message,
+            format_forwarded_telegram_message_text(message, reply_text),
+            files,
         )
         await handlers._send_message(
             message.chat_id,
@@ -1226,7 +1324,7 @@ async def handle_media_message(
                 runtime,
                 record,
                 image_candidate,
-                caption_text,
+                turn_caption_text,
                 placeholder_id=placeholder_id,
             )
             return
@@ -1246,7 +1344,7 @@ async def handle_media_message(
                 runtime,
                 record,
                 voice_candidate,
-                caption_text,
+                turn_caption_text,
                 placeholder_id=placeholder_id,
             )
             return
@@ -1266,16 +1364,16 @@ async def handle_media_message(
                 runtime,
                 record,
                 file_candidate,
-                caption_text,
+                turn_caption_text,
                 placeholder_id=placeholder_id,
             )
             return
 
-        if caption_text:
+        if turn_caption_text:
             await handlers._handle_normal_message(
                 message,
                 runtime,
-                text_override=caption_text,
+                text_override=turn_caption_text,
                 record=record,
                 placeholder_id=placeholder_id,
             )
@@ -1291,7 +1389,7 @@ async def handle_media_message(
         SurfaceThreadMessageRequest(
             surface_kind="telegram",
             workspace_root=workspace_root,
-            prompt_text=caption_text,
+            prompt_text=turn_caption_text,
             agent_id=getattr(record, "agent", None),
             pma_enabled=pma_enabled,
         ),

@@ -60,6 +60,26 @@ class AgentHarness(ABC):
             return False
         return next(iter(normalized)) in self.capabilities
 
+    def allows_parallel_event_stream(self) -> bool:
+        return self.supports("event_streaming")
+
+    def progress_event_stream(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ) -> AsyncIterator[Any]:
+        if not self.allows_parallel_event_stream():
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _unsupported() -> AsyncIterator[Any]:
+                raise UnsupportedAgentCapabilityError(
+                    "event_streaming",
+                    agent_id=str(self.agent_id),
+                )
+                if False:
+                    yield None
+
+            return _unsupported()
+        return self.stream_events(workspace_root, conversation_id, turn_id)
+
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
         _ = workspace_root
         raise UnsupportedAgentCapabilityError(
@@ -175,4 +195,61 @@ class AgentHarness(ABC):
         return _unsupported()
 
 
-__all__ = ["AgentHarness", "UnsupportedAgentCapabilityError"]
+def harness_allows_parallel_event_stream(harness: Any) -> bool:
+    supports = getattr(harness, "supports", None)
+    if not callable(supports) or not supports("event_streaming"):
+        return False
+    allows_parallel = getattr(harness, "allows_parallel_event_stream", None)
+    if callable(allows_parallel):
+        return bool(allows_parallel())
+    return True
+
+
+def harness_supports_progress_event_stream(harness: Any) -> bool:
+    progress_stream = getattr(harness, "progress_event_stream", None)
+    if callable(progress_stream):
+        progress_func = getattr(progress_stream, "__func__", None)
+        if (
+            progress_func is None
+            or progress_func is not AgentHarness.progress_event_stream
+        ):
+            return True
+    return harness_allows_parallel_event_stream(harness)
+
+
+def harness_progress_event_stream(
+    harness: Any,
+    workspace_root: Path,
+    conversation_id: str,
+    turn_id: str,
+) -> AsyncIterator[Any]:
+    progress_stream = getattr(harness, "progress_event_stream", None)
+    if callable(progress_stream):
+        progress_func = getattr(progress_stream, "__func__", None)
+        if (
+            progress_func is None
+            or progress_func is not AgentHarness.progress_event_stream
+        ):
+            return progress_stream(workspace_root, conversation_id, turn_id)
+    stream_events = getattr(harness, "stream_events", None)
+    if callable(stream_events) and harness_allows_parallel_event_stream(harness):
+        return stream_events(workspace_root, conversation_id, turn_id)
+
+    async def _unsupported() -> AsyncIterator[Any]:
+        raise UnsupportedAgentCapabilityError(
+            "event_streaming",
+            agent_id=str(getattr(harness, "agent_id", "") or ""),
+        )
+        if False:
+            yield None
+
+    return _unsupported()
+
+
+__all__ = [
+    "AgentHarness",
+    "UnsupportedAgentCapabilityError",
+    "harness_allows_parallel_event_stream",
+    "harness_progress_event_stream",
+    "harness_supports_progress_event_stream",
+]

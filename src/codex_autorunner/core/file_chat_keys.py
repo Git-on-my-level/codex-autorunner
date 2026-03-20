@@ -1,22 +1,8 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-from ..tickets.frontmatter import parse_markdown_frontmatter
-
-_TICKET_ID_RE = re.compile(r"^[A-Za-z0-9._-]{6,128}$")
-
-
-def _sanitize_ticket_id(raw: object) -> str | None:
-    if not isinstance(raw, str):
-        return None
-    value = raw.strip()
-    if not value:
-        return None
-    if not _TICKET_ID_RE.match(value):
-        return None
-    return value
+from ..tickets.frontmatter import parse_markdown_frontmatter, sanitize_ticket_id
 
 
 def ticket_stable_id(path: Path) -> str | None:
@@ -28,7 +14,7 @@ def ticket_stable_id(path: Path) -> str | None:
     except OSError:
         return None
     data, _ = parse_markdown_frontmatter(content)
-    return _sanitize_ticket_id(data.get("ticket_id"))
+    return sanitize_ticket_id(data.get("ticket_id"))
 
 
 def ticket_instance_token(path: Path) -> str:
@@ -42,8 +28,7 @@ def ticket_instance_token(path: Path) -> str:
         return ticket_id
     if not path.exists():
         return "missing-ticket"
-    # Legacy fallback for older tickets that do not yet have ticket_id.
-    return f"legacy-{path.name.lower()}"
+    return "invalid-ticket-id"
 
 
 def ticket_chat_scope(index: int, path: Path) -> str:

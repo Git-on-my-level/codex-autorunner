@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from ....agents.opencode.supervisor import OpenCodeSupervisorError
+from ....core.coercion import coerce_int
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import (
@@ -21,6 +22,7 @@ from ....core.update import (
     _spawn_update_process,
 )
 from ....core.update_paths import resolve_update_paths
+from ....core.update_targets import get_update_target_label
 from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
 from ...chat.media import (
@@ -30,6 +32,7 @@ from ...chat.picker_filter import (
     filter_picker_items,
     find_exact_picker_item,
 )
+from ...chat.turn_metrics import compose_turn_response_with_footer
 from ...chat.update_notifier import (
     format_update_status_message,
     mark_update_status_notified,
@@ -61,6 +64,7 @@ from ..constants import (
     MAX_MENTION_BYTES,
     MODEL_CATALOG_TTL_SECONDS,
     MODEL_PICKER_PROMPT,
+    REASONING_EFFORT_VALUES,
     SHELL_MESSAGE_BUFFER_CHARS,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THREAD_LIST_MAX_PAGES,
@@ -107,7 +111,6 @@ from ..types import (
     ModelPickerState,
     SelectionState,
 )
-from .utils import _coerce_int
 
 if TYPE_CHECKING:
     from ..state import TelegramTopicRecord
@@ -314,13 +317,13 @@ class TelegramCommandHandlers(
                 limit = model_entry.get("limit") or model_entry.get("limits")
                 if isinstance(limit, dict):
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(limit.get(key))
+                        value = coerce_int(limit.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
                 if context_window is None:
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(model_entry.get(key))
+                        value = coerce_int(model_entry.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
@@ -328,7 +331,7 @@ class TelegramCommandHandlers(
                 limit = provider.get("limit") or provider.get("limits")
                 if isinstance(limit, dict):
                     for key in _OPENCODE_MODEL_CONTEXT_KEYS:
-                        value = _coerce_int(limit.get(key))
+                        value = coerce_int(limit.get(key))
                         if value is not None and value > 0:
                             context_window = value
                             break
@@ -370,16 +373,54 @@ class TelegramCommandHandlers(
             outcome.token_usage, outcome.elapsed_seconds
         )
         metrics_mode = self._metrics_mode()
+        resolved_agent = self._effective_agent(outcome.record)
         response_text = outcome.response
-        if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
-            response_text = f"{response_text}\n\n{metrics}"
-        response_sent = await self._deliver_turn_response(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            placeholder_id=outcome.placeholder_id,
-            response=response_text,
-        )
+        intermediate_response = outcome.intermediate_response
+        if resolved_agent == "opencode":
+            if (
+                isinstance(response_text, str)
+                and response_text.strip() == "No response."
+            ):
+                response_text = ""
+        if metrics_mode == "append_to_response":
+            response_text = compose_turn_response_with_footer(
+                response_text,
+                summary_text=outcome.intermediate_response,
+                token_usage=outcome.token_usage,
+                elapsed_seconds=outcome.elapsed_seconds,
+                agent=resolved_agent,
+                model=getattr(outcome.record, "model", None),
+            )
+            intermediate_response = None
+        elif resolved_agent == "opencode":
+            response_text = compose_turn_response_with_footer(
+                response_text,
+                summary_text=outcome.intermediate_response,
+                token_usage=None,
+                elapsed_seconds=None,
+                agent=resolved_agent,
+                model=getattr(outcome.record, "model", None),
+            )
+            intermediate_response = None
+        try:
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=outcome.placeholder_id,
+                response=response_text,
+                intermediate_response=intermediate_response,
+            )
+        except TypeError as exc:
+            if "intermediate_response" not in str(exc):
+                raise
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=outcome.placeholder_id,
+                response=response_text,
+            )
         if response_sent:
             key = await self._resolve_topic_key(message.chat_id, message.thread_id)
             log_event(
@@ -399,6 +440,17 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
                 elapsed_seconds=outcome.elapsed_seconds,
                 token_usage=outcome.token_usage,
+            )
+        elif metrics and metrics_mode == "append_to_progress":
+            await self._append_metrics_to_placeholder(
+                message.chat_id,
+                outcome.placeholder_id,
+                metrics,
+                base_text=(
+                    outcome.intermediate_response
+                    if isinstance(outcome.intermediate_response, str)
+                    else None
+                ),
             )
         if outcome.turn_id:
             self._token_usage_by_turn.pop(outcome.turn_id, None)
@@ -485,21 +537,11 @@ class TelegramCommandHandlers(
                 )
             )
             if current_thread is not None:
-                interrupted_active = False
-                cancelled_queued = 0
                 pma_mode = bool(getattr(record, "pma_enabled", False))
-                running_execution = orchestration_service.get_running_execution(
-                    current_thread.thread_target_id
-                )
                 try:
-                    cancelled_queued = orchestration_service.cancel_queued_executions(
+                    stop_outcome = await orchestration_service.stop_thread(
                         current_thread.thread_target_id
                     )
-                    if running_execution is not None:
-                        await orchestration_service.interrupt_thread(
-                            current_thread.thread_target_id
-                        )
-                        interrupted_active = True
                 except Exception as exc:
                     log_event(
                         self._logger,
@@ -523,20 +565,32 @@ class TelegramCommandHandlers(
                         reply_to=reply_to,
                     )
                     return
-                if interrupted_active or cancelled_queued:
+                if (
+                    stop_outcome.interrupted_active
+                    or stop_outcome.recovered_lost_backend
+                    or stop_outcome.cancelled_queued
+                ):
                     parts = []
-                    if interrupted_active:
+                    if stop_outcome.interrupted_active:
                         parts.append(
                             "Interrupted active PMA turn."
                             if pma_mode
                             else "Interrupted active turn."
                         )
-                    if cancelled_queued:
+                    elif stop_outcome.recovered_lost_backend:
                         parts.append(
                             (
-                                f"Cancelled {cancelled_queued} queued PMA turn(s)."
+                                "Recovered stale PMA session after backend thread was lost."
                                 if pma_mode
-                                else f"Cancelled {cancelled_queued} queued turn(s)."
+                                else "Recovered stale session after backend thread was lost."
+                            )
+                        )
+                    if stop_outcome.cancelled_queued:
+                        parts.append(
+                            (
+                                f"Cancelled {stop_outcome.cancelled_queued} queued PMA turn(s)."
+                                if pma_mode
+                                else f"Cancelled {stop_outcome.cancelled_queued} queued turn(s)."
                             )
                         )
                     await self._send_message(
@@ -1172,7 +1226,7 @@ class TelegramCommandHandlers(
         if effort and effort not in VALID_REASONING_EFFORTS:
             await self._send_message(
                 message.chat_id,
-                f"Unknown effort '{effort}'. Allowed: {', '.join(sorted(VALID_REASONING_EFFORTS))}.",
+                f"Unknown effort '{effort}'. Allowed: {', '.join(REASONING_EFFORT_VALUES)}.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1195,6 +1249,14 @@ class TelegramCommandHandlers(
     async def _handle_pma(
         self, message: TelegramMessage, args: str, _runtime: Any
     ) -> None:
+        def status_text(record: Optional[TelegramTopicRecord]) -> str:
+            if record is None:
+                return "PMA mode: disabled\nCurrent workspace: unbound"
+            if record.pma_enabled:
+                return "PMA mode: enabled"
+            workspace = record.workspace_path or "unbound"
+            return f"PMA mode: disabled\nCurrent workspace: {workspace}"
+
         if not self._hub_root:
             await self._send_message(
                 message.chat_id,
@@ -1226,10 +1288,10 @@ class TelegramCommandHandlers(
             enabled = True
         elif action in ("off", "disable", "false"):
             enabled = False
-        elif action in ("status", "show"):
+        elif action in ("status", "show", ""):
             await self._send_message(
                 message.chat_id,
-                f"PMA mode: {'enabled' if current else 'disabled'}",
+                status_text(record),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1242,8 +1304,27 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
-        else:
-            enabled = not current
+
+        if enabled and current:
+            await self._send_message(
+                message.chat_id,
+                "PMA mode is already enabled for this topic. Use /pma off to exit.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        if not enabled and record is None:
+            await self._send_message(
+                message.chat_id,
+                "PMA mode disabled. Back to repo mode.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+
+        previous_binding_workspace = record.workspace_path if record else None
+        restored_workspace = record.pma_prev_workspace_path if record else None
 
         if record is None:
             record = await self._router.ensure_topic(message.chat_id, message.thread_id)
@@ -1288,18 +1369,20 @@ class TelegramCommandHandlers(
             apply_pma,
         )
 
-        status = "enabled" if enabled else "disabled"
         if enabled:
-            hint = "Use /pma off to exit. Previous repo binding saved."
+            text = (
+                "PMA mode enabled. Use /pma off to exit. Previous binding saved."
+                if previous_binding_workspace
+                else "PMA mode enabled. Use /pma off to exit."
+            )
         else:
-            previous = (record and record.pma_prev_workspace_path) or None
-            if previous:
-                hint = f"Back to repo mode. Restored {previous}."
+            if restored_workspace:
+                text = f"PMA mode disabled. Restored binding to {restored_workspace}."
             else:
-                hint = "Back to repo mode."
+                text = "PMA mode disabled. Back to repo mode."
         await self._send_message(
             message.chat_id,
-            f"PMA mode {status}. {hint}",
+            text,
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -2564,8 +2647,9 @@ Summary applied.""",
                     chat_id, failure, thread_id=thread_id, reply_to=reply_to
                 )
             return
+        target_label = get_update_target_label(update_target)
         message = (
-            f"Update started ({update_target}). The selected service(s) will restart."
+            f"Update started ({target_label}). The selected service(s) will restart."
         )
         if callback and selection_key:
             await self._answer_callback(callback, "Update started")

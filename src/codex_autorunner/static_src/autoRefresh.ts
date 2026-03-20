@@ -73,6 +73,8 @@ export function registerAutoRefresh(
     immediate = false,
   } = options;
 
+  unregisterAutoRefresh(id);
+
   const refresher: Refresher = {
     callback,
     tabId,
@@ -93,7 +95,16 @@ export function registerAutoRefresh(
     void doRefresh(id, refresher, { reason: "manual" });
   }
 
-  return () => unregisterAutoRefresh(id);
+  return () => {
+    if (refreshers.get(id) !== refresher) {
+      if (refresher.timerId) {
+        clearInterval(refresher.timerId);
+        refresher.timerId = null;
+      }
+      return;
+    }
+    unregisterAutoRefresh(id);
+  };
 }
 
 /**
@@ -104,6 +115,7 @@ export function unregisterAutoRefresh(id: string): void {
   if (refresher) {
     if (refresher.timerId) {
       clearInterval(refresher.timerId);
+      refresher.timerId = null;
     }
     refreshers.delete(id);
   }

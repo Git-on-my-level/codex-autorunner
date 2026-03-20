@@ -8,7 +8,12 @@ from ...core.logging_utils import log_event
 from ...core.state import now_iso
 from .adapter import TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
-from .helpers import _format_turn_metrics, _should_trace_message, _with_conversation_id
+from .helpers import (
+    _format_turn_metrics,
+    _is_no_agent_response,
+    _should_trace_message,
+    _with_conversation_id,
+)
 from .outbox import (
     OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER,
     OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER,
@@ -19,6 +24,46 @@ from .state import OutboxRecord
 
 
 class TelegramMessageTransport:
+    @staticmethod
+    def _looks_like_progress_summary(text: str) -> bool:
+        normalized = text.strip()
+        if not normalized or "\n" in normalized:
+            return False
+        return " · agent " in normalized
+
+    @staticmethod
+    def _resolve_delivered_turn_response(
+        response: str,
+        intermediate_response: Optional[str] = None,
+    ) -> str:
+        response_text = response.strip() if isinstance(response, str) else ""
+        intermediate_text = (
+            intermediate_response.strip()
+            if isinstance(intermediate_response, str)
+            else ""
+        )
+        if not intermediate_text:
+            return response_text
+        if not response_text:
+            return intermediate_text
+
+        response_head, separator, response_tail = response_text.partition("\n\n")
+        if _is_no_agent_response(response_head):
+            if response_tail.strip():
+                return f"{intermediate_text}\n\n{response_tail.strip()}"
+            return intermediate_text
+
+        metric_lines = [
+            line.strip() for line in response_text.splitlines() if line.strip()
+        ]
+        if metric_lines and all(
+            line.startswith(("Turn time:", "Token usage:")) for line in metric_lines
+        ):
+            return f"{intermediate_text}\n\n{response_text}"
+        if TelegramMessageTransport._looks_like_progress_summary(intermediate_text):
+            return f"{intermediate_text}\n\n{response_text}"
+        return response_text
+
     @staticmethod
     def _truncate_tail_text(text: str, limit: int) -> str:
         if limit <= 0:
@@ -229,11 +274,16 @@ class TelegramMessageTransport:
         reply_to: Optional[int],
         placeholder_id: Optional[int],
         response: str,
+        intermediate_response: Optional[str] = None,
         delete_placeholder_on_delivery: bool = True,
     ) -> bool:
+        delivered_response = self._resolve_delivered_turn_response(
+            response,
+            intermediate_response=intermediate_response,
+        )
         return await self._send_message_with_outbox(
             chat_id,
-            response,
+            delivered_response,
             thread_id=thread_id,
             reply_to=reply_to,
             placeholder_id=placeholder_id,

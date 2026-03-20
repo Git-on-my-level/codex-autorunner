@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from ...core.app_server_command import (
+    DEFAULT_APP_SERVER_COMMAND as CORE_DEFAULT_APP_SERVER_COMMAND,
+)
+from ...core.app_server_command import (
+    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
+    resolve_app_server_command,
+)
 from ..chat.collaboration_policy import (
     CollaborationPolicy,
     CollaborationPolicyError,
@@ -41,7 +48,7 @@ DEFAULT_PARSE_MODE = "HTML"
 DEFAULT_TRIGGER_MODE = "all"
 TRIGGER_MODE_OPTIONS = {"all", "mentions"}
 DEFAULT_STATE_FILE = ".codex-autorunner/telegram_state.sqlite3"
-DEFAULT_APP_SERVER_COMMAND = ["codex", "app-server"]
+DEFAULT_APP_SERVER_COMMAND = list(CORE_DEFAULT_APP_SERVER_COMMAND)
 DEFAULT_APP_SERVER_MAX_HANDLES = 20
 DEFAULT_APP_SERVER_IDLE_TTL_SECONDS = 3600
 DEFAULT_OPENCODE_MAX_HANDLES = 4
@@ -591,17 +598,18 @@ class TelegramBotConfig:
             )
 
         app_server_command_env = str(
-            cfg.get("app_server_command_env", "CAR_TELEGRAM_APP_SERVER_COMMAND")
+            cfg.get("app_server_command_env", LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV)
         )
-        app_server_command: list[str] = []
-        if app_server_command_env:
-            env_command = env.get(app_server_command_env)
-            if env_command:
-                app_server_command = _parse_command(env_command)
-        if not app_server_command:
-            app_server_command = _parse_command(cfg.get("app_server_command"))
-        if not app_server_command:
-            app_server_command = list(DEFAULT_APP_SERVER_COMMAND)
+        extra_env_vars = [
+            app_server_command_env,
+            LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
+        ]
+        app_server_command = resolve_app_server_command(
+            cfg.get("app_server_command"),
+            env=env,
+            extra_env_vars=extra_env_vars,
+            fallback=DEFAULT_APP_SERVER_COMMAND,
+        )
 
         app_server_raw_value = cfg.get("app_server")
         app_server_raw: dict[str, Any] = (

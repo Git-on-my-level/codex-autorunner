@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
+from codex_autorunner.surfaces.web.schemas import PmaManagedThreadCreateRequest
 from codex_autorunner.surfaces.web.services.pma.common import (
     build_idempotency_key,
     normalize_optional_text,
     pma_config_from_raw,
+)
+from codex_autorunner.surfaces.web.services.pma.managed_thread_followup import (
+    ManagedThreadAutomationClient,
+    ManagedThreadAutomationUnavailable,
+    resolve_managed_thread_followup_policy,
 )
 
 
@@ -21,6 +32,7 @@ def test_pma_config_from_raw_uses_defaults_for_missing_values() -> None:
         "default_agent": None,
         "model": None,
         "reasoning": None,
+        "managed_thread_terminal_followup_default": True,
         "active_context_max_lines": 200,
         "max_text_chars": 10_000,
     }
@@ -42,6 +54,7 @@ def test_pma_config_from_raw_normalizes_and_coerces_values() -> None:
     assert config["default_agent"] == "codex"
     assert config["model"] == "gpt-test"
     assert config["reasoning"] == "high"
+    assert config["managed_thread_terminal_followup_default"] is True
     assert config["active_context_max_lines"] == 350
     assert config["max_text_chars"] == 1200
 
@@ -74,3 +87,146 @@ def test_build_idempotency_key_is_deterministic_and_input_sensitive() -> None:
     assert first == second
     assert first.startswith("pma:")
     assert changed != first
+
+
+def test_managed_thread_create_request_captures_explicit_followup_fields() -> None:
+    payload = PmaManagedThreadCreateRequest.model_validate(
+        {
+            "agent": "codex",
+            "workspace_root": "/tmp/workspace",
+            "terminalFollowup": True,
+            "notifyLane": " lane-1 ",
+            "notifyOnce": False,
+        }
+    )
+
+    assert payload.notify_on_explicit is False
+    assert payload.terminal_followup_explicit is True
+    assert payload.notify_lane_explicit is True
+    assert payload.notify_once_explicit is True
+
+
+def test_resolve_managed_thread_followup_policy_uses_defaults_best_effort() -> None:
+    payload = PmaManagedThreadCreateRequest.model_validate(
+        {
+            "agent": "codex",
+            "workspace_root": "/tmp/workspace",
+        }
+    )
+
+    policy = resolve_managed_thread_followup_policy(
+        payload,
+        default_terminal_followup=True,
+    )
+
+    assert policy.enabled is True
+    assert policy.required is False
+    assert policy.event_mode == "terminal"
+    assert policy.lane_id is None
+    assert policy.notify_once is True
+
+
+def test_resolve_managed_thread_followup_policy_marks_explicit_customization_required() -> (
+    None
+):
+    payload = PmaManagedThreadCreateRequest.model_validate(
+        {
+            "agent": "codex",
+            "workspace_root": "/tmp/workspace",
+            "notifyLane": " lane-1 ",
+            "notifyOnce": False,
+        }
+    )
+
+    policy = resolve_managed_thread_followup_policy(
+        payload,
+        default_terminal_followup=True,
+    )
+
+    assert policy.enabled is True
+    assert policy.required is True
+    assert policy.event_mode == "terminal"
+    assert policy.lane_id == "lane-1"
+    assert policy.notify_once is False
+
+
+def test_resolve_managed_thread_followup_policy_rejects_conflicting_opt_out() -> None:
+    payload = PmaManagedThreadCreateRequest.model_validate(
+        {
+            "agent": "codex",
+            "workspace_root": "/tmp/workspace",
+            "notifyOn": "terminal",
+            "terminalFollowup": False,
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        resolve_managed_thread_followup_policy(
+            payload,
+            default_terminal_followup=True,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "terminal_followup=false" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_managed_thread_automation_client_preserves_required_store_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    client = ManagedThreadAutomationClient(request, lambda: None)
+
+    async def _fake_get_store(_request, _runtime_state, *, required):
+        assert required is True
+        return object()
+
+    async def _fake_create(_store, _method_names, _payload):
+        raise HTTPException(status_code=409, detail="lane already subscribed")
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        _fake_get_store,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.call_store_create_with_payload",
+        _fake_create,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await client.create_terminal_followup(
+            managed_thread_id="thread-1",
+            lane_id="lane-1",
+            notify_once=True,
+            idempotency_key=None,
+            required=True,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "lane already subscribed"
+
+
+@pytest.mark.asyncio
+async def test_managed_thread_automation_client_normalizes_required_unavailable_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    client = ManagedThreadAutomationClient(request, lambda: None)
+
+    async def _fake_get_store(_request, _runtime_state, *, required):
+        assert required is True
+        raise HTTPException(status_code=503, detail="Automation action unavailable")
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        _fake_get_store,
+    )
+
+    with pytest.raises(ManagedThreadAutomationUnavailable):
+        await client.create_terminal_followup(
+            managed_thread_id="thread-1",
+            lane_id="lane-1",
+            notify_once=True,
+            idempotency_key=None,
+            required=True,
+        )

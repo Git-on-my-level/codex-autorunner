@@ -171,6 +171,9 @@ def _extract_ticket_id(state: Any) -> Optional[str]:
     engine = state.get("ticket_engine") if isinstance(state, dict) else {}
     if not isinstance(engine, dict):
         return None
+    ticket_id = engine.get("current_ticket_id")
+    if isinstance(ticket_id, str) and ticket_id.strip():
+        return ticket_id.strip()
     ticket_id = engine.get("current_ticket")
     if isinstance(ticket_id, str) and ticket_id.strip():
         return ticket_id.strip()

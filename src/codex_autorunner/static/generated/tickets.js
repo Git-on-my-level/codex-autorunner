@@ -6,7 +6,7 @@ import { CONSTANTS } from "./constants.js";
 import { subscribe } from "./bus.js";
 import { isRepoHealthy } from "./health.js";
 import { closeTicketEditor, initTicketEditor, openTicketEditor } from "./ticketEditor.js";
-import { parseAppServerEvent } from "./agentEvents.js";
+import { parseAppServerEvent, resetOpenCodeEventState } from "./agentEvents.js";
 import { summarizeEvents, renderCompactSummary, COMPACT_MAX_TEXT_LENGTH } from "./eventSummarizer.js";
 import { refreshBell, renderMarkdown } from "./messages.js";
 import { preserveScroll } from "./preserve.js";
@@ -111,7 +111,6 @@ const ticketListRefresh = createSmartRefresh({
             return [ticket.path ?? "", ticket.index ?? "", title, done, agent, mtime, errors, diff].join("|");
         });
         return [
-            payload.ticket_dir ?? "",
             payload.activeTicket ?? "",
             payload.flowStatus ?? "",
             pieces.join(";"),
@@ -121,14 +120,12 @@ const ticketListRefresh = createSmartRefresh({
         const { tickets } = els();
         preserveScroll(tickets, () => {
             renderTickets({
-                ticket_dir: payload.ticket_dir,
                 tickets: payload.tickets,
             });
         }, { restoreOnNextFrame: true });
     },
     onSkip: (payload) => {
         ticketListCache = {
-            ticket_dir: payload.ticket_dir,
             tickets: payload.tickets,
         };
         updateScrollFade();
@@ -470,6 +467,9 @@ function addLiveOutputEvent(parsed) {
         else if (mergeStrategy === "newline") {
             existing.summary = `${existing.summary || ""}\n\n`;
         }
+        else if (mergeStrategy === "replace") {
+            existing.summary = event.summary;
+        }
         existing.time = event.time;
         return;
     }
@@ -637,6 +637,7 @@ function clearLiveOutput() {
         outputEl.textContent = "";
     liveOutputEvents = [];
     liveOutputEventIndex = {};
+    resetOpenCodeEventState();
     scheduleLiveOutputRender();
 }
 function setLiveOutputStatus(status) {
@@ -918,7 +919,7 @@ function renderTickets(data) {
     clearTicketDragState();
     const { tickets, dir } = els();
     if (dir)
-        dir.textContent = data?.ticket_dir || "–";
+        dir.textContent = ".codex-autorunner/tickets";
     if (!tickets)
         return;
     tickets.innerHTML = "";
@@ -1385,7 +1386,6 @@ async function loadTicketFiles(ctx) {
         await ticketListRefresh.refresh(async () => {
             const data = (await api("/api/flows/ticket_flow/tickets"));
             return {
-                ticket_dir: data.ticket_dir,
                 tickets: data.tickets,
                 lint_errors: data.lint_errors,
                 activeTicket: currentActiveTicket,
@@ -2057,15 +2057,16 @@ async function archiveTicketFlow() {
         flash("No ticket flow run to archive", "info");
         return;
     }
-    const confirmed = await confirmModal("Archive this flow? Tickets, contextspace, and run artifacts will move into the run archive and the live workspace state will be reset.");
-    if (!confirmed) {
-        return;
+    const force = currentFlowStatus === "stopping" || currentFlowStatus === "paused";
+    if (force) {
+        const confirmed = await confirmModal("Archive this incomplete flow? Tickets, contextspace, and run artifacts will move into the run archive and the live workspace state will be reset.");
+        if (!confirmed) {
+            return;
+        }
     }
     setButtonsDisabled(true);
     archiveBtn.textContent = "Archiving…";
     try {
-        // Force archive if flow is stuck in stopping or paused state
-        const force = currentFlowStatus === "stopping" || currentFlowStatus === "paused";
         const res = (await api(`/api/flows/${currentRunId}/archive?force=${force}`, {
             method: "POST",
             body: {},

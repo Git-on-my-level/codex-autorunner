@@ -3,26 +3,18 @@ from __future__ import annotations
 import re
 from typing import Literal
 
+from .car_context import (
+    DEFAULT_PMA_CONTEXT_PROFILE,
+    DEFAULT_REPO_THREAD_CONTEXT_PROFILE,
+    CarContextProfile,
+    build_car_context_bundle,
+    render_injected_car_context,
+)
 from .injected_context import wrap_injected_context
 
-CAR_AWARENESS_BLOCK = """<injected context>
-You are operating inside a Codex Autorunner (CAR) managed repo.
-
-CAR’s durable control-plane lives under `.codex-autorunner/`:
-- `.codex-autorunner/ABOUT_CAR.md` — short repo-local briefing (ticket/contextspace conventions + helper scripts).
-- `.codex-autorunner/DESTINATION_QUICKSTART.md` — local/docker runtime setup (custom image + mount/env/profile flags).
-- `.codex-autorunner/tickets/` — ordered ticket queue (`TICKET-###*.md`) used by the ticket flow runner.
-- `.codex-autorunner/contextspace/` — shared context docs:
-  - `active_context.md` — current “north star” context; kept fresh for ongoing work.
-  - `spec.md` — longer spec / acceptance criteria when needed.
-  - `decisions.md` — prior decisions / tradeoffs when relevant.
-- `.codex-autorunner/filebox/` — attachments inbox/outbox used by CAR surfaces (if present).
-
-Intent signals: if the user mentions tickets, “dispatch”, “resume”, contextspace docs, or `.codex-autorunner/`, they are likely referring to CAR artifacts/workflow rather than generic repo files.
-
-Use the above as orientation. If you need operational details (exact helper commands, generated files), read `.codex-autorunner/ABOUT_CAR.md`.
-For docker runtime setup details, read `.codex-autorunner/DESTINATION_QUICKSTART.md` or run `car hub destination set --help`.
-</injected context>"""
+CAR_AWARENESS_BLOCK = render_injected_car_context(
+    build_car_context_bundle(DEFAULT_PMA_CONTEXT_PROFILE)
+)
 
 ROLE_ADDENDUM_START = "<role addendum>"
 ROLE_ADDENDUM_END = "</role addendum>"
@@ -36,14 +28,29 @@ _FILE_CONTEXT_SIGNAL_RE = re.compile(
 )
 
 
-def maybe_inject_car_awareness(prompt_text: str) -> tuple[str, bool]:
-    """Inject CAR repo awareness context once at the top of the prompt."""
+def maybe_inject_car_awareness(
+    prompt_text: str,
+    *,
+    declared_profile: CarContextProfile = DEFAULT_REPO_THREAD_CONTEXT_PROFILE,
+    target_path: str | None = None,
+    initiated_by_ticket_flow: bool = False,
+) -> tuple[str, bool]:
+    """Inject CAR repo awareness context when the selected profile requires it."""
     prompt_text = prompt_text or ""
-    if CAR_AWARENESS_BLOCK in prompt_text:
+    bundle = build_car_context_bundle(
+        declared_profile,
+        prompt_text=prompt_text,
+        target_path=target_path,
+        initiated_by_ticket_flow=initiated_by_ticket_flow,
+    )
+    injection = render_injected_car_context(bundle)
+    if not injection:
+        return prompt_text, False
+    if injection in prompt_text:
         return prompt_text, False
     if not prompt_text or not prompt_text.strip():
-        return CAR_AWARENESS_BLOCK, True
-    return f"{CAR_AWARENESS_BLOCK}\n\n{prompt_text}", True
+        return injection, True
+    return f"{injection}\n\n{prompt_text}", True
 
 
 def maybe_inject_prompt_writing_hint(prompt_text: str) -> tuple[str, bool]:

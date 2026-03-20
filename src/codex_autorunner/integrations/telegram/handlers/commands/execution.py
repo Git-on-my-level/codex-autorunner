@@ -13,6 +13,10 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 import httpx
 
+from .....agents.base import (
+    harness_progress_event_stream,
+    harness_supports_progress_event_stream,
+)
 from .....agents.opencode.runtime import (
     PERMISSION_ALLOW,
     PERMISSION_ASK,
@@ -40,11 +44,10 @@ from .....core.orchestration import (
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
+    recover_post_completion_outcome,
     terminal_run_event_from_outcome,
 )
 from .....core.orchestration.runtime_threads import (
-    RUNTIME_THREAD_INTERRUPTED_ERROR,
-    RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
     await_runtime_thread_outcome,
@@ -62,11 +65,17 @@ from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
-    PMA_KEY,
-    PMA_OPENCODE_KEY,
     AppServerThreadRegistry,
+    pma_base_key,
+    pma_topic_scoped_key,
 )
 from .....integrations.chat.compaction import match_pending_compact_seed
+from .....integrations.chat.runtime_thread_errors import (
+    resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
+)
+from .....integrations.chat.runtime_thread_errors import (
+    sanitize_runtime_thread_error as _sanitize_runtime_thread_result_error,
+)
 from .....integrations.github.context_injection import maybe_inject_github_context
 from ....app_server.client import (
     CodexAppServerClient,
@@ -91,6 +100,7 @@ from ...constants import (
     WHISPER_TRANSCRIPT_DISCLAIMER,
     TurnKey,
 )
+from ...forwarding import format_forwarded_telegram_message_text
 from ...helpers import (
     _clear_pending_compact_seed,
     _compact_preview,
@@ -159,6 +169,7 @@ class _TurnRunResult:
     token_usage: Optional[dict[str, Any]]
     transcript_message_id: Optional[int]
     transcript_text: Optional[str]
+    intermediate_response: str = ""
 
 
 @dataclass
@@ -210,23 +221,6 @@ def _format_download_failure_response(kind: str, detail: Optional[str]) -> str:
     if detail:
         return f"{base} Reason: {detail}"
     return base
-
-
-def _sanitize_runtime_thread_result_error(
-    detail: Any,
-    *,
-    public_error: str,
-    timeout_error: str,
-    interrupted_error: str,
-) -> str:
-    sanitized = str(detail or "").strip()
-    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, timeout_error}:
-        return timeout_error
-    if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, interrupted_error}:
-        return interrupted_error
-    if sanitized in {timeout_error, interrupted_error}:
-        return sanitized
-    return public_error
 
 
 def _build_managed_thread_input_items(
@@ -396,13 +390,17 @@ async def _sync_telegram_thread_binding(
     canonical_workspace = str(workspace_root.resolve())
     normalized_repo_id = repo_id.strip() if isinstance(repo_id, str) else None
     if replace_existing and current_thread is not None:
-        orchestration_service.cancel_queued_executions(current_thread.thread_target_id)
-        if (
-            orchestration_service.get_running_execution(current_thread.thread_target_id)
-            is not None
-        ):
-            await orchestration_service.interrupt_thread(
-                current_thread.thread_target_id
+        stop_outcome = await orchestration_service.stop_thread(
+            current_thread.thread_target_id
+        )
+        if stop_outcome.recovered_lost_backend:
+            log_event(
+                handlers._logger,
+                logging.INFO,
+                "telegram.thread.recovered_lost_backend",
+                surface_key=surface_key,
+                managed_thread_id=current_thread.thread_target_id,
+                mode=mode,
             )
         orchestration_service.archive_thread_target(current_thread.thread_target_id)
         current_thread = None
@@ -478,14 +476,15 @@ async def _finalize_telegram_managed_thread_execution(
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
 
     if (
-        started.harness.supports("event_streaming")
+        harness_supports_progress_event_stream(started.harness)
         and stream_backend_thread_id
         and stream_backend_turn_id
     ):
 
         async def _pump_runtime_events() -> None:
             try:
-                async for raw_event in started.harness.stream_events(
+                async for raw_event in harness_progress_event_stream(
+                    started.harness,
                     started.workspace_root,
                     stream_backend_thread_id,
                     stream_backend_turn_id,
@@ -526,6 +525,16 @@ async def _finalize_telegram_managed_thread_execution(
             stream_task.cancel()
             with suppress(asyncio.CancelledError):
                 await stream_task
+
+    recovered_outcome = recover_post_completion_outcome(outcome, event_state)
+    if recovered_outcome is not outcome:
+        handlers._logger.warning(
+            "Telegram runtime turn recovered from post-completion error: thread=%s turn=%s error=%s",
+            managed_thread_id,
+            managed_turn_id,
+            outcome.error,
+        )
+        outcome = recovered_outcome
 
     if on_progress_event is not None:
         with suppress(Exception):
@@ -599,8 +608,9 @@ async def _finalize_telegram_managed_thread_execution(
             if finalized_status == "interrupted":
                 detail = interrupted_error
             elif finalized_status == "error" and finalized_execution is not None:
-                detail = _sanitize_runtime_thread_result_error(
-                    finalized_execution.error,
+                detail = _resolve_runtime_thread_result_error_detail(
+                    execution_error=getattr(finalized_execution, "error", None),
+                    event_error=event_state.last_error_message,
                     public_error=public_execution_error,
                     timeout_error=timeout_error,
                     interrupted_error=interrupted_error,
@@ -647,8 +657,9 @@ async def _finalize_telegram_managed_thread_execution(
             "token_usage": event_state.token_usage,
         }
 
-    detail = _sanitize_runtime_thread_result_error(
-        outcome.error,
+    detail = _resolve_runtime_thread_result_error_detail(
+        outcome_error=outcome.error,
+        event_error=event_state.last_error_message,
         public_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
@@ -756,6 +767,24 @@ def _ensure_telegram_managed_thread_queue_worker(
 
     worker_task = handlers._spawn_task(_queue_worker())
     task_map[managed_thread_id] = worker_task
+
+
+def _sync_pma_registry_thread_id(
+    handlers: Any,
+    record: "TelegramTopicRecord",
+    message: TelegramMessage,
+    backend_thread_id: Optional[str],
+) -> None:
+    if not isinstance(backend_thread_id, str) or not backend_thread_id.strip():
+        return
+    registry = getattr(handlers, "_hub_thread_registry", None)
+    pma_key_builder = getattr(handlers, "_pma_registry_key", None)
+    if registry is None or not callable(pma_key_builder):
+        return
+    pma_key = pma_key_builder(record, message)
+    if not isinstance(pma_key, str) or not pma_key.strip():
+        return
+    registry.set_thread_id(pma_key, backend_thread_id)
 
 
 async def _run_telegram_managed_thread_turn(
@@ -1018,6 +1047,14 @@ async def _run_telegram_managed_thread_turn(
             transcript_message_id,
             transcript_text,
         )
+    if pma_enabled:
+        _sync_pma_registry_thread_id(
+            handlers,
+            record,
+            message,
+            str(getattr(started_execution.thread, "backend_thread_id", "") or "")
+            or None,
+        )
     if pending_seed and not pma_enabled:
         await handlers._router.update_topic(
             message.chat_id,
@@ -1065,6 +1102,7 @@ async def _run_telegram_managed_thread_turn(
         else None
     )
     registered_turn_key: Optional[tuple[str, str]] = None
+    intermediate_response = ""
     if turn_key is not None:
         from ...types import TurnContext
 
@@ -1113,6 +1151,21 @@ async def _run_telegram_managed_thread_turn(
         )
     finally:
         if registered_turn_key is not None:
+            render_turn_progress_summary = getattr(
+                handlers, "_render_turn_progress_summary", None
+            )
+            if callable(render_turn_progress_summary):
+                intermediate_response = render_turn_progress_summary(
+                    registered_turn_key
+                )
+            else:
+                render_final_turn_progress = getattr(
+                    handlers, "_render_final_turn_progress", None
+                )
+                if callable(render_final_turn_progress):
+                    intermediate_response = render_final_turn_progress(
+                        registered_turn_key
+                    )
             handlers._turn_contexts.pop(registered_turn_key, None)
             handlers._clear_thinking_preview(registered_turn_key)
             handlers._clear_turn_progress(registered_turn_key)
@@ -1171,6 +1224,13 @@ async def _run_telegram_managed_thread_turn(
             transcript_text,
         )
     resolved_backend_thread_id = str(finalized.get("backend_thread_id") or "") or None
+    if pma_enabled and resolved_backend_thread_id:
+        _sync_pma_registry_thread_id(
+            handlers,
+            record,
+            message,
+            resolved_backend_thread_id,
+        )
     if not pma_enabled and resolved_backend_thread_id and hasattr(handlers, "_router"):
         await _sync_telegram_thread_binding(
             handlers,
@@ -1232,6 +1292,7 @@ async def _run_telegram_managed_thread_turn(
         token_usage=cast(Optional[dict[str, Any]], finalized.get("token_usage")),
         transcript_message_id=transcript_message_id,
         transcript_text=transcript_text,
+        intermediate_response=intermediate_response,
     )
 
 
@@ -1279,7 +1340,10 @@ class ExecutionCommands(SharedHelpers):
         return maybe_inject_prompt_writing_hint(prompt_text)
 
     def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
-        return maybe_inject_car_awareness(prompt_text)
+        return maybe_inject_car_awareness(
+            prompt_text,
+            declared_profile="car_ambient",
+        )
 
     def _maybe_inject_outbox_context(
         self,
@@ -1789,6 +1853,7 @@ class ExecutionCommands(SharedHelpers):
         pma_thread_key: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         supervisor = getattr(self, "_opencode_supervisor", None)
+        turn_delivery_state: dict[str, str] = {}
         if supervisor is None:
             failure_message = "OpenCode backend unavailable; install opencode or switch to /agent codex."
             if send_failure_response:
@@ -2620,6 +2685,9 @@ class ExecutionCommands(SharedHelpers):
                 token_usage=token_usage,
                 transcript_message_id=transcript_message_id,
                 transcript_text=transcript_text,
+                intermediate_response=turn_delivery_state.get(
+                    "intermediate_response", ""
+                ),
             )
         except Exception as exc:
             log_extra: dict[str, Any] = {}
@@ -2656,6 +2724,21 @@ class ExecutionCommands(SharedHelpers):
             )
         finally:
             if turn_key is not None:
+                render_turn_progress_summary = getattr(
+                    self, "_render_turn_progress_summary", None
+                )
+                if callable(render_turn_progress_summary):
+                    turn_delivery_state["intermediate_response"] = (
+                        render_turn_progress_summary(turn_key)
+                    )
+                else:
+                    render_final_turn_progress = getattr(
+                        self, "_render_final_turn_progress", None
+                    )
+                    if callable(render_final_turn_progress):
+                        turn_delivery_state["intermediate_response"] = (
+                            render_final_turn_progress(turn_key)
+                        )
                 self._turn_contexts.pop(turn_key, None)
                 self._clear_thinking_preview(turn_key)
                 self._clear_turn_progress(turn_key)
@@ -2688,6 +2771,7 @@ class ExecutionCommands(SharedHelpers):
         turn_handle = None
         turn_key: Optional[TurnKey] = None
         turn_started_at: Optional[float] = None
+        turn_delivery_state: dict[str, str] = {}
 
         def _is_missing_thread_error(exc: Exception) -> bool:
             if not isinstance(exc, CodexAppServerResponseError):
@@ -3126,6 +3210,21 @@ class ExecutionCommands(SharedHelpers):
         finally:
             if turn_handle is not None:
                 if turn_key is not None:
+                    render_turn_progress_summary = getattr(
+                        self, "_render_turn_progress_summary", None
+                    )
+                    if callable(render_turn_progress_summary):
+                        turn_delivery_state["intermediate_response"] = (
+                            render_turn_progress_summary(turn_key)
+                        )
+                    else:
+                        render_final_turn_progress = getattr(
+                            self, "_render_final_turn_progress", None
+                        )
+                        if callable(render_final_turn_progress):
+                            turn_delivery_state["intermediate_response"] = (
+                                render_final_turn_progress(turn_key)
+                            )
                     self._turn_contexts.pop(turn_key, None)
                     self._clear_thinking_preview(turn_key)
                     self._clear_turn_progress(turn_key)
@@ -3208,6 +3307,7 @@ class ExecutionCommands(SharedHelpers):
             token_usage=token_usage,
             transcript_message_id=transcript_message_id,
             transcript_text=transcript_text,
+            intermediate_response=turn_delivery_state.get("intermediate_response", ""),
         )
 
     def _prepare_turn_prompt(
@@ -3235,23 +3335,36 @@ class ExecutionCommands(SharedHelpers):
         in the common case (require_topics disabled).
         """
         agent = self._effective_agent(record)
-        base_key = PMA_OPENCODE_KEY if agent == "opencode" else PMA_KEY
+        base_key = pma_base_key(agent)
 
-        # PMA thread scoping: per-topic when require_topics is true
         require_topics = getattr(self._config, "require_topics", False)
         if require_topics and message is not None:
-            topic_key = build_topic_key(message.chat_id, message.thread_id)
-            return f"{base_key}.{topic_key}"
+            return pma_topic_scoped_key(
+                agent, message.chat_id, message.thread_id, topic_key_fn=build_topic_key
+            )
         return base_key
 
-    async def _prepare_pma_prompt(self, message_text: str) -> Optional[str]:
+    async def _prepare_pma_prompt(
+        self,
+        message_text: str,
+        *,
+        record: "TelegramTopicRecord",
+        message: TelegramMessage,
+    ) -> Optional[str]:
         hub_root = getattr(self, "_hub_root", None)
         if hub_root is None:
             return None
         supervisor = getattr(self, "_hub_supervisor", None)
         snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
         base_prompt = load_pma_prompt(hub_root)
-        return format_pma_prompt(base_prompt, snapshot, message_text, hub_root=hub_root)
+        prompt_state_key = self._pma_registry_key(record, message)
+        return format_pma_prompt(
+            base_prompt,
+            snapshot,
+            message_text,
+            hub_root=hub_root,
+            prompt_state_key=prompt_state_key,
+        )
 
     async def _prepare_turn_context(
         self,
@@ -3436,12 +3549,17 @@ class ExecutionCommands(SharedHelpers):
         prompt_text = (
             text_override if text_override is not None else (message.text or "")
         )
+        prompt_text = format_forwarded_telegram_message_text(message, prompt_text)
         prompt_text = self._prepare_turn_prompt(
             prompt_text, transcript_text=transcript_text
         )
         if pma_enabled:
             user_message_prompt = prompt_text
-            pma_prompt = await self._prepare_pma_prompt(prompt_text)
+            pma_prompt = await self._prepare_pma_prompt(
+                prompt_text,
+                record=record,
+                message=message,
+            )
             if pma_prompt is None:
                 failure_message = "PMA unavailable; hub snapshot failed."
                 if send_failure_response:
@@ -3474,7 +3592,6 @@ class ExecutionCommands(SharedHelpers):
 
         if (
             pma_enabled
-            and allow_new_thread
             and getattr(self._config, "root", None) is not None
             and callable(getattr(self, "_spawn_task", None))
         ):
@@ -3491,6 +3608,8 @@ class ExecutionCommands(SharedHelpers):
                 transcript_message_id=transcript_message_id,
                 transcript_text=transcript_text,
                 placeholder_id=placeholder_id,
+                allow_new_thread=allow_new_thread,
+                missing_thread_message=missing_thread_message,
             )
 
         if getattr(self._config, "root", None) is not None and callable(

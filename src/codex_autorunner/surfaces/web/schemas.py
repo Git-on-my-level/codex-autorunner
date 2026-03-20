@@ -16,6 +16,8 @@ from pydantic import (
     model_validator,
 )
 
+from ...core.car_context import CarContextProfile
+
 
 class Payload(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
@@ -33,45 +35,6 @@ class ContextspaceResponse(ResponseModel):
     active_context: str
     decisions: str
     spec: str
-
-
-class ContextspaceFileItem(ResponseModel):
-    name: str
-    path: str
-    is_pinned: bool = False
-    modified_at: Optional[str] = None
-
-
-class ContextspaceFileListResponse(ResponseModel):
-    files: List[ContextspaceFileItem]
-
-
-class ContextspaceNode(ResponseModel):
-    name: str
-    path: str
-    type: Literal["file", "folder"]
-    is_pinned: bool = False
-    modified_at: Optional[str] = None
-    size: Optional[int] = None
-    children: Optional[List["ContextspaceNode"]] = None
-
-
-ContextspaceNode.model_rebuild()
-
-
-class ContextspaceTreeResponse(ResponseModel):
-    tree: List[ContextspaceNode]
-
-
-class ContextspaceUploadedItem(ResponseModel):
-    filename: str
-    path: str
-    size: int
-
-
-class ContextspaceUploadResponse(ResponseModel):
-    status: str
-    uploaded: List[ContextspaceUploadedItem]
 
 
 class ArchiveSnapshotSummary(ResponseModel):
@@ -159,6 +122,7 @@ class HubCreateAgentWorkspaceRequest(Payload):
         validation_alias=AliasChoices("workspace_id", "workspaceId", "id"),
     )
     runtime: str
+    enabled: bool = True
     display_name: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("display_name", "displayName", "name"),
@@ -217,6 +181,9 @@ class HubCleanupWorktreeRequest(Payload):
     archive_note: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
     )
+    archive_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
+    )
 
 
 class HubArchiveWorktreeRequest(Payload):
@@ -225,6 +192,19 @@ class HubArchiveWorktreeRequest(Payload):
     )
     archive_note: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    )
+    archive_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
+    )
+
+
+class HubArchiveRepoStateRequest(Payload):
+    repo_id: str = Field(validation_alias=AliasChoices("repo_id", "repoId"))
+    archive_note: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_note", "archiveNote")
+    )
+    archive_profile: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("archive_profile", "archiveProfile")
     )
 
 
@@ -240,9 +220,9 @@ class HubArchiveWorktreeResponse(ResponseModel):
 
 
 class HubArchiveWorktreeStateResponse(ResponseModel):
-    snapshot_id: str
-    snapshot_path: str
-    meta_path: str
+    snapshot_id: Optional[str]
+    snapshot_path: Optional[str]
+    meta_path: Optional[str]
     status: str
     file_count: int
     total_bytes: int
@@ -250,6 +230,12 @@ class HubArchiveWorktreeStateResponse(ResponseModel):
     latest_flow_run_id: Optional[str]
     archived_paths: list[str]
     reset_paths: list[str]
+    archived_thread_ids: list[str] = []
+    archived_thread_count: int = 0
+
+
+class HubArchiveRepoStateResponse(HubArchiveWorktreeStateResponse):
+    pass
 
 
 class AppServerThreadResetRequest(Payload):
@@ -263,10 +249,9 @@ class AppServerThreadArchiveRequest(Payload):
 
 
 class PmaManagedThreadCreateRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     agent: Optional[Literal["codex", "opencode", "zeroclaw"]] = None
-    repo_id: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("repo_id", "repoId")
-    )
     resource_kind: Optional[Literal["repo", "agent_workspace"]] = Field(
         default=None, validation_alias=AliasChoices("resource_kind", "resourceKind")
     )
@@ -276,23 +261,53 @@ class PmaManagedThreadCreateRequest(Payload):
     workspace_root: Optional[str] = None
     name: Optional[str] = None
     backend_thread_id: Optional[str] = None
+    notify_on: Optional[Literal["terminal"]] = Field(
+        default=None, validation_alias=AliasChoices("notify_on", "notifyOn")
+    )
+    terminal_followup: Optional[bool] = Field(
+        default=None,
+        validation_alias=AliasChoices("terminal_followup", "terminalFollowup"),
+    )
+    notify_lane: Optional[str] = Field(
+        default=None, validation_alias=AliasChoices("notify_lane", "notifyLane")
+    )
+    notify_once: bool = Field(
+        default=True, validation_alias=AliasChoices("notify_once", "notifyOnce")
+    )
+    context_profile: Optional[CarContextProfile] = Field(
+        default=None,
+        validation_alias=AliasChoices("context_profile", "contextProfile"),
+    )
+    notify_on_explicit: bool = Field(default=False, exclude=True)
+    terminal_followup_explicit: bool = Field(default=False, exclude=True)
+    notify_lane_explicit: bool = Field(default=False, exclude=True)
+    notify_once_explicit: bool = Field(default=False, exclude=True)
 
     @model_validator(mode="before")
     @classmethod
-    def _normalize_repo_owner_alias(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        repo_id = data.get("repo_id", data.get("repoId"))
-        resource_kind = data.get("resource_kind", data.get("resourceKind"))
-        resource_id = data.get("resource_id", data.get("resourceId"))
+    def _capture_followup_intent(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        repo_id = payload.pop("repo_id", None)
         if repo_id is None:
-            return data
-        normalized = dict(data)
-        if resource_kind is None:
-            normalized["resource_kind"] = "repo"
-        if resource_id is None:
-            normalized["resource_id"] = repo_id
-        return normalized
+            repo_id = payload.pop("repoId", None)
+        if repo_id is not None:
+            payload.setdefault("resource_kind", "repo")
+            payload.setdefault("resource_id", repo_id)
+        payload["notify_on_explicit"] = any(
+            key in value for key in ("notify_on", "notifyOn")
+        )
+        payload["terminal_followup_explicit"] = any(
+            key in value for key in ("terminal_followup", "terminalFollowup")
+        )
+        payload["notify_lane_explicit"] = any(
+            key in value for key in ("notify_lane", "notifyLane")
+        )
+        payload["notify_once_explicit"] = any(
+            key in value for key in ("notify_once", "notifyOnce")
+        )
+        return payload
 
 
 class SessionSettingsRequest(Payload):
@@ -421,9 +436,6 @@ class TemplateFetchResponse(ResponseModel):
 
 class TemplateApplyRequest(Payload):
     template: str
-    ticket_dir: Optional[str] = Field(
-        default=None, validation_alias=AliasChoices("ticket_dir", "ticketDir")
-    )
     at: Optional[int] = None
     next_index: bool = Field(
         default=True, validation_alias=AliasChoices("next_index", "nextIndex")
@@ -452,6 +464,9 @@ class SystemUpdateRequest(Payload):
 class SystemUpdateTargetOption(ResponseModel):
     value: str
     label: str
+    description: Optional[str] = None
+    includes_web: bool = False
+    restart_notice: Optional[str] = None
 
 
 class SystemUpdateTargetsResponse(ResponseModel):
@@ -696,6 +711,8 @@ class TicketBulkUpdateResponse(ResponseModel):
 
 
 class PmaManagedThreadMessageRequest(Payload):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     message: str
     busy_policy: Optional[Literal["queue", "interrupt", "reject"]] = Field(
         default=None, validation_alias=AliasChoices("busy_policy", "busyPolicy")
@@ -704,13 +721,7 @@ class PmaManagedThreadMessageRequest(Payload):
     reasoning: Optional[str] = None
     defer_execution: bool = Field(
         default=False,
-        validation_alias=AliasChoices(
-            "defer_execution",
-            "deferExecution",
-            "background",
-            "async_mode",
-            "asyncMode",
-        ),
+        validation_alias=AliasChoices("defer_execution", "deferExecution"),
     )
     notify_on: Optional[Literal["terminal"]] = Field(
         default=None, validation_alias=AliasChoices("notify_on", "notifyOn")

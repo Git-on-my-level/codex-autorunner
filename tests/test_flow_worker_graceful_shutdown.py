@@ -37,6 +37,7 @@ def test_flow_worker_sigterm_closes_agent_pool_and_controller(
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
         """---
+ticket_id: "tkt_worker001"
 title: "Test ticket"
 agent: "codex"
 done: false
@@ -54,6 +55,8 @@ body
     class _FakeConfig:
         durable_writes = False
         app_server = SimpleNamespace(command=["python"])
+        git_auto_commit = False
+        ticket_flow = SimpleNamespace(include_previous_ticket_context=False)
 
         def agent_serve_command(self, _agent: str) -> Optional[list[str]]:
             return None

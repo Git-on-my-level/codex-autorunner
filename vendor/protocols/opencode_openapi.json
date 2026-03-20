@@ -1108,19 +1108,10 @@
             "$ref": "#/components/schemas/Event.worktree.failed"
           },
           {
-            "$ref": "#/components/schemas/Event.lsp.client.diagnostics"
-          },
-          {
             "$ref": "#/components/schemas/Event.permission.asked"
           },
           {
             "$ref": "#/components/schemas/Event.permission.replied"
-          },
-          {
-            "$ref": "#/components/schemas/Event.session.status"
-          },
-          {
-            "$ref": "#/components/schemas/Event.session.idle"
           },
           {
             "$ref": "#/components/schemas/Event.question.asked"
@@ -1130,6 +1121,15 @@
           },
           {
             "$ref": "#/components/schemas/Event.question.rejected"
+          },
+          {
+            "$ref": "#/components/schemas/Event.lsp.client.diagnostics"
+          },
+          {
+            "$ref": "#/components/schemas/Event.session.status"
+          },
+          {
+            "$ref": "#/components/schemas/Event.session.idle"
           },
           {
             "$ref": "#/components/schemas/Event.todo.updated"
@@ -1147,6 +1147,9 @@
             "$ref": "#/components/schemas/Event.pty.deleted"
           },
           {
+            "$ref": "#/components/schemas/Event.lsp.updated"
+          },
+          {
             "$ref": "#/components/schemas/Event.file.watcher.updated"
           },
           {
@@ -1154,15 +1157,6 @@
           },
           {
             "$ref": "#/components/schemas/Event.mcp.browser.open.failed"
-          },
-          {
-            "$ref": "#/components/schemas/Event.lsp.updated"
-          },
-          {
-            "$ref": "#/components/schemas/Event.vcs.branch.updated"
-          },
-          {
-            "$ref": "#/components/schemas/Event.command.executed"
           },
           {
             "$ref": "#/components/schemas/Event.message.updated"
@@ -1178,6 +1172,12 @@
           },
           {
             "$ref": "#/components/schemas/Event.message.part.removed"
+          },
+          {
+            "$ref": "#/components/schemas/Event.vcs.branch.updated"
+          },
+          {
+            "$ref": "#/components/schemas/Event.command.executed"
           },
           {
             "$ref": "#/components/schemas/Event.session.compacted"

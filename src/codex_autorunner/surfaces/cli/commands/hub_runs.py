@@ -18,6 +18,7 @@ from ....core.flows.archive_helpers import (
     archive_flow_run_artifacts as _archive_flow_run_artifacts_core,
 )
 from ....core.flows.models import FlowRunRecord, FlowRunStatus
+from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.force_attestation import (
     FORCE_ATTESTATION_REQUIRED_PHRASE,
     validate_force_attestation,
@@ -40,11 +41,8 @@ def _build_force_attestation(
 
 
 def _resolve_run_paths(record: FlowRunRecord, repo_root: Path):
-    workspace_root = Path(record.input_data.get("workspace_root") or repo_root)
-    runs_dir = Path(record.input_data.get("runs_dir") or ".codex-autorunner/runs")
-    return resolve_outbox_paths(
-        workspace_root=workspace_root, runs_dir=runs_dir, run_id=record.id
-    )
+    workspace_root = resolve_ticket_flow_workspace_root(record.input_data, repo_root)
+    return resolve_outbox_paths(workspace_root=workspace_root, run_id=record.id)
 
 
 def _flow_timestamp(record: FlowRunRecord) -> Optional[datetime]:

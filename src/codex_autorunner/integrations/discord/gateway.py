@@ -16,14 +16,14 @@ from .rest import DiscordRestClient
 
 try:
     import websockets
-    from websockets.exceptions import ConnectionClosed
+    from websockets.exceptions import ConnectionClosed as WebsocketsConnectionClosed
 except (
     ImportError
 ):  # pragma: no cover - optional dependency gate handles this at runtime.
     websockets = None  # type: ignore[assignment]
-
-    class ConnectionClosed(Exception):
-        pass
+    ConnectionClosed: type[Exception] = Exception
+else:
+    ConnectionClosed = WebsocketsConnectionClosed
 
 
 FATAL_GATEWAY_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013, 4014}

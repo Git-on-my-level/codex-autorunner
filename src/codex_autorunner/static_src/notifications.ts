@@ -9,6 +9,14 @@ interface HubDispatch {
   is_handoff?: boolean;
 }
 
+interface SupersessionPayload {
+  status?: "primary" | "non_primary" | "superseded" | null;
+  is_primary?: boolean | null;
+  superseded?: boolean | null;
+  superseded_by?: string | null;
+  reason?: string | null;
+}
+
 interface HubMessageItem {
   repo_id: string;
   repo_display_name?: string;
@@ -19,6 +27,7 @@ interface HubMessageItem {
   dispatch?: HubDispatch | null;
   dispatch_actionable?: boolean;
   open_url?: string;
+  supersession?: SupersessionPayload | null;
 }
 
 interface PmaDispatchItem {
@@ -46,6 +55,10 @@ interface NormalizedNotification {
   pillLabel: string;
   priority?: string;
   links?: Array<{ label: string; href: string }>;
+  isSuperseded?: boolean;
+  supersededBy?: string | null;
+  supersededReason?: string | null;
+  isPrimary?: boolean;
 }
 
 interface NotificationRoot {
@@ -122,6 +135,11 @@ function normalizeHubItem(item: HubMessageItem): NormalizedNotification {
     (Boolean(item.dispatch?.is_handoff) || mode === "pause");
   const runId = String(item.run_id || "");
   const openUrl = item.open_url || `/repos/${repoId}/?tab=inbox&run_id=${runId}`;
+  const supersession = item.supersession;
+  const isSuperseded = supersession?.superseded === true;
+  const isPrimary = supersession?.is_primary === true;
+  const supersededBy = supersession?.superseded_by || null;
+  const supersededReason = supersession?.reason || null;
   return {
     kind: "hub",
     repoId,
@@ -135,6 +153,10 @@ function normalizeHubItem(item: HubMessageItem): NormalizedNotification {
     isHandoff,
     openUrl,
     pillLabel: isHandoff ? "handoff" : isInformationalDispatch ? "info" : "paused",
+    isSuperseded,
+    supersededBy,
+    supersededReason,
+    isPrimary,
   };
 }
 
@@ -162,15 +184,22 @@ function getItemsForRoot(rootKey: string): NormalizedNotification[] {
 function renderDropdown(root: NotificationRoot): void {
   if (!root) return;
   const items = getItemsForRoot(root.key);
+  const actionableItems = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => !item.isSuperseded);
+  const supersededItems = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.isSuperseded);
   if (!items.length) {
     root.dropdown.innerHTML = '<div class="notifications-empty muted small">No pending dispatches</div>';
     return;
   }
-  const html = items
-    .map((item, index) => {
+  const actionableHtml = actionableItems
+    .map(({ item, index }) => {
       const pill = item.pillLabel || (item.isHandoff ? "handoff" : "paused");
+      const primaryClass = item.isPrimary ? "notifications-item-primary" : "";
       return `
-        <button class="notifications-item" type="button" data-index="${index}">
+        <button class="notifications-item ${primaryClass}" type="button" data-index="${index}">
           <span class="notifications-item-repo">${escapeHtml(item.repoDisplay || "PMA")}</span>
           <span class="notifications-item-title">${escapeHtml(item.title)}</span>
           <span class="pill pill-small pill-warn notifications-item-pill">${escapeHtml(pill)}</span>
@@ -178,7 +207,23 @@ function renderDropdown(root: NotificationRoot): void {
       `;
     })
     .join("");
-  root.dropdown.innerHTML = html;
+  const supersededHtml = supersededItems.length
+    ? supersededItems
+        .map(({ item, index }) => {
+          return `
+            <button class="notifications-item notifications-item-superseded muted" type="button" data-index="${index}" title="${escapeHtml(item.supersededReason || "Superseded by newer action")}">
+              <span class="notifications-item-repo">${escapeHtml(item.repoDisplay || "PMA")}</span>
+              <span class="notifications-item-title">${escapeHtml(item.title)}</span>
+              <span class="pill pill-small pill-muted notifications-item-pill">superseded</span>
+            </button>
+          `;
+        })
+        .join("")
+    : "";
+  const supersededSection = supersededItems.length
+    ? `<div class="notifications-superseded-section"><div class="notifications-section-label muted small">Superseded</div>${supersededHtml}</div>`
+    : "";
+  root.dropdown.innerHTML = actionableHtml + supersededSection;
 }
 
 function renderDropdownError(root: NotificationRoot): void {
@@ -317,11 +362,21 @@ function openNotificationsModal(item: NormalizedNotification, returnFocusTo?: HT
     const runId = item.runId || "";
     const runLabel = item.seq ? `${runId.slice(0, 8)} (#${item.seq})` : runId.slice(0, 8);
     const modeLabel = item.mode ? ` (${item.mode})` : "";
+    const supersededBlock = item.isSuperseded
+      ? `
+        <div class="notifications-modal-row muted">
+          <span class="notifications-modal-label">Status</span>
+          <span class="notifications-modal-value">Superseded by ${escapeHtml(item.supersededBy || "newer action")}</span>
+        </div>
+        ${item.supersededReason ? `<div class="notifications-modal-row muted"><span class="notifications-modal-label"></span><span class="notifications-modal-value small">${escapeHtml(item.supersededReason)}</span></div>` : ""}
+      `
+      : "";
+    const primaryLabel = item.isPrimary ? ' <span class="pill pill-small pill-info">primary</span>' : "";
     modal.body.innerHTML = `
       <div class="notifications-modal-meta">
         <div class="notifications-modal-row">
           <span class="notifications-modal-label">Repo</span>
-          <span class="notifications-modal-value">${escapeHtml(item.repoDisplay || "")}</span>
+          <span class="notifications-modal-value">${escapeHtml(item.repoDisplay || "")}${primaryLabel}</span>
         </div>
         <div class="notifications-modal-row">
           <span class="notifications-modal-label">Run</span>
@@ -331,6 +386,7 @@ function openNotificationsModal(item: NormalizedNotification, returnFocusTo?: HT
           <span class="notifications-modal-label">Dispatch</span>
           <span class="notifications-modal-value">${escapeHtml(item.title)}${escapeHtml(modeLabel)}</span>
         </div>
+        ${supersededBlock}
       </div>
       <div class="notifications-modal-body">${body}</div>
       <div class="notifications-modal-actions">
@@ -368,7 +424,7 @@ function openNotificationsModal(item: NormalizedNotification, returnFocusTo?: HT
           (entry) => !isSameNotification(entry, item)
         );
         notificationItemsByRoot.hub = hubItems;
-        setBadgeCount("hub", hubItems.length);
+        setBadgeCount("hub", hubItems.filter((entry) => !entry.isSuperseded).length);
         if (activeRoot && activeRoot.key === "hub") {
           renderDropdown(activeRoot);
         }
@@ -409,8 +465,8 @@ async function refreshNotifications(_ctx?: RefreshContext): Promise<void> {
     const pmaItems = (pmaPayload?.items || []).map(normalizePmaItem);
     notificationItemsByRoot.hub = hubItems;
     notificationItemsByRoot.pma = pmaItems;
-    setBadgeCount("hub", hubItems.length);
-    setBadgeCount("pma", pmaItems.length);
+    setBadgeCount("hub", hubItems.filter((item) => !item.isSuperseded).length);
+    setBadgeCount("pma", pmaItems.filter((item) => !item.isSuperseded).length);
     if (activeRoot) {
       renderDropdown(activeRoot);
     }

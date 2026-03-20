@@ -53,6 +53,7 @@ from ....core.orchestration import build_ticket_flow_orchestration_service
 from ....core.runtime import RuntimeContext
 from ....core.utils import atomic_write, find_repo_root
 from ....flows.ticket_flow import build_ticket_flow_definition
+from ....flows.ticket_flow.runtime_helpers import normalize_ticket_flow_input_data
 from ....integrations.agents.build_agent_pool import build_agent_pool
 from ....integrations.github.service import GitHubError, GitHubService
 from ....tickets.bulk import bulk_clear_model_pin, bulk_set_agent
@@ -62,7 +63,12 @@ from ....tickets.files import (
     read_ticket,
     safe_relpath,
 )
-from ....tickets.frontmatter import parse_markdown_frontmatter
+from ....tickets.frontmatter import (
+    ensure_ticket_id,
+    generate_ticket_id,
+    parse_markdown_frontmatter,
+    render_markdown_frontmatter,
+)
 from ....tickets.lint import lint_ticket_frontmatter
 from ..schemas import (
     TicketBulkClearModelRequest,
@@ -78,54 +84,16 @@ from ..schemas import (
 from ..services import flow_store as flow_store_service
 from .flow_routes import FlowRoutesState
 from .flow_routes.dependencies import build_default_flow_route_dependencies
-from .flow_routes.history_artifacts import (
-    get_diff_stats_by_dispatch_seq as extracted_get_diff_stats_by_dispatch_seq,
-)
-from .flow_routes.history_artifacts import (
-    get_dispatch_history_file as extracted_get_dispatch_history_file,
-)
-from .flow_routes.history_artifacts import (
-    get_reply_history as extracted_get_reply_history,
-)
-from .flow_routes.run_routes import (
-    archive_flow_run as extracted_archive_flow_run,
-)
-from .flow_routes.run_routes import (
-    get_flow_run_status as extracted_get_flow_run_status,
-)
-from .flow_routes.run_routes import (
-    resume_flow_run as extracted_resume_flow_run,
-)
-from .flow_routes.run_routes import (
-    stop_flow_worker as extracted_stop_flow_worker,
-)
 from .flow_routes.runtime_service import (
     list_orchestration_flow_run_records,
     resolve_flow_run_record,
 )
-from .flow_routes.ticket_bootstrap import (
-    build_ticket_bootstrap_routes as extracted_build_ticket_bootstrap_routes,
-)
-from .flow_routes.ticket_bootstrap import run_bootstrap as extracted_run_bootstrap
 
 _logger = logging.getLogger(__name__)
 
 _supported_flow_types = ("ticket_flow",)
 _FLOW_DB_CORRUPT_SUFFIX = ".corrupt"
 _FLOW_DB_NOTICE_SUFFIX = ".corrupt.json"
-
-# Keep the staged extraction seams visible while this module remains the composition owner.
-_EXTRACTED_FLOW_ROUTE_SEAMS = (
-    extracted_get_diff_stats_by_dispatch_seq,
-    extracted_get_dispatch_history_file,
-    extracted_get_reply_history,
-    extracted_stop_flow_worker,
-    extracted_resume_flow_run,
-    extracted_archive_flow_run,
-    extracted_get_flow_run_status,
-    extracted_build_ticket_bootstrap_routes,
-    extracted_run_bootstrap,
-)
 
 
 def _utc_stamp() -> str:
@@ -340,7 +308,13 @@ def _build_flow_definition(
             config=config,
         )
         agent_pool = build_agent_pool(engine.config)
-        definition = build_ticket_flow_definition(agent_pool=agent_pool)
+        definition = build_ticket_flow_definition(
+            agent_pool=agent_pool,
+            auto_commit_default=engine.config.git_auto_commit,
+            include_previous_ticket_context_default=(
+                engine.config.ticket_flow.include_previous_ticket_context
+            ),
+        )
     else:
         raise HTTPException(status_code=404, detail=f"Unknown flow type: {flow_type}")
 
@@ -646,9 +620,14 @@ async def _start_flow_via_controller(
     run_id: str,
 ) -> FlowRunRecord:
     controller = _get_flow_controller(repo_root, flow_type, state)
+    input_data = (
+        normalize_ticket_flow_input_data(repo_root, request.input_data)
+        if flow_type == "ticket_flow"
+        else dict(request.input_data or {})
+    )
     try:
         return await controller.start_flow(
-            input_data=request.input_data,
+            input_data=input_data,
             run_id=run_id,
             metadata=request.metadata,
         )
@@ -658,7 +637,7 @@ async def _start_flow_via_controller(
             retry_run_id = _normalize_run_id(uuid.uuid4())
             try:
                 return await controller.start_flow(
-                    input_data=request.input_data,
+                    input_data=input_data,
                     run_id=retry_run_id,
                     metadata=request.metadata,
                 )
@@ -1016,7 +995,7 @@ def build_flow_routes() -> APIRouter:
 
         seeded = False
         if not tickets_exist and not ticket_path.exists():
-            bootstrap_ticket_id = f"tkt_{uuid.uuid4().hex}"
+            bootstrap_ticket_id = generate_ticket_id()
             template = f"""---
 agent: codex
 done: false
@@ -1117,7 +1096,7 @@ You are the first ticket in a new ticket_flow run.
                 parsed_body = None
             rel_path = safe_relpath(path, repo_root)
             stable_ticket_id = ticket_stable_id(path)
-            diff_refs = [stable_ticket_id] if stable_ticket_id else [rel_path]
+            diff_refs = [stable_ticket_id] if stable_ticket_id else []
             tickets.append(
                 {
                     "path": rel_path,
@@ -1129,10 +1108,7 @@ You are the first ticket in a new ticket_flow run.
                     "diff_stats": _merge_ticket_diff_stats(diff_refs, diff_by_ref),
                 }
             )
-        return {
-            "ticket_dir": safe_relpath(ticket_dir, repo_root),
-            "tickets": tickets,
-        }
+        return {"tickets": tickets}
 
     @router.get("/ticket_flow/tickets/{index}", response_model=TicketResponse)
     async def get_ticket(index: int):
@@ -1195,7 +1171,7 @@ You are the first ticket in a new ticket_flow run.
 
         title_line = f"title: {_quote(request.title)}\n" if request.title else ""
         goal_line = f"goal: {_quote(request.goal)}\n" if request.goal else ""
-        ticket_id = f"tkt_{uuid.uuid4().hex}"
+        ticket_id = generate_ticket_id()
         ticket_id_line = f"ticket_id: {_quote(ticket_id)}\n"
 
         content = (
@@ -1237,8 +1213,24 @@ You are the first ticket in a new ticket_flow run.
         if not ticket_path:
             raise HTTPException(status_code=404, detail=f"Ticket {index:03d} not found")
 
+        existing_doc, _existing_errors = read_ticket(ticket_path)
+
         # Validate frontmatter before saving
         data, body = parse_markdown_frontmatter(request.content)
+        needs_render = False
+        if existing_doc is not None and "ticket_id" not in data:
+            data = dict(data)
+            data["ticket_id"] = existing_doc.frontmatter.ticket_id
+            needs_render = True
+        previous_ticket_id = data.get("ticket_id")
+        ensure_ticket_id(
+            data,
+            fallback_ticket_id=(
+                existing_doc.frontmatter.ticket_id if existing_doc is not None else None
+            ),
+        )
+        if data.get("ticket_id") != previous_ticket_id:
+            needs_render = True
         _, errors = lint_ticket_frontmatter(data)
         if errors:
             raise HTTPException(
@@ -1246,7 +1238,10 @@ You are the first ticket in a new ticket_flow run.
                 detail={"message": "Invalid ticket frontmatter", "errors": errors},
             )
 
-        atomic_write(ticket_path, request.content)
+        if needs_render:
+            atomic_write(ticket_path, render_markdown_frontmatter(data, body))
+        else:
+            atomic_write(ticket_path, request.content)
 
         # Read back to return validated data
         doc, read_errors = read_ticket(ticket_path)

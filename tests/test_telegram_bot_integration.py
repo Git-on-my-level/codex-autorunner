@@ -242,6 +242,29 @@ class FakeBot:
 
 
 @pytest.mark.anyio
+async def test_begin_typing_indicator_rolls_back_when_spawn_fails(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+
+    def _raise_spawn_error(_coro: object) -> object:
+        raise RuntimeError("spawn failed")
+
+    service._spawn_task = _raise_spawn_error  # type: ignore[assignment]
+
+    try:
+        with pytest.raises(RuntimeError, match="spawn failed"):
+            await service._begin_typing_indicator(123, None)
+
+        key = (123, None)
+        assert key not in service._typing_tasks
+        assert service._typing_sessions.get(key, 0) == 0
+    finally:
+        await service._app_server_supervisor.close_all()
+
+
+@pytest.mark.anyio
 async def test_status_creates_record(tmp_path: Path) -> None:
     config = make_config(tmp_path, fixture_command("basic"))
     service = TelegramBotService(config, hub_root=tmp_path)

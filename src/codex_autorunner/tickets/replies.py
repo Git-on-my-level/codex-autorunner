@@ -34,10 +34,8 @@ class ReplyDispatch:
     archived_files: tuple[Path, ...]
 
 
-def resolve_reply_paths(
-    *, workspace_root: Path, runs_dir: Path, run_id: str
-) -> ReplyPaths:
-    run_dir = workspace_root / runs_dir / run_id
+def resolve_reply_paths(*, workspace_root: Path, run_id: str) -> ReplyPaths:
+    run_dir = workspace_root / ".codex-autorunner" / "runs" / run_id
     reply_dir = run_dir / "reply"
     reply_history_dir = run_dir / "reply_history"
     user_reply_path = run_dir / "USER_REPLY.md"

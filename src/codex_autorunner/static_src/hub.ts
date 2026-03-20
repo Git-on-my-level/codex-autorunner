@@ -12,6 +12,15 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { HUB_BASE } from "./env.js";
 import { preserveScroll } from "./preserve.js";
 import { initNotificationBell } from "./notificationBell.js";
+import {
+  describeUpdateTarget,
+  getUpdateTarget,
+  includesWebUpdateTarget,
+  normalizeUpdateTarget,
+  type UpdateTargetsResponse,
+  updateRestartNotice,
+  updateTargetOptionsFromResponse,
+} from "./updateTargets.js";
 
 interface HubTicketFlow {
   status: string;
@@ -73,6 +82,7 @@ interface HubRepo {
   discord_chat_bound_thread_count?: number | null;
   telegram_chat_bound_thread_count?: number | null;
   non_pma_chat_bound_thread_count?: number | null;
+  unbound_managed_thread_count?: number | null;
   cleanup_blocked_by_chat_binding?: boolean;
   has_car_state?: boolean;
   resource_kind: "repo";
@@ -226,6 +236,8 @@ interface HubViewPrefs {
   sortOrder: HubSortOrder;
 }
 
+type HubOpenPanel = "repos" | "agents";
+
 interface HubRepoGroup {
   base: HubRepo;
   worktrees: HubRepo[];
@@ -253,6 +265,27 @@ function isCleanupBlockedByChatBinding(repo: HubRepo): boolean {
 
 function isChatBoundWorktree(repo: HubRepo): boolean {
   return isCleanupBlockedByChatBinding(repo);
+}
+
+function unboundManagedThreadCount(repo: HubRepo): number {
+  return Math.max(0, Number(repo.unbound_managed_thread_count || 0));
+}
+
+function baseReposWithUnboundThreads(repos: HubRepo[]): HubRepo[] {
+  return repos.filter(
+    (repo) => (repo.kind || "base") === "base" && unboundManagedThreadCount(repo) > 0
+  );
+}
+
+function totalUnboundManagedThreadCount(repos: HubRepo[]): number {
+  return repos.reduce(
+    (total, repo) => total + unboundManagedThreadCount(repo),
+    0
+  );
+}
+
+function dirtyBaseReposWithUnboundThreads(repos: HubRepo[]): HubRepo[] {
+  return baseReposWithUnboundThreads(repos).filter((repo) => repo.is_clean === false);
 }
 
 const HUB_VIEW_PREFS_KEY = `car:hub-view-prefs:${HUB_BASE || "/"}`;
@@ -299,7 +332,22 @@ const hubFlowFilterEl = document.getElementById(
 const hubSortOrderEl = document.getElementById(
   "hub-sort-order"
 ) as HTMLSelectElement | null;
+const hubCleanupAllThreadsBtn = document.getElementById(
+  "hub-cleanup-all-threads"
+) as HTMLButtonElement | null;
+const hubRepoPanelEl = document.getElementById("hub-repo-panel");
+const hubAgentPanelEl = document.getElementById("hub-agent-panel");
+const hubShellEl = document.getElementById("hub-shell");
+const hubRepoPanelSummaryEl = document.getElementById(
+  "hub-repo-panel-summary"
+) as HTMLButtonElement | null;
+const hubAgentPanelSummaryEl = document.getElementById(
+  "hub-agent-panel-summary"
+) as HTMLButtonElement | null;
+const hubRepoPanelStateEl = document.getElementById("hub-repo-panel-state");
+const hubAgentPanelStateEl = document.getElementById("hub-agent-panel-state");
 const UPDATE_STATUS_SEEN_KEY = "car_update_status_seen";
+const HUB_PANEL_PREFS_KEY = `car:hub-open-panel:${HUB_BASE || "/"}`;
 const HUB_JOB_POLL_INTERVAL_MS = 1200;
 const HUB_JOB_TIMEOUT_MS = 180000;
 
@@ -307,6 +355,7 @@ let hubUsageSummaryRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let hubUsageIndex: Record<string, HubUsageRepo> = {};
 let hubUsageUnmatched: HubUsageData["unmatched"] | null = null;
 let hubChannelEntries: HubChannelEntry[] = [];
+let hubOpenPanel: HubOpenPanel = loadHubOpenPanel();
 
 function saveSessionCache<T>(key: string, value: T): void {
   try {
@@ -336,6 +385,26 @@ function saveHubViewPrefs(): void {
   } catch (_err) {
     // Ignore local storage failures; prefs are best-effort.
   }
+}
+
+function saveHubOpenPanel(value: HubOpenPanel): void {
+  try {
+    localStorage.setItem(HUB_PANEL_PREFS_KEY, value);
+  } catch (_err) {
+    // Ignore local storage failures; prefs are best-effort.
+  }
+}
+
+function loadHubOpenPanel(): HubOpenPanel {
+  try {
+    const raw = localStorage.getItem(HUB_PANEL_PREFS_KEY);
+    if (raw === "repos" || raw === "agents") {
+      return raw;
+    }
+  } catch (_err) {
+    // Ignore parse/storage errors; defaults apply.
+  }
+  return "repos";
 }
 
 function loadHubViewPrefs(): void {
@@ -654,6 +723,31 @@ async function pollHubJob(jobId: string, { timeoutMs = HUB_JOB_TIMEOUT_MS }: Pol
   }
 }
 
+function updateCleanupAllThreadsButton(repos: HubRepo[]): void {
+  if (!hubCleanupAllThreadsBtn) return;
+  const cleanupRepos = baseReposWithUnboundThreads(repos);
+  const totalThreads = totalUnboundManagedThreadCount(cleanupRepos);
+  const dirtyRepos = dirtyBaseReposWithUnboundThreads(repos);
+  hubCleanupAllThreadsBtn.textContent =
+    totalThreads > 0 ? `Cleanup all (${totalThreads})` : "Cleanup all";
+  hubCleanupAllThreadsBtn.disabled = totalThreads <= 0;
+  if (totalThreads <= 0) {
+    hubCleanupAllThreadsBtn.title =
+      "No stale non-chat-bound managed threads across base repos";
+    return;
+  }
+  const dirtySummary = dirtyRepos.length
+    ? ` Includes ${dirtyRepos.length} dirty repo${
+        dirtyRepos.length === 1 ? "" : "s"
+      }.`
+    : "";
+  hubCleanupAllThreadsBtn.title =
+    `Archive ${totalThreads} stale non-chat-bound managed thread${
+      totalThreads === 1 ? "" : "s"
+    } across ${cleanupRepos.length} base repo${cleanupRepos.length === 1 ? "" : "s"}.` +
+    dirtySummary;
+}
+
 interface StartHubJobOptions {
   body?: unknown;
   startedMessage?: string;
@@ -684,6 +778,7 @@ function formatTimeCompact(isoString: string | null): string {
 function renderSummary(repos: HubRepo[]): void {
   const running = repos.filter((r) => r.status === "running").length;
   const missing = repos.filter((r) => !r.exists_on_disk).length;
+  updateCleanupAllThreadsButton(repos);
   if (totalEl) totalEl.textContent = repos.length.toString();
   if (runningEl) runningEl.textContent = running.toString();
   if (missingEl) missingEl.textContent = missing.toString();
@@ -805,60 +900,6 @@ async function loadHubUsage({ silent = false, allowRetry = true }: LoadHubUsageO
   }
 }
 
-const UPDATE_TARGET_LABELS: Record<string, string> = {
-  both: "Web + Chat Apps",
-  web: "web only",
-  chat: "Chat Apps (Telegram + Discord)",
-  telegram: "Telegram only",
-  discord: "Discord only",
-};
-
-type UpdateTarget = "both" | "web" | "chat" | "telegram" | "discord";
-
-function normalizeUpdateTarget(value: unknown): UpdateTarget {
-  if (!value) return "both";
-  if (
-    value === "both" ||
-    value === "web" ||
-    value === "chat" ||
-    value === "telegram" ||
-    value === "discord"
-  ) {
-    return value as UpdateTarget;
-  }
-  return "both";
-}
-
-function getUpdateTarget(selectId: string | null): UpdateTarget {
-  const select = selectId ? (document.getElementById(selectId) as HTMLSelectElement | null) : null;
-  return normalizeUpdateTarget(select ? select.value : "both");
-}
-
-function describeUpdateTarget(target: UpdateTarget): string {
-  return UPDATE_TARGET_LABELS[target] || UPDATE_TARGET_LABELS.both;
-}
-
-function includesWebUpdateTarget(target: UpdateTarget): boolean {
-  return target === "both" || target === "web";
-}
-
-function updateRestartNotice(target: UpdateTarget): string {
-  if (target === "chat") return "Telegram and Discord bots will restart.";
-  if (target === "telegram") return "The Telegram bot will restart.";
-  if (target === "discord") return "The Discord bot will restart.";
-  return "The service will restart.";
-}
-
-interface UpdateTargetOptionResponse {
-  value?: string;
-  label?: string;
-}
-
-interface UpdateTargetsResponse {
-  targets?: UpdateTargetOptionResponse[];
-  default_target?: string;
-}
-
 async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
   const select = selectId ? (document.getElementById(selectId) as HTMLSelectElement | null) : null;
   if (!select) return;
@@ -869,26 +910,11 @@ async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
   } catch (_err) {
     return;
   }
-  const rawOptions = Array.isArray(payload?.targets) ? payload.targets : [];
-  const options: Array<{ value: UpdateTarget; label: string }> = [];
-  const seen = new Set<string>();
-  rawOptions.forEach((entry) => {
-    const rawValue = typeof entry?.value === "string" ? entry.value : "";
-    if (!["both", "web", "chat", "telegram", "discord"].includes(rawValue)) return;
-    if (!rawValue) return;
-    const value = normalizeUpdateTarget(rawValue);
-    if (seen.has(value)) return;
-    seen.add(value);
-    const label = typeof entry?.label === "string" && entry.label.trim()
-      ? entry.label.trim()
-      : describeUpdateTarget(value);
-    options.push({ value, label });
-  });
+  const { options, defaultTarget } = updateTargetOptionsFromResponse(payload);
   if (!options.length) return;
 
   const previous = normalizeUpdateTarget(select.value || "both");
   const hasPrevious = options.some((item) => item.value === previous);
-  const defaultTarget = normalizeUpdateTarget(payload?.default_target || "both");
   const fallback = options.some((item) => item.value === defaultTarget)
     ? defaultTarget
     : options[0].value;
@@ -1026,6 +1052,7 @@ function buildActions(repo: HubRepo): RepoAction[] {
   const actions: RepoAction[] = [];
   const missing = !repo.exists_on_disk;
   const kind = repo.kind || "base";
+  const unboundThreads = unboundManagedThreadCount(repo);
   if (!missing && repo.mount_error) {
     actions.push({ key: "init", label: "Retry mount", kind: "primary" });
   } else if (!missing && repo.init_error) {
@@ -1045,6 +1072,19 @@ function buildActions(repo: HubRepo): RepoAction[] {
       title: "Repository settings",
     });
   }
+  if (!missing && (repo.has_car_state || (kind === "base" && unboundThreads > 0))) {
+    actions.push({
+      key: "archive_state",
+      label: "Archive",
+      kind: "ghost",
+      title:
+        kind === "base" && unboundThreads > 0
+          ? `Archive CAR state and ${unboundThreads} repo-linked managed thread${
+              unboundThreads === 1 ? "" : "s"
+            } for fresh work`
+          : "Archive CAR runtime state and reset this workspace for fresh work",
+    });
+  }
   if (!missing && kind === "base") {
     actions.push({ key: "new_worktree", label: "New Worktree", kind: "ghost" });
     const clean = repo.is_clean;
@@ -1062,14 +1102,6 @@ function buildActions(repo: HubRepo): RepoAction[] {
   }
   if (!missing && kind === "worktree") {
     const cleanupBlockedByChatBinding = isCleanupBlockedByChatBinding(repo);
-    if (repo.has_car_state) {
-      actions.push({
-        key: "archive_state",
-        label: "Archive state",
-        kind: "ghost",
-        title: "Archive CAR runtime state and reset the worktree for fresh work",
-      });
-    }
     actions.push({
       key: "cleanup_worktree",
       label: "Cleanup",
@@ -1531,26 +1563,57 @@ function channelPmaDetails(channel: HubChannelEntry): string {
   return parts.join(" · ");
 }
 
-function channelThreadKind(channel: HubChannelEntry): string {
-  return String(
-    channel.provenance?.thread_kind || channel.meta?.thread_kind || ""
-  )
-    .trim()
-    .toLowerCase();
+function isManagedPmaChannel(channel: HubChannelEntry): boolean {
+  return channelSource(channel) === "pma_thread";
 }
 
-function isTicketFlowPmaChannel(channel: HubChannelEntry): boolean {
-  if (channelSource(channel) !== "pma_thread") return false;
-  if (channelThreadKind(channel) === "ticket_flow") return true;
-  const label = channelDisplayLabel(channel).toLowerCase();
-  return label.startsWith("ticket-flow:");
-}
-
-function channelDisplayLabel(channel: HubChannelEntry): string {
+function rawChannelDisplayLabel(channel: HubChannelEntry): string {
   if (typeof channel.display === "string" && channel.display.trim()) {
     return channel.display.trim();
   }
   return channel.key;
+}
+
+function titleCaseWord(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function channelDisplayLabel(channel: HubChannelEntry): string {
+  const rawLabel = rawChannelDisplayLabel(channel);
+  if (channelSource(channel) !== "pma_thread") {
+    return rawLabel;
+  }
+  const normalizedRaw = rawLabel.trim().toLowerCase();
+  const threadKind = String(
+    channel.provenance?.thread_kind || channel.meta?.thread_kind || ""
+  )
+    .trim()
+    .toLowerCase();
+  if (
+    threadKind === "ticket_flow" ||
+    normalizedRaw === "ticket-flow" ||
+    normalizedRaw.startsWith("ticket-flow:")
+  ) {
+    return "Ticket flow";
+  }
+  if (
+    normalizedRaw.startsWith("pma:") ||
+    normalizedRaw === "pma" ||
+    threadKind === "interactive"
+  ) {
+    const agent = String(channel.provenance?.agent || channel.meta?.agent || "")
+      .trim()
+      .toLowerCase();
+    return agent ? `${titleCaseWord(agent)} thread` : "Agent thread";
+  }
+  if (normalizedRaw.startsWith("discord:")) {
+    return "Discord thread";
+  }
+  if (normalizedRaw.startsWith("telegram:")) {
+    return "Telegram thread";
+  }
+  return rawLabel;
 }
 
 function channelOwnerSummary(channel: HubChannelEntry): string {
@@ -1632,32 +1695,114 @@ function channelSummarySubline(
   </div>`;
 }
 
-function ticketFlowPmaSummaryMarkup(
-  channels: HubChannelEntry[],
-  { lastActivity = "" }: { lastActivity?: string } = {}
+function pmaSummaryMarkup(
+  channel: HubChannelEntry,
+  {
+    lastActivity = "",
+    label = channelDisplayLabel(channel),
+    count = 1,
+  }: { lastActivity?: string; label?: string; count?: number } = {}
 ): string {
-  if (!channels.length) return "";
-  const count = channels.length;
   const latestSeenAt =
-    typeof channels[0]?.seen_at === "string" && channels[0].seen_at
-      ? formatTimeCompact(channels[0].seen_at)
+    typeof channel.seen_at === "string" && channel.seen_at
+      ? formatTimeCompact(channel.seen_at)
       : "";
-  const metaParts = [`${count} thread${count === 1 ? "" : "s"}`];
+  const metaParts: string[] = [];
   if (latestSeenAt) {
     metaParts.push(`seen ${latestSeenAt}`);
   }
   if (lastActivity) {
     metaParts.push(lastActivity);
   }
+  const countMarkup =
+    count > 1
+      ? `<span class="hub-chat-binding-count">x${escapeHtml(String(count))}</span>`
+      : "";
   return `
     <div class="hub-chat-binding-row hub-chat-binding-row-compact">
       <div class="hub-chat-binding-main">
-        ${channelSourceBadgeMarkup(channels[0])}
-        <span class="hub-chat-binding-label">Ticket flow threads</span>
+        ${channelSourceBadgeMarkup(channel)}
+        <span class="hub-chat-binding-label">${escapeHtml(label)}</span>
+        ${countMarkup}
       </div>
       <div class="hub-chat-binding-meta muted small">${escapeHtml(metaParts.join(" · "))}</div>
     </div>
   `;
+}
+
+function pmaChannelGroupKey(channel: HubChannelEntry): string {
+  const threadKind = String(
+    channel.provenance?.thread_kind || channel.meta?.thread_kind || ""
+  )
+    .trim()
+    .toLowerCase();
+  const display = rawChannelDisplayLabel(channel);
+  const normalizedDisplay = display.trim().toLowerCase();
+  if (
+    threadKind === "ticket_flow" ||
+    normalizedDisplay === "ticket-flow" ||
+    normalizedDisplay.startsWith("ticket-flow:")
+  ) {
+    return "ticket-flow";
+  }
+  return `display:${normalizedDisplay}`;
+}
+
+function pmaChannelGroupLabel(channel: HubChannelEntry): string {
+  const key = pmaChannelGroupKey(channel);
+  if (key === "ticket-flow") return "Ticket flow";
+  return channelDisplayLabel(channel);
+}
+
+function isDuplicateChatBoundPmaChannel(
+  channel: HubChannelEntry,
+  visibleChannels: HubChannelEntry[]
+): boolean {
+  const normalizedLabel = rawChannelDisplayLabel(channel).trim().toLowerCase();
+  if (
+    !normalizedLabel ||
+    (!normalizedLabel.startsWith("discord:") &&
+      !normalizedLabel.startsWith("telegram:"))
+  ) {
+    return false;
+  }
+  return visibleChannels.some((channel) => {
+    const channelKey = String(channel.key || "")
+      .trim()
+      .toLowerCase();
+    return (
+      channelKey === normalizedLabel ||
+      channelKey.startsWith(`${normalizedLabel}:`) ||
+      normalizedLabel.startsWith(`${channelKey}:`)
+    );
+  });
+}
+
+function groupPmaChannels(
+  channels: HubChannelEntry[]
+): Array<{ label: string; count: number; latest: HubChannelEntry }> {
+  const grouped = new Map<string, { label: string; count: number; latest: HubChannelEntry }>();
+  channels.forEach((channel) => {
+    const key = pmaChannelGroupKey(channel);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (channelSeenAtMs(channel) > channelSeenAtMs(existing.latest)) {
+        existing.latest = channel;
+      }
+      return;
+    }
+    grouped.set(key, {
+      label: pmaChannelGroupLabel(channel),
+      count: 1,
+      latest: channel,
+    });
+  });
+  return Array.from(grouped.values()).sort((a, b) => {
+    const seenDiff = channelSeenAtMs(b.latest) - channelSeenAtMs(a.latest);
+    if (seenDiff !== 0) return seenDiff;
+    return a.label.localeCompare(b.label);
+  });
 }
 
 function channelSeenAtMs(channel: HubChannelEntry): number {
@@ -1772,6 +1917,7 @@ function buildRepoGroups(repos: HubRepo[]): {
 function renderRepos(repos: HubRepo[]): void {
   if (!repoListEl) return;
   repoListEl.innerHTML = "";
+  updateCleanupAllThreadsButton(repos);
   const searchQuery = normalizedHubSearch();
   const repoChannels = channelsByRepoId(hubChannelEntries);
 
@@ -1966,11 +2112,16 @@ function renderRepos(repos: HubRepo[]): void {
     const lastActivity = formatLastActivity(repo);
     const runDuration =
       repo.last_run_finished_at ? formatRunDuration(repo.last_run_duration_seconds) : "";
-    const ticketFlowPmaChannels = inlineChannels.filter((channel) =>
-      isTicketFlowPmaChannel(channel)
+    const pmaChannels = inlineChannels.filter((channel) =>
+      isManagedPmaChannel(channel)
     );
     const visibleChannels = inlineChannels.filter(
-      (channel) => !isTicketFlowPmaChannel(channel)
+      (channel) => !isManagedPmaChannel(channel)
+    );
+    const pmaGroups = groupPmaChannels(
+      pmaChannels.filter(
+        (channel) => !isDuplicateChatBoundPmaChannel(channel, visibleChannels)
+      )
     );
     const primaryChannel = visibleChannels[0] || null;
     const infoItems: string[] = [];
@@ -1998,8 +2149,12 @@ function renderRepos(repos: HubRepo[]): void {
           lastActivity,
           additionalCount: Math.max(0, visibleChannels.length - 1),
         })
-      : ticketFlowPmaChannels.length > 0
-      ? ticketFlowPmaSummaryMarkup(ticketFlowPmaChannels, { lastActivity })
+      : pmaGroups.length > 0
+      ? pmaSummaryMarkup(pmaGroups[0].latest, {
+          label: pmaGroups[0].label,
+          count: pmaGroups[0].count,
+          lastActivity,
+        })
       : infoItems.length > 0
       ? `<div class="hub-repo-subline"><span class="hub-repo-info-line">${escapeHtml(
           infoItems.join(" · ")
@@ -2023,11 +2178,22 @@ function renderRepos(repos: HubRepo[]): void {
         `;
       })
       .join("");
-    const ticketFlowPmaBlock = primaryChannel && ticketFlowPmaChannels.length > 0
-      ? ticketFlowPmaSummaryMarkup(ticketFlowPmaChannels)
+    const pmaRows = pmaGroups
+      .map((group, index) => {
+        if (!primaryChannel && index === 0) return "";
+        return pmaSummaryMarkup(group.latest, {
+          label: group.label,
+          count: group.count,
+        });
+      })
+      .join("");
+    const pmaBlock = primaryChannel && pmaGroups.length > 0
+      ? pmaRows
       : "";
-    const inlineChannelBlock = overflowChannelRows || ticketFlowPmaBlock
-      ? `<div class="hub-chat-binding-block">${ticketFlowPmaBlock}${overflowChannelRows}</div>`
+    const inlineChannelBlock = overflowChannelRows || pmaRows
+      ? `<div class="hub-chat-binding-block">${pmaBlock || ""}${overflowChannelRows}${
+          !primaryChannel ? pmaRows : ""
+        }</div>`
       : "";
 
     const setupBadge =
@@ -2558,6 +2724,45 @@ function initHubRepoListControls(): void {
   }
 }
 
+function applyHubPanelState(openPanel: HubOpenPanel): void {
+  hubOpenPanel = openPanel;
+  const reposOpen = openPanel === "repos";
+  const agentsOpen = openPanel === "agents";
+  hubShellEl?.setAttribute("data-hub-open-panel", openPanel);
+  hubRepoPanelEl?.classList.toggle("hub-panel-expanded", reposOpen);
+  hubRepoPanelEl?.classList.toggle("hub-panel-collapsed", !reposOpen);
+  hubAgentPanelEl?.classList.toggle("hub-panel-expanded", agentsOpen);
+  hubAgentPanelEl?.classList.toggle("hub-panel-collapsed", !agentsOpen);
+  if (hubRepoPanelSummaryEl) {
+    hubRepoPanelSummaryEl.setAttribute("aria-expanded", reposOpen ? "true" : "false");
+  }
+  if (hubRepoPanelStateEl) {
+    hubRepoPanelStateEl.textContent = reposOpen ? "Expanded" : "Show panel";
+  }
+  if (hubAgentPanelSummaryEl) {
+    hubAgentPanelSummaryEl.setAttribute("aria-expanded", agentsOpen ? "true" : "false");
+  }
+  if (hubAgentPanelStateEl) {
+    hubAgentPanelStateEl.textContent = agentsOpen ? "Expanded" : "Show panel";
+  }
+}
+
+function toggleHubPanel(panel: HubOpenPanel): void {
+  if (hubOpenPanel === panel) return;
+  saveHubOpenPanel(panel);
+  applyHubPanelState(panel);
+}
+
+function initHubPanelControls(): void {
+  applyHubPanelState(hubOpenPanel);
+  hubRepoPanelSummaryEl?.addEventListener("click", () => {
+    toggleHubPanel("repos");
+  });
+  hubAgentPanelSummaryEl?.addEventListener("click", () => {
+    toggleHubPanel("agents");
+  });
+}
+
 async function setParentRepoPinned(repoId: string, pinned: boolean): Promise<void> {
   const response = await api(`/hub/repos/${encodeURIComponent(repoId)}/pin`, {
     method: "POST",
@@ -3046,7 +3251,7 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
         ? repoId.split("--").pop()
         : repoId;
       const ok = await confirmModal(
-        `Clean up worktree "${displayName}"?\n\nCAR will archive its runtime files for later viewing in the Archive tab, then remove the worktree directory and branch.`,
+        `Clean up worktree "${displayName}"?\n\nCAR will archive a review snapshot for the Archive tab, then remove the worktree directory and branch. The default snapshot keeps tickets, contextspace, runs, flow artifacts, and lightweight metadata.`,
         { confirmText: "Archive & remove" }
       );
       if (!ok) return;
@@ -3065,18 +3270,45 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
     }
     if (action === "archive_state") {
       const repo = hubData.repos.find((item) => item.id === repoId);
-      if (!repo || !repo.has_car_state) return;
+      const cleanupCount = repo ? unboundManagedThreadCount(repo) : 0;
+      if (!repo || (!repo.has_car_state && cleanupCount <= 0)) return;
       const displayName = repo.display_name || repoId;
+      const subject = repo.kind === "worktree" ? "worktree" : "repo";
+      const archiveSummary = repo.has_car_state
+        ? "archive reviewable runtime artifacts for later viewing in the Archive tab"
+        : "skip the snapshot because CAR state is already clean";
+      const threadSummary =
+        cleanupCount > 0
+          ? ` It will also archive ${cleanupCount} stale non-chat-bound managed thread${
+              cleanupCount === 1 ? "" : "s"
+            }.`
+          : "";
       const ok = await confirmModal(
-        `Archive worktree state "${displayName}"?\n\nCAR will archive tickets, dispatches, contextspace, and other dirty runtime state for later viewing in the Archive tab. The worktree and chat bindings will remain active for fresh work.`,
-        { confirmText: "Archive state" }
+        `Archive ${subject} "${displayName}"?\n\nCAR will ${archiveSummary} before resetting local CAR state when needed.${threadSummary} Git state is not touched, and active chat bindings remain available for fresh work.`,
+        { confirmText: "Archive" }
       );
       if (!ok) return;
-      await api("/hub/worktrees/archive-state", {
+      const response = (await api("/hub/repos/archive-state", {
         method: "POST",
-        body: { worktree_repo_id: repoId, archive_note: null },
-      });
-      flash(`Archived state for worktree: ${repoId}`, "success");
+        body: { repo_id: repoId, archive_note: null },
+      })) as {
+        snapshot_id?: string | null;
+        archived_thread_count?: number | null;
+      } | null;
+      const archivedThreadCount =
+        typeof response?.archived_thread_count === "number"
+          ? response.archived_thread_count
+          : 0;
+      const snapshotText = response?.snapshot_id
+        ? `snapshot ${response.snapshot_id}`
+        : "managed threads only";
+      const threadText =
+        archivedThreadCount > 0
+          ? ` and ${archivedThreadCount} managed thread${
+              archivedThreadCount === 1 ? "" : "s"
+            }`
+          : "";
+      flash(`Archived ${subject}: ${displayName} (${snapshotText}${threadText})`, "success");
       await refreshHub();
       return;
     }
@@ -3094,6 +3326,50 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
     flash((err as Error).message || "Hub action failed", "error");
   } finally {
     buttons?.forEach((btn) => (btn as HTMLButtonElement).disabled = false);
+  }
+}
+
+async function handleCleanupAllRepoThreads(): Promise<void> {
+  if (!hubCleanupAllThreadsBtn) return;
+  const cleanupRepos = baseReposWithUnboundThreads(hubData.repos || []);
+  const totalThreads = totalUnboundManagedThreadCount(cleanupRepos);
+  if (totalThreads <= 0) {
+    flash("No stale non-chat threads across base repos", "success");
+    return;
+  }
+  const dirtyRepos = dirtyBaseReposWithUnboundThreads(hubData.repos || []);
+  const dirtyWarning = dirtyRepos.length
+    ? `\n\nDirty repos:\n${dirtyRepos
+        .map((repo) => `- ${repo.display_name || repo.id}`)
+        .join(
+          "\n"
+        )}\n\nThese repos are dirty, but cleanup only archives unbound managed threads.`
+    : "";
+  const ok = await confirmModal(
+    `Clean up stale non-chat threads across ${cleanupRepos.length} base repo${
+      cleanupRepos.length === 1 ? "" : "s"
+    }?\n\nCAR will archive ${totalThreads} unbound managed thread${
+      totalThreads === 1 ? "" : "s"
+    }. Discord and Telegram-bound threads will stay active.${dirtyWarning}`,
+    { confirmText: "Cleanup all" }
+  );
+  if (!ok) return;
+
+  hubCleanupAllThreadsBtn.disabled = true;
+  try {
+    const response = (await api("/hub/repos/cleanup-threads", {
+      method: "POST",
+    })) as { message?: string } | null;
+    const message =
+      typeof response?.message === "string" && response.message.trim()
+        ? response.message.trim()
+        : "Cleaned up stale threads across base repos";
+    flash(message, "success");
+    await refreshHub();
+  } catch (err) {
+    flash((err as Error).message || "Bulk cleanup failed", "error");
+  } finally {
+    updateCleanupAllThreadsButton(hubData.repos || []);
   }
 }
 
@@ -3123,6 +3399,11 @@ function attachHubHandlers(): void {
   if (hubUsageRefresh) {
     hubUsageRefresh.addEventListener("click", () => loadHubUsage());
   }
+  if (hubCleanupAllThreadsBtn) {
+    hubCleanupAllThreadsBtn.addEventListener("click", () => {
+      void handleCleanupAllRepoThreads();
+    });
+  }
   if (hubRepoSearchInput) {
     hubRepoSearchInput.addEventListener("input", () => {
       renderReposWithScroll(hubData.repos || []);
@@ -3130,10 +3411,16 @@ function attachHubHandlers(): void {
   }
 
   if (newRepoBtn) {
-    newRepoBtn.addEventListener("click", showCreateRepoModal);
+    newRepoBtn.addEventListener("click", () => {
+      toggleHubPanel("repos");
+      showCreateRepoModal();
+    });
   }
   if (newAgentBtn) {
-    newAgentBtn.addEventListener("click", showCreateAgentWorkspaceModal);
+    newAgentBtn.addEventListener("click", () => {
+      toggleHubPanel("agents");
+      showCreateAgentWorkspaceModal();
+    });
   }
   if (createCancelBtn) {
     createCancelBtn.addEventListener("click", hideCreateRepoModal);
@@ -3315,6 +3602,7 @@ function prefetchRepo(url: string): void {
 export function initHub(): void {
   attachHubHandlers();
   initHubRepoListControls();
+  initHubPanelControls();
   if (!repoListEl) return;
   initNotificationBell();
   const cachedHub = loadSessionCache<HubData | null>(HUB_CACHE_KEY, HUB_CACHE_TTL_MS);
@@ -3349,6 +3637,12 @@ export function initHub(): void {
 export const __hubTest = {
   renderRepos,
   renderAgentWorkspaces,
+  applyHubPanelState,
+  toggleHubPanel,
+  initInteractionHarness(): void {
+    attachHubHandlers();
+    initHubPanelControls();
+  },
   setHubChannelEntries(entries: HubChannelEntry[]): void {
     hubChannelEntries = Array.isArray(entries) ? [...entries] : [];
   },

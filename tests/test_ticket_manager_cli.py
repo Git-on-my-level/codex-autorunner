@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,19 +44,45 @@ def test_list_and_create_and_move(repo: Path) -> None:
     assert res.returncode == 0
 
 
-def test_create_quotes_special_scalars(repo: Path) -> None:
+def test_create_quotes_special_title_and_normalizes_agent(repo: Path) -> None:
     tickets = repo / ".codex-autorunner" / "tickets"
     tickets.mkdir(parents=True, exist_ok=True)
 
-    res = _run(repo, "create", "--title", "Fix #123: timing", "--agent", "qa:bot")
+    res = _run(repo, "create", "--title", "Fix #123: timing", "--agent", "CODEX")
     assert res.returncode == 0
 
     ticket_path = tickets / "TICKET-001.md"
     content = ticket_path.read_text(encoding="utf-8")
     assert "Fix #123: timing" in content
+    assert 'agent: "codex"' in content
 
     res = _run(repo, "lint")
     assert res.returncode == 0
+
+
+def test_create_emits_valid_ticket_id(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    res = _run(repo, "create", "--title", "First", "--agent", "codex")
+    assert res.returncode == 0
+
+    content = (tickets / "TICKET-001.md").read_text(encoding="utf-8")
+    assert re.search(r'^ticket_id: "tkt_[A-Za-z0-9]{32}"$', content, re.MULTILINE)
+
+    res = _run(repo, "lint")
+    assert res.returncode == 0
+
+
+def test_create_rejects_unknown_agent(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    res = _run(repo, "create", "--title", "First", "--agent", "qa-bot")
+    assert res.returncode == 1
+    assert "frontmatter.agent is invalid" in res.stderr
+    assert "qa-bot" in res.stderr
+    assert not any(p.name.startswith("TICKET-") for p in tickets.iterdir())
 
 
 def test_insert_requires_anchor(repo: Path) -> None:
@@ -72,7 +99,9 @@ def test_insert_with_title_creates_ticket(repo: Path) -> None:
     _run(repo, "create", "--title", "First", "--agent", "codex")
     _run(repo, "create", "--title", "Second", "--agent", "codex")
 
-    res = _run(repo, "insert", "--before", "1", "--title", "Inserted", "--agent", "bot")
+    res = _run(
+        repo, "insert", "--before", "1", "--title", "Inserted", "--agent", "user"
+    )
     assert res.returncode == 0
     assert "Inserted gap and created" in res.stdout
 
@@ -83,7 +112,28 @@ def test_insert_with_title_creates_ticket(repo: Path) -> None:
 
     content = (tickets / "TICKET-001.md").read_text(encoding="utf-8")
     assert "Inserted" in content
-    assert 'agent: "bot"' in content
+    assert 'agent: "user"' in content
+
+
+def test_insert_rejects_unknown_agent_without_shifting(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+
+    _run(repo, "create", "--title", "First", "--agent", "codex")
+    _run(repo, "create", "--title", "Second", "--agent", "codex")
+
+    res = _run(
+        repo, "insert", "--before", "1", "--title", "Inserted", "--agent", "qa-bot"
+    )
+    assert res.returncode == 1
+    assert "frontmatter.agent is invalid" in res.stderr
+
+    ticket_paths = sorted(
+        p.name for p in tickets.iterdir() if p.name.startswith("TICKET-")
+    )
+    assert ticket_paths == ["TICKET-001.md", "TICKET-002.md"]
+    assert "First" in (tickets / "TICKET-001.md").read_text(encoding="utf-8")
+    assert "Second" in (tickets / "TICKET-002.md").read_text(encoding="utf-8")
 
 
 def test_insert_without_title_warns_next_step(repo: Path) -> None:
@@ -122,3 +172,37 @@ def test_tool_lint_ignores_ingest_receipt_file(repo: Path) -> None:
     res = _run(repo, "lint")
     assert res.returncode == 0
     assert "Invalid ticket filename" not in res.stderr
+
+
+def test_tool_lint_rejects_unknown_agent(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+    (tickets / "TICKET-001.md").write_text(
+        '---\nticket_id: "tkt_toollint001"\nagent: qa-bot\ndone: false\n---\nBody\n',
+        encoding="utf-8",
+    )
+
+    res = _run(repo, "lint")
+    assert res.returncode == 1
+    assert "frontmatter.agent is invalid" in res.stderr
+    assert "qa-bot" in res.stderr
+
+
+def test_tool_lint_allows_runtime_valid_extra_frontmatter(repo: Path) -> None:
+    tickets = repo / ".codex-autorunner" / "tickets"
+    tickets.mkdir(parents=True, exist_ok=True)
+    (tickets / "TICKET-001.md").write_text(
+        "---\n"
+        'ticket_id: "tkt_tooldepends001"\n'
+        "agent: codex\n"
+        "done: false\n"
+        "depends_on:\n"
+        "  - TICKET-000\n"
+        "---\n"
+        "Body\n",
+        encoding="utf-8",
+    )
+
+    res = _run(repo, "lint")
+    assert res.returncode == 0
+    assert "OK" in res.stdout

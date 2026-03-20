@@ -33,7 +33,7 @@ from ....integrations.templates import (
     format_template_scan_rejection,
     run_template_scan,
 )
-from ....tickets.files import normalize_ticket_dir, safe_relpath
+from ....tickets.files import safe_relpath
 from ....tickets.frontmatter import split_markdown_frontmatter
 from ....tickets.lint import parse_ticket_index
 from ..schemas import (
@@ -223,25 +223,11 @@ async def _fetch_template_with_scan(
     return fetched, scan_record, hub_root
 
 
-def _resolve_ticket_dir(repo_root: Path, ticket_dir: Optional[str]) -> Path:
-    try:
-        return normalize_ticket_dir(repo_root, ticket_dir)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=_error_detail("ticket_dir_invalid", str(exc)),
-        ) from exc
-
-
 def _collect_ticket_indices(ticket_dir: Path) -> list[int]:
     indices: list[int] = []
     if not ticket_dir.exists() or not ticket_dir.is_dir():
         return indices
-    for (
-        path
-    ) in (
-        ticket_dir.iterdir()
-    ):  # codeql[py/path-injection] validated by normalize_ticket_dir
+    for path in ticket_dir.iterdir():
         if not path.is_file():
             continue
         idx = parse_ticket_index(path.name)
@@ -489,8 +475,8 @@ def build_templates_routes() -> APIRouter:
             payload.template, request
         )
 
-        resolved_dir = _resolve_ticket_dir(
-            request.app.state.engine.repo_root, payload.ticket_dir
+        resolved_dir = (
+            request.app.state.engine.repo_root / ".codex-autorunner" / "tickets"
         )
         if resolved_dir.exists() and not resolved_dir.is_dir():
             raise HTTPException(
@@ -501,9 +487,7 @@ def build_templates_routes() -> APIRouter:
                 ),
             )
         try:
-            resolved_dir.mkdir(
-                parents=True, exist_ok=True
-            )  # codeql[py/path-injection] validated by normalize_ticket_dir
+            resolved_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise HTTPException(
                 status_code=500,
@@ -569,9 +553,7 @@ def build_templates_routes() -> APIRouter:
             content = inject_provenance(content, fetched, scan_record)
 
         try:
-            path.write_text(
-                content, encoding="utf-8"
-            )  # codeql[py/path-injection] validated by normalize_ticket_dir
+            path.write_text(content, encoding="utf-8")
         except OSError as exc:
             raise HTTPException(
                 status_code=500,

@@ -17,9 +17,17 @@ import {
   refreshAgentControls,
 } from "./agentControls.js";
 import { createFileBoxWidget, type FileBoxListing } from "./fileboxUi.js";
-import { extractContextRemainingPercent } from "./streamUtils.js";
+import { handleStreamEvent, type StreamEventHandler } from "./streamUtils.js";
 
 import { initNotificationBell } from "./notificationBell.js";
+import { registerAutoRefresh } from "./autoRefresh.js";
+import { CONSTANTS } from "./constants.js";
+import {
+  loadPendingTurn as loadCanonicalPendingTurn,
+  savePendingTurn as saveCanonicalPendingTurn,
+  clearPendingTurn as clearCanonicalPendingTurn,
+  type PendingTurn,
+} from "./turnResume.js";
 
 const pmaStyling: ChatStyling = {
   eventClass: "chat-event",
@@ -97,14 +105,20 @@ const docsInfo: Map<string, PMADocInfo> = new Map();
 let isSavingDoc = false;
 let activeContextAutoPrune: PMADocsResponse["active_context_auto_prune"] = null;
 let pendingDeliverySummary: PMADeliverySummary | null = null;
-let pmaRefreshIntervalId: ReturnType<typeof setInterval> | null = null;
+let pmaRefreshCleanup: (() => void) | null = null;
 type PMAView = "chat" | "memory";
 
-type PendingTurn = {
-  clientTurnId: string;
-  message: string;
-  startedAtMs: number;
-};
+function loadPMAPendingTurn(): PendingTurn | null {
+  return loadCanonicalPendingTurn(PMA_PENDING_TURN_KEY);
+}
+
+function savePMAPendingTurn(turn: PendingTurn): void {
+  saveCanonicalPendingTurn(PMA_PENDING_TURN_KEY, turn);
+}
+
+function clearPMAPendingTurn(): void {
+  clearCanonicalPendingTurn(PMA_PENDING_TURN_KEY);
+}
 
 type PMADeliveryStatus =
   | "success"
@@ -130,35 +144,6 @@ function newClientTurnId(): string {
     // ignore
   }
   return `pma-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function loadPendingTurn(): PendingTurn | null {
-  try {
-    const raw = localStorage.getItem(PMA_PENDING_TURN_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<PendingTurn>;
-    if (!parsed || typeof parsed !== "object") return null;
-    if (!parsed.clientTurnId || !parsed.message || !parsed.startedAtMs) return null;
-    return parsed as PendingTurn;
-  } catch {
-    return null;
-  }
-}
-
-function savePendingTurn(turn: PendingTurn): void {
-  try {
-    localStorage.setItem(PMA_PENDING_TURN_KEY, JSON.stringify(turn));
-  } catch {
-    // ignore
-  }
-}
-
-function clearPendingTurn(): void {
-  try {
-    localStorage.removeItem(PMA_PENDING_TURN_KEY);
-  } catch {
-    // ignore
-  }
 }
 
 function loadPMAView(): PMAView {
@@ -439,6 +424,7 @@ async function startTurnEventsStream(meta: {
 }): Promise<void> {
   stopTurnEventsStream();
   if (!meta.threadId || !meta.turnId) return;
+  if ((meta.agent || "codex").trim().toLowerCase() === "opencode") return;
 
   const ctrl = new AbortController();
   currentEventsController = ctrl;
@@ -490,7 +476,7 @@ async function pollForTurnMeta(
       const threadId = typeof cur.thread_id === "string" ? cur.thread_id : "";
       const turnId = typeof cur.turn_id === "string" ? cur.turn_id : "";
       const agent = typeof cur.agent === "string" ? cur.agent : "codex";
-      if (threadId && turnId) {
+      if (threadId && turnId && agent.trim().toLowerCase() !== "opencode") {
         void startTurnEventsStream({ agent, threadId, turnId });
         return;
       }
@@ -550,7 +536,7 @@ const decoder = new TextDecoder();
 
 function escapeMarkdownLinkText(text: string): string {
   // Keep this ES2019-compatible (no String.prototype.replaceAll).
-  return text.replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+  return text.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
 }
 
 function formatOutboxAttachments(listing: FileBoxListing | null, names: string[]): string {
@@ -645,7 +631,7 @@ async function finalizePMAResponse(
     attachments = "";
   } finally {
     currentOutboxBaseline = null;
-    clearPendingTurn();
+    clearPMAPendingTurn();
     stopTurnEventsStream();
   }
 
@@ -735,20 +721,25 @@ async function initPMA(): Promise<void> {
 }
 
 function startPMARefreshLoop(): void {
-  if (pmaRefreshIntervalId !== null) return;
-  pmaRefreshIntervalId = window.setInterval(() => {
-    if (document.hidden) return;
-    const shell = document.getElementById("pma-shell");
-    if (!shell || shell.classList.contains("hidden")) return;
-    void loadPMAThreadInfo();
-    void fileBoxCtrl?.refresh();
-  }, 30000);
+  if (pmaRefreshCleanup) return;
+  pmaRefreshCleanup = registerAutoRefresh("pma:refresh", {
+    callback: async () => {
+      const shell = document.getElementById("pma-shell");
+      if (!shell || shell.classList.contains("hidden")) return;
+      await loadPMAThreadInfo();
+      await fileBoxCtrl?.refresh();
+    },
+    interval: CONSTANTS.UI.AUTO_REFRESH_INTERVAL,
+    refreshOnActivation: true,
+    immediate: false,
+  });
 }
 
 function stopPMARefreshLoop(): void {
-  if (pmaRefreshIntervalId === null) return;
-  clearInterval(pmaRefreshIntervalId);
-  pmaRefreshIntervalId = null;
+  if (pmaRefreshCleanup) {
+    pmaRefreshCleanup();
+    pmaRefreshCleanup = null;
+  }
 }
 
 export function setPMARefreshActive(active: boolean): void {
@@ -855,7 +846,7 @@ async function sendMessage(): Promise<void> {
   const model = elements.modelSelect?.value || getSelectedModel(agent);
   const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
   const clientTurnId = newClientTurnId();
-  savePendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
+  savePMAPendingTurn({ clientTurnId, message, startedAtMs: Date.now() });
 
   currentController = new AbortController();
   pmaChat.state.controller = currentController;
@@ -951,7 +942,7 @@ async function sendMessage(): Promise<void> {
     pmaChat.addAssistantMessage(`Error: ${errorMsg}`, true);
     pmaChat.render();
     pmaChat.renderMessages();
-    clearPendingTurn();
+    clearPMAPendingTurn();
     stopTurnEventsStream();
     pendingDeliverySummary = null;
   } finally {
@@ -1006,7 +997,7 @@ async function readPMAStream(res: Response, finalizeOnClose = false): Promise<vo
 
       if (dataLines.length === 0) continue;
       const data = dataLines.join("\n");
-      handlePMAStreamEvent(event, data);
+      handleStreamEvent(event, data, pmaStreamHandlers);
     }
   }
 
@@ -1023,7 +1014,7 @@ async function readPMAStream(res: Response, finalizeOnClose = false): Promise<vo
       }
     });
     if (dataLines.length) {
-      handlePMAStreamEvent(event, dataLines.join("\n"));
+      handleStreamEvent(event, dataLines.join("\n"), pmaStreamHandlers);
     }
   }
 
@@ -1035,142 +1026,86 @@ async function readPMAStream(res: Response, finalizeOnClose = false): Promise<vo
   }
 }
 
-function handlePMAStreamEvent(event: string, rawData: string): void {
-  const parsed = parseMaybeJson(rawData) as Record<string, unknown> | string;
+const pmaStreamHandlers: StreamEventHandler = {
+  onStatus(status) {
+    pmaChat!.state.statusText = status;
+    pmaChat!.render();
+    pmaChat!.renderEvents();
+  },
 
-  switch (event) {
-    case "status": {
-      const status =
-        typeof parsed === "string"
-          ? parsed
-          : ((parsed as Record<string, unknown>).status as string) || "";
-      pmaChat!.state.statusText = status;
-      pmaChat!.render();
-      pmaChat!.renderEvents();
-      break;
+  onToken(token) {
+    pmaChat!.state.streamText = (pmaChat!.state.streamText || "") + token;
+    if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "starting") {
+      pmaChat!.state.statusText = "responding";
     }
-
-    case "token": {
-      const token =
-        typeof parsed === "string"
-          ? parsed
-          : ((parsed as Record<string, unknown>).token as string) ||
-            ((parsed as Record<string, unknown>).text as string) ||
-            rawData ||
-            "";
-      pmaChat!.state.streamText = (pmaChat!.state.streamText || "") + token;
-      // Force status to "responding" if we have tokens, so the stream loop picks it up
-      if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "starting") {
-        pmaChat!.state.statusText = "responding";
-      }
-      // Ensure we're in "running" state if receiving tokens
-      if (pmaChat!.state.status !== "running") {
-          pmaChat!.state.status = "running";
-      }
-      pmaChat!.render();
-      break;
+    if (pmaChat!.state.status !== "running") {
+      pmaChat!.state.status = "running";
     }
+    pmaChat!.render();
+  },
 
-    case "event":
-    case "app-server": {
-      if (pmaChat) {
-        // Ensure we're in "running" state if receiving events
-        if (pmaChat!.state.status !== "running") {
-            pmaChat!.state.status = "running";
-        }
-        // If we are receiving events but still show "starting", bump status so UI
-        // reflects progress even before token streaming starts.
-        if (!pmaChat!.state.statusText || pmaChat!.state.statusText === "starting") {
-          pmaChat!.state.statusText = "working";
-        }
-        pmaChat.applyAppEvent(parsed);
-        pmaChat.renderEvents();
-        // Force a full render to update the inline thinking indicator
-        pmaChat.render();
-      }
-      break;
+  onTokenUsage(percentRemaining) {
+    if (pmaChat) {
+      pmaChat.state.contextUsagePercent = percentRemaining;
+      pmaChat.render();
     }
+  },
 
-    case "token_usage": {
-      // Token usage events - context window usage
-      if (typeof parsed === "object" && parsed !== null) {
-        const percentRemaining = extractContextRemainingPercent(parsed);
-        if (percentRemaining !== null && pmaChat) {
-          pmaChat.state.contextUsagePercent = percentRemaining;
-          pmaChat.render();
-        }
-      }
-      break;
+  onUpdate(payload) {
+    if (payload.client_turn_id) {
+      clearPMAPendingTurn();
     }
-
-    case "error": {
-      const message =
-        typeof parsed === "object" && parsed !== null
-          ? ((parsed as Record<string, unknown>).detail as string) ||
-            ((parsed as Record<string, unknown>).error as string) ||
-            rawData
-          : rawData || "PMA chat failed";
-      pendingDeliverySummary = null;
-      pmaChat!.state.status = "error";
-      pmaChat!.state.error = String(message);
-      pmaChat!.addAssistantMessage(`Error: ${message}`, true);
-      pmaChat!.render();
-      pmaChat!.renderMessages();
-      throw new Error(String(message));
+    if (payload.message) {
+      pmaChat!.state.streamText = payload.message as string;
     }
-
-    case "interrupted": {
-      const message =
-        typeof parsed === "object" && parsed !== null
-          ? ((parsed as Record<string, unknown>).detail as string) || rawData
-          : rawData || "PMA chat interrupted";
-      pendingDeliverySummary = null;
-      pmaChat!.state.status = "interrupted";
-      pmaChat!.state.error = "";
-      pmaChat!.state.statusText = String(message);
-      pmaChat!.addAssistantMessage("Request interrupted", true);
-      pmaChat!.render();
-      pmaChat!.renderMessages();
-      break;
+    const summary = deriveDeliverySummary(payload);
+    if (summary) {
+      pendingDeliverySummary = summary;
     }
+    pmaChat!.render();
+  },
 
-    case "update": {
-      const data = typeof parsed === "string" ? {} : (parsed as Record<string, unknown>);
-      // If server echoes client_turn_id, we can clear pending when we receive the final payload.
-      if (data.client_turn_id) {
-        clearPendingTurn();
+  onEvent(event) {
+    if (pmaChat) {
+      if (pmaChat.state.status !== "running") {
+        pmaChat.state.status = "running";
       }
-      if (data.message) {
-        pmaChat!.state.streamText = data.message as string;
+      if (!pmaChat.state.statusText || pmaChat.state.statusText === "starting") {
+        pmaChat.state.statusText = "working";
       }
-      const summary = deriveDeliverySummary(data);
-      if (summary) {
-        pendingDeliverySummary = summary;
-      }
-      pmaChat!.render();
-      break;
+      pmaChat.applyAppEvent(event);
+      pmaChat.renderEvents();
+      pmaChat.render();
     }
+  },
 
-    case "done":
-    case "finish": {
-      void finalizePMAResponse(pmaChat!.state.streamText || "");
-      break;
-    }
+  onError(message) {
+    pendingDeliverySummary = null;
+    pmaChat!.state.status = "error";
+    pmaChat!.state.error = message;
+    pmaChat!.addAssistantMessage(`Error: ${message}`, true);
+    pmaChat!.render();
+    pmaChat!.renderMessages();
+    throw new Error(message);
+  },
 
-    default:
-      if (typeof parsed === "object" && parsed !== null) {
-        const messageObj = parsed as Record<string, unknown>;
-        if (messageObj.method || messageObj.message) {
-          pmaChat!.applyAppEvent(parsed);
-          pmaChat!.renderEvents();
-        }
-      }
-      break;
-  }
-}
+  onInterrupted(message) {
+    pendingDeliverySummary = null;
+    pmaChat!.state.status = "interrupted";
+    pmaChat!.state.error = "";
+    pmaChat!.state.statusText = message;
+    pmaChat!.addAssistantMessage("Request interrupted", true);
+    pmaChat!.render();
+    pmaChat!.renderMessages();
+  },
+
+  onDone() {
+    void finalizePMAResponse(pmaChat!.state.streamText || "");
+  },
+};
 
 async function resumePendingTurn(): Promise<void> {
-  const pending = loadPendingTurn();
+  const pending = loadPMAPendingTurn();
   if (!pending || !pmaChat) return;
 
   // Show a running indicator immediately.
@@ -1190,7 +1125,12 @@ async function resumePendingTurn(): Promise<void> {
       const threadId = typeof cur.thread_id === "string" ? cur.thread_id : "";
       const turnId = typeof cur.turn_id === "string" ? cur.turn_id : "";
       const agent = typeof cur.agent === "string" ? cur.agent : "codex";
-      if (threadId && turnId && !currentEventsController) {
+      if (
+        threadId &&
+        turnId &&
+        !currentEventsController &&
+        agent.trim().toLowerCase() !== "opencode"
+      ) {
         void startTurnEventsStream({ agent, threadId, turnId });
       }
 
@@ -1210,7 +1150,7 @@ async function resumePendingTurn(): Promise<void> {
         pmaChat.addAssistantMessage(`Error: ${detail}`, true);
         pmaChat.render();
         pmaChat.renderMessages();
-        clearPendingTurn();
+        clearPMAPendingTurn();
         stopTurnEventsStream();
         return;
       }
@@ -1221,7 +1161,7 @@ async function resumePendingTurn(): Promise<void> {
         pmaChat.addAssistantMessage("Request interrupted", true);
         pmaChat.render();
         pmaChat.renderMessages();
-        clearPendingTurn();
+        clearPMAPendingTurn();
         stopTurnEventsStream();
         return;
       }
@@ -1277,14 +1217,6 @@ function applyPMAResult(payload: unknown): void {
   void finalizePMAResponse(responseText, { deliverySummary: summary });
 }
 
-function parseMaybeJson(data: string): unknown {
-  try {
-    return JSON.parse(data);
-  } catch {
-    return data;
-  }
-}
-
 type CancelRequestOptions = {
   clearPending?: boolean;
   interruptServer?: boolean;
@@ -1319,7 +1251,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
     await interruptActiveTurn({ stopLane });
   }
   if (clearPending) {
-    clearPendingTurn();
+    clearPMAPendingTurn();
   }
   if (pmaChat) {
     pmaChat.state.controller = null;
@@ -1331,7 +1263,7 @@ async function cancelRequest(options: CancelRequestOptions = {}): Promise<void> 
 }
 
 function resetThread(): void {
-  clearPendingTurn();
+  clearPMAPendingTurn();
   pendingDeliverySummary = null;
   stopTurnEventsStream();
   if (pmaChat) {

@@ -35,7 +35,10 @@ from codex_autorunner.integrations.discord.config import (
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.errors import DiscordAPIError
-from codex_autorunner.integrations.discord.service import DiscordBotService
+from codex_autorunner.integrations.discord.service import (
+    DiscordBotService,
+    DiscordMessageTurnResult,
+)
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.manifest import (
     MANIFEST_VERSION,
@@ -50,6 +53,9 @@ class _FakeRest:
         self.interaction_responses: list[dict[str, Any]] = []
         self.followup_messages: list[dict[str, Any]] = []
         self.channel_messages: list[dict[str, Any]] = []
+        self.edited_channel_messages: list[dict[str, Any]] = []
+        self.deleted_channel_messages: list[dict[str, Any]] = []
+        self.typing_calls: list[str] = []
         self.command_sync_calls: list[dict[str, Any]] = []
 
     async def create_interaction_response(
@@ -70,13 +76,35 @@ class _FakeRest:
     async def create_channel_message(
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        message_id = f"msg-{len(self.channel_messages) + 1}"
         self.channel_messages.append(
             {
                 "channel_id": channel_id,
                 "payload": payload,
+                "message_id": message_id,
             }
         )
-        return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
+        return {"id": message_id, "channel_id": channel_id, "payload": payload}
+
+    async def edit_channel_message(
+        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.edited_channel_messages.append(
+            {
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "payload": payload,
+            }
+        )
+        return {"id": message_id}
+
+    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
+        self.deleted_channel_messages.append(
+            {"channel_id": channel_id, "message_id": message_id}
+        )
+
+    async def trigger_typing(self, *, channel_id: str) -> None:
+        self.typing_calls.append(channel_id)
 
     async def create_followup_message(
         self,
@@ -130,6 +158,12 @@ class _FakeOutboxManager:
 
     async def run_loop(self) -> None:
         await asyncio.Event().wait()
+
+
+class _DeleteFailingRest(_FakeRest):
+    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
+        _ = channel_id, message_id
+        raise RuntimeError("delete failed")
 
 
 @pytest.mark.anyio
@@ -213,6 +247,123 @@ async def test_discord_message_turns_route_through_orchestration_ingress(
         "submit_flow_reply",
         "submit_thread_message",
     }
+
+
+@pytest.mark.asyncio
+async def test_discord_backend_approval_request_sends_prompt_and_accepts(
+    tmp_path: Path,
+) -> None:
+    rest = _FakeRest()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        service._discord_turn_approval_contexts["turn-1"] = (
+            discord_service_module._DiscordTurnApprovalContext(channel_id="channel-1")
+        )
+        request = {
+            "id": "approval-1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "turnId": "turn-1",
+                "reason": "Need permission",
+                "command": ["/bin/zsh", "-c", "ps -p 123"],
+            },
+        }
+
+        decision_task = asyncio.create_task(
+            service._handle_backend_approval_request(request)
+        )
+        await asyncio.sleep(0)
+
+        assert len(rest.channel_messages) == 1
+        payload = rest.channel_messages[0]["payload"]
+        assert "Approval required" in payload["content"]
+        action_rows = payload["components"]
+        accept_custom_id = action_rows[0]["components"][0]["custom_id"]
+
+        await service._handle_component_interaction_normalized(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id=accept_custom_id,
+            values=None,
+            guild_id="guild-1",
+            user_id="user-1",
+        )
+
+        assert await decision_task == "accept"
+        assert rest.deleted_channel_messages == [
+            {
+                "channel_id": "channel-1",
+                "message_id": rest.channel_messages[0]["message_id"],
+            }
+        ]
+        assert (
+            rest.interaction_responses[-1]["payload"]["data"]["content"]
+            == "Decision: accept"
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_discord_approval_component_falls_back_to_edit_when_delete_fails(
+    tmp_path: Path,
+) -> None:
+    rest = _DeleteFailingRest()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        service._discord_pending_approvals["token-1"] = (
+            discord_service_module._DiscordPendingApproval(
+                token="token-1",
+                request_id="approval-1",
+                turn_id="turn-1",
+                channel_id="channel-1",
+                message_id="msg-1",
+                prompt="Approval required",
+                future=future,
+            )
+        )
+
+        await service._handle_component_interaction_normalized(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id="approval:token-1:decline",
+            values=None,
+            guild_id="guild-1",
+            user_id="user-1",
+        )
+
+        assert future.done() and future.result() == "decline"
+        assert rest.edited_channel_messages == [
+            {
+                "channel_id": "channel-1",
+                "message_id": "msg-1",
+                "payload": {
+                    "content": "Approval decline.",
+                    "components": [],
+                },
+            }
+        ]
+    finally:
+        await store.close()
 
 
 def _config(
@@ -1469,11 +1620,11 @@ async def test_service_tickets_search_autocomplete_returns_filtered_tickets(
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_alpha1"\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-002.md").write_text(
-        "---\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_beta1"\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3582,7 +3733,7 @@ async def test_car_tickets_returns_ticket_picker_components(tmp_path: Path) -> N
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\ntitle: First\ndone: false\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_first"\ntitle: First\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3628,7 +3779,7 @@ async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
     long_name = f"TICKET-001-{'x' * 120}.md"
     ticket_rel = f".codex-autorunner/tickets/{long_name}"
     (ticket_dir / long_name).write_text(
-        "---\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_long1"\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3672,7 +3823,7 @@ async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
         assert modal_payload["type"] == 9
         text_input = modal_payload["data"]["components"][0]["component"]
         assert text_input["value"] == (
-            "---\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n"
+            '---\nticket_id: "tkt_discord_long1"\nagent: codex\ntitle: Very long ticket\ndone: false\n---\n\nBody\n'
         )
         assert (
             service._resolve_ticket_picker_value(
@@ -3693,11 +3844,11 @@ async def test_car_tickets_search_filters_picker_and_persists_across_filter_chan
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        "---\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_alpha2"\nagent: codex\ntitle: Alpha task\ndone: false\n---\n\nBody\n',
         encoding="utf-8",
     )
     (ticket_dir / "TICKET-002.md").write_text(
-        "---\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n",
+        '---\nticket_id: "tkt_discord_beta2"\nagent: codex\ntitle: Beta task\ndone: true\n---\n\nBody\n',
         encoding="utf-8",
     )
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -4364,17 +4515,13 @@ async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> 
             assert thread_target_id == "thread-1"
             return SimpleNamespace(thread_target_id="thread-1")
 
-        def cancel_queued_executions(self, thread_target_id: str) -> int:
-            assert thread_target_id == "thread-1"
-            return 2
-
-        def get_running_execution(self, thread_target_id: str) -> Any:
-            assert thread_target_id == "thread-1"
-            return SimpleNamespace(execution_id="exec-1")
-
-        async def interrupt_thread(self, thread_target_id: str) -> Any:
+        async def stop_thread(self, thread_target_id: str) -> Any:
             interrupted.append(thread_target_id)
-            return SimpleNamespace(status="interrupted")
+            return SimpleNamespace(
+                interrupted_active=True,
+                recovered_lost_backend=False,
+                cancelled_queued=2,
+            )
 
     service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
 
@@ -4391,6 +4538,138 @@ async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> 
         assert "cancelled 2 queued turn" in content
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(
+                interrupted_active=False,
+                recovered_lost_backend=True,
+                cancelled_queued=0,
+            )
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_interrupt(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "recovered stale session" in content
+        assert "backend thread was lost" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    calls: list[tuple[str, str]] = []
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            calls.append(("stop", thread_target_id))
+            return SimpleNamespace(recovered_lost_backend=True)
+
+        def archive_thread_target(self, thread_target_id: str) -> None:
+            calls.append(("archive", thread_target_id))
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            calls.append(("create", agent))
+            assert workspace_root == workspace
+            return SimpleNamespace(thread_target_id="thread-2")
+
+        def upsert_binding(self, **kwargs: Any) -> Any:
+            calls.append(("bind", str(kwargs["thread_target_id"])))
+            return SimpleNamespace(thread_target_id=kwargs["thread_target_id"])
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        had_previous, new_thread_id = await service._reset_discord_thread_binding(
+            channel_id="channel-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            pma_enabled=False,
+        )
+    finally:
+        await store.close()
+
+    assert had_previous is True
+    assert new_thread_id == "thread-2"
+    assert calls == [
+        ("stop", "thread-1"),
+        ("archive", "thread-1"),
+        ("create", "codex"),
+        ("bind", "thread-2"),
+    ]
 
 
 @pytest.mark.anyio
@@ -4471,7 +4750,7 @@ async def test_car_update_starts_worker_with_explicit_target(
         assert observed["notify_context"] == {"chat_id": "channel-1"}
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "update started (both)" in content
+        assert "update started (all)" in content
     finally:
         await store.close()
 
@@ -4752,4 +5031,174 @@ async def test_car_command_raises_on_invalid_workspace(
         content = last_response["payload"]["data"]["content"].lower()
         assert "workspace path does not exist" in content
     finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_handle_chat_event_message_starts_and_stops_typing_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_handle_message_event(_event: Any, _context: Any) -> None:
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(service, "_handle_message_event", _fake_handle_message_event)
+
+    event = ChatMessageEvent(
+        update_id="u-1",
+        thread=ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None),
+        message=ChatMessageRef(
+            thread=ChatThreadRef(
+                platform="discord",
+                chat_id="channel-1",
+                thread_id=None,
+            ),
+            message_id="m-1",
+        ),
+        from_user_id="user-1",
+        text="hello",
+    )
+    context = build_dispatch_context(event)
+    task = asyncio.create_task(service._handle_chat_event(event, context))
+    try:
+        await started.wait()
+        for _ in range(100):
+            if rest.typing_calls:
+                break
+            await asyncio.sleep(0.01)
+        assert rest.typing_calls == ["channel-1"]
+        release.set()
+        await task
+        assert not await service._typing_session_active("channel-1")
+    finally:
+        release.set()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_typing_indicator_reference_count_waits_for_last_end(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._begin_typing_indicator("channel-1")
+        await service._begin_typing_indicator("channel-1")
+        assert await service._typing_session_active("channel-1")
+        await service._end_typing_indicator("channel-1")
+        assert await service._typing_session_active("channel-1")
+        await service._end_typing_indicator("channel-1")
+        assert not await service._typing_session_active("channel-1")
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_run_agent_turn_for_message_wraps_typing_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_run_agent_turn(
+        _service: Any,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        input_items: list[dict[str, Any]] | None = None,
+        agent: str,
+        model_override: str | None,
+        reasoning_effort: str | None,
+        session_key: str,
+        orchestrator_channel_key: str,
+        max_actions: int,
+        min_edit_interval_seconds: float,
+        heartbeat_interval_seconds: float,
+        log_event_fn: Any,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            input_items,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+            max_actions,
+            min_edit_interval_seconds,
+            heartbeat_interval_seconds,
+            log_event_fn,
+        )
+        started.set()
+        await release.wait()
+        return DiscordMessageTurnResult(final_message="ok")
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "run_agent_turn_for_message",
+        _fake_run_agent_turn,
+    )
+
+    task = asyncio.create_task(
+        service._run_agent_turn_for_message(
+            workspace_root=tmp_path,
+            prompt_text="hello",
+            agent="codex",
+            model_override=None,
+            reasoning_effort=None,
+            session_key="session-1",
+            orchestrator_channel_key="channel-1",
+        )
+    )
+    try:
+        await started.wait()
+        for _ in range(100):
+            if rest.typing_calls:
+                break
+            await asyncio.sleep(0.01)
+        assert rest.typing_calls == ["channel-1"]
+        release.set()
+        result = await task
+        assert result.final_message == "ok"
+        assert not await service._typing_session_active("channel-1")
+    finally:
+        release.set()
         await store.close()
