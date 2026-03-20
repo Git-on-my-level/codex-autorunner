@@ -585,7 +585,8 @@ class TelegramNotificationHandlers:
                     incoming_output == latest_output
                     or incoming_output.startswith(latest_output)
                 ):
-                    tracker.note_output(text)
+                    if not tracker.replace_latest_output(text):
+                        tracker.note_output(text)
                 else:
                     tracker.note_output(text, new_segment=True)
                 tracker.end_output_segment()

@@ -10,7 +10,10 @@ from codex_autorunner.integrations.chat.managed_thread_progress import (
     ProgressRuntimeState,
     apply_run_event_to_progress_tracker,
 )
-from codex_autorunner.integrations.chat.progress_primitives import TurnProgressTracker
+from codex_autorunner.integrations.chat.progress_primitives import (
+    TurnProgressTracker,
+    render_progress_text,
+)
 
 
 def _tracker() -> TurnProgressTracker:
@@ -105,3 +108,39 @@ def test_apply_run_event_to_progress_tracker_marks_interrupts_terminal() -> None
     assert outcome.force is True
     assert outcome.terminal is True
     assert tracker.label == "cancelled"
+
+
+def test_apply_run_event_to_progress_tracker_replaces_cumulative_snapshot_in_place() -> (
+    None
+):
+    tracker = _tracker()
+    runtime_state = ProgressRuntimeState()
+
+    first = "I’m re-scoping to March 20, 2026 only"
+    second = "I’m re-scoping to March 20, 2026 only and tracing the exact log lines."
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="2026-03-15T00:00:00Z",
+            content=first,
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        ),
+        runtime_state=runtime_state,
+    )
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="2026-03-15T00:00:01Z",
+            content=second,
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        ),
+        runtime_state=runtime_state,
+    )
+
+    output_actions = [action for action in tracker.actions if action.label == "output"]
+    assert len(output_actions) == 1
+    assert output_actions[0].text == second
+
+    rendered = render_progress_text(tracker, max_length=2000, now=1.0)
+    assert rendered.count("I’m re-scoping to March 20, 2026 only") == 1

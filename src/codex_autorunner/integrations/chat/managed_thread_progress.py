@@ -60,7 +60,8 @@ def apply_run_event_to_progress_tracker(
                 incoming_output == latest_output
                 or incoming_output.startswith(latest_output)
             ):
-                tracker.note_output(delta)
+                if not tracker.replace_latest_output(delta):
+                    tracker.note_output(delta)
             else:
                 tracker.note_output(delta, new_segment=True)
             tracker.end_output_segment()

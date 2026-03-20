@@ -228,6 +228,31 @@ class TurnProgressTracker:
                 return action.text
         return ""
 
+    def replace_latest_output(self, text: str) -> bool:
+        normalized = _normalize_output_text(text)
+        if not normalized.strip():
+            return False
+        latest_index = self.last_output_index
+        if (
+            latest_index is None
+            or latest_index < 0
+            or latest_index >= len(self.actions)
+            or self.actions[latest_index].label != "output"
+        ):
+            latest_index = None
+            for index in range(len(self.actions) - 1, -1, -1):
+                action = self.actions[index]
+                if action.label == "output" and action.text.strip():
+                    latest_index = index
+                    break
+        if latest_index is None:
+            return False
+        self.clear_transient_action()
+        self.output_buffer = _truncate_tail(normalized, self.max_output_chars)
+        self.update_action_raw(latest_index, self.output_buffer, "update")
+        self.last_output_index = latest_index
+        return True
+
     def drop_terminal_output_if_duplicate(self, final_text: str) -> bool:
         if not isinstance(final_text, str) or not final_text.strip():
             return False

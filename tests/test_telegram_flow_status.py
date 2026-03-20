@@ -629,6 +629,38 @@ async def test_output_delta_with_explicit_assistant_stream_does_not_use_log_fall
 
 
 @pytest.mark.anyio
+async def test_item_completed_agent_message_replaces_cumulative_snapshot_in_place() -> (
+    None
+):
+    harness = _OutputDeltaProgressHarness()
+    key = harness._turn_key
+    tracker: TurnProgressTracker = harness._turn_progress_trackers[key]
+
+    first = "I’m re-scoping to March 20, 2026 only"
+    second = "I’m re-scoping to March 20, 2026 only and tracing the exact log lines."
+
+    await harness._note_progress_item_completed(
+        {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "item": {"type": "agentMessage", "text": first},
+        }
+    )
+    await harness._note_progress_item_completed(
+        {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "item": {"type": "agentMessage", "text": second},
+        }
+    )
+
+    output_actions = [action for action in tracker.actions if action.label == "output"]
+    assert len(output_actions) == 1
+    assert output_actions[0].text == second
+    assert harness._scheduled == [key, key]
+
+
+@pytest.mark.anyio
 async def test_start_turn_progress_uses_full_message_budget_for_persistent_output() -> (
     None
 ):
