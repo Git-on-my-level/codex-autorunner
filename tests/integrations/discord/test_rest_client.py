@@ -5,9 +5,11 @@ from typing import Any
 import httpx
 import pytest
 
+from codex_autorunner.core.exceptions import CircuitOpenError
 from codex_autorunner.integrations.discord.errors import (
     DiscordAPIError,
     DiscordPermanentError,
+    DiscordTransientError,
 )
 from codex_autorunner.integrations.discord.rest import DiscordRestClient
 
@@ -170,6 +172,9 @@ async def test_auth_failures_raise_permanent_error_without_retry(
         await client.close()
 
     assert attempts["count"] == 1
+    breaker = client._circuit_breakers["gateway"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"
 
 
 @pytest.mark.anyio
@@ -203,3 +208,147 @@ async def test_download_attachment_streaming_enforces_max_size() -> None:
             )
     finally:
         await client.close()
+
+
+@pytest.mark.anyio
+async def test_interaction_4xx_does_not_open_shared_breaker() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(
+            404,
+            json={"message": "Unknown interaction", "code": 10062},
+        )
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        for _ in range(6):
+            with pytest.raises(DiscordPermanentError, match="status=404"):
+                await client.create_interaction_response(
+                    interaction_id="123",
+                    interaction_token="token",
+                    payload={"type": 5},
+                )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 6
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"
+
+
+@pytest.mark.anyio
+async def test_rate_limit_exhaustion_does_not_open_shared_breaker() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(429, headers={"Retry-After": "0"}, json={})
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        for _ in range(6):
+            with pytest.raises(DiscordTransientError, match="rate limit"):
+                await client.create_interaction_response(
+                    interaction_id="123",
+                    interaction_token="token",
+                    payload={"type": 5},
+                )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 6
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"
+
+
+@pytest.mark.anyio
+async def test_repeated_5xx_opens_shared_breaker() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(500, json={"message": "server exploded"})
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        for _ in range(5):
+            with pytest.raises(DiscordTransientError, match="server error"):
+                await client.create_interaction_response(
+                    interaction_id="123",
+                    interaction_token="token",
+                    payload={"type": 5},
+                )
+        with pytest.raises(CircuitOpenError):
+            await client.create_interaction_response(
+                interaction_id="123",
+                interaction_token="token",
+                payload={"type": 5},
+            )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 5
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 5
+    assert breaker._state.state.value == "open"
+
+
+@pytest.mark.anyio
+async def test_retryable_5xx_that_recovers_does_not_open_shared_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.rest.asyncio.sleep", fake_sleep
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] <= 2:
+            return httpx.Response(500, json={"message": "temporary outage"})
+        return httpx.Response(204)
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=2,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        await client.create_interaction_response(
+            interaction_id="123",
+            interaction_token="token",
+            payload={"type": 5},
+        )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 3
+    assert len(sleeps) == 2
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"

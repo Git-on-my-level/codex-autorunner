@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 from .exceptions import CircuitOpenError
 
@@ -65,7 +65,11 @@ class CircuitBreaker:
         self._lock = asyncio.Lock()
 
     @asynccontextmanager
-    async def call(self) -> AsyncIterator[None]:
+    async def call(
+        self,
+        *,
+        should_record_failure: Optional[Callable[[Exception], bool]] = None,
+    ) -> AsyncIterator[None]:
         """
         Context manager that raises CircuitOpenError if circuit is open.
 
@@ -98,12 +102,20 @@ class CircuitBreaker:
         try:
             yield
         except Exception as exc:
-            self._logger.debug(
-                "Exception caught by circuit breaker for %s: %s",
-                self._service_name,
-                exc,
-            )
-            await self._record_failure()
+            if should_record_failure is None or should_record_failure(exc):
+                self._logger.debug(
+                    "Exception caught by circuit breaker for %s: %s",
+                    self._service_name,
+                    exc,
+                )
+                await self._record_failure()
+            else:
+                self._logger.debug(
+                    "Exception treated as successful service contact for %s: %s",
+                    self._service_name,
+                    exc,
+                )
+                await self._record_success()
             raise
         else:
             await self._record_success()
