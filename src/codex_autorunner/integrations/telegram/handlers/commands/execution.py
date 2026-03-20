@@ -71,6 +71,9 @@ from .....integrations.app_server.threads import (
 )
 from .....integrations.chat.compaction import match_pending_compact_seed
 from .....integrations.chat.runtime_thread_errors import (
+    resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
+)
+from .....integrations.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error as _sanitize_runtime_thread_result_error,
 )
 from .....integrations.github.context_injection import maybe_inject_github_context
@@ -604,12 +607,9 @@ async def _finalize_telegram_managed_thread_execution(
             if finalized_status == "interrupted":
                 detail = interrupted_error
             elif finalized_status == "error" and finalized_execution is not None:
-                raw_error = (
-                    getattr(finalized_execution, "error", None)
-                    or event_state.last_error_message
-                )
-                detail = _sanitize_runtime_thread_result_error(
-                    raw_error,
+                detail = _resolve_runtime_thread_result_error_detail(
+                    execution_error=getattr(finalized_execution, "error", None),
+                    event_error=event_state.last_error_message,
                     public_error=public_execution_error,
                     timeout_error=timeout_error,
                     interrupted_error=interrupted_error,
@@ -656,9 +656,9 @@ async def _finalize_telegram_managed_thread_execution(
             "token_usage": event_state.token_usage,
         }
 
-    raw_error = outcome.error or event_state.last_error_message
-    detail = _sanitize_runtime_thread_result_error(
-        raw_error,
+    detail = _resolve_runtime_thread_result_error_detail(
+        outcome_error=outcome.error,
+        event_error=event_state.last_error_message,
         public_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,

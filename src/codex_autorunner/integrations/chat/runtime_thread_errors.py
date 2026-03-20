@@ -63,6 +63,35 @@ def sanitize_runtime_thread_error(
     return format_public_error(sanitized, limit=detail_limit)
 
 
+def resolve_runtime_thread_error_detail(
+    *,
+    execution_error: Any = None,
+    outcome_error: Any = None,
+    event_error: Any = None,
+    public_error: str,
+    timeout_error: str,
+    interrupted_error: str,
+    detail_limit: int = DEFAULT_ERROR_DETAIL_LIMIT,
+) -> str:
+    """Pick the best available runtime-thread error detail and sanitize it."""
+
+    raw_detail = next(
+        (
+            candidate
+            for candidate in (execution_error, outcome_error, event_error)
+            if str(candidate or "").strip()
+        ),
+        None,
+    )
+    return sanitize_runtime_thread_error(
+        raw_detail,
+        public_error=public_error,
+        timeout_error=timeout_error,
+        interrupted_error=interrupted_error,
+        detail_limit=detail_limit,
+    )
+
+
 def format_public_error(detail: str, *, limit: int = DEFAULT_ERROR_DETAIL_LIMIT) -> str:
     """Format error detail for public messages with redaction and truncation.
 

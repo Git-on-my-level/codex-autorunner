@@ -66,7 +66,10 @@ from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
 from ...integrations.chat.models import ChatMessageEvent
 from ...integrations.chat.runtime_thread_errors import (
-    sanitize_runtime_thread_error as _sanitize_runtime_thread_result_error,
+    resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
+)
+from ...integrations.chat.runtime_thread_errors import (
+    sanitize_runtime_thread_error,
 )
 from ..chat.managed_thread_progress import (
     ProgressRuntimeState,
@@ -99,6 +102,48 @@ class DiscordMessageTurnResult:
     intermediate_message: Optional[str] = None
     token_usage: Optional[dict[str, Any]] = None
     elapsed_seconds: Optional[float] = None
+    send_final_message: bool = True
+
+
+_APPROVAL_MODE_POLICY_PRESETS: dict[str, tuple[str, str]] = {
+    "yolo": ("never", "dangerFullAccess"),
+    "safe": ("never", "workspaceWrite"),
+    "auto": ("never", "workspaceWrite"),
+    "read-only": ("never", "readOnly"),
+    "full-access": ("never", "dangerFullAccess"),
+}
+
+_sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
+
+
+def _resolve_discord_turn_policies(
+    binding: Optional[dict[str, Any]],
+    *,
+    default_approval_policy: str,
+    default_sandbox_policy: str,
+) -> tuple[str, Any]:
+    approval_policy = default_approval_policy
+    sandbox_policy: Any = default_sandbox_policy
+    approval_mode = "yolo"
+    if isinstance(binding, dict):
+        binding_mode = str(binding.get("approval_mode") or "").strip()
+        if binding_mode:
+            approval_mode = binding_mode
+        binding_policy = binding.get("approval_policy")
+        if isinstance(binding_policy, str) and binding_policy.strip():
+            approval_policy = binding_policy.strip()
+        binding_sandbox = binding.get("sandbox_policy")
+        if isinstance(binding_sandbox, str) and binding_sandbox.strip():
+            sandbox_policy = binding_sandbox.strip()
+    preset_policy, preset_sandbox = _APPROVAL_MODE_POLICY_PRESETS.get(
+        approval_mode.lower(),
+        (None, None),
+    )
+    if approval_policy == default_approval_policy and preset_policy is not None:
+        approval_policy = preset_policy
+    if sandbox_policy == default_sandbox_policy and preset_sandbox is not None:
+        sandbox_policy = preset_sandbox
+    return approval_policy, sandbox_policy
 
 
 async def _apply_discord_progress_run_event(
@@ -402,7 +447,10 @@ async def handle_message_event(
                         ),
                     },
                 )
-            return DiscordMessageTurnResult(final_message="")
+            return DiscordMessageTurnResult(
+                final_message="",
+                send_final_message=False,
+            )
 
         if not pma_enabled:
             prompt_text, injected = maybe_inject_car_awareness(
@@ -452,7 +500,10 @@ async def handle_message_event(
                     channel_id,
                     {"content": "Failed to build PMA context. Please try again."},
                 )
-                return DiscordMessageTurnResult(final_message="")
+                return DiscordMessageTurnResult(
+                    final_message="",
+                    send_final_message=False,
+                )
 
         prompt_text, _github_injected = await service._maybe_inject_github_context(
             prompt_text,
@@ -506,7 +557,10 @@ async def handle_message_event(
                     )
                 },
             )
-            return DiscordMessageTurnResult(final_message="")
+            return DiscordMessageTurnResult(
+                final_message="",
+                send_final_message=False,
+            )
 
     result = await ingress.submit_message(
         SurfaceThreadMessageRequest(
@@ -527,6 +581,7 @@ async def handle_message_event(
     if isinstance(turn_result, DiscordMessageTurnResult):
         response_text = turn_result.final_message
         preview_message_id = turn_result.preview_message_id
+        send_final_message = turn_result.send_final_message
         intermediate_text = (
             turn_result.intermediate_message.strip()
             if isinstance(turn_result.intermediate_message, str)
@@ -543,6 +598,7 @@ async def handle_message_event(
     else:
         response_text = str(turn_result or "")
         preview_message_id = None
+        send_final_message = True
         intermediate_text = ""
 
     if isinstance(preview_message_id, str) and preview_message_id:
@@ -551,20 +607,22 @@ async def handle_message_event(
             message_id=preview_message_id,
             record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
         )
-    await _send_discord_turn_section(
-        service,
-        channel_id=channel_id,
-        text=response_text or "(No response text returned.)",
-        record_prefix=f"turn:final:{session_key}",
-        attachment_filename="final-response.md",
-        attachment_caption="Final response too long; attached as final-response.md.",
-    )
+    if send_final_message:
+        await _send_discord_turn_section(
+            service,
+            channel_id=channel_id,
+            text=response_text or "(No response text returned.)",
+            record_prefix=f"turn:final:{session_key}",
+            attachment_filename="final-response.md",
+            attachment_caption="Final response too long; attached as final-response.md.",
+        )
     if pending_compact_seed is not None:
         await service._store.clear_pending_compact_seed(channel_id=channel_id)
-    await service._flush_outbox_files(
-        workspace_root=workspace_root,
-        channel_id=channel_id,
-    )
+    if send_final_message:
+        await service._flush_outbox_files(
+            workspace_root=workspace_root,
+            channel_id=channel_id,
+        )
 
 
 async def run_agent_turn_for_message(
@@ -589,6 +647,12 @@ async def run_agent_turn_for_message(
         heartbeat_interval_seconds,
         log_event_fn,
     )
+    binding = await service._store.get_binding(channel_id=orchestrator_channel_key)
+    approval_mode, sandbox_policy = _resolve_discord_turn_policies(
+        binding,
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    )
     return await _run_discord_orchestrated_turn_for_message(
         service,
         workspace_root=workspace_root,
@@ -605,8 +669,8 @@ async def run_agent_turn_for_message(
         public_execution_error=DISCORD_REPO_PUBLIC_EXECUTION_ERROR,
         timeout_error="Discord turn timed out",
         interrupted_error="Discord turn interrupted",
-        approval_mode="never",
-        sandbox_policy="dangerFullAccess",
+        approval_mode=approval_mode,
+        sandbox_policy=sandbox_policy,
         max_actions=max_actions,
         min_edit_interval_seconds=min_edit_interval_seconds,
         heartbeat_interval_seconds=heartbeat_interval_seconds,
@@ -1174,8 +1238,9 @@ async def _finalize_discord_thread_execution(
             if finalized_status == "interrupted":
                 detail = interrupted_error
             elif finalized_status == "error" and finalized_execution is not None:
-                detail = _sanitize_runtime_thread_result_error(
-                    finalized_execution.error,
+                detail = _resolve_runtime_thread_result_error_detail(
+                    execution_error=getattr(finalized_execution, "error", None),
+                    event_error=event_state.last_error_message,
                     public_error=public_execution_error,
                     timeout_error=timeout_error,
                     interrupted_error=interrupted_error,
@@ -1221,8 +1286,9 @@ async def _finalize_discord_thread_execution(
             "token_usage": event_state.token_usage,
         }
 
-    detail = _sanitize_runtime_thread_result_error(
-        outcome.error,
+    detail = _resolve_runtime_thread_result_error_detail(
+        outcome_error=outcome.error,
+        event_error=event_state.last_error_message,
         public_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
@@ -1646,6 +1712,12 @@ async def run_managed_thread_turn_for_message(
         f"{prompt_text}\n"
         "</user_message>\n"
     )
+    binding = await service._store.get_binding(channel_id=orchestrator_channel_key)
+    approval_mode, sandbox_policy = _resolve_discord_turn_policies(
+        binding,
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    )
     return await _run_discord_orchestrated_turn_for_message(
         service,
         workspace_root=workspace_root,
@@ -1662,8 +1734,8 @@ async def run_managed_thread_turn_for_message(
         public_execution_error=DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
         timeout_error="Discord PMA turn timed out",
         interrupted_error="Discord PMA turn interrupted",
-        approval_mode="on-request",
-        sandbox_policy="dangerFullAccess",
+        approval_mode=approval_mode,
+        sandbox_policy=sandbox_policy,
         max_actions=DISCORD_PMA_PROGRESS_MAX_ACTIONS,
         min_edit_interval_seconds=DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
         heartbeat_interval_seconds=DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
