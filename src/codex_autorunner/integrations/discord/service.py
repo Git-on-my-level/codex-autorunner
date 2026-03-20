@@ -7910,15 +7910,19 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = await self._resolve_flow_run_input(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            action="archive",
-            run_id_opt=options.get("run_id"),
-        )
-        if run_id_opt is None:
-            return
+        run_id_opt = options.get("run_id")
+        if isinstance(run_id_opt, str) and run_id_opt.strip():
+            run_id_opt = await self._resolve_flow_run_input(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="archive",
+                run_id_opt=run_id_opt,
+            )
+            if run_id_opt is None:
+                return
+        else:
+            run_id_opt = ""
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -7991,14 +7995,35 @@ class DiscordBotService:
             message_id=interaction_id,
         )
         flow_service = self._ticket_flow_orchestration_service(workspace_root)
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         try:
-            summary = flow_service.archive_flow_run(
+            summary = await asyncio.to_thread(
+                flow_service.archive_flow_run,
                 target.id,
                 force=False,
                 delete_run=True,
             )
+        except KeyError:
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=(
+                    f"Run {target.id} no longer exists. "
+                    "Use /car flow status or /car flow runs to inspect historical runs."
+                ),
+            )
+            return
         except ValueError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=str(exc),
+            )
             return
 
         outbound_text = (
@@ -8007,10 +8032,11 @@ class DiscordBotService:
             f"runs_archived={summary['archived_runs']}, "
             f"contextspace={summary['archived_contextspace']})."
         )
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            outbound_text,
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=outbound_text,
         )
 
     async def _handle_flow_reply(
