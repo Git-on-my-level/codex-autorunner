@@ -199,6 +199,33 @@ class SharedHelpers:
             [[InlineButton("Cancel", encode_cancel_callback("interrupt"))]]
         )
 
+    async def _clear_interrupt_status_message(
+        self,
+        *,
+        chat_id: int,
+        runtime: Any,
+        turn_id: Optional[str],
+        fallback_text: Optional[str] = None,
+    ) -> None:
+        """Clear an interrupt status message once the turn outcome is already visible.
+
+        Prefer deleting the transient "Stopping current turn..." message so Telegram
+        does not restate the same terminal outcome in a second message. Fall back to
+        editing when deletion fails.
+        """
+
+        if runtime.interrupt_turn_id != turn_id:
+            return
+        message_id = runtime.interrupt_message_id
+        if message_id is None:
+            runtime.interrupt_turn_id = None
+            return
+        cleared = await self._delete_message(chat_id, message_id)
+        if not cleared and fallback_text:
+            await self._edit_message_text(chat_id, message_id, fallback_text)
+        runtime.interrupt_message_id = None
+        runtime.interrupt_turn_id = None
+
     def _parse_command_args(self, args: str) -> list[str]:
         """Parse command arguments with shlex.
 

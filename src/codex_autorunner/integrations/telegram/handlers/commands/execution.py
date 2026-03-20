@@ -1192,22 +1192,19 @@ async def _run_telegram_managed_thread_turn(
                 runtime.interrupt_message_id is not None
                 and runtime.interrupt_turn_id == backend_turn_id
             ):
-                await handlers._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupted.",
+                await handlers._clear_interrupt_status_message(
+                    chat_id=message.chat_id,
+                    runtime=runtime,
+                    turn_id=backend_turn_id,
+                    fallback_text="Interrupted.",
                 )
-                runtime.interrupt_message_id = None
-                runtime.interrupt_turn_id = None
         elif runtime.interrupt_turn_id == backend_turn_id:
-            if runtime.interrupt_message_id is not None:
-                await handlers._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupt requested; turn completed.",
-                )
-            runtime.interrupt_message_id = None
-            runtime.interrupt_turn_id = None
+            await handlers._clear_interrupt_status_message(
+                chat_id=message.chat_id,
+                runtime=runtime,
+                turn_id=backend_turn_id,
+                fallback_text="Interrupt requested; turn completed.",
+            )
         if send_failure_response:
             await handlers._deliver_turn_response(
                 chat_id=message.chat_id,
@@ -1273,14 +1270,12 @@ async def _run_telegram_managed_thread_turn(
         )
     response_text = str(finalized.get("assistant_text") or "")
     if runtime.interrupt_turn_id == backend_turn_id:
-        if runtime.interrupt_message_id is not None:
-            await handlers._edit_message_text(
-                message.chat_id,
-                runtime.interrupt_message_id,
-                "Interrupt requested; turn completed.",
-            )
-        runtime.interrupt_message_id = None
-        runtime.interrupt_turn_id = None
+        await handlers._clear_interrupt_status_message(
+            chat_id=message.chat_id,
+            runtime=runtime,
+            turn_id=backend_turn_id,
+            fallback_text="Interrupt requested; turn completed.",
+        )
     return _TurnRunResult(
         record=record,
         thread_id=resolved_backend_thread_id,
@@ -3262,23 +3257,20 @@ class ExecutionCommands(SharedHelpers):
                 runtime.interrupt_message_id is not None
                 and runtime.interrupt_turn_id == turn_handle_id
             ):
-                await self._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupted.",
+                await self._clear_interrupt_status_message(
+                    chat_id=message.chat_id,
+                    runtime=runtime,
+                    turn_id=turn_handle_id,
+                    fallback_text="Interrupted.",
                 )
-                runtime.interrupt_message_id = None
-                runtime.interrupt_turn_id = None
             runtime.interrupt_requested = False
         elif runtime.interrupt_turn_id == turn_handle_id:
-            if runtime.interrupt_message_id is not None:
-                await self._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupt requested; turn completed.",
-                )
-            runtime.interrupt_message_id = None
-            runtime.interrupt_turn_id = None
+            await self._clear_interrupt_status_message(
+                chat_id=message.chat_id,
+                runtime=runtime,
+                turn_id=turn_handle_id,
+                fallback_text="Interrupt requested; turn completed.",
+            )
             runtime.interrupt_requested = False
 
         log_event(

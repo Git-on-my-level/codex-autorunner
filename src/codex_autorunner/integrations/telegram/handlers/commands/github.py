@@ -528,23 +528,20 @@ class GitHubCommands(SharedHelpers):
                 and runtime.interrupt_message_id is not None
                 and runtime.interrupt_turn_id == turn_handle_id
             ):
-                await self._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupted.",
+                await self._clear_interrupt_status_message(
+                    chat_id=message.chat_id,
+                    runtime=runtime,
+                    turn_id=turn_handle_id,
+                    fallback_text="Interrupted.",
                 )
-                runtime.interrupt_message_id = None
-                runtime.interrupt_turn_id = None
             runtime.interrupt_requested = False
         elif runtime.interrupt_turn_id == turn_handle_id:
-            if runtime.interrupt_message_id is not None:
-                await self._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupt requested; turn completed.",
-                )
-            runtime.interrupt_message_id = None
-            runtime.interrupt_turn_id = None
+            await self._clear_interrupt_status_message(
+                chat_id=message.chat_id,
+                runtime=runtime,
+                turn_id=turn_handle_id,
+                fallback_text="Interrupt requested; turn completed.",
+            )
             runtime.interrupt_requested = False
         log_event(
             self._logger,
