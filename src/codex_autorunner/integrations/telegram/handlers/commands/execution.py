@@ -13,7 +13,10 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 import httpx
 
-from .....agents.base import harness_allows_parallel_event_stream
+from .....agents.base import (
+    harness_progress_event_stream,
+    harness_supports_progress_event_stream,
+)
 from .....agents.opencode.runtime import (
     PERMISSION_ALLOW,
     PERMISSION_ASK,
@@ -469,14 +472,15 @@ async def _finalize_telegram_managed_thread_execution(
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
 
     if (
-        harness_allows_parallel_event_stream(started.harness)
+        harness_supports_progress_event_stream(started.harness)
         and stream_backend_thread_id
         and stream_backend_turn_id
     ):
 
         async def _pump_runtime_events() -> None:
             try:
-                async for raw_event in started.harness.stream_events(
+                async for raw_event in harness_progress_event_stream(
+                    started.harness,
                     started.workspace_root,
                     stream_backend_thread_id,
                     stream_backend_turn_id,

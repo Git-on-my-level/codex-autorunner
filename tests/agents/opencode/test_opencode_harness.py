@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -179,6 +180,53 @@ async def test_opencode_harness_wait_for_turn_uses_stream_output_over_commentary
     assert result.status == "ok"
     assert result.assistant_text == "final reply"
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_progress_event_stream_reuses_pending_turn_collector() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="message.completed",
+                data='{"sessionID":"session-1","info":{"id":"assistant-1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}',
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    streamed: list[str] = []
+
+    async def _collect_stream() -> None:
+        async for raw_event in harness.progress_event_stream(
+            workspace, "session-1", turn.turn_id
+        ):
+            streamed.append(raw_event)
+
+    stream_task = asyncio.create_task(_collect_stream())
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+    await stream_task
+
+    assert result.status == "ok"
+    assert result.assistant_text == "hello world"
+    assert len(streamed) == 1
+    assert any('"message.completed"' in event for event in streamed)
 
 
 @pytest.mark.asyncio

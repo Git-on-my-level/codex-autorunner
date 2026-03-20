@@ -10,7 +10,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, cast
 
-from ...agents.base import harness_allows_parallel_event_stream
+from ...agents.base import (
+    harness_progress_event_stream,
+    harness_supports_progress_event_stream,
+)
 from ...agents.registry import get_registered_agents
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
@@ -1038,14 +1041,15 @@ async def _finalize_discord_thread_execution(
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
 
     if (
-        harness_allows_parallel_event_stream(started.harness)
+        harness_supports_progress_event_stream(started.harness)
         and stream_backend_thread_id
         and stream_backend_turn_id
     ):
 
         async def _pump_runtime_events() -> None:
             try:
-                async for raw_event in started.harness.stream_events(
+                async for raw_event in harness_progress_event_stream(
+                    started.harness,
                     started.workspace_root,
                     stream_backend_thread_id,
                     stream_backend_turn_id,

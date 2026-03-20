@@ -430,6 +430,8 @@ class _StreamingFakeHarness:
         errors: Optional[list[str]] = None,
         wait_for_stream: bool = False,
         stream_exception: Optional[Exception] = None,
+        allow_parallel_event_stream: bool = True,
+        allow_progress_event_stream: bool = True,
     ) -> None:
         self._events = events
         self._status = status
@@ -437,6 +439,8 @@ class _StreamingFakeHarness:
         self._errors = list(errors or [])
         self._wait_for_stream = wait_for_stream
         self._stream_exception = stream_exception
+        self._allow_parallel_event_stream = allow_parallel_event_stream
+        self._allow_progress_event_stream = allow_progress_event_stream
         self._stream_done = asyncio.Event()
 
     async def ensure_ready(self, workspace_root: Path) -> None:
@@ -444,6 +448,22 @@ class _StreamingFakeHarness:
 
     def supports(self, capability: str) -> bool:
         return capability in self.capabilities
+
+    def allows_parallel_event_stream(self) -> bool:
+        return self._allow_parallel_event_stream
+
+    def progress_event_stream(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ):
+        if not self._allow_progress_event_stream:
+
+            async def _unsupported():
+                if False:
+                    yield None
+                raise RuntimeError("progress event streaming disabled")
+
+            return _unsupported()
+        return self.stream_events(workspace_root, conversation_id, turn_id)
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -540,6 +560,8 @@ def _patch_streaming_harness(
     errors: Optional[list[str]] = None,
     wait_for_stream: bool = False,
     stream_exception: Optional[Exception] = None,
+    allow_parallel_event_stream: bool = True,
+    allow_progress_event_stream: bool = True,
 ) -> _StreamingFakeHarness:
     harness = _StreamingFakeHarness(
         events,
@@ -548,6 +570,8 @@ def _patch_streaming_harness(
         errors=errors,
         wait_for_stream=wait_for_stream,
         stream_exception=stream_exception,
+        allow_parallel_event_stream=allow_parallel_event_stream,
+        allow_progress_event_stream=allow_progress_event_stream,
     )
     monkeypatch.setattr(
         discord_message_turns_module,
@@ -2390,6 +2414,62 @@ async def test_message_create_streaming_turn_posts_progress_placeholder_and_edit
         ],
         assistant_text="done from streaming turn",
         wait_for_stream=True,
+    )
+
+    try:
+        await service.run_forever()
+        send_indices = [
+            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "send"
+        ]
+        edit_indices = [
+            idx for idx, op in enumerate(rest.message_ops) if op.get("op") == "edit"
+        ]
+        assert send_indices
+        assert edit_indices
+        assert send_indices[0] < edit_indices[0]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_streaming_turn_uses_safe_progress_stream_when_parallel_streaming_is_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    _patch_streaming_harness(
+        monkeypatch,
+        [
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content="thinking",
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+        ],
+        assistant_text="done from streaming turn",
+        wait_for_stream=True,
+        allow_parallel_event_stream=False,
+        allow_progress_event_stream=True,
     )
 
     try:

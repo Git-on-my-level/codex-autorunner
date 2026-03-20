@@ -63,6 +63,23 @@ class AgentHarness(ABC):
     def allows_parallel_event_stream(self) -> bool:
         return self.supports("event_streaming")
 
+    def progress_event_stream(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ) -> AsyncIterator[str]:
+        if not self.allows_parallel_event_stream():
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _unsupported() -> AsyncIterator[str]:
+                raise UnsupportedAgentCapabilityError(
+                    "event_streaming",
+                    agent_id=str(self.agent_id),
+                )
+                if False:
+                    yield ""
+
+            return _unsupported()
+        return self.stream_events(workspace_root, conversation_id, turn_id)
+
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
         _ = workspace_root
         raise UnsupportedAgentCapabilityError(
@@ -188,8 +205,41 @@ def harness_allows_parallel_event_stream(harness: Any) -> bool:
     return True
 
 
+def harness_supports_progress_event_stream(harness: Any) -> bool:
+    progress_stream = getattr(harness, "progress_event_stream", None)
+    if callable(progress_stream):
+        return True
+    return harness_allows_parallel_event_stream(harness)
+
+
+def harness_progress_event_stream(
+    harness: Any,
+    workspace_root: Path,
+    conversation_id: str,
+    turn_id: str,
+) -> AsyncIterator[str]:
+    progress_stream = getattr(harness, "progress_event_stream", None)
+    if callable(progress_stream):
+        return progress_stream(workspace_root, conversation_id, turn_id)
+    stream_events = getattr(harness, "stream_events", None)
+    if callable(stream_events) and harness_allows_parallel_event_stream(harness):
+        return stream_events(workspace_root, conversation_id, turn_id)
+
+    async def _unsupported() -> AsyncIterator[str]:
+        raise UnsupportedAgentCapabilityError(
+            "event_streaming",
+            agent_id=str(getattr(harness, "agent_id", "") or ""),
+        )
+        if False:
+            yield ""
+
+    return _unsupported()
+
+
 __all__ = [
     "AgentHarness",
     "UnsupportedAgentCapabilityError",
     "harness_allows_parallel_event_stream",
+    "harness_progress_event_stream",
+    "harness_supports_progress_event_stream",
 ]

@@ -50,6 +50,7 @@ class _FakeHarness:
         scripts: list[_HarnessScript],
         *,
         allow_parallel_event_stream: bool = True,
+        allow_progress_event_stream: bool = True,
     ) -> None:
         self._scripts = list(scripts)
         self._turns: dict[tuple[str, str], _HarnessScript] = {}
@@ -58,6 +59,7 @@ class _FakeHarness:
         self._session_counter = 0
         self._turn_counter = 0
         self._allow_parallel_event_stream = allow_parallel_event_stream
+        self._allow_progress_event_stream = allow_progress_event_stream
         self.stream_event_calls = 0
 
     async def ensure_ready(self, workspace_root: Path) -> None:
@@ -68,6 +70,19 @@ class _FakeHarness:
 
     def allows_parallel_event_stream(self) -> bool:
         return self._allow_parallel_event_stream
+
+    def progress_event_stream(
+        self, workspace_root: Path, conversation_id: str, turn_id: str
+    ):
+        if not self._allow_progress_event_stream:
+
+            async def _unsupported():
+                if False:
+                    yield None
+                raise RuntimeError("progress event streaming disabled")
+
+            return _unsupported()
+        return self.stream_events(workspace_root, conversation_id, turn_id)
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -305,6 +320,7 @@ async def test_run_turn_replays_final_events_when_parallel_streaming_is_disabled
             )
         ],
         allow_parallel_event_stream=False,
+        allow_progress_event_stream=False,
     )
     pool = _make_pool(tmp_path, harness, approval_mode="yolo")
 
@@ -324,6 +340,54 @@ async def test_run_turn_replays_final_events_when_parallel_streaming_is_disabled
 
     assert result.text == "hello"
     assert harness.stream_event_calls == 0
+    assert [event_type for event_type, _ in emitted] == [
+        FlowEventType.APP_SERVER_EVENT,
+        FlowEventType.AGENT_STREAM_DELTA,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_turn_streams_progress_when_parallel_streaming_is_disabled_but_safe_progress_stream_exists(
+    tmp_path: Path,
+):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="hello",
+                raw_events=[
+                    _message(
+                        "outputDelta",
+                        {
+                            "turnId": "turn-1",
+                            "delta": "hello",
+                            "deltaType": "assistant_stream",
+                        },
+                    )
+                ],
+                stream_started_event=asyncio.Event(),
+            )
+        ],
+        allow_parallel_event_stream=False,
+        allow_progress_event_stream=True,
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
+
+    emitted = []
+
+    def _emit(event_type: FlowEventType, payload: dict):
+        emitted.append((event_type, payload))
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="main prompt",
+            workspace_root=tmp_path,
+            emit_event=_emit,
+        )
+    )
+
+    assert result.text == "hello"
+    assert harness.stream_event_calls == 1
     assert [event_type for event_type, _ in emitted] == [
         FlowEventType.APP_SERVER_EVENT,
         FlowEventType.AGENT_STREAM_DELTA,

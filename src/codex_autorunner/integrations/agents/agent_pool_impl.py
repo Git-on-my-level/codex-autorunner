@@ -9,7 +9,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Optional, cast
 
-from ...agents.base import harness_allows_parallel_event_stream
+from ...agents.base import (
+    harness_progress_event_stream,
+    harness_supports_progress_event_stream,
+)
 from ...agents.registry import get_registered_agents
 from ...core.flows.models import FlowEventType
 from ...core.orchestration import (
@@ -566,10 +569,11 @@ class DefaultAgentPool:
         backend_turn_id = _normalize_optional_text(started.execution.backend_id)
         if backend_thread_id is None or backend_turn_id is None:
             return
-        if not harness_allows_parallel_event_stream(started.harness):
+        if not harness_supports_progress_event_stream(started.harness):
             return
         try:
-            async for raw_event in started.harness.stream_events(
+            async for raw_event in harness_progress_event_stream(
+                started.harness,
                 started.workspace_root,
                 backend_thread_id,
                 backend_turn_id,
@@ -634,7 +638,7 @@ class DefaultAgentPool:
         backend_turn_id = _normalize_optional_text(started.execution.backend_id)
         result_raw_events: tuple[Any, ...] = ()
 
-        if backend_turn_id is not None and harness_allows_parallel_event_stream(
+        if backend_turn_id is not None and harness_supports_progress_event_stream(
             started.harness
         ):
             stream_task = asyncio.create_task(
