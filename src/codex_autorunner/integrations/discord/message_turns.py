@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, cast
 
+from ...agents.base import harness_allows_parallel_event_stream
 from ...agents.registry import get_registered_agents
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
@@ -1037,7 +1038,7 @@ async def _finalize_discord_thread_execution(
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
 
     if (
-        started.harness.supports("event_streaming")
+        harness_allows_parallel_event_stream(started.harness)
         and stream_backend_thread_id
         and stream_backend_turn_id
     ):

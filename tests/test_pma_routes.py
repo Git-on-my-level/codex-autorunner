@@ -1501,6 +1501,23 @@ def test_pma_turn_events_stream_codex_respects_resume_cursor(hub_env) -> None:
     assert fake_events.calls == [("thread-1", "turn-1", 1)]
 
 
+def test_pma_turn_events_stream_opencode_returns_conflict_when_live_streaming_disabled(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    app.state.opencode_supervisor = object()
+
+    client = TestClient(app)
+    resp = client.get(
+        "/hub/pma/turns/turn-1/events",
+        params={"thread_id": "thread-1", "agent": "opencode"},
+    )
+
+    assert resp.status_code == 409
+    assert resp.json() == {"detail": "Live turn events unavailable for this agent"}
+
+
 def test_pma_managed_thread_status_and_tail_use_orchestration_service(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:

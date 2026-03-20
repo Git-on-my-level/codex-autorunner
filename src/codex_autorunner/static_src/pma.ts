@@ -424,6 +424,7 @@ async function startTurnEventsStream(meta: {
 }): Promise<void> {
   stopTurnEventsStream();
   if (!meta.threadId || !meta.turnId) return;
+  if ((meta.agent || "codex").trim().toLowerCase() === "opencode") return;
 
   const ctrl = new AbortController();
   currentEventsController = ctrl;
@@ -475,7 +476,7 @@ async function pollForTurnMeta(
       const threadId = typeof cur.thread_id === "string" ? cur.thread_id : "";
       const turnId = typeof cur.turn_id === "string" ? cur.turn_id : "";
       const agent = typeof cur.agent === "string" ? cur.agent : "codex";
-      if (threadId && turnId) {
+      if (threadId && turnId && agent.trim().toLowerCase() !== "opencode") {
         void startTurnEventsStream({ agent, threadId, turnId });
         return;
       }
@@ -1124,7 +1125,12 @@ async function resumePendingTurn(): Promise<void> {
       const threadId = typeof cur.thread_id === "string" ? cur.thread_id : "";
       const turnId = typeof cur.turn_id === "string" ? cur.turn_id : "";
       const agent = typeof cur.agent === "string" ? cur.agent : "codex";
-      if (threadId && turnId && !currentEventsController) {
+      if (
+        threadId &&
+        turnId &&
+        !currentEventsController &&
+        agent.trim().toLowerCase() !== "opencode"
+      ) {
         void startTurnEventsStream({ agent, threadId, turnId });
       }
 

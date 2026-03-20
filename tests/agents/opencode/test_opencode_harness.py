@@ -10,8 +10,11 @@ from codex_autorunner.core.sse import SSEEvent
 
 
 class _StubClient:
-    def __init__(self, events: list[SSEEvent]) -> None:
+    def __init__(
+        self, events: list[SSEEvent], *, stream_error: Exception | None = None
+    ) -> None:
         self._events = events
+        self._stream_error = stream_error
         self.permission_replies: list[tuple[str, str]] = []
         self.question_replies: list[tuple[str, list[list[str]]]] = []
         self.question_rejections: list[str] = []
@@ -25,6 +28,8 @@ class _StubClient:
             ready_event.set()
         for event in self._events:
             yield event
+        if self._stream_error is not None:
+            raise self._stream_error
 
     async def prompt_async(self, session_id: str, **kwargs: object) -> dict[str, str]:
         self.prompt_calls.append({"session_id": session_id, **kwargs})
@@ -76,6 +81,8 @@ async def test_opencode_harness_reports_capabilities_from_contract() -> None:
     assert harness.capabilities == get_registered_agents()["opencode"].capabilities
     assert harness.supports("interrupt") is True
     assert harness.supports("review") is True
+    assert harness.supports("event_streaming") is True
+    assert harness.allows_parallel_event_stream() is False
     assert harness.supports("approvals") is False
     assert report.capabilities == harness.capabilities
 
@@ -172,6 +179,53 @@ async def test_opencode_harness_wait_for_turn_uses_stream_output_over_commentary
     assert result.status == "ok"
     assert result.assistant_text == "final reply"
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_recovers_late_disconnect_after_completion() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.completed",
+                        data='{"sessionID":"session-1","text":"final reply","phase":"final_answer"}',
+                    ),
+                ],
+                stream_error=RuntimeError("stream dropped"),
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "final reply"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_still_raises_without_terminal_completion() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.delta",
+                        data='{"sessionID":"session-1","delta":"partial"}',
+                    ),
+                ],
+                stream_error=RuntimeError("stream dropped"),
+            )
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="stream dropped"):
+        await harness.wait_for_turn(Path("."), "session-1", "turn-1")
 
 
 @pytest.mark.asyncio

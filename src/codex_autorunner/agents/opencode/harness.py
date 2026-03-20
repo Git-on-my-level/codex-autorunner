@@ -440,6 +440,20 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
     return assistant_text, errors
 
 
+def _saw_terminal_completion(payloads: list[dict[str, Any]]) -> bool:
+    for payload in payloads:
+        method, params = _unwrap_harness_payload(payload)
+        if method == "turn/completed":
+            return True
+        if method == "message.completed":
+            return _extract_message_phase(params) != "commentary"
+        if method == "item/completed":
+            item = params.get("item")
+            if isinstance(item, dict) and item.get("type") == "agentMessage":
+                return _extract_message_phase(params) != "commentary"
+    return False
+
+
 def _coerce_providers(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         providers = payload.get("providers")
@@ -485,6 +499,10 @@ class OpenCodeHarness(AgentHarness):
             RuntimeCapability("event_streaming"),
         ]
     )
+
+    def allows_parallel_event_stream(self) -> bool:
+        # wait_for_turn() consumes the OpenCode event stream to collect output.
+        return False
 
     def __init__(self, supervisor: OpenCodeSupervisor) -> None:
         self._supervisor = supervisor
@@ -730,28 +748,38 @@ class OpenCodeHarness(AgentHarness):
         async def _collect() -> TerminalTurnResult:
             if pending is None:
                 payloads: list[dict[str, Any]] = []
+                stream_error: Optional[Exception] = None
 
                 async def _iter_lines(raw_event_text: str) -> AsyncIterator[str]:
                     for line in raw_event_text.splitlines():
                         yield line
                     yield ""
 
-                async for raw_event in self.stream_events(
-                    workspace_root,
-                    conversation_id,
-                    turn_id or "",
-                ):
-                    async for sse_event in parse_sse_lines(_iter_lines(str(raw_event))):
-                        try:
-                            payload = (
-                                json.loads(sse_event.data) if sse_event.data else {}
-                            )
-                        except json.JSONDecodeError:
-                            payload = {}
-                        if isinstance(payload, dict):
-                            payloads.append(payload)
+                try:
+                    async for raw_event in self.stream_events(
+                        workspace_root,
+                        conversation_id,
+                        turn_id or "",
+                    ):
+                        async for sse_event in parse_sse_lines(
+                            _iter_lines(str(raw_event))
+                        ):
+                            try:
+                                payload = (
+                                    json.loads(sse_event.data) if sse_event.data else {}
+                                )
+                            except json.JSONDecodeError:
+                                payload = {}
+                            if isinstance(payload, dict):
+                                payloads.append(payload)
+                except Exception as exc:
+                    stream_error = exc
 
                 assistant_text, errors = _collect_terminal_text(payloads)
+                if stream_error is not None and not (
+                    assistant_text and _saw_terminal_completion(payloads)
+                ):
+                    raise stream_error
                 return TerminalTurnResult(
                     status="error" if errors else "ok",
                     assistant_text=assistant_text,
