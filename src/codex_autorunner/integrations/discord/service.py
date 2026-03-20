@@ -87,7 +87,7 @@ from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.agents.opencode_supervisor_factory import (
     build_opencode_supervisor_from_repo_config,
 )
-from ...integrations.app_server.client import CodexAppServerClient
+from ...integrations.app_server.client import ApprovalDecision, CodexAppServerClient
 from ...integrations.app_server.env import app_server_env, build_app_server_env
 from ...integrations.app_server.event_buffer import AppServerEventBuffer
 from ...integrations.app_server.supervisor import WorkspaceAppServerSupervisor
@@ -199,6 +199,7 @@ from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
     DISCORD_BUTTON_STYLE_DANGER,
+    DISCORD_BUTTON_STYLE_SUCCESS,
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_action_row,
     build_agent_picker,
@@ -435,6 +436,36 @@ class _OpenCodeSupervisorCacheEntry:
     last_requested_at: float
 
 
+@dataclass(frozen=True)
+class _DiscordTurnApprovalContext:
+    channel_id: str
+
+
+@dataclass
+class _DiscordPendingApproval:
+    token: str
+    request_id: str
+    turn_id: str
+    channel_id: str
+    message_id: Optional[str]
+    prompt: str
+    future: asyncio.Future[ApprovalDecision]
+
+
+class _DiscordBackendNotificationRouter:
+    def __init__(
+        self,
+        *,
+        notification_handler: Callable[[dict[str, object]], Awaitable[None]],
+        approval_handler: Callable[[dict[str, Any]], Awaitable[ApprovalDecision]],
+    ) -> None:
+        self._notification_handler = notification_handler
+        self.approval_handler = approval_handler
+
+    async def __call__(self, payload: dict[str, object]) -> None:
+        await self._notification_handler(payload)
+
+
 class _DiscordAppServerSupervisorAdapter:
     def __init__(self, service: "DiscordBotService") -> None:
         self._service = service
@@ -614,6 +645,10 @@ class DiscordBotService:
         self._typing_sessions: dict[str, int] = {}
         self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
         self._typing_lock: Optional[asyncio.Lock] = None
+        self._discord_turn_approval_contexts: dict[str, _DiscordTurnApprovalContext] = (
+            {}
+        )
+        self._discord_pending_approvals: dict[str, _DiscordPendingApproval] = {}
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="discord",
             logger=self._logger,
@@ -2059,10 +2094,194 @@ class DiscordBotService:
                 orchestrator = BackendOrchestrator(
                     repo_root=workspace_root,
                     config=repo_config,
+                    notification_handler=_DiscordBackendNotificationRouter(
+                        notification_handler=self.app_server_events.handle_notification,
+                        approval_handler=self._handle_backend_approval_request,
+                    ),
                     logger=self._logger,
                 )
             self._backend_orchestrators[key] = orchestrator
             return orchestrator
+
+    def _register_discord_turn_approval_context(
+        self, *, started_execution: Any, channel_id: str
+    ) -> None:
+        for turn_id in (
+            str(getattr(started_execution.execution, "backend_id", "") or "").strip(),
+            str(getattr(started_execution.execution, "execution_id", "") or "").strip(),
+        ):
+            if turn_id:
+                self._discord_turn_approval_contexts[turn_id] = (
+                    _DiscordTurnApprovalContext(channel_id=channel_id)
+                )
+
+    def _clear_discord_turn_approval_context(self, *, started_execution: Any) -> None:
+        for turn_id in (
+            str(getattr(started_execution.execution, "backend_id", "") or "").strip(),
+            str(getattr(started_execution.execution, "execution_id", "") or "").strip(),
+        ):
+            if turn_id:
+                self._discord_turn_approval_contexts.pop(turn_id, None)
+
+    @staticmethod
+    def _format_discord_approval_prompt(request: dict[str, Any]) -> str:
+        method = request.get("method")
+        params = (
+            request.get("params") if isinstance(request.get("params"), dict) else {}
+        )
+        lines = ["Approval required"]
+        reason = params.get("reason")
+        if isinstance(reason, str) and reason:
+            lines.append(f"Reason: {reason}")
+        if method == "item/commandExecution/requestApproval":
+            command = params.get("command")
+            if isinstance(command, list):
+                command = " ".join(str(part) for part in command).strip()
+            if isinstance(command, str) and command:
+                lines.append(f"Command: {command}")
+        elif method == "item/fileChange/requestApproval":
+            files = params.get("paths")
+            if isinstance(files, list):
+                normalized = [str(path).strip() for path in files if str(path).strip()]
+                if len(normalized) == 1:
+                    lines.append(f"File: {normalized[0]}")
+                elif normalized:
+                    lines.append("Files:")
+                    lines.extend(f"- {path}" for path in normalized[:10])
+                    if len(normalized) > 10:
+                        lines.append("- ...")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_discord_approval_components(token: str) -> list[dict[str, Any]]:
+        return [
+            build_action_row(
+                [
+                    build_button(
+                        "Accept",
+                        f"approval:{token}:accept",
+                        style=DISCORD_BUTTON_STYLE_SUCCESS,
+                    ),
+                    build_button(
+                        "Decline",
+                        f"approval:{token}:decline",
+                    ),
+                ]
+            ),
+            build_action_row(
+                [
+                    build_button(
+                        "Cancel",
+                        f"approval:{token}:cancel",
+                    )
+                ]
+            ),
+        ]
+
+    async def _handle_backend_approval_request(
+        self, request: dict[str, Any]
+    ) -> ApprovalDecision:
+        request_id = str(request.get("id") or "").strip()
+        params = (
+            request.get("params") if isinstance(request.get("params"), dict) else {}
+        )
+        turn_id = str(params.get("turnId") or params.get("turn_id") or "").strip()
+        if not request_id or not turn_id:
+            return "cancel"
+        context = self._discord_turn_approval_contexts.get(turn_id)
+        if context is None:
+            return "cancel"
+
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[ApprovalDecision] = loop.create_future()
+        token = uuid.uuid4().hex[:12]
+        prompt = self._format_discord_approval_prompt(request)
+        pending = _DiscordPendingApproval(
+            token=token,
+            request_id=request_id,
+            turn_id=turn_id,
+            channel_id=context.channel_id,
+            message_id=None,
+            prompt=prompt,
+            future=future,
+        )
+        try:
+            response = await self._send_channel_message(
+                context.channel_id,
+                {
+                    "content": format_discord_message(prompt),
+                    "components": self._build_discord_approval_components(token),
+                },
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.approval.send_failed",
+                channel_id=context.channel_id,
+                request_id=request_id,
+                turn_id=turn_id,
+                exc=exc,
+            )
+            await self._send_channel_message_safe(
+                context.channel_id,
+                {
+                    "content": format_discord_message(
+                        "Approval prompt failed to send; canceling approval. Please retry."
+                    )
+                },
+            )
+            return "cancel"
+
+        message_id = response.get("id")
+        if isinstance(message_id, str) and message_id:
+            pending.message_id = message_id
+        self._discord_pending_approvals[token] = pending
+        try:
+            return await future
+        finally:
+            self._discord_pending_approvals.pop(token, None)
+
+    async def _handle_approval_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        custom_id: str,
+    ) -> None:
+        _prefix, token, decision = (custom_id.split(":", 2) + ["", "", ""])[:3]
+        pending = self._discord_pending_approvals.pop(token, None)
+        if pending is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Approval already handled",
+            )
+            return
+        if not pending.future.done():
+            pending.future.set_result(decision)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            f"Decision: {decision}",
+        )
+        if not pending.message_id:
+            return
+        try:
+            await self._delete_channel_message(
+                pending.channel_id,
+                pending.message_id,
+            )
+        except Exception:
+            with contextlib.suppress(Exception):
+                await self._rest.edit_channel_message(
+                    channel_id=pending.channel_id,
+                    message_id=pending.message_id,
+                    payload={
+                        "content": format_discord_message(f"Approval {decision}."),
+                        "components": [],
+                    },
+                )
 
     def _build_workspace_env(
         self, workspace_root: Path, workspace_id: str, state_dir: Path
@@ -9575,6 +9794,14 @@ class DiscordBotService:
                     )
                 return
 
+            if custom_id.startswith("approval:"):
+                await self._handle_approval_component(
+                    interaction_id,
+                    interaction_token,
+                    custom_id=custom_id,
+                )
+                return
+
             if custom_id == "cancel_turn":
                 await self._handle_cancel_turn_button(
                     interaction_id,
@@ -9914,6 +10141,14 @@ class DiscordBotService:
                         channel_id=channel_id,
                         guild_id=guild_id,
                     )
+                return
+
+            if custom_id.startswith("approval:"):
+                await self._handle_approval_component(
+                    interaction_id,
+                    interaction_token,
+                    custom_id=custom_id,
+                )
                 return
 
             if custom_id == "cancel_turn":
