@@ -41,10 +41,10 @@ class _PendingTurnConfig:
     sandbox_policy: Optional[Any]
     question_policy: str
     command_task: Optional[asyncio.Task[Any]] = None
-    progress_event_subscribers: list[asyncio.Queue[Optional[str]]] = field(
+    progress_event_subscribers: list[asyncio.Queue[Optional[dict[str, Any]]]] = field(
         default_factory=list
     )
-    progress_event_history: list[str] = field(default_factory=list)
+    progress_event_history: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _path_is_within(root: Path, candidate: Path) -> bool:
@@ -510,19 +510,23 @@ class OpenCodeHarness(AgentHarness):
 
     def progress_event_stream(
         self, workspace_root: Path, conversation_id: str, turn_id: str
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[Any]:
         pending = self._pending_turns.get((conversation_id, turn_id or ""))
         if pending is None:
-            return super().progress_event_stream(
-                workspace_root, conversation_id, turn_id
-            )
+            _ = workspace_root, conversation_id, turn_id
 
-        queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
+            async def _empty() -> AsyncIterator[Any]:
+                if False:
+                    yield None
+
+            return _empty()
+
+        queue: asyncio.Queue[Optional[dict[str, Any]]] = asyncio.Queue()
         for item in pending.progress_event_history:
             queue.put_nowait(item)
         pending.progress_event_subscribers.append(queue)
 
-        async def _stream() -> AsyncIterator[str]:
+        async def _stream() -> AsyncIterator[Any]:
             try:
                 while True:
                     item = await queue.get()
@@ -822,14 +826,14 @@ class OpenCodeHarness(AgentHarness):
 
             raw_events: list[dict[str, Any]] = []
 
-            def _publish_progress_event(raw_event_text: str) -> None:
-                if not raw_event_text:
+            def _publish_progress_event(raw_event: dict[str, Any]) -> None:
+                if not raw_event:
                     return
-                pending.progress_event_history.append(raw_event_text)
+                pending.progress_event_history.append(raw_event)
                 if len(pending.progress_event_history) > 64:
                     del pending.progress_event_history[:-64]
                 for queue in list(pending.progress_event_subscribers):
-                    queue.put_nowait(raw_event_text)
+                    queue.put_nowait(raw_event)
 
             def _close_progress_streams() -> None:
                 for queue in list(pending.progress_event_subscribers):
@@ -872,9 +876,7 @@ class OpenCodeHarness(AgentHarness):
                                 and not is_idle
                                 and session_id
                             ):
-                                _publish_progress_event(
-                                    format_sse("app-server", wrapped)
-                                )
+                                _publish_progress_event(wrapped)
                         yield event
                 finally:
                     _close_progress_streams()

@@ -65,17 +65,17 @@ class AgentHarness(ABC):
 
     def progress_event_stream(
         self, workspace_root: Path, conversation_id: str, turn_id: str
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[Any]:
         if not self.allows_parallel_event_stream():
             _ = workspace_root, conversation_id, turn_id
 
-            async def _unsupported() -> AsyncIterator[str]:
+            async def _unsupported() -> AsyncIterator[Any]:
                 raise UnsupportedAgentCapabilityError(
                     "event_streaming",
                     agent_id=str(self.agent_id),
                 )
                 if False:
-                    yield ""
+                    yield None
 
             return _unsupported()
         return self.stream_events(workspace_root, conversation_id, turn_id)
@@ -222,7 +222,7 @@ def harness_progress_event_stream(
     workspace_root: Path,
     conversation_id: str,
     turn_id: str,
-) -> AsyncIterator[str]:
+) -> AsyncIterator[Any]:
     progress_stream = getattr(harness, "progress_event_stream", None)
     if callable(progress_stream):
         progress_func = getattr(progress_stream, "__func__", None)
@@ -235,13 +235,13 @@ def harness_progress_event_stream(
     if callable(stream_events) and harness_allows_parallel_event_stream(harness):
         return stream_events(workspace_root, conversation_id, turn_id)
 
-    async def _unsupported() -> AsyncIterator[str]:
+    async def _unsupported() -> AsyncIterator[Any]:
         raise UnsupportedAgentCapabilityError(
             "event_streaming",
             agent_id=str(getattr(harness, "agent_id", "") or ""),
         )
         if False:
-            yield ""
+            yield None
 
     return _unsupported()
 
