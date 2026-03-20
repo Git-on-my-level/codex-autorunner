@@ -19,7 +19,7 @@ def workspace_id_for_path(path: Path) -> str:
 
 
 __all__ = [
+    "WORKSPACE_ID_HEX_LEN",
     "canonical_workspace_root",
     "workspace_id_for_path",
-    "WORKSPACE_ID_HEX_LEN",
 ]

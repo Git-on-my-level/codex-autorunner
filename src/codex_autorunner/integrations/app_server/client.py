@@ -2378,6 +2378,6 @@ __all__ = [
     "NotificationHandler",
     "TurnHandle",
     "TurnResult",
-    "_normalize_sandbox_policy",
     "_close_all_clients",
+    "_normalize_sandbox_policy",
 ]

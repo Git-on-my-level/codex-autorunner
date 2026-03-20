@@ -692,7 +692,7 @@ class PmaQueue:
 
 
 __all__ = [
-    "QueueItemState",
-    "PmaQueueItem",
     "PmaQueue",
+    "PmaQueueItem",
+    "QueueItemState",
 ]

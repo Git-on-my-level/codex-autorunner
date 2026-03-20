@@ -150,10 +150,10 @@ def maybe_auto_prune_active_context(
 
 
 __all__ = [
-    "ActiveContextAutoPruneMeta",
-    "ActiveContextState",
     "PMA_ACTIVE_CONTEXT_MAX_LINES",
     "PMA_ACTIVE_CONTEXT_STATE_FILENAME",
+    "ActiveContextAutoPruneMeta",
+    "ActiveContextState",
     "get_active_context_auto_prune_meta",
     "maybe_auto_prune_active_context",
 ]

@@ -6,17 +6,17 @@ from pydantic import BaseModel, Field
 
 __all__ = [
     "BaseTelegramSchema",
-    "TelegramPhotoSizeSchema",
-    "TelegramDocumentSchema",
     "TelegramAudioSchema",
-    "TelegramVoiceSchema",
+    "TelegramCallbackQuerySchema",
+    "TelegramDocumentSchema",
     "TelegramMessageEntitySchema",
     "TelegramMessageSchema",
-    "TelegramCallbackQuerySchema",
+    "TelegramPhotoSizeSchema",
     "TelegramUpdateSchema",
-    "parse_update_payload",
-    "parse_message_payload",
+    "TelegramVoiceSchema",
     "parse_callback_query_payload",
+    "parse_message_payload",
+    "parse_update_payload",
 ]
 
 

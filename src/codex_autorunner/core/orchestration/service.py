@@ -1219,8 +1219,8 @@ __all__ = [
     "PmaThreadExecutionStore",
     "SurfaceIngressResult",
     "SurfaceOrchestrationIngress",
-    "build_surface_orchestration_ingress",
     "build_harness_backed_orchestration_service",
+    "build_surface_orchestration_ingress",
     "build_ticket_flow_orchestration_service",
     "get_surface_orchestration_ingress",
 ]

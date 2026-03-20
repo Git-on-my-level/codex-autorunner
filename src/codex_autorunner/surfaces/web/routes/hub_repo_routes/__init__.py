@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 __all__ = [
+    "HubDestinationService",
     "HubMountManager",
     "HubRepoEnricher",
     "HubRunControlService",
     "HubWorktreeService",
-    "HubDestinationService",
     "build_hub_agent_workspace_router",
-    "build_hub_repo_listing_router",
-    "build_hub_repo_crud_router",
     "build_hub_channel_router",
+    "build_hub_repo_crud_router",
+    "build_hub_repo_listing_router",
 ]
 
 from .agent_workspaces import build_hub_agent_workspace_router

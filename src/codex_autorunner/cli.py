@@ -5,7 +5,7 @@ Re-export the Typer app from the CLI surface.
 
 from .surfaces.cli.cli import _resolve_repo_api_path, app, main  # noqa: F401
 
-__all__ = ["app", "main", "_resolve_repo_api_path"]
+__all__ = ["_resolve_repo_api_path", "app", "main"]
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -1532,9 +1532,9 @@ class PmaAutomationStore:
 __all__ = [
     "PMA_AUTOMATION_STORE_FILENAME",
     "PMA_AUTOMATION_VERSION",
-    "PmaLifecycleSubscription",
+    "PmaAutomationStore",
     "PmaAutomationTimer",
     "PmaAutomationWakeup",
-    "PmaAutomationStore",
+    "PmaLifecycleSubscription",
     "default_pma_automation_state",
 ]

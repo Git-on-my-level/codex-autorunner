@@ -10,6 +10,6 @@ from ..chat.progress_primitives import (
 __all__ = [
     "ProgressAction",
     "TurnProgressTracker",
-    "render_progress_text",
     "format_elapsed",
+    "render_progress_text",
 ]

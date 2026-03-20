@@ -24,10 +24,10 @@ from .paths import (
 
 __all__ = [
     "CONTEXTSPACE_DOC_KINDS",
+    "PINNED_DOC_FILENAMES",
     "ContextspaceDocKind",
     "ContextspaceFile",
     "ContextspaceNode",
-    "PINNED_DOC_FILENAMES",
     "contextspace_dir",
     "contextspace_doc_path",
     "list_contextspace_files",

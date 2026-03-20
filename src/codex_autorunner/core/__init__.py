@@ -22,10 +22,8 @@ from .type_debt_ledger import (
 )
 
 __all__ = [
-    "ArchiveResult",
-    "archive_worktree_snapshot",
     "CAR_AWARENESS_BLOCK",
-    "format_file_role_addendum",
+    "ArchiveResult",
     "LifecycleEvent",
     "LifecycleEventEmitter",
     "LifecycleEventStore",
@@ -35,9 +33,11 @@ __all__ = [
     "PmaAutomationWakeup",
     "PmaLifecycleSubscription",
     "SSEEvent",
-    "format_sse",
-    "parse_sse_lines",
+    "archive_worktree_snapshot",
     "build_type_debt_ledger",
-    "render_markdown_report",
+    "format_file_role_addendum",
+    "format_sse",
     "ledger_to_dict",
+    "parse_sse_lines",
+    "render_markdown_report",
 ]

@@ -13,9 +13,9 @@ from .registry import (
 __all__ = [
     "AgentCapability",
     "AgentDescriptor",
-    "get_registered_agents",
-    "get_available_agents",
     "get_agent_descriptor",
-    "validate_agent_id",
+    "get_available_agents",
+    "get_registered_agents",
     "has_capability",
+    "validate_agent_id",
 ]

@@ -12,12 +12,12 @@ from .registry import (
 )
 
 __all__ = [
-    "ProcessRecord",
-    "write_process_record",
-    "read_process_record",
-    "list_process_records",
-    "delete_process_record",
-    "ReapSummary",
     "DEFAULT_MAX_RECORD_AGE_SECONDS",
+    "ProcessRecord",
+    "ReapSummary",
+    "delete_process_record",
+    "list_process_records",
+    "read_process_record",
     "reap_managed_processes",
+    "write_process_record",
 ]

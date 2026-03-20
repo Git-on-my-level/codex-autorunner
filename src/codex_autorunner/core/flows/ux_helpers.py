@@ -384,9 +384,9 @@ __all__ = [
     "format_issue_as_markdown",
     "issue_md_has_content",
     "issue_md_path",
+    "seed_issue_from_github",
+    "seed_issue_from_text",
     "select_default_ticket_flow_run",
     "summarize_flow_freshness",
     "ticket_progress",
-    "seed_issue_from_github",
-    "seed_issue_from_text",
 ]

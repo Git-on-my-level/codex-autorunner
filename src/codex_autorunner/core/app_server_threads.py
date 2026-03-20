@@ -20,18 +20,18 @@ normalize_feature_key = _threads.normalize_feature_key
 AppServerThreadRegistry = _threads.AppServerThreadRegistry
 
 __all__ = [
-    "APP_SERVER_THREADS_FILENAME",
-    "APP_SERVER_THREADS_VERSION",
     "APP_SERVER_THREADS_CORRUPT_SUFFIX",
+    "APP_SERVER_THREADS_FILENAME",
     "APP_SERVER_THREADS_NOTICE_SUFFIX",
+    "APP_SERVER_THREADS_VERSION",
+    "FEATURE_KEYS",
     "FILE_CHAT_KEY",
     "FILE_CHAT_OPENCODE_KEY",
-    "FILE_CHAT_PREFIX",
     "FILE_CHAT_OPENCODE_PREFIX",
+    "FILE_CHAT_PREFIX",
     "PMA_KEY",
     "PMA_OPENCODE_KEY",
-    "FEATURE_KEYS",
+    "AppServerThreadRegistry",
     "default_app_server_threads_path",
     "normalize_feature_key",
-    "AppServerThreadRegistry",
 ]

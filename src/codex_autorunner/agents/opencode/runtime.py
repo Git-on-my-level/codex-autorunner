@@ -1714,11 +1714,13 @@ async def collect_opencode_output(
 
 
 __all__ = [
-    "OpenCodeMessageResult",
-    "OpenCodeTurnOutput",
     "PERMISSION_ALLOW",
     "PERMISSION_ASK",
     "PERMISSION_DENY",
+    "OpenCodeMessageResult",
+    "OpenCodeTurnOutput",
+    "PartHandler",
+    "QuestionHandler",
     "build_turn_id",
     "collect_opencode_output",
     "collect_opencode_output_from_events",
@@ -1728,7 +1730,5 @@ __all__ = [
     "map_approval_policy_to_permission",
     "opencode_missing_env",
     "parse_message_response",
-    "PartHandler",
-    "QuestionHandler",
     "split_model_id",
 ]

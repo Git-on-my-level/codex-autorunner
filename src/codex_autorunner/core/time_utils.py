@@ -8,4 +8,4 @@ def now_iso_utc_z() -> str:
 now_iso = now_iso_utc_z
 
 
-__all__ = ["now_iso_utc_z", "now_iso"]
+__all__ = ["now_iso", "now_iso_utc_z"]

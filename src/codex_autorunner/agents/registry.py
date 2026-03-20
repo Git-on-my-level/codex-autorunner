@@ -330,15 +330,15 @@ def has_capability(agent_id: str, capability: str) -> bool:
 
 
 __all__ = [
+    "CAR_AGENT_ENTRYPOINT_GROUP",
+    "CAR_PLUGIN_API_VERSION",
     "AgentCapability",
     "AgentDescriptor",
-    "CAR_PLUGIN_API_VERSION",
-    "CAR_AGENT_ENTRYPOINT_GROUP",
-    "get_registered_agents",
-    "get_available_agents",
     "get_agent_descriptor",
-    "validate_agent_id",
+    "get_available_agents",
+    "get_registered_agents",
     "has_capability",
     "normalize_agent_capabilities",
     "reload_agents",
+    "validate_agent_id",
 ]

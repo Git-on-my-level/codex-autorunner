@@ -1598,9 +1598,9 @@ class PmaThreadStore:
 
 
 __all__ = [
+    "PMA_THREADS_DB_FILENAME",
     "ManagedThreadAlreadyHasRunningTurnError",
     "ManagedThreadNotActiveError",
-    "PMA_THREADS_DB_FILENAME",
     "PmaThreadStore",
     "default_pma_threads_db_path",
     "pma_threads_db_lock",

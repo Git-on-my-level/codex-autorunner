@@ -327,11 +327,11 @@ def backfill_managed_thread_status(
 
 
 __all__ = [
+    "TERMINAL_STATUSES",
+    "TRANSITION_TABLE",
     "ManagedThreadStatus",
     "ManagedThreadStatusReason",
     "ManagedThreadStatusSnapshot",
-    "TERMINAL_STATUSES",
-    "TRANSITION_TABLE",
     "backfill_managed_thread_status",
     "build_managed_thread_status_snapshot",
     "normalize_status_timestamp",

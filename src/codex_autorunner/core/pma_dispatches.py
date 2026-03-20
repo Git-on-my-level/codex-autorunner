@@ -206,11 +206,11 @@ def resolve_pma_dispatch(path: Path) -> tuple[Optional[PmaDispatch], list[str]]:
 
 
 __all__ = [
-    "PmaDispatch",
     "PMA_DISPATCHES_DIRNAME",
+    "PmaDispatch",
     "ensure_pma_dispatches_dir",
-    "parse_pma_dispatch",
-    "list_pma_dispatches",
     "find_pma_dispatch_path",
+    "list_pma_dispatches",
+    "parse_pma_dispatch",
     "resolve_pma_dispatch",
 ]
