@@ -29,6 +29,7 @@ from .logging_utils import log_event
 from .orchestration.migrate_legacy_state import backfill_legacy_pma_lifecycle_events
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_audit import PmaActionType
+from .pma_context import clear_pma_prompt_state_sessions
 from .pma_queue import PmaQueue
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .time_utils import now_iso
@@ -82,6 +83,47 @@ class PmaLifecycleRouter:
         safety_config = PmaSafetyConfig()
         self._safety_checker = PmaSafetyChecker(hub_root, config=safety_config)
 
+    def _clear_runtime_state_for_agent(
+        self, agent: Optional[str]
+    ) -> tuple[list[str], list[str]]:
+        registry = AppServerThreadRegistry(
+            self._hub_root / ".codex-autorunner" / "app_server_threads.json"
+        )
+
+        cleared_thread_keys: list[str] = []
+        cleared_prompt_state_keys: list[str] = []
+        prefixes = pma_prefixes_for_reset(agent)
+        codex_prefix = pma_prefixes_for_reset("codex")[0]
+        opencode_prefix = pma_prefixes_for_reset("opencode")[0]
+        preserve_opencode = agent not in ("all", None, "")
+
+        for prefix in prefixes:
+            exclude_prefixes = (
+                (opencode_prefix,)
+                if prefix == codex_prefix and preserve_opencode
+                else ()
+            )
+            cleared_thread_keys.extend(
+                registry.reset_threads_by_prefix(
+                    prefix, exclude_prefixes=exclude_prefixes
+                )
+            )
+            base_key = prefix.rstrip(".")
+            if registry.reset_thread(base_key):
+                cleared_thread_keys.append(base_key)
+            cleared_prompt_state_keys.extend(
+                clear_pma_prompt_state_sessions(
+                    self._hub_root,
+                    keys=(base_key,),
+                    prefixes=(prefix,),
+                    exclude_prefixes=exclude_prefixes,
+                )
+            )
+
+        return list(dict.fromkeys(cleared_thread_keys)), list(
+            dict.fromkeys(cleared_prompt_state_keys)
+        )
+
     async def new(
         self,
         *,
@@ -107,28 +149,9 @@ class PmaLifecycleRouter:
         try:
             event_id = self._generate_event_id()
             timestamp = now_iso()
-
-            registry = AppServerThreadRegistry(
-                self._hub_root / ".codex-autorunner" / "app_server_threads.json"
+            cleared_keys, cleared_prompt_state_keys = (
+                self._clear_runtime_state_for_agent(agent)
             )
-
-            cleared_keys = []
-            prefixes = pma_prefixes_for_reset(agent)
-            for prefix in prefixes:
-                exclude_prefixes = (
-                    (pma_prefixes_for_reset("opencode")[0],)
-                    if prefix == pma_prefixes_for_reset("codex")[0]
-                    and agent not in ("all", None, "")
-                    else ()
-                )
-                cleared_keys.extend(
-                    registry.reset_threads_by_prefix(
-                        prefix, exclude_prefixes=exclude_prefixes
-                    )
-                )
-                base_key = prefix.rstrip(".")
-                if registry.reset_thread(base_key):
-                    cleared_keys.append(base_key)
 
             # Create artifact
             artifact = {
@@ -138,6 +161,7 @@ class PmaLifecycleRouter:
                 "agent": agent,
                 "lane_id": lane_id,
                 "cleared_threads": cleared_keys,
+                "cleared_prompt_state_keys": cleared_prompt_state_keys,
                 "metadata": metadata or {},
             }
             artifact_path = self._write_artifact(event_id, artifact)
@@ -152,6 +176,7 @@ class PmaLifecycleRouter:
                 details={
                     "command": "new",
                     "cleared_threads": cleared_keys,
+                    "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "lane_id": lane_id,
                 },
             )
@@ -165,6 +190,7 @@ class PmaLifecycleRouter:
                     "agent": agent,
                     "lane_id": lane_id,
                     "cleared_threads": cleared_keys,
+                    "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "artifact_path": str(artifact_path),
                 }
             )
@@ -177,6 +203,7 @@ class PmaLifecycleRouter:
                 agent=agent,
                 lane_id=lane_id,
                 cleared_threads=cleared_keys,
+                cleared_prompt_state_keys=cleared_prompt_state_keys,
             )
 
             return LifecycleCommandResult(
@@ -186,6 +213,7 @@ class PmaLifecycleRouter:
                 artifact_path=artifact_path,
                 details={
                     "cleared_threads": cleared_keys,
+                    "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "agent": agent,
                     "lane_id": lane_id,
                 },
@@ -226,28 +254,9 @@ class PmaLifecycleRouter:
         try:
             event_id = self._generate_event_id()
             timestamp = now_iso()
-
-            registry = AppServerThreadRegistry(
-                self._hub_root / ".codex-autorunner" / "app_server_threads.json"
+            cleared_keys, cleared_prompt_state_keys = (
+                self._clear_runtime_state_for_agent(agent)
             )
-
-            cleared_keys = []
-            prefixes = pma_prefixes_for_reset(agent)
-            for prefix in prefixes:
-                exclude_prefixes = (
-                    (pma_prefixes_for_reset("opencode")[0],)
-                    if prefix == pma_prefixes_for_reset("codex")[0]
-                    and agent not in ("all", None, "")
-                    else ()
-                )
-                cleared_keys.extend(
-                    registry.reset_threads_by_prefix(
-                        prefix, exclude_prefixes=exclude_prefixes
-                    )
-                )
-                base_key = prefix.rstrip(".")
-                if registry.reset_thread(base_key):
-                    cleared_keys.append(base_key)
 
             # Create artifact
             artifact = {
@@ -256,6 +265,7 @@ class PmaLifecycleRouter:
                 "timestamp": timestamp,
                 "agent": agent,
                 "cleared_threads": cleared_keys,
+                "cleared_prompt_state_keys": cleared_prompt_state_keys,
                 "metadata": metadata or {},
             }
             artifact_path = self._write_artifact(event_id, artifact)
@@ -270,6 +280,7 @@ class PmaLifecycleRouter:
                 details={
                     "command": "reset",
                     "cleared_threads": cleared_keys,
+                    "cleared_prompt_state_keys": cleared_prompt_state_keys,
                 },
             )
 
@@ -281,6 +292,7 @@ class PmaLifecycleRouter:
                     "timestamp": timestamp,
                     "agent": agent,
                     "cleared_threads": cleared_keys,
+                    "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "artifact_path": str(artifact_path),
                 }
             )
@@ -292,6 +304,7 @@ class PmaLifecycleRouter:
                 event_id=event_id,
                 agent=agent,
                 cleared_threads=cleared_keys,
+                cleared_prompt_state_keys=cleared_prompt_state_keys,
             )
 
             return LifecycleCommandResult(
@@ -301,6 +314,7 @@ class PmaLifecycleRouter:
                 artifact_path=artifact_path,
                 details={
                     "cleared_threads": cleared_keys,
+                    "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "agent": agent,
                 },
             )

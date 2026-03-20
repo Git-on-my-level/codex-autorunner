@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
 )
+from codex_autorunner.core.pma_context import default_pma_prompt_state_path
 from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
@@ -3359,14 +3361,35 @@ class _PMAWorkspaceRouter:
         return self._record
 
 
+def _write_prompt_state_sessions(hub_root: Path, *keys: str) -> Path:
+    state_path = default_pma_prompt_state_path(hub_root)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-03-20T00:00:00Z",
+                "sessions": {key: {"version": 1} for key in keys},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return state_path
+
+
 class _PMAWorkspaceHandler(WorkspaceCommands):
     def __init__(
-        self, record: TelegramTopicRecord, registry: AppServerThreadRegistry
+        self,
+        record: TelegramTopicRecord,
+        registry: AppServerThreadRegistry,
+        *,
+        hub_root: Optional[Path] = None,
     ) -> None:
         self._logger = logging.getLogger("test")
         self._config = SimpleNamespace(require_topics=False)
         self._router = _PMAWorkspaceRouter(record)
         self._hub_thread_registry = registry
+        self._hub_root = hub_root
         self._sent: list[str] = []
         self._record = record
 
@@ -3499,11 +3522,13 @@ async def test_archive_uses_shared_fresh_start_and_resets_topic(
     calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         "codex_autorunner.core.archive.archive_workspace_for_fresh_start",
-        lambda **kwargs: calls.append(kwargs)
-        or SimpleNamespace(
-            snapshot_id=None,
-            archived_paths=(),
-            archived_thread_ids=("managed-thread-1",),
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or SimpleNamespace(
+                snapshot_id=None,
+                archived_paths=(),
+                archived_thread_ids=("managed-thread-1",),
+            )
         ),
     )
 
@@ -3558,11 +3583,13 @@ async def test_archive_without_hub_root_does_not_substitute_workspace_root(
     calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         "codex_autorunner.core.archive.archive_workspace_for_fresh_start",
-        lambda **kwargs: calls.append(kwargs)
-        or SimpleNamespace(
-            snapshot_id="snap-1",
-            archived_paths=("tickets",),
-            archived_thread_ids=(),
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or SimpleNamespace(
+                snapshot_id="snap-1",
+                archived_paths=("tickets",),
+                archived_thread_ids=(),
+            )
         ),
     )
 
@@ -3643,20 +3670,21 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
         ),
     )
     try:
-        _service, thread = (
-            await execution_commands_module._sync_telegram_thread_binding(
-                handlers,
-                surface_key="topic-1",
-                workspace_root=workspace,
-                agent="codex",
-                repo_id="repo-1",
-                resource_kind="repo",
-                resource_id="repo-1",
-                backend_thread_id="backend-2",
-                mode="repo",
-                pma_enabled=False,
-                replace_existing=True,
-            )
+        (
+            _service,
+            thread,
+        ) = await execution_commands_module._sync_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-2",
+            mode="repo",
+            pma_enabled=False,
+            replace_existing=True,
         )
     finally:
         monkeypatch.undo()
@@ -3675,10 +3703,11 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
     registry = AppServerThreadRegistry(tmp_path / "threads.json")
     registry.reset_all()
     registry.set_thread_id(PMA_OPENCODE_KEY, "old-thread")
+    state_path = _write_prompt_state_sessions(tmp_path, PMA_OPENCODE_KEY)
     record = TelegramTopicRecord(
         pma_enabled=True, workspace_path=None, agent="opencode"
     )
-    handler = _PMAWorkspaceHandler(record, registry)
+    handler = _PMAWorkspaceHandler(record, registry, hub_root=tmp_path)
     message = TelegramMessage(
         update_id=1,
         message_id=2,
@@ -3693,6 +3722,8 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
     await handler._handle_new(message)
 
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
+    sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
+    assert PMA_OPENCODE_KEY not in sessions
     assert handler._sent and "PMA session reset" in handler._sent[-1]
 
 
@@ -3711,11 +3742,14 @@ async def test_pma_new_resets_scoped_key_when_require_topics_enabled(
         topic_key_fn=lambda c, t: f"{c}:{t or 'root'}",
     )
     registry.set_thread_id(scoped_key, "old-scoped-thread")
+    state_path = _write_prompt_state_sessions(tmp_path, scoped_key)
 
     record = TelegramTopicRecord(
         pma_enabled=True, workspace_path=None, agent="opencode"
     )
-    handler = _PMAWorkspaceHandlerWithScopedKey(record, registry, require_topics=True)
+    handler = _PMAWorkspaceHandlerWithScopedKey(
+        record, registry, hub_root=tmp_path, require_topics=True
+    )
     message = TelegramMessage(
         update_id=1,
         message_id=2,
@@ -3730,6 +3764,8 @@ async def test_pma_new_resets_scoped_key_when_require_topics_enabled(
     await handler._handle_new(message)
 
     assert registry.get_thread_id(scoped_key) is None
+    sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
+    assert scoped_key not in sessions
     assert handler._sent and "PMA session reset" in handler._sent[-1]
 
 
@@ -3748,9 +3784,12 @@ async def test_pma_reset_resets_scoped_key_when_require_topics_enabled(
         topic_key_fn=lambda c, t: f"{c}:{t or 'root'}",
     )
     registry.set_thread_id(scoped_key, "old-scoped-thread")
+    state_path = _write_prompt_state_sessions(tmp_path, scoped_key)
 
     record = TelegramTopicRecord(pma_enabled=True, workspace_path=None, agent="codex")
-    handler = _PMAWorkspaceHandlerWithScopedKey(record, registry, require_topics=True)
+    handler = _PMAWorkspaceHandlerWithScopedKey(
+        record, registry, hub_root=tmp_path, require_topics=True
+    )
     message = TelegramMessage(
         update_id=1,
         message_id=2,
@@ -3765,6 +3804,8 @@ async def test_pma_reset_resets_scoped_key_when_require_topics_enabled(
     await handler._handle_reset(message)
 
     assert registry.get_thread_id(scoped_key) is None
+    sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
+    assert scoped_key not in sessions
     assert handler._sent and "PMA thread reset" in handler._sent[-1]
 
 
@@ -3774,12 +3815,14 @@ class _PMAWorkspaceHandlerWithScopedKey(WorkspaceCommands):
         record: TelegramTopicRecord,
         registry: AppServerThreadRegistry,
         *,
+        hub_root: Optional[Path] = None,
         require_topics: bool = False,
     ) -> None:
         self._logger = logging.getLogger("test")
         self._config = SimpleNamespace(require_topics=require_topics)
         self._router = _PMAWorkspaceRouter(record)
         self._hub_thread_registry = registry
+        self._hub_root = hub_root
         self._sent: list[str] = []
         self._record = record
 

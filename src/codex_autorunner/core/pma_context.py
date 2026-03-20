@@ -7,7 +7,7 @@ import logging
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Mapping, Optional, TypedDict, cast
+from typing import Any, Mapping, Optional, Sequence, TypedDict, cast
 
 from ..bootstrap import ensure_pma_docs, pma_doc_path
 from ..tickets.files import list_ticket_paths, safe_relpath
@@ -366,6 +366,71 @@ def _trim_prompt_sessions(sessions: Mapping[str, Any]) -> dict[str, Any]:
 
     trimmed = sorted(items, key=_sort_key)[-PMA_PROMPT_STATE_MAX_SESSIONS:]
     return {key: dict(value) for key, value in trimmed}
+
+
+def clear_pma_prompt_state_sessions(
+    hub_root: Path,
+    *,
+    keys: Sequence[str] = (),
+    prefixes: Sequence[str] = (),
+    exclude_prefixes: Sequence[str] = (),
+) -> list[str]:
+    """Clear PMA prompt-state sessions by exact key and/or key prefix."""
+
+    normalized_keys = {
+        str(key).strip() for key in keys if isinstance(key, str) and key.strip()
+    }
+    normalized_prefixes = tuple(
+        str(prefix).strip()
+        for prefix in prefixes
+        if isinstance(prefix, str) and prefix.strip()
+    )
+    normalized_excludes = tuple(
+        str(prefix).strip()
+        for prefix in exclude_prefixes
+        if isinstance(prefix, str) and prefix.strip()
+    )
+    if not normalized_keys and not normalized_prefixes:
+        return []
+
+    path = default_pma_prompt_state_path(hub_root)
+    lock_path = _prompt_state_lock_path(path)
+    cleared_keys: list[str] = []
+
+    def _is_excluded(session_key: str) -> bool:
+        return any(
+            session_key == excluded.rstrip(".") or session_key.startswith(excluded)
+            for excluded in normalized_excludes
+        )
+
+    with file_lock(lock_path):
+        state = _read_pma_prompt_state_unlocked(path)
+        sessions = state.get("sessions")
+        if not isinstance(sessions, Mapping):
+            return []
+
+        updated_sessions = dict(sessions)
+        for session_key in tuple(updated_sessions.keys()):
+            if not isinstance(session_key, str) or not session_key:
+                continue
+            key_match = session_key in normalized_keys
+            prefix_match = bool(normalized_prefixes) and any(
+                session_key.startswith(prefix) for prefix in normalized_prefixes
+            )
+            if not key_match and not prefix_match:
+                continue
+            if _is_excluded(session_key):
+                continue
+            updated_sessions.pop(session_key, None)
+            cleared_keys.append(session_key)
+
+        if cleared_keys:
+            state["version"] = PMA_PROMPT_STATE_VERSION
+            state["updated_at"] = now_iso()
+            state["sessions"] = _trim_prompt_sessions(updated_sessions)
+            _write_pma_prompt_state_unlocked(path, state)
+
+    return sorted(cleared_keys)
 
 
 def _merge_prompt_session_state(
@@ -1888,14 +1953,14 @@ def format_pma_prompt(
         "</current_actionable_state>\n\n"
     )
     if not use_delta:
-        prompt += "<hub_snapshot>\n" f"{snapshot_text}\n" "</hub_snapshot>\n\n"
+        prompt += f"<hub_snapshot>\n{snapshot_text}\n</hub_snapshot>\n\n"
     elif prompt_state_key:
         prompt += (
             "<hub_snapshot_ref "
             f"digest='{_digest_preview(str((sections.get('hub_snapshot') or {}).get('digest') or ''))}' "
             f"state_key='{prompt_state_key}' />\n\n"
         )
-    prompt += "<user_message>\n" f"{message}\n" "</user_message>\n"
+    prompt += f"<user_message>\n{message}\n</user_message>\n"
     return prompt
 
 

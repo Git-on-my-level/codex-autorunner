@@ -13,6 +13,7 @@ from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunStatus
 from .....core.git_utils import GitError, reset_branch_from_origin_main
 from .....core.logging_utils import log_event
+from .....core.pma_context import clear_pma_prompt_state_sessions
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
 from .....manifest import load_manifest
@@ -1017,6 +1018,23 @@ class WorkspaceCommands(SharedHelpers):
                 pma_key = self._pma_registry_key(record, message)
                 if pma_key:
                     registry.reset_thread(pma_key)
+                    hub_root = getattr(self, "_hub_root", None)
+                    if hub_root is not None:
+                        try:
+                            clear_pma_prompt_state_sessions(
+                                Path(hub_root), keys=(pma_key,)
+                            )
+                        except Exception as exc:
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "telegram.pma.prompt_state.clear_failed",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                pma_key=pma_key,
+                                exc=exc,
+                            )
             await self._send_message(
                 message.chat_id,
                 "PMA thread reset. Send a message to start a fresh PMA turn.",
@@ -1186,6 +1204,23 @@ class WorkspaceCommands(SharedHelpers):
                 pma_key = self._pma_registry_key(record, message)
                 if pma_key:
                     registry.reset_thread(pma_key)
+                    hub_root = getattr(self, "_hub_root", None)
+                    if hub_root is not None:
+                        try:
+                            clear_pma_prompt_state_sessions(
+                                Path(hub_root), keys=(pma_key,)
+                            )
+                        except Exception as exc:
+                            log_event(
+                                self._logger,
+                                logging.WARNING,
+                                "telegram.pma.prompt_state.clear_failed",
+                                topic_key=key,
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                pma_key=pma_key,
+                                exc=exc,
+                            )
             await self._send_message(
                 message.chat_id,
                 "PMA session reset. Send a message to start a fresh PMA turn.",
