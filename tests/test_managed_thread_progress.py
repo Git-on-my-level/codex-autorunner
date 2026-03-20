@@ -144,3 +144,36 @@ def test_apply_run_event_to_progress_tracker_replaces_cumulative_snapshot_in_pla
 
     rendered = render_progress_text(tracker, max_length=2000, now=1.0)
     assert rendered.count("I’m re-scoping to March 20, 2026 only") == 1
+
+
+def test_apply_run_event_to_progress_tracker_preserves_boundary_between_snapshots() -> (
+    None
+):
+    tracker = _tracker()
+    runtime_state = ProgressRuntimeState()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="2026-03-15T00:00:00Z",
+            content="Scanning repo",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        ),
+        runtime_state=runtime_state,
+    )
+    tracker.end_output_segment()
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="2026-03-15T00:00:01Z",
+            content="Scanning repo complete.",
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        ),
+        runtime_state=runtime_state,
+    )
+
+    output_actions = [action for action in tracker.actions if action.label == "output"]
+    assert [action.text for action in output_actions] == [
+        "Scanning repo",
+        "Scanning repo complete.",
+    ]
