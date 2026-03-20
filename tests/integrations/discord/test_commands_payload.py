@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from codex_autorunner.core.update_targets import update_target_command_choices
+from codex_autorunner.integrations.chat.agents import (
+    chat_agent_command_choices,
+    chat_agent_description,
+)
+from codex_autorunner.integrations.chat.model_selection import (
+    reasoning_effort_command_choices,
+    reasoning_effort_description,
+)
 from codex_autorunner.integrations.discord.commands import build_application_commands
 
 
@@ -161,13 +169,15 @@ def test_agent_and_effort_options_include_choices() -> None:
 
     agent = _find_option(car_options, "agent")
     agent_name = _find_option(agent["options"], "name")
-    agent_choices = {choice["value"] for choice in agent_name.get("choices", [])}
-    assert agent_choices == {"codex", "opencode"}
+    assert agent_name["description"] == f"Agent name: {chat_agent_description()}"
+    assert agent_name.get("choices", []) == list(chat_agent_command_choices())
 
     model = _find_option(car_options, "model")
     model_effort = _find_option(model["options"], "effort")
-    effort_choices = {choice["value"] for choice in model_effort.get("choices", [])}
-    assert effort_choices == {"none", "minimal", "low", "medium", "high", "xhigh"}
+    assert model_effort["description"] == (
+        f"Reasoning effort (codex only): {reasoning_effort_description()}"
+    )
+    assert model_effort.get("choices", []) == list(reasoning_effort_command_choices())
 
     update = _find_option(car_options, "update")
     update_target = _find_option(update["options"], "target")

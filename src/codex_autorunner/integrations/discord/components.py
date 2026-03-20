@@ -6,6 +6,8 @@ from ...core.update_targets import (
     UpdateTargetDefinition,
     all_update_target_definitions,
 )
+from ..chat.agents import CHAT_AGENT_DEFINITIONS
+from ..chat.model_selection import REASONING_EFFORT_VALUES
 
 DISCORD_BUTTON_STYLE_PRIMARY = 1
 DISCORD_BUTTON_STYLE_SECONDARY = 2
@@ -119,17 +121,12 @@ def build_agent_picker(
 ) -> dict[str, Any]:
     options = [
         build_select_option(
-            label="codex",
-            value="codex",
-            description="Default Codex agent",
-            default=current_agent == "codex",
-        ),
-        build_select_option(
-            label="opencode",
-            value="opencode",
-            description="OpenCode agent (requires opencode binary)",
-            default=current_agent == "opencode",
-        ),
+            label=definition.value,
+            value=definition.value,
+            description=definition.description,
+            default=current_agent == definition.value,
+        )
+        for definition in CHAT_AGENT_DEFINITIONS
     ]
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
@@ -182,19 +179,19 @@ def build_model_effort_picker(
     custom_id: str = "model_effort_select",
     placeholder: str = "Select reasoning effort...",
 ) -> dict[str, Any]:
-    options = [
-        build_select_option(
-            label="(none)",
-            value="none",
-            description="Do not set an effort override",
-            default=True,
-        ),
-        build_select_option("minimal", "minimal"),
-        build_select_option("low", "low"),
-        build_select_option("medium", "medium"),
-        build_select_option("high", "high"),
-        build_select_option("xhigh", "xhigh"),
-    ]
+    options = []
+    for effort in REASONING_EFFORT_VALUES:
+        if effort == "none":
+            options.append(
+                build_select_option(
+                    label="(none)",
+                    value=effort,
+                    description="Do not set an effort override",
+                    default=True,
+                )
+            )
+            continue
+        options.append(build_select_option(effort, effort))
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
     )

@@ -126,6 +126,7 @@ from ...integrations.chat.media import (
     normalize_mime_type,
 )
 from ...integrations.chat.model_selection import (
+    REASONING_EFFORT_VALUES,
     _coerce_model_entries,
     _display_name_is_model_alias,
     _is_valid_opencode_model_name,
@@ -6276,7 +6277,7 @@ class DiscordBotService:
             f"Agent set to {switch_state.agent}. Will apply on the next turn.",
         )
 
-    VALID_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+    VALID_REASONING_EFFORTS = REASONING_EFFORT_VALUES
 
     def _pending_interaction_scope_key(
         self,

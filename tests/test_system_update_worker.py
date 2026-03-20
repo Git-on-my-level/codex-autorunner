@@ -11,6 +11,7 @@ import codex_autorunner.surfaces.web.routes.system as system
 from codex_autorunner.core.update_targets import (
     update_target_command_choices,
     update_target_label_pairs,
+    update_target_values,
 )
 
 
@@ -138,6 +139,14 @@ def test_available_update_target_options_include_discord_when_active(
 
 
 def test_update_target_helpers_share_the_same_core_definitions() -> None:
+    assert update_target_values(include_status=True) == (
+        "both",
+        "web",
+        "chat",
+        "telegram",
+        "discord",
+        "status",
+    )
     assert update_target_label_pairs() == (
         ("both", "All"),
         ("web", "Web only"),

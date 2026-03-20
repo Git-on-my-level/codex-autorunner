@@ -64,6 +64,7 @@ from ..constants import (
     MAX_MENTION_BYTES,
     MODEL_CATALOG_TTL_SECONDS,
     MODEL_PICKER_PROMPT,
+    REASONING_EFFORT_VALUES,
     SHELL_MESSAGE_BUFFER_CHARS,
     TELEGRAM_MAX_MESSAGE_LENGTH,
     THREAD_LIST_MAX_PAGES,
@@ -1225,7 +1226,7 @@ class TelegramCommandHandlers(
         if effort and effort not in VALID_REASONING_EFFORTS:
             await self._send_message(
                 message.chat_id,
-                f"Unknown effort '{effort}'. Allowed: {', '.join(sorted(VALID_REASONING_EFFORTS))}.",
+                f"Unknown effort '{effort}'. Allowed: {', '.join(REASONING_EFFORT_VALUES)}.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )

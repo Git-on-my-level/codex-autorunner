@@ -117,6 +117,13 @@ def update_target_label_pairs(
     return tuple((definition.value, definition.label) for definition in items)
 
 
+def update_target_values(*, include_status: bool = False) -> tuple[str, ...]:
+    values = tuple(definition.value for definition in all_update_target_definitions())
+    if not include_status:
+        return values
+    return (*values, _UPDATE_TARGET_STATUS.value)
+
+
 def update_target_command_choices(
     *, include_status: bool = False
 ) -> tuple[dict[str, str], ...]:

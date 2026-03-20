@@ -9,9 +9,8 @@ from typing import TYPE_CHECKING, Any, Optional
 if TYPE_CHECKING:
     from ..app_server.client import CodexAppServerClient
 
-VALID_REASONING_EFFORTS = frozenset(
-    {"none", "minimal", "low", "medium", "high", "xhigh"}
-)
+REASONING_EFFORT_VALUES = ("none", "minimal", "low", "medium", "high", "xhigh")
+VALID_REASONING_EFFORTS = frozenset(REASONING_EFFORT_VALUES)
 MODEL_LIST_INVALID_PARAMS_ERROR_CODES = frozenset({-32600, -32602})
 
 
@@ -87,7 +86,7 @@ def _coerce_model_options(
                 efforts.append(default_effort)
             efforts = [effort for effort in efforts if effort]
             if not efforts:
-                efforts = sorted(VALID_REASONING_EFFORTS)
+                efforts = list(REASONING_EFFORT_VALUES)
             efforts = list(dict.fromkeys(efforts))
             if default_effort:
                 label = f"{label} (default {default_effort})"
@@ -146,8 +145,19 @@ def format_model_set_message(
     return f"Model set to {model_name}{effort_note}. Will apply on the next turn."
 
 
+def reasoning_effort_command_choices() -> tuple[dict[str, str], ...]:
+    return tuple(
+        {"name": effort, "value": effort} for effort in REASONING_EFFORT_VALUES
+    )
+
+
+def reasoning_effort_description() -> str:
+    return ", ".join(REASONING_EFFORT_VALUES)
+
+
 __all__ = [
     "MODEL_LIST_INVALID_PARAMS_ERROR_CODES",
+    "REASONING_EFFORT_VALUES",
     "VALID_REASONING_EFFORTS",
     "ModelOption",
     "_coerce_model_entries",
@@ -158,4 +168,6 @@ __all__ = [
     "_model_list_with_agent_compat",
     "_normalize_model_name",
     "format_model_set_message",
+    "reasoning_effort_command_choices",
+    "reasoning_effort_description",
 ]
