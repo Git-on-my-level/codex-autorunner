@@ -9,6 +9,8 @@ from typing import Any, Iterable, Optional
 
 from ...core.app_server_command import (
     DEFAULT_APP_SERVER_COMMAND as CORE_DEFAULT_APP_SERVER_COMMAND,
+)
+from ...core.app_server_command import (
     LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
     resolve_app_server_command,
 )
