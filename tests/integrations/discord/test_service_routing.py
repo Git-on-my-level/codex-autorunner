@@ -53,6 +53,8 @@ class _FakeRest:
         self.interaction_responses: list[dict[str, Any]] = []
         self.followup_messages: list[dict[str, Any]] = []
         self.channel_messages: list[dict[str, Any]] = []
+        self.edited_channel_messages: list[dict[str, Any]] = []
+        self.deleted_channel_messages: list[dict[str, Any]] = []
         self.typing_calls: list[str] = []
         self.command_sync_calls: list[dict[str, Any]] = []
 
@@ -74,13 +76,32 @@ class _FakeRest:
     async def create_channel_message(
         self, *, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        message_id = f"msg-{len(self.channel_messages) + 1}"
         self.channel_messages.append(
             {
                 "channel_id": channel_id,
                 "payload": payload,
+                "message_id": message_id,
             }
         )
-        return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
+        return {"id": message_id, "channel_id": channel_id, "payload": payload}
+
+    async def edit_channel_message(
+        self, *, channel_id: str, message_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.edited_channel_messages.append(
+            {
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "payload": payload,
+            }
+        )
+        return {"id": message_id}
+
+    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
+        self.deleted_channel_messages.append(
+            {"channel_id": channel_id, "message_id": message_id}
+        )
 
     async def trigger_typing(self, *, channel_id: str) -> None:
         self.typing_calls.append(channel_id)
@@ -137,6 +158,12 @@ class _FakeOutboxManager:
 
     async def run_loop(self) -> None:
         await asyncio.Event().wait()
+
+
+class _DeleteFailingRest(_FakeRest):
+    async def delete_channel_message(self, *, channel_id: str, message_id: str) -> None:
+        _ = channel_id, message_id
+        raise RuntimeError("delete failed")
 
 
 @pytest.mark.anyio
@@ -220,6 +247,123 @@ async def test_discord_message_turns_route_through_orchestration_ingress(
         "submit_flow_reply",
         "submit_thread_message",
     }
+
+
+@pytest.mark.asyncio
+async def test_discord_backend_approval_request_sends_prompt_and_accepts(
+    tmp_path: Path,
+) -> None:
+    rest = _FakeRest()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        service._discord_turn_approval_contexts["turn-1"] = (
+            discord_service_module._DiscordTurnApprovalContext(channel_id="channel-1")
+        )
+        request = {
+            "id": "approval-1",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "turnId": "turn-1",
+                "reason": "Need permission",
+                "command": ["/bin/zsh", "-c", "ps -p 123"],
+            },
+        }
+
+        decision_task = asyncio.create_task(
+            service._handle_backend_approval_request(request)
+        )
+        await asyncio.sleep(0)
+
+        assert len(rest.channel_messages) == 1
+        payload = rest.channel_messages[0]["payload"]
+        assert "Approval required" in payload["content"]
+        action_rows = payload["components"]
+        accept_custom_id = action_rows[0]["components"][0]["custom_id"]
+
+        await service._handle_component_interaction_normalized(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id=accept_custom_id,
+            values=None,
+            guild_id="guild-1",
+            user_id="user-1",
+        )
+
+        assert await decision_task == "accept"
+        assert rest.deleted_channel_messages == [
+            {
+                "channel_id": "channel-1",
+                "message_id": rest.channel_messages[0]["message_id"],
+            }
+        ]
+        assert (
+            rest.interaction_responses[-1]["payload"]["data"]["content"]
+            == "Decision: accept"
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_discord_approval_component_falls_back_to_edit_when_delete_fails(
+    tmp_path: Path,
+) -> None:
+    rest = _DeleteFailingRest()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    try:
+        future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+        service._discord_pending_approvals["token-1"] = (
+            discord_service_module._DiscordPendingApproval(
+                token="token-1",
+                request_id="approval-1",
+                turn_id="turn-1",
+                channel_id="channel-1",
+                message_id="msg-1",
+                prompt="Approval required",
+                future=future,
+            )
+        )
+
+        await service._handle_component_interaction_normalized(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id="approval:token-1:decline",
+            values=None,
+            guild_id="guild-1",
+            user_id="user-1",
+        )
+
+        assert future.done() and future.result() == "decline"
+        assert rest.edited_channel_messages == [
+            {
+                "channel_id": "channel-1",
+                "message_id": "msg-1",
+                "payload": {
+                    "content": "Approval decline.",
+                    "components": [],
+                },
+            }
+        ]
+    finally:
+        await store.close()
 
 
 def _config(

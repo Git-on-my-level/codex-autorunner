@@ -108,9 +108,9 @@ class DiscordMessageTurnResult:
 
 _APPROVAL_MODE_POLICY_PRESETS: dict[str, tuple[str, str]] = {
     "yolo": ("never", "dangerFullAccess"),
-    "safe": ("never", "workspaceWrite"),
-    "auto": ("never", "workspaceWrite"),
-    "read-only": ("never", "readOnly"),
+    "safe": ("on-request", "workspaceWrite"),
+    "auto": ("on-request", "workspaceWrite"),
+    "read-only": ("on-request", "readOnly"),
     "full-access": ("never", "dangerFullAccess"),
 }
 
@@ -1369,15 +1369,24 @@ def _ensure_discord_thread_queue_worker(
                 async def _process_started_execution(
                     started_execution: RuntimeThreadExecution = started,
                 ) -> None:
-                    finalized = await _finalize_discord_thread_execution(
-                        service,
-                        orchestration_service=orchestration_service,
-                        started=started_execution,
+                    service._register_discord_turn_approval_context(
+                        started_execution=started_execution,
                         channel_id=channel_id,
-                        public_execution_error=public_execution_error,
-                        timeout_error=timeout_error,
-                        interrupted_error=interrupted_error,
                     )
+                    try:
+                        finalized = await _finalize_discord_thread_execution(
+                            service,
+                            orchestration_service=orchestration_service,
+                            started=started_execution,
+                            channel_id=channel_id,
+                            public_execution_error=public_execution_error,
+                            timeout_error=timeout_error,
+                            interrupted_error=interrupted_error,
+                        )
+                    finally:
+                        service._clear_discord_turn_approval_context(
+                            started_execution=started_execution
+                        )
                     if finalized["status"] == "ok":
                         message = str(finalized.get("assistant_text") or "").strip()
                         if message:
@@ -1598,6 +1607,10 @@ async def _run_discord_orchestrated_turn_for_message(
     except Exception:
         progress_message_id = None
 
+    service._register_discord_turn_approval_context(
+        started_execution=started_execution,
+        channel_id=channel_id,
+    )
     try:
         finalized = await _finalize_discord_thread_execution(
             service,
@@ -1616,6 +1629,9 @@ async def _run_discord_orchestrated_turn_for_message(
             ),
         )
     finally:
+        service._clear_discord_turn_approval_context(
+            started_execution=started_execution
+        )
         if progress_heartbeat_task is not None:
             progress_heartbeat_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):

@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import inspect
 import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Optional, Union
@@ -28,6 +29,7 @@ _logger = logging.getLogger(__name__)
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
+ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
 
 
 def _extract_output_delta(params: Dict[str, Any]) -> str:
@@ -133,6 +135,7 @@ class CodexAppServerBackend(AgentBackend):
         restart_backoff_jitter_ratio: Optional[float] = None,
         output_policy: str = "final_only",
         notification_handler: Optional[NotificationHandler] = None,
+        approval_handler: Optional[ApprovalHandler] = None,
         default_approval_decision: str = "accept",
         logger: Optional[logging.Logger] = None,
     ):
@@ -158,6 +161,7 @@ class CodexAppServerBackend(AgentBackend):
         self._restart_backoff_jitter_ratio = restart_backoff_jitter_ratio
         self._output_policy = output_policy
         self._notification_handler = notification_handler
+        self._approval_handler = approval_handler
         self._default_approval_decision = (
             default_approval_decision.strip()
             if isinstance(default_approval_decision, str)
@@ -213,6 +217,7 @@ class CodexAppServerBackend(AgentBackend):
         self._reasoning_effort = reasoning_effort
         self._turn_timeout_seconds = options.get("turn_timeout_seconds")
         self._notification_handler = options.get("notification_handler")
+        self._approval_handler = options.get("approval_handler")
         default_approval_decision = options.get("default_approval_decision")
         if (
             isinstance(default_approval_decision, str)
@@ -507,6 +512,15 @@ class CodexAppServerBackend(AgentBackend):
                 context=request.get("params", {}),
             )
         )
+
+        if self._approval_handler is not None:
+            external_decision = self._approval_handler(request)
+            if inspect.isawaitable(external_decision):
+                external_decision = await external_decision
+            if isinstance(external_decision, dict):
+                return external_decision
+            if isinstance(external_decision, str) and external_decision.strip():
+                return external_decision.strip()
 
         decision = self._default_approval_decision.strip().lower()
         return {

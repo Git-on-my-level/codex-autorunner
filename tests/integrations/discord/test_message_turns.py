@@ -255,17 +255,15 @@ def test_resolve_discord_turn_policies_prefers_binding_preset() -> None:
         {"approval_mode": "read-only"},
         default_approval_policy="never",
         default_sandbox_policy="dangerFullAccess",
-    ) == ("never", "readOnly")
+    ) == ("on-request", "readOnly")
 
 
-def test_resolve_discord_turn_policies_keeps_safe_in_workspace_write_without_prompting() -> (
-    None
-):
+def test_resolve_discord_turn_policies_maps_safe_to_prompted_workspace_write() -> None:
     assert discord_message_turns_module._resolve_discord_turn_policies(
         {"approval_mode": "safe"},
         default_approval_policy="never",
         default_sandbox_policy="dangerFullAccess",
-    ) == ("never", "workspaceWrite")
+    ) == ("on-request", "workspaceWrite")
 
 
 def test_resolve_discord_turn_policies_prefers_explicit_binding_values() -> None:
@@ -322,7 +320,7 @@ async def test_run_managed_thread_turn_for_message_uses_binding_policies(
     )
 
     assert result.final_message == "ok"
-    assert captured["approval_mode"] == "never"
+    assert captured["approval_mode"] == "on-request"
     assert captured["sandbox_policy"] == "workspaceWrite"
 
 
