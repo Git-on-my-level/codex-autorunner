@@ -71,6 +71,7 @@ class _FlowServiceStub:
 class _FlowLifecycleHandler(FlowCommands):
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self.reply_markups: list[dict[str, object] | None] = []
 
     async def _send_message(
         self,
@@ -82,8 +83,9 @@ class _FlowLifecycleHandler(FlowCommands):
         reply_markup: dict[str, object] | None = None,
         parse_mode: str | None = None,
     ) -> None:
-        _ = (thread_id, reply_to, reply_markup, parse_mode)
+        _ = (thread_id, reply_to, parse_mode)
         self.sent.append(text)
+        self.reply_markups.append(reply_markup)
 
 
 def _message() -> TelegramMessage:
@@ -280,7 +282,7 @@ async def test_flow_recover_defaults_latest_active(
 
 
 @pytest.mark.anyio
-async def test_flow_archive_defaults_latest_paused(
+async def test_flow_archive_defaults_latest_paused_prompts_confirmation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = _init_store(tmp_path, monkeypatch)
@@ -308,6 +310,57 @@ async def test_flow_archive_defaults_latest_paused(
 
     handler = _FlowLifecycleHandler()
     await handler._handle_flow_archive(_message(), tmp_path, argv=[])
+
+    assert any("Archive it anyway?" in text for text in handler.sent)
+    assert handler.reply_markups[-1] is not None
+    archive_dir = (
+        tmp_path
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / run_paused
+        / "archived_tickets"
+    )
+    assert not archive_dir.exists()
+    assert (tickets_dir / "TICKET-001.md").exists()
+    assert (tmp_path / ".codex-autorunner" / "flows" / run_paused).exists()
+    store = FlowStore(tmp_path / ".codex-autorunner" / "flows.db")
+    store.initialize()
+    try:
+        assert store.get_flow_run(run_paused) is not None
+    finally:
+        store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_archive_force_archives_latest_paused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _init_store(tmp_path, monkeypatch)
+    run_terminal = str(uuid.uuid4())
+    run_paused = str(uuid.uuid4())
+    _create_run(store, run_terminal, FlowRunStatus.COMPLETED)
+    _create_run(store, run_paused, FlowRunStatus.PAUSED)
+    store.close()
+
+    tickets_dir = tmp_path / ".codex-autorunner" / "tickets"
+    tickets_dir.mkdir(parents=True, exist_ok=True)
+    (tickets_dir / "TICKET-001.md").write_text("ticket", encoding="utf-8")
+
+    context_dir = tmp_path / ".codex-autorunner" / "contextspace"
+    context_dir.mkdir(parents=True, exist_ok=True)
+    (context_dir / "active_context.md").write_text("Active context\n", encoding="utf-8")
+    (context_dir / "decisions.md").write_text("Decision log\n", encoding="utf-8")
+
+    run_dir = tmp_path / ".codex-autorunner" / "runs" / run_paused
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "DISPATCH.md").write_text("dispatch", encoding="utf-8")
+    live_flow_dir = tmp_path / ".codex-autorunner" / "flows" / run_paused / "chat"
+    live_flow_dir.mkdir(parents=True, exist_ok=True)
+    (live_flow_dir / "outbound.jsonl").write_text("{}", encoding="utf-8")
+
+    handler = _FlowLifecycleHandler()
+    await handler._handle_flow_archive(_message(), tmp_path, argv=["--force"])
 
     archive_dir = (
         tmp_path
