@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
+from ..logging_utils import log_event
 from ..pma_thread_store import PmaThreadStore
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
@@ -40,6 +42,7 @@ _MISSING_THREAD_MARKERS = (
     "thread not found",
     "no rollout found for thread id",
 )
+logger = logging.getLogger(__name__)
 
 
 class BusyInterruptFailedError(RuntimeError):
@@ -883,6 +886,38 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             thread_target_id, execution.execution_id
         )
 
+    def _recover_lost_backend_execution(
+        self,
+        *,
+        thread_target_id: str,
+        execution: ExecutionRecord,
+        backend_thread_id: Optional[str],
+        error_message: str,
+        reason: str,
+    ) -> ExecutionRecord:
+        recovered = self.thread_store.record_execution_result(
+            thread_target_id,
+            execution.execution_id,
+            status="error",
+            assistant_text="",
+            error=error_message,
+            backend_turn_id=execution.backend_id,
+            transcript_turn_id=None,
+        )
+        self.thread_store.set_thread_backend_id(thread_target_id, None)
+        log_event(
+            logger,
+            logging.INFO,
+            "orchestration.thread.recovered_lost_backend",
+            thread_target_id=thread_target_id,
+            execution_id=execution.execution_id,
+            backend_thread_id=backend_thread_id,
+            backend_turn_id=execution.backend_id,
+            reason=reason,
+            error=error_message,
+        )
+        return recovered
+
     async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome:
         thread = self.get_thread_target(thread_target_id)
         if thread is None:
@@ -898,16 +933,13 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         backend_thread_id = thread.backend_thread_id
         if not backend_thread_id:
-            recovered = self.thread_store.record_execution_result(
-                thread_target_id,
-                execution.execution_id,
-                status="error",
-                assistant_text="",
-                error=MISSING_BACKEND_THREAD_ERROR,
-                backend_turn_id=execution.backend_id,
-                transcript_turn_id=None,
+            recovered = self._recover_lost_backend_execution(
+                thread_target_id=thread_target_id,
+                execution=execution,
+                backend_thread_id=None,
+                error_message=MISSING_BACKEND_THREAD_ERROR,
+                reason="missing_backend_thread_id",
             )
-            self.thread_store.set_thread_backend_id(thread_target_id, None)
             return ThreadStopOutcome(
                 thread_target_id=thread_target_id,
                 cancelled_queued=cancelled_queued,
@@ -920,16 +952,23 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         except Exception as exc:
             if not _is_missing_thread_error(exc):
                 raise
-            recovered = self.thread_store.record_execution_result(
-                thread_target_id,
-                execution.execution_id,
-                status="error",
-                assistant_text="",
-                error=LOST_BACKEND_THREAD_ERROR,
+            log_event(
+                logger,
+                logging.INFO,
+                "orchestration.thread.interrupt_missing_backend",
+                thread_target_id=thread_target_id,
+                execution_id=execution.execution_id,
+                backend_thread_id=backend_thread_id,
                 backend_turn_id=execution.backend_id,
-                transcript_turn_id=None,
+                exc=exc,
             )
-            self.thread_store.set_thread_backend_id(thread_target_id, None)
+            recovered = self._recover_lost_backend_execution(
+                thread_target_id=thread_target_id,
+                execution=execution,
+                backend_thread_id=backend_thread_id,
+                error_message=LOST_BACKEND_THREAD_ERROR,
+                reason="interrupt_thread_not_found",
+            )
             return ThreadStopOutcome(
                 thread_target_id=thread_target_id,
                 cancelled_queued=cancelled_queued,
