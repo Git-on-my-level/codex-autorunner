@@ -156,6 +156,7 @@ def test_build_app_server_supervisor_factory_preserves_runtime_policy_settings(
 def test_build_app_server_supervisor_factory_prefers_global_env_override(
     monkeypatch, tmp_path: Path
 ) -> None:
+    monkeypatch.setenv(GLOBAL_APP_SERVER_COMMAND_ENV, "/env/codex app-server --global")
     hub_root, repo_root = _make_repo_config(tmp_path)
     config = load_repo_config(repo_root, hub_path=hub_root)
 
@@ -165,7 +166,6 @@ def test_build_app_server_supervisor_factory_prefers_global_env_override(
         def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
             captured["command"] = list(command)
 
-    monkeypatch.setenv(GLOBAL_APP_SERVER_COMMAND_ENV, "/env/codex app-server --global")
     monkeypatch.setattr(
         "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
         _FakeSupervisor,

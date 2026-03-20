@@ -17,7 +17,6 @@ from typing import Any, Awaitable, Callable, Optional
 from ...agents.opencode.harness import OpenCodeHarness
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...bootstrap import seed_repo_files
-from ...core.app_server_command import resolve_app_server_command
 from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
     preferred_non_pma_chat_notification_sources_by_workspace,
@@ -1926,10 +1925,10 @@ class DiscordBotService:
         self, workspace_root: Path, workspace_id: str, state_dir: Path
     ) -> dict[str, str]:
         repo_config = load_repo_config(workspace_root, hub_path=self._hub_config_path)
-        command = resolve_app_server_command(
-            repo_config.app_server.command
-            if repo_config and repo_config.app_server
-            else None
+        command = (
+            list(repo_config.app_server.command)
+            if repo_config and repo_config.app_server and repo_config.app_server.command
+            else []
         )
         return build_app_server_env(
             command,
@@ -1951,10 +1950,12 @@ class DiscordBotService:
                 workspace_root,
                 hub_path=self._hub_config_path,
             )
-            command = resolve_app_server_command(
-                repo_config.app_server.command
-                if repo_config and repo_config.app_server
-                else None
+            command = (
+                list(repo_config.app_server.command)
+                if repo_config
+                and repo_config.app_server
+                and repo_config.app_server.command
+                else []
             )
             supervisor = WorkspaceAppServerSupervisor(
                 command,

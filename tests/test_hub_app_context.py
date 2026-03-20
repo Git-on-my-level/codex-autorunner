@@ -119,6 +119,7 @@ def test_build_app_server_supervisor_prefers_global_env_override(
     hub_root = tmp_path / "hub"
     hub_root.mkdir()
     seed_hub_files(hub_root, force=True)
+    monkeypatch.setenv(GLOBAL_APP_SERVER_COMMAND_ENV, "/env/codex app-server --web")
     config = web_app_state_module.load_hub_config(hub_root)
 
     captured: dict[str, object] = {}
@@ -127,7 +128,6 @@ def test_build_app_server_supervisor_prefers_global_env_override(
         def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
             captured["command"] = list(command)
 
-    monkeypatch.setenv(GLOBAL_APP_SERVER_COMMAND_ENV, "/env/codex app-server --web")
     monkeypatch.setattr(
         web_app_state_module, "WorkspaceAppServerSupervisor", _FakeSupervisor
     )

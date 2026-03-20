@@ -682,6 +682,24 @@ def test_load_repo_config_fails_when_manifest_yaml_is_invalid(tmp_path: Path) ->
         load_repo_config(repo_root, hub_path=hub_root)
 
 
+def test_load_repo_config_preserves_explicit_empty_app_server_command(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(hub_root / CONFIG_FILENAME, {"mode": "hub"})
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+    write_test_config(
+        repo_root / REPO_OVERRIDE_FILENAME,
+        {"app_server": {"command": []}},
+    )
+
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    assert config.app_server.command == []
+
+
 def test_load_hub_config_raises_when_no_config_in_git_repo(tmp_path: Path) -> None:
     """Test that load_hub_config raises ConfigError without creating hub config."""
     git_repo = tmp_path / "repo"

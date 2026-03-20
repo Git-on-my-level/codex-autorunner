@@ -1674,10 +1674,18 @@ def _parse_app_server_config(
     defaults: Dict[str, Any],
 ) -> AppServerConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
-    command = resolve_app_server_command(
-        cfg.get("command", defaults.get("command")),
-        env=os.environ,
-    )
+    raw_command = cfg.get("command", dataclasses.MISSING)
+    if raw_command is dataclasses.MISSING:
+        command = resolve_app_server_command(
+            defaults.get("command"),
+            env=os.environ,
+        )
+    else:
+        command = resolve_app_server_command(
+            raw_command,
+            env=os.environ,
+            fallback=(),
+        )
     state_root_raw = cfg.get("state_root", defaults.get("state_root"))
     if state_root_raw is None:
         raise ConfigError("app_server.state_root is required")

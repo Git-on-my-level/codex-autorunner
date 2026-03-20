@@ -12,7 +12,6 @@ from typing import Any, Mapping, Optional, cast
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import validate_agent_id
 from ...bootstrap import ensure_hub_car_shim
-from ...core.app_server_command import resolve_app_server_command
 from ...core.config import (
     AppServerConfig,
     ConfigError,
@@ -374,9 +373,9 @@ def _build_app_server_supervisor(
     notification_handler: Optional[NotificationHandler] = None,
     approval_handler: Optional[ApprovalHandler] = None,
 ) -> tuple[Optional[WorkspaceAppServerSupervisor], Optional[float]]:
-    command = resolve_app_server_command(config.command)
-    if not command:
+    if not config.command:
         return None, None
+    command = list(config.command)
 
     def _env_builder(
         workspace_root: Path, _workspace_id: str, state_dir: Path
