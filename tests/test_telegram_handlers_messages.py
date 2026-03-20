@@ -383,6 +383,53 @@ async def test_buffer_coalesced_message_does_not_construct_lock_when_key_exists(
 
 
 @pytest.mark.anyio
+async def test_flush_coalesced_key_wraps_with_typing_indicator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeline: list[tuple[object, ...]] = []
+
+    async def _handle_inner(
+        _handlers: object,
+        message: TelegramMessage,
+        *,
+        topic_key: Optional[str] = None,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
+        timeline.append(("inner", message.text, topic_key, placeholder_id))
+
+    monkeypatch.setattr(msg_module, "handle_message_inner", _handle_inner)
+
+    async def _begin(chat_id: int, thread_id: Optional[int]) -> None:
+        timeline.append(("begin", chat_id, thread_id))
+
+    async def _end(chat_id: int, thread_id: Optional[int]) -> None:
+        timeline.append(("end", chat_id, thread_id))
+
+    key = "chat:3:thread:4:user:5"
+    handlers = types.SimpleNamespace(
+        _coalesce_locks={key: _AsyncNoopLock()},
+        _coalesced_buffers={
+            key: _CoalescedBuffer(
+                message=_message(text="hello"),
+                parts=["alpha", "beta"],
+                topic_key="topic-key",
+                placeholder_id=99,
+            )
+        },
+        _begin_typing_indicator=_begin,
+        _end_typing_indicator=_end,
+    )
+
+    await msg_module.flush_coalesced_key(handlers, key)
+
+    assert timeline == [
+        ("begin", 3, 4),
+        ("inner", "alpha\nbeta", "topic-key", 99),
+        ("end", 3, 4),
+    ]
+
+
+@pytest.mark.anyio
 async def test_buffer_media_batch_does_not_construct_lock_when_key_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

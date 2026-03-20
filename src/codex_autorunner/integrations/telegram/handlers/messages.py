@@ -78,6 +78,35 @@ def _event_logger(handlers: Any) -> logging.Logger:
     return logging.getLogger(__name__)
 
 
+async def _run_with_typing_indicator(
+    handlers: Any,
+    *,
+    chat_id: Optional[int],
+    thread_id: Optional[int],
+    work: Any,
+) -> None:
+    if chat_id is None:
+        await work()
+        return
+    begin = getattr(handlers, "_begin_typing_indicator", None)
+    end = getattr(handlers, "_end_typing_indicator", None)
+    began = False
+    if callable(begin):
+        try:
+            await begin(chat_id, thread_id)
+            began = True
+        except Exception:
+            began = False
+    try:
+        await work()
+    finally:
+        if began and callable(end):
+            try:
+                await end(chat_id, thread_id)
+            except Exception:
+                pass
+
+
 def _paused_flow_status(run_record: Any) -> str:
     status = getattr(run_record, "status", None)
     if status is None:
@@ -798,11 +827,20 @@ async def flush_coalesced_key(handlers: Any, key: str) -> None:
     if task is not None and task is not asyncio.current_task():
         task.cancel()
     combined_message = build_coalesced_message(buffer)
-    await handle_message_inner(
+
+    async def _handle() -> None:
+        await handle_message_inner(
+            handlers,
+            combined_message,
+            topic_key=buffer.topic_key,
+            placeholder_id=buffer.placeholder_id,
+        )
+
+    await _run_with_typing_indicator(
         handlers,
-        combined_message,
-        topic_key=buffer.topic_key,
-        placeholder_id=buffer.placeholder_id,
+        chat_id=combined_message.chat_id,
+        thread_id=combined_message.thread_id,
+        work=_handle,
     )
 
 

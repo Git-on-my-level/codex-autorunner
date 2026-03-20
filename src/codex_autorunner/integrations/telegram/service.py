@@ -1579,26 +1579,23 @@ class TelegramBotService(
         self, chat_id: int, thread_id: Optional[int]
     ) -> None:
         key = (chat_id, thread_id)
-        task_to_start: Optional[Coroutine[Any, Any, None]] = None
         lock = self._ensure_typing_lock()
         async with lock:
             self._typing_sessions[key] = self._typing_sessions.get(key, 0) + 1
             task = self._typing_tasks.get(key)
-            if task is None or task.done():
-                task_to_start = self._typing_indicator_loop(chat_id, thread_id)
-        if task_to_start is None:
-            return
-        try:
-            self._typing_tasks[key] = self._spawn_task(task_to_start)
-        except Exception:
-            task_to_start.close()
-            async with lock:
+            if task is not None and not task.done():
+                return
+            typing_coro = self._typing_indicator_loop(chat_id, thread_id)
+            try:
+                self._typing_tasks[key] = self._spawn_task(typing_coro)
+            except Exception:
+                typing_coro.close()
                 count = self._typing_sessions.get(key, 0)
                 if count <= 1:
                     self._typing_sessions.pop(key, None)
                 else:
                     self._typing_sessions[key] = count - 1
-            raise
+                raise
 
     async def _end_typing_indicator(
         self, chat_id: int, thread_id: Optional[int]
