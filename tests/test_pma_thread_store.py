@@ -260,6 +260,44 @@ def test_claim_next_queued_turn_recovers_stale_running_execution(
     assert stale_after["finished_at"]
 
 
+def test_recovery_does_not_interrupt_legit_queued_turn_promoted_after_newer_terminal(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    first_running = store.create_turn(thread["managed_thread_id"], prompt="A")
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="B",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "B"}},
+    )
+    assert queued_turn["status"] == "queued"
+    assert store.mark_turn_finished(first_running["managed_turn_id"], status="ok")
+
+    newer_running = store.create_turn(thread["managed_thread_id"], prompt="C")
+    assert newer_running["status"] == "running"
+    assert store.mark_turn_finished(newer_running["managed_turn_id"], status="ok")
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is not None
+    claimed_execution, _ = claimed
+    assert claimed_execution["managed_turn_id"] == queued_turn["managed_turn_id"]
+    assert claimed_execution["status"] == "running"
+
+    running_after = store.get_running_turn(thread["managed_thread_id"])
+    assert running_after is not None
+    assert running_after["managed_turn_id"] == queued_turn["managed_turn_id"]
+
+    queued_after = store.get_turn(
+        thread["managed_thread_id"], queued_turn["managed_turn_id"]
+    )
+    assert queued_after is not None
+    assert queued_after["status"] == "running"
+    assert queued_after["error"] is None
+
+
 def test_mark_turn_finished_does_not_override_interrupted_status(
     tmp_path: Path,
 ) -> None:

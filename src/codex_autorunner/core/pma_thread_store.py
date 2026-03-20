@@ -22,7 +22,6 @@ from .time_utils import now_iso
 
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
 _STALE_RUNNING_RECOVERY_ERROR = "stale_running_execution_recovered"
-_TERMINAL_RUNTIME_STATUSES = frozenset({"completed", "interrupted", "failed"})
 
 
 class ManagedThreadAlreadyHasRunningTurnError(RuntimeError):
@@ -507,11 +506,11 @@ class PmaThreadStore:
     ) -> list[str]:
         running_rows = conn.execute(
             """
-            SELECT rowid AS execution_rowid, execution_id
+            SELECT execution_id
               FROM orch_thread_executions
              WHERE thread_target_id = ?
                AND status = 'running'
-             ORDER BY rowid ASC
+             ORDER BY created_at ASC, execution_id ASC
             """,
             (managed_thread_id,),
         ).fetchall()
@@ -526,11 +525,6 @@ class PmaThreadStore:
             """,
             (managed_thread_id,),
         ).fetchone()
-        runtime_status = (
-            str(thread_row["runtime_status"]).strip().lower()
-            if thread_row is not None and thread_row["runtime_status"] is not None
-            else ""
-        )
         status_turn_id = (
             str(thread_row["status_turn_id"]).strip()
             if thread_row is not None and thread_row["status_turn_id"] is not None
@@ -540,30 +534,7 @@ class PmaThreadStore:
         stale_execution_ids: list[str] = []
         for row in running_rows:
             execution_id = str(row["execution_id"])
-            execution_rowid = int(row["execution_rowid"])
-            newer_terminal = conn.execute(
-                """
-                SELECT 1
-                  FROM orch_thread_executions AS e
-             LEFT JOIN orch_queue_items AS q
-                    ON q.source_kind = 'thread_execution'
-                   AND q.source_key = e.execution_id
-                 WHERE e.thread_target_id = ?
-                   AND e.status IN ('ok', 'error', 'interrupted')
-                   AND e.rowid > ?
-                   AND (q.queue_item_id IS NULL OR q.claimed_at IS NOT NULL)
-                 LIMIT 1
-                """,
-                (managed_thread_id, execution_rowid),
-            ).fetchone()
-            if newer_terminal is not None:
-                stale_execution_ids.append(execution_id)
-                continue
-            if (
-                runtime_status in _TERMINAL_RUNTIME_STATUSES
-                and status_turn_id
-                and status_turn_id != execution_id
-            ):
+            if status_turn_id and status_turn_id != execution_id:
                 stale_execution_ids.append(execution_id)
         return stale_execution_ids
 
