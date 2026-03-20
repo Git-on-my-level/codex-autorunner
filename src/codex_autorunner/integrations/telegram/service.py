@@ -674,10 +674,7 @@ class TelegramBotService(
             if isinstance(existing, dict):
                 pid = existing.get("pid")
                 if isinstance(pid, int) and pid == os.getpid():
-                    try:
-                        lock_path.unlink()
-                    except OSError:
-                        pass
+                    lock.write_text("")
         finally:
             lock.release()
         self._instance_lock_path = None

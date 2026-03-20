@@ -583,3 +583,50 @@ async def test_terminal_scan_failure_sends_degraded_notice_once_until_recovery(
     await bridge._notify_terminal_for_workspace(workspace, [("123:456", record)])
 
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_pause_scan_failure_retries_when_notice_delivery_returns_false(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "tg-1-send-false"
+    workspace.mkdir()
+    record = _DummyRecord(workspace)
+    calls: list[tuple[int, str, int | None]] = []
+
+    async def send_message_with_outbox(
+        chat_id: int, text: str, thread_id=None, reply_to=None
+    ):
+        calls.append((chat_id, text, thread_id))
+        return False
+
+    async def send_document(**kwargs):
+        return True
+
+    bridge = TelegramTicketFlowBridge(
+        logger=logging.getLogger("test"),
+        store=_DummyStore({"123:456": record}),
+        pause_targets={},
+        send_message_with_outbox=send_message_with_outbox,
+        send_document=send_document,
+        pause_config=PauseDispatchNotifications(
+            enabled=True,
+            send_attachments=False,
+            max_file_size_bytes=10,
+            chunk_long_messages=False,
+        ),
+        default_notification_chat_id=None,
+        hub_root=None,
+        manifest_path=None,
+        config_root=workspace,
+    )
+
+    def _raise_disk_error(_path: Path):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    bridge._load_ticket_flow_pause = _raise_disk_error  # type: ignore[assignment]
+
+    await bridge._notify_ticket_flow_pause(workspace, [("123:456", record)])
+    await bridge._notify_ticket_flow_pause(workspace, [("123:456", record)])
+
+    assert len(calls) == 2

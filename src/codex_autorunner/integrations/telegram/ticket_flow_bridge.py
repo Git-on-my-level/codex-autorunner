@@ -927,16 +927,16 @@ class TelegramTicketFlowBridge:
             except Exception as exc:
                 self._logger.debug("Failed to parse topic key: %s", exc)
             else:
-                await self._send_message_with_outbox(
+                sent = await self._send_message_with_outbox(
                     chat_id, message, thread_id=thread_id, reply_to=None
                 )
-                return True
+                return bool(sent)
         if self._default_notification_chat_id is None:
             return False
-        await self._send_message_with_outbox(
+        sent = await self._send_message_with_outbox(
             self._default_notification_chat_id,
             message,
             thread_id=None,
             reply_to=None,
         )
-        return True
+        return bool(sent)

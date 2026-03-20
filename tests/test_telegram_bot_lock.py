@@ -59,7 +59,8 @@ def test_telegram_bot_lock_acquire_and_release(
     finally:
         service._release_instance_lock()
         asyncio.run(service._app_server_supervisor.close_all())
-    assert not lock_path.exists()
+    assert lock_path.exists()
+    assert lock_path.read_text(encoding="utf-8") == ""
 
 
 def test_telegram_bot_lock_contended(
