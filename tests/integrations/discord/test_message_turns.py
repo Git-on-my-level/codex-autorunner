@@ -2789,7 +2789,7 @@ async def test_message_create_opencode_turn_sends_summary_before_final(
             str(msg["payload"].get("content", "")) for msg in rest.channel_messages
         ]
         assert any(
-            "done · agent opencode · model-x · 1s · step 3\n\nfinal output" in content
+            "final output\n\ndone · agent opencode · model-x · 1s · step 3" in content
             for content in contents
         )
         assert not any(content.strip() == "---" for content in contents)
@@ -2843,7 +2843,7 @@ async def test_message_create_opencode_turn_does_not_duplicate_summary_with_metr
         ]
         combined = "\n".join(contents)
         assert combined.count(summary) == 1
-        assert "Turn time: 1.0s" in combined
+        assert "(No response text returned.)" in combined
     finally:
         await store.close()
 
@@ -3331,7 +3331,8 @@ async def test_message_create_streaming_turn_appends_final_metrics(
                 final_content = content
                 break
         assert final_content
-        assert "Turn time:" in final_content
+        assert "agent codex" in final_content
+        assert "ctx 65%" in final_content
         assert "Token usage: total 71173 input 400 output 245 ctx 65%" in final_content
     finally:
         await store.close()
@@ -3402,7 +3403,8 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
                 break
         assert final_content
         assert streamed_text in final_content
-        assert "Turn time:" in final_content
+        assert "agent codex" in final_content
+        assert "ctx 65%" in final_content
         assert "Token usage: total 71173 input 400 output 245 ctx 65%" in final_content
         assert "(No response text returned.)" not in final_content
     finally:
@@ -3464,7 +3466,8 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
                 break
         assert final_content
         assert "(No response text returned.)" in final_content
-        assert "Turn time:" in final_content
+        assert "agent codex" in final_content
+        assert "ctx 65%" in final_content
     finally:
         await store.close()
 

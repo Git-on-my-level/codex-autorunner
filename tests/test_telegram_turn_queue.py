@@ -490,7 +490,7 @@ async def test_normal_turn_deletes_progress_placeholder_on_success() -> None:
 
 
 @pytest.mark.anyio
-async def test_normal_turn_append_to_progress_appends_metrics_to_response() -> None:
+async def test_normal_turn_append_to_progress_does_not_emit_separate_metrics() -> None:
     wait = asyncio.Event()
     wait.set()
     client = _ClientStub(turn_wait_events=[wait])
@@ -526,11 +526,13 @@ async def test_normal_turn_append_to_progress_appends_metrics_to_response() -> N
 
     assert captured == {}
     assert handler._deliver_calls[-1]["delete_placeholder_on_delivery"] is True
-    assert handler._deliver_calls[-1]["response"].endswith("\n\nmetrics block")
+    assert "metrics block" not in handler._deliver_calls[-1]["response"]
 
 
 @pytest.mark.anyio
-async def test_normal_opencode_turn_sends_summary_before_final_response() -> None:
+async def test_normal_opencode_turn_appends_summary_footer_after_final_response() -> (
+    None
+):
     wait = asyncio.Event()
     wait.set()
     client = _ClientStub(turn_wait_events=[wait])
@@ -573,7 +575,7 @@ async def test_normal_opencode_turn_sends_summary_before_final_response() -> Non
     assert handler._outbox_calls == []
     assert (
         handler._deliver_calls[-1]["response"]
-        == "done · agent opencode · model-x · 1s · step 3\n\nfinal output"
+        == "final output\n\ndone · agent opencode · model-x · 1s · step 3"
     )
     assert handler._deliver_calls[-1]["intermediate_response"] is None
 
@@ -622,8 +624,8 @@ async def test_normal_opencode_turn_drops_no_response_sentinel_when_summary_pres
     await handler._handle_normal_message(message, _RuntimeStub(), record=record)
 
     assert (
-        handler._deliver_calls[-1]["response"]
-        == "done · agent opencode · model-x · 1s · step 3"
+        handler._deliver_calls[-1]["response"] == "(No response text returned.)\n\n"
+        "done · agent opencode · model-x · 1s · step 3"
     )
     assert handler._deliver_calls[-1]["intermediate_response"] is None
 

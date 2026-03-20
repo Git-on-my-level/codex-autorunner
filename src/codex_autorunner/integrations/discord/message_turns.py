@@ -72,7 +72,7 @@ from ..chat.managed_thread_progress import (
 from ..chat.progress_primitives import TurnProgressTracker, render_progress_text
 from ..chat.turn_metrics import (
     _extract_context_usage_percent,
-    _format_turn_metrics,
+    compose_turn_response_with_footer,
 )
 from .components import build_cancel_turn_button
 from .rendering import (
@@ -521,27 +521,22 @@ async def handle_message_event(
         return
     turn_result = result.thread_result
 
-    summary_already_in_response = False
     if isinstance(turn_result, DiscordMessageTurnResult):
-        response_text = turn_result.final_message.strip()
+        response_text = turn_result.final_message
         preview_message_id = turn_result.preview_message_id
         intermediate_text = (
             turn_result.intermediate_message.strip()
             if isinstance(turn_result.intermediate_message, str)
             else ""
         )
-        if not response_text and intermediate_text:
-            response_text = intermediate_text
-            summary_already_in_response = True
-        metrics_text = _format_turn_metrics(
-            turn_result.token_usage,
-            turn_result.elapsed_seconds,
+        response_text = compose_turn_response_with_footer(
+            response_text,
+            summary_text=intermediate_text,
+            token_usage=turn_result.token_usage,
+            elapsed_seconds=turn_result.elapsed_seconds,
+            agent=agent,
+            model=model_override,
         )
-        if metrics_text:
-            if response_text.strip():
-                response_text = f"{response_text}\n\n{metrics_text}"
-            else:
-                response_text = f"(No response text returned.)\n\n{metrics_text}"
     else:
         response_text = str(turn_result or "")
         preview_message_id = None
@@ -553,14 +548,6 @@ async def handle_message_event(
             message_id=preview_message_id,
             record_id=f"turn:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}",
         )
-    if (
-        agent == "opencode"
-        and intermediate_text
-        and response_text.strip()
-        and not summary_already_in_response
-        and intermediate_text != response_text.strip()
-    ):
-        response_text = f"{intermediate_text}\n\n{response_text}"
     await _send_discord_turn_section(
         service,
         channel_id=channel_id,

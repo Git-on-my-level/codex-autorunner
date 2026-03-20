@@ -31,6 +31,7 @@ from ...chat.picker_filter import (
     filter_picker_items,
     find_exact_picker_item,
 )
+from ...chat.turn_metrics import compose_turn_response_with_footer
 from ...chat.update_notifier import (
     format_update_status_message,
     mark_update_status_notified,
@@ -366,31 +367,22 @@ class TelegramCommandHandlers(
         )
         if isinstance(outcome, _TurnRunFailure):
             return
-        metrics = self._format_turn_metrics_text(
-            outcome.token_usage, outcome.elapsed_seconds
-        )
-        metrics_mode = self._metrics_mode()
+        resolved_agent = self._effective_agent(outcome.record)
         response_text = outcome.response
-        if metrics and metrics_mode in {"append_to_response", "append_to_progress"}:
-            response_text = f"{response_text}\n\n{metrics}"
-        intermediate_response = outcome.intermediate_response
-        if self._effective_agent(outcome.record) == "opencode":
+        if resolved_agent == "opencode":
             if (
                 isinstance(response_text, str)
                 and response_text.strip() == "No response."
             ):
                 response_text = ""
-            summary_text = (
-                outcome.intermediate_response.strip()
-                if isinstance(outcome.intermediate_response, str)
-                else ""
-            )
-            final_text = response_text.strip() if isinstance(response_text, str) else ""
-            if summary_text and final_text and summary_text != final_text:
-                response_text = f"{summary_text}\n\n{response_text}"
-            elif summary_text and not final_text:
-                response_text = summary_text
-            intermediate_response = None
+        response_text = compose_turn_response_with_footer(
+            response_text,
+            summary_text=outcome.intermediate_response,
+            token_usage=outcome.token_usage,
+            elapsed_seconds=outcome.elapsed_seconds,
+            agent=resolved_agent,
+            model=getattr(outcome.record, "model", None),
+        )
         try:
             response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,
@@ -398,7 +390,6 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
                 placeholder_id=outcome.placeholder_id,
                 response=response_text,
-                intermediate_response=intermediate_response,
             )
         except TypeError as exc:
             if "intermediate_response" not in str(exc):
@@ -421,14 +412,6 @@ class TelegramCommandHandlers(
                 thread_id=message.thread_id,
                 placeholder_id=outcome.placeholder_id,
                 final_response_sent_at=now_iso(),
-            )
-        if metrics and metrics_mode == "separate":
-            await self._send_turn_metrics(
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                elapsed_seconds=outcome.elapsed_seconds,
-                token_usage=outcome.token_usage,
             )
         if outcome.turn_id:
             self._token_usage_by_turn.pop(outcome.turn_id, None)
