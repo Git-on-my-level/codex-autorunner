@@ -335,6 +335,68 @@ async def test_audio_message_bypasses_coalescing_like_voice(
 
 
 @pytest.mark.anyio
+async def test_forwarded_text_message_bypasses_coalescing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    forwarded_message = _message(
+        text="/status",
+        entities=(bot_command_entity("/status"),),
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+
+    timeline: list[tuple[str, object]] = []
+    topic_key = "topic-key"
+    coalesce_key = f"{topic_key}:user:{forwarded_message.from_user_id}"
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return topic_key
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _config=types.SimpleNamespace(
+            media=types.SimpleNamespace(batch_uploads=True, enabled=True)
+        ),
+        _pending_questions={},
+        _resolve_topic_key=_resolve_topic_key,
+        _coalesce_locks={coalesce_key: _AsyncNoopLock()},
+        _coalesced_buffers={
+            coalesce_key: _CoalescedBuffer(
+                message=_message(text="older"),
+                parts=["older"],
+                topic_key=topic_key,
+            )
+        },
+        _claim_queued_placeholder=lambda *_args, **_kwargs: None,
+        _delete_message=lambda *_args, **_kwargs: None,
+    )
+
+    async def async_handle_inner(
+        _handlers: object,
+        message: TelegramMessage,
+        *,
+        topic_key: Optional[str] = None,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
+        _ = topic_key
+        timeline.append((message.text or "", message.forward_origin))
+        assert placeholder_id is None
+
+    monkeypatch.setattr(msg_module, "handle_message_inner", async_handle_inner)
+
+    async def async_buffer(*args, **kwargs):
+        raise AssertionError("forwarded text should not be buffered for coalescing")
+
+    monkeypatch.setattr(msg_module, "buffer_coalesced_message", async_buffer)
+
+    await msg_module.handle_message(handlers, forwarded_message)
+
+    assert timeline == [
+        ("older", None),
+        ("/status", forwarded_message.forward_origin),
+    ]
+
+
+@pytest.mark.anyio
 async def test_media_batch_key_with_media_group() -> None:
     async def _resolve_topic_key(chat_id: int, thread_id: int) -> str:
         return f"chat:{chat_id}:thread:{thread_id}"
@@ -486,6 +548,107 @@ async def test_buffer_media_batch_does_not_construct_lock_when_key_exists(
 
 
 @pytest.mark.anyio
+async def test_handle_message_preserves_forwarded_media_through_batch_flush() -> None:
+    message = _message(
+        caption="caption here",
+        document=TelegramDocument(
+            file_id="doc-1",
+            file_unique_id=None,
+            file_name="notes.txt",
+            mime_type="text/plain",
+            file_size=12,
+        ),
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+    queued: list[object] = []
+    batch_calls: list[dict[str, object]] = []
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _dismiss_review_custom_prompt(*_args, **_kwargs) -> None:
+        return
+
+    async def _delete_message(*_args, **_kwargs) -> None:
+        return
+
+    async def _handle_media_batch(
+        messages: list[TelegramMessage],
+        *,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
+        batch_calls.append(
+            {
+                "messages": messages,
+                "placeholder_id": placeholder_id,
+            }
+        )
+
+    def _spawn_task(coro: object) -> None:
+        coro.close()
+        return None
+
+    def _wrap_placeholder_work(
+        *,
+        chat_id: int,
+        placeholder_id: Optional[int],
+        work: object,
+    ) -> object:
+        _ = (chat_id, placeholder_id)
+        return work()
+
+    def _enqueue_topic_work(_key: str, wrapped: object) -> None:
+        queued.append(wrapped)
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _config=types.SimpleNamespace(
+            media=types.SimpleNamespace(
+                enabled=True,
+                batch_uploads=True,
+                batch_window_seconds=0.5,
+            )
+        ),
+        _pending_questions={},
+        _resume_options={},
+        _bind_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={},
+        _dismiss_review_custom_prompt=_dismiss_review_custom_prompt,
+        _claim_queued_placeholder=lambda *_args, **_kwargs: None,
+        _delete_message=_delete_message,
+        _resolve_topic_key=_resolve_topic_key,
+        _coalesce_locks={},
+        _coalesced_buffers={},
+        _media_batch_locks={},
+        _media_batch_buffers={},
+        _touch_cache_timestamp=lambda *_args, **_kwargs: None,
+        _spawn_task=_spawn_task,
+        _wrap_placeholder_work=_wrap_placeholder_work,
+        _enqueue_topic_work=_enqueue_topic_work,
+        _handle_media_batch=_handle_media_batch,
+    )
+
+    await msg_module.handle_message(handlers, message)
+
+    key = await media_batch_key(handlers, message)
+    assert key in handlers._media_batch_buffers
+    await msg_module.flush_media_batch_key(handlers, key)
+    assert len(queued) == 1
+    await queued[0]
+
+    assert len(batch_calls) == 1
+    forwarded = batch_calls[0]["messages"][0].forward_origin
+    assert forwarded is not None
+    assert forwarded.source_label == "Ops"
+    assert forwarded.message_id == 9
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize(
     ("locks_attr", "guard_attr"),
     [
@@ -513,6 +676,457 @@ async def test_ensure_key_lock_returns_same_instance_for_concurrent_callers(
     first = locks[0]
     assert all(lock is first for lock in locks)
     assert getattr(handlers, locks_attr)[key] is first
+
+
+@pytest.mark.anyio
+async def test_handle_message_allows_forwarded_custom_question_command_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _message(
+        text="/workspace/repo",
+        entities=(bot_command_entity("/workspace/repo"),),
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+    policy_flags: list[bool] = []
+    custom_calls: list[int] = []
+
+    async def _handle_custom_text_input(
+        _handlers: object, custom_message: TelegramMessage
+    ) -> bool:
+        custom_calls.append(custom_message.message_id)
+        return True
+
+    monkeypatch.setattr(
+        msg_module, "handle_custom_text_input", _handle_custom_text_input
+    )
+
+    async def _delete_message(*_args, **_kwargs) -> None:
+        raise AssertionError("forwarded custom input should not be rejected")
+
+    pending = types.SimpleNamespace(
+        awaiting_custom_input=True,
+        chat_id=message.chat_id,
+        thread_id=message.thread_id,
+    )
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _pending_questions={"req-1": pending},
+        _claim_queued_placeholder=lambda *_args, **_kwargs: None,
+        _delete_message=_delete_message,
+        _evaluate_collaboration_message_policy=lambda _message, *, text, is_explicit_command: (
+            policy_flags.append(is_explicit_command)
+            or types.SimpleNamespace(
+                command_allowed=not is_explicit_command,
+                should_start_turn=True,
+            )
+        ),
+    )
+
+    await msg_module.handle_message(handlers, message)
+
+    assert policy_flags == [False]
+    assert custom_calls == [message.message_id]
+
+
+@pytest.mark.anyio
+async def test_handle_message_inner_allows_forwarded_pending_review_custom_text() -> (
+    None
+):
+    message = _message(
+        text="/workspace/repo",
+        entities=(bot_command_entity("/workspace/repo"),),
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+    policy_flags: list[bool] = []
+    review_custom_calls: list[dict[str, object]] = []
+    deleted: list[tuple[object, ...]] = []
+    runtime = object()
+
+    class _RouterStub:
+        def runtime_for(self, _key: str) -> object:
+            return runtime
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _handle_pending_review_commit(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _handle_pending_review_custom(
+        key: str,
+        _message: TelegramMessage,
+        runtime_arg: object,
+        command: object,
+        raw_text: str,
+        raw_caption: str,
+    ) -> bool:
+        review_custom_calls.append(
+            {
+                "key": key,
+                "runtime_matches": runtime_arg is runtime,
+                "command": command,
+                "raw_text": raw_text,
+                "raw_caption": raw_caption,
+            }
+        )
+        return True
+
+    async def _delete_message(*args, **_kwargs) -> None:
+        deleted.append(args)
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _router=_RouterStub(),
+        _config=types.SimpleNamespace(trigger_mode="all"),
+        _resume_options={},
+        _bind_options={},
+        _flow_run_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={"topic-key": object()},
+        _resolve_topic_key=_resolve_topic_key,
+        _handle_pending_resume=lambda *_args, **_kwargs: False,
+        _handle_pending_bind=lambda *_args, **_kwargs: False,
+        _handle_pending_review_commit=_handle_pending_review_commit,
+        _handle_pending_review_custom=_handle_pending_review_custom,
+        _dismiss_review_custom_prompt=lambda *_args, **_kwargs: None,
+        _delete_message=_delete_message,
+        _command_specs={},
+        _evaluate_collaboration_message_policy=lambda _message, *, text, is_explicit_command: (
+            policy_flags.append(is_explicit_command)
+            or types.SimpleNamespace(
+                command_allowed=not is_explicit_command,
+                should_start_turn=True,
+            )
+        ),
+    )
+
+    await handle_message_inner(handlers, message, placeholder_id=99)
+
+    assert policy_flags == [False]
+    assert len(review_custom_calls) == 1
+    assert review_custom_calls[0]["key"] == "topic-key"
+    assert review_custom_calls[0]["runtime_matches"] is True
+    assert review_custom_calls[0]["command"] is None
+    assert review_custom_calls[0]["raw_text"] == "/workspace/repo"
+    assert deleted == [(message.chat_id, 99)]
+
+
+@pytest.mark.anyio
+async def test_handle_message_inner_allows_forwarded_pending_bind_text() -> None:
+    message = _message(
+        text="/workspace/repo",
+        entities=(bot_command_entity("/workspace/repo"),),
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+    policy_flags: list[bool] = []
+    bind_calls: list[tuple[str, str, Optional[int]]] = []
+    deleted: list[tuple[object, ...]] = []
+    runtime = object()
+
+    class _RouterStub:
+        def runtime_for(self, _key: str) -> object:
+            return runtime
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _delete_message(*args, **_kwargs) -> None:
+        deleted.append(args)
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _router=_RouterStub(),
+        _config=types.SimpleNamespace(trigger_mode="all"),
+        _resume_options={},
+        _bind_options={"topic-key": object()},
+        _flow_run_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={},
+        _resolve_topic_key=_resolve_topic_key,
+        _handle_pending_resume=lambda *_args, **_kwargs: False,
+        _handle_pending_bind=lambda key, text, *, user_id=None: (
+            bind_calls.append((key, text, user_id)) or True
+        ),
+        _handle_pending_review_commit=lambda *_args, **_kwargs: False,
+        _handle_pending_review_custom=lambda *_args, **_kwargs: False,
+        _dismiss_review_custom_prompt=lambda *_args, **_kwargs: None,
+        _delete_message=_delete_message,
+        _command_specs={},
+        _evaluate_collaboration_message_policy=lambda _message, *, text, is_explicit_command: (
+            policy_flags.append(is_explicit_command)
+            or types.SimpleNamespace(
+                command_allowed=not is_explicit_command,
+                should_start_turn=True,
+            )
+        ),
+    )
+
+    await handle_message_inner(handlers, message, placeholder_id=99)
+
+    assert policy_flags == [False]
+    assert bind_calls == [("topic-key", "/workspace/repo", message.from_user_id)]
+    assert deleted == [(message.chat_id, 99)]
+
+
+@pytest.mark.anyio
+async def test_handle_message_inner_allows_forwarded_pending_resume_text() -> None:
+    message = _message(
+        text="/workspace/repo",
+        entities=(bot_command_entity("/workspace/repo"),),
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+    policy_flags: list[bool] = []
+    resume_calls: list[tuple[str, str, Optional[int]]] = []
+    deleted: list[tuple[object, ...]] = []
+    runtime = object()
+
+    class _RouterStub:
+        def runtime_for(self, _key: str) -> object:
+            return runtime
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _delete_message(*args, **_kwargs) -> None:
+        deleted.append(args)
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _router=_RouterStub(),
+        _config=types.SimpleNamespace(trigger_mode="all"),
+        _resume_options={"topic-key": object()},
+        _bind_options={},
+        _flow_run_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={},
+        _resolve_topic_key=_resolve_topic_key,
+        _handle_pending_resume=lambda key, text, *, user_id=None: (
+            resume_calls.append((key, text, user_id)) or True
+        ),
+        _handle_pending_bind=lambda *_args, **_kwargs: False,
+        _handle_pending_review_commit=lambda *_args, **_kwargs: False,
+        _handle_pending_review_custom=lambda *_args, **_kwargs: False,
+        _dismiss_review_custom_prompt=lambda *_args, **_kwargs: None,
+        _delete_message=_delete_message,
+        _command_specs={},
+        _evaluate_collaboration_message_policy=lambda _message, *, text, is_explicit_command: (
+            policy_flags.append(is_explicit_command)
+            or types.SimpleNamespace(
+                command_allowed=not is_explicit_command,
+                should_start_turn=True,
+            )
+        ),
+    )
+
+    await handle_message_inner(handlers, message, placeholder_id=99)
+
+    assert policy_flags == [False]
+    assert resume_calls == [("topic-key", "/workspace/repo", message.from_user_id)]
+    assert deleted == [(message.chat_id, 99)]
+
+
+@pytest.mark.anyio
+async def test_handle_message_inner_uses_formatted_forwarded_prompt_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _message(
+        text="deploy this",
+        forward_origin=TelegramForwardOrigin(
+            source_label="Ops", message_id=9, is_automatic=True
+        ),
+    )
+    captured: dict[str, object] = {}
+    runtime = object()
+
+    class _IngressStub:
+        async def submit_message(
+            self,
+            request,
+            *,
+            resolve_paused_flow_target,
+            submit_flow_reply,
+            submit_thread_message,
+        ) -> None:
+            _ = (resolve_paused_flow_target, submit_flow_reply)
+            captured["prompt_text"] = request.prompt_text
+            await submit_thread_message(request)
+
+    monkeypatch.setattr(
+        msg_module,
+        "build_surface_orchestration_ingress",
+        lambda event_sink: _IngressStub(),
+    )
+
+    class _RouterStub:
+        def runtime_for(self, _key: str) -> object:
+            return runtime
+
+        async def get_topic(self, _key: str) -> object:
+            return types.SimpleNamespace(pma_enabled=True, workspace_path=".")
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _handle_pending_review_commit(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _handle_pending_review_custom(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _dismiss_review_custom_prompt(*_args, **_kwargs) -> None:
+        return
+
+    async def _delete_message(*_args, **_kwargs) -> None:
+        return
+
+    async def _handle_normal_message(
+        _message: TelegramMessage,
+        runtime_arg: object,
+        *,
+        text_override: str,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
+        captured["runtime_matches"] = runtime_arg is runtime
+        captured["text_override"] = text_override
+        captured["placeholder_id"] = placeholder_id
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _router=_RouterStub(),
+        _config=types.SimpleNamespace(trigger_mode="all"),
+        _resume_options={},
+        _bind_options={},
+        _flow_run_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={},
+        _resolve_topic_key=_resolve_topic_key,
+        _handle_pending_resume=lambda *_args, **_kwargs: False,
+        _handle_pending_bind=lambda *_args, **_kwargs: False,
+        _handle_pending_review_commit=_handle_pending_review_commit,
+        _handle_pending_review_custom=_handle_pending_review_custom,
+        _dismiss_review_custom_prompt=_dismiss_review_custom_prompt,
+        _delete_message=_delete_message,
+        _command_specs={},
+        _handle_normal_message=_handle_normal_message,
+    )
+
+    await handle_message_inner(handlers, message, placeholder_id=99)
+
+    expected = "Forwarded message (automatic) from Ops [message 9]:\n" "deploy this"
+    assert captured["prompt_text"] == expected
+    assert captured["text_override"] == expected
+    assert captured["runtime_matches"] is True
+    assert captured["placeholder_id"] == 99
+
+
+@pytest.mark.anyio
+async def test_handle_media_message_uses_formatted_forwarded_caption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _message(
+        text="caption here",
+        document=TelegramDocument(
+            file_id="doc-1",
+            file_unique_id=None,
+            file_name="notes.txt",
+            mime_type="text/plain",
+            file_size=12,
+        ),
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+    captured: dict[str, object] = {}
+    runtime = object()
+
+    class _IngressStub:
+        async def submit_message(
+            self,
+            request,
+            *,
+            resolve_paused_flow_target,
+            submit_flow_reply,
+            submit_thread_message,
+        ) -> None:
+            _ = (resolve_paused_flow_target, submit_flow_reply)
+            captured["prompt_text"] = request.prompt_text
+            await submit_thread_message(request)
+
+    monkeypatch.setattr(
+        msg_module,
+        "build_surface_orchestration_ingress",
+        lambda event_sink: _IngressStub(),
+    )
+
+    async def _handle_file_message(
+        _message: TelegramMessage,
+        runtime_arg: object,
+        record: object,
+        file_candidate: object,
+        caption_text: str,
+        *,
+        placeholder_id: Optional[int] = None,
+    ) -> None:
+        _ = (record, file_candidate)
+        captured["runtime_matches"] = runtime_arg is runtime
+        captured["caption_text"] = caption_text
+        captured["placeholder_id"] = placeholder_id
+
+    class _RouterStub:
+        async def get_topic(self, _key: str) -> object:
+            return TelegramTopicRecord(workspace_path=".", pma_enabled=True)
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    handlers = types.SimpleNamespace(
+        _config=types.SimpleNamespace(
+            media=types.SimpleNamespace(
+                enabled=True,
+                max_image_bytes=1024,
+                max_file_bytes=1024,
+                max_voice_bytes=1024,
+                images=True,
+                voice=True,
+                files=True,
+            )
+        ),
+        _router=_RouterStub(),
+        _hub_root=".",
+        _resolve_topic_key=_resolve_topic_key,
+        _ticket_flow_pause_targets={},
+        _logger=types.SimpleNamespace(debug=lambda *_args, **_kwargs: None),
+        _with_conversation_id=lambda text, **_kwargs: text,
+        _handle_file_message=_handle_file_message,
+    )
+
+    await handle_media_message(
+        handlers,
+        message,
+        runtime=runtime,
+        caption_text="caption here",
+        placeholder_id=99,
+    )
+
+    expected = "Forwarded message from Ops [message 9]:\ncaption here"
+    assert captured["prompt_text"] == expected
+    assert captured["caption_text"] == expected
+    assert captured["runtime_matches"] is True
+    assert captured["placeholder_id"] == 99
 
 
 @pytest.mark.anyio

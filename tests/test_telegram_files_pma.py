@@ -5,9 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from codex_autorunner.integrations.telegram.adapter import TelegramMessage
+from codex_autorunner.integrations.telegram.adapter import (
+    TelegramForwardOrigin,
+    TelegramMessage,
+)
 from codex_autorunner.integrations.telegram.handlers.commands.files import (
     FilesCommands,
+    MediaBatchContext,
+    MediaBatchResult,
+    MediaBatchStats,
 )
 from codex_autorunner.integrations.telegram.state import TelegramTopicRecord
 
@@ -97,3 +103,44 @@ async def test_files_requires_binding_when_no_pma(tmp_path: Path) -> None:
 
     assert handler._sent
     assert "Use /bind" in handler._sent[-1]
+
+
+def test_build_media_prompt_includes_forwarded_caption(tmp_path: Path) -> None:
+    handler = FilesCommands.__new__(FilesCommands)
+    handler._config = SimpleNamespace(
+        media=SimpleNamespace(image_prompt="Describe the image", max_file_bytes=1024)
+    )
+    handler._hub_root = tmp_path
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=10,
+        thread_id=20,
+        from_user_id=2,
+        text=None,
+        caption="caption here",
+        date=None,
+        is_topic_message=True,
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+    context = MediaBatchContext(
+        first_message=message,
+        sorted_messages=[message],
+        record=TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=False),
+        runtime=None,
+        topic_key="10:20",
+        max_image_bytes=1024,
+        max_file_bytes=1024,
+    )
+    result = MediaBatchResult(
+        saved_image_paths=[],
+        saved_image_inbox_info=[],
+        saved_file_info=[("notes.txt", "/tmp/notes.txt", 12)],
+        stats=MediaBatchStats(),
+    )
+
+    prompt, input_items = handler._build_media_prompt(context, result)
+
+    assert "Forwarded message from Ops [message 9]:" in prompt
+    assert "caption here" in prompt
+    assert input_items is None
