@@ -639,7 +639,11 @@ async def test_handle_message_preserves_forwarded_media_through_batch_flush() ->
     assert key in handlers._media_batch_buffers
     await msg_module.flush_media_batch_key(handlers, key)
     assert len(queued) == 1
-    await queued[0]
+    queued_work = queued[0]
+    if callable(queued_work):
+        queued_work = queued_work()
+    if queued_work is not None:
+        await queued_work
 
     assert len(batch_calls) == 1
     forwarded = batch_calls[0]["messages"][0].forward_origin
