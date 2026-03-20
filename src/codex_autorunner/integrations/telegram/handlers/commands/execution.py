@@ -368,6 +368,65 @@ def _resolve_telegram_managed_thread(
     return orchestration_service, thread
 
 
+async def _reset_telegram_thread_binding(
+    handlers: Any,
+    *,
+    surface_key: str,
+    workspace_root: Path,
+    agent: str,
+    repo_id: Optional[str],
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+    mode: str,
+    pma_enabled: bool,
+) -> tuple[bool, str]:
+    orchestration_service, _binding, current_thread = _get_telegram_thread_binding(
+        handlers,
+        surface_key=surface_key,
+        mode=mode,
+    )
+    had_previous = current_thread is not None
+    normalized_repo_id = repo_id.strip() if isinstance(repo_id, str) else None
+    if current_thread is not None:
+        stop_outcome = await orchestration_service.stop_thread(
+            current_thread.thread_target_id
+        )
+        if stop_outcome.recovered_lost_backend:
+            log_event(
+                handlers._logger,
+                logging.INFO,
+                "telegram.thread.recovered_lost_backend",
+                surface_key=surface_key,
+                managed_thread_id=current_thread.thread_target_id,
+                mode=mode,
+            )
+        orchestration_service.archive_thread_target(current_thread.thread_target_id)
+    replacement = orchestration_service.create_thread_target(
+        agent,
+        workspace_root,
+        repo_id=normalized_repo_id or None,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        display_name=f"telegram:{surface_key}",
+    )
+    orchestration_service.upsert_binding(
+        surface_kind="telegram",
+        surface_key=surface_key,
+        thread_target_id=replacement.thread_target_id,
+        agent_id=agent,
+        repo_id=normalized_repo_id or None,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        mode=mode,
+        metadata={
+            "topic_key": surface_key,
+            "pma_enabled": pma_enabled,
+            "surface_key": surface_key,
+        },
+    )
+    return had_previous, replacement.thread_target_id
+
+
 async def _sync_telegram_thread_binding(
     handlers: Any,
     *,

@@ -3699,6 +3699,77 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
 
 
 @pytest.mark.anyio
+async def test_reset_telegram_thread_binding_archives_after_lost_backend_recovery() -> (
+    None
+):
+    workspace = Path("/tmp/telegram-reset-workspace").resolve()
+    calls: list[tuple[str, str]] = []
+
+    class _FakeThreadService:
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            calls.append(("stop", thread_target_id))
+            return SimpleNamespace(recovered_lost_backend=True)
+
+        def archive_thread_target(self, thread_target_id: str) -> None:
+            calls.append(("archive", thread_target_id))
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            calls.append(("create", agent))
+            assert workspace_root == workspace
+            return SimpleNamespace(
+                thread_target_id="thread-2",
+                agent_id=agent,
+                workspace_root=str(workspace_root),
+            )
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            calls.append(("bind", str(kwargs["thread_target_id"])))
+
+    handlers = SimpleNamespace(_logger=logging.getLogger("test"))
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="pma"),
+            SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                workspace_root=str(workspace),
+            ),
+        ),
+    )
+    try:
+        had_previous, new_thread_id = (
+            await execution_commands_module._reset_telegram_thread_binding(
+                handlers,
+                surface_key="topic-1",
+                workspace_root=workspace,
+                agent="codex",
+                repo_id="repo-1",
+                resource_kind="repo",
+                resource_id="repo-1",
+                mode="pma",
+                pma_enabled=True,
+            )
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert had_previous is True
+    assert new_thread_id == "thread-2"
+    assert calls == [
+        ("stop", "thread-1"),
+        ("archive", "thread-1"),
+        ("create", "codex"),
+        ("bind", "thread-2"),
+    ]
+
+
+@pytest.mark.anyio
 async def test_pma_new_resets_session(tmp_path: Path) -> None:
     registry = AppServerThreadRegistry(tmp_path / "threads.json")
     registry.reset_all()
@@ -3724,6 +3795,50 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
     sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
     assert PMA_OPENCODE_KEY not in sessions
+    assert handler._sent and "PMA session reset" in handler._sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_new_resets_managed_binding_when_runtime_threads_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = AppServerThreadRegistry(tmp_path / "threads.json")
+    registry.reset_all()
+    record = TelegramTopicRecord(pma_enabled=True, workspace_path=None, agent="codex")
+    handler = _PMAWorkspaceHandler(record, registry, hub_root=tmp_path)
+    handler._config = SimpleNamespace(require_topics=False, root=tmp_path)
+    handler._spawn_task = lambda coro: None
+    calls: list[dict[str, object]] = []
+
+    async def _fake_reset_telegram_thread_binding(
+        _handlers: Any, **kwargs: Any
+    ) -> tuple[bool, str]:
+        calls.append(kwargs)
+        return True, "thread-2"
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_reset_telegram_thread_binding",
+        _fake_reset_telegram_thread_binding,
+    )
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=-2002,
+        thread_id=333,
+        from_user_id=99,
+        text="/new",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_new(message)
+
+    assert calls
+    assert calls[-1]["surface_key"] == "-2002:333"
+    assert calls[-1]["mode"] == "pma"
+    assert calls[-1]["pma_enabled"] is True
     assert handler._sent and "PMA session reset" in handler._sent[-1]
 
 
