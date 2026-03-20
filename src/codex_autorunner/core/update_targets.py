@@ -71,6 +71,34 @@ _UPDATE_TARGET_ALIASES = {
 }
 
 
+def _format_service_list(services: tuple[str, ...]) -> str:
+    if len(services) == 1:
+        return services[0]
+    if len(services) == 2:
+        return f"{services[0]} and {services[1]}"
+    return f"{', '.join(services[:-1])}, and {services[-1]}"
+
+
+def _all_target_definition(
+    *, telegram_available: bool, discord_available: bool
+) -> UpdateTargetDefinition:
+    services = ["Web"]
+    restart_services = ["web UI"]
+    if telegram_available:
+        services.append("Telegram")
+        restart_services.append("Telegram")
+    if discord_available:
+        services.append("Discord")
+        restart_services.append("Discord")
+    return UpdateTargetDefinition(
+        value="both",
+        label="All",
+        description=" + ".join(services),
+        restart_notice=f"The {_format_service_list(tuple(restart_services))} will restart.",
+        includes_web=True,
+    )
+
+
 def all_update_target_definitions() -> tuple[UpdateTargetDefinition, ...]:
     return tuple(_UPDATE_TARGET_DEFINITIONS[key] for key in _UPDATE_TARGET_ORDER)
 
@@ -100,14 +128,19 @@ def available_update_target_definitions(
     telegram_available: bool,
     discord_available: bool,
 ) -> tuple[UpdateTargetDefinition, ...]:
-    values: list[str] = []
+    definitions: list[UpdateTargetDefinition] = []
     if telegram_available or discord_available:
-        values.append("both")
-    values.append("web")
+        definitions.append(
+            _all_target_definition(
+                telegram_available=telegram_available,
+                discord_available=discord_available,
+            )
+        )
+    definitions.append(_UPDATE_TARGET_DEFINITIONS["web"])
     if telegram_available and discord_available:
-        values.append("chat")
+        definitions.append(_UPDATE_TARGET_DEFINITIONS["chat"])
     if telegram_available:
-        values.append("telegram")
+        definitions.append(_UPDATE_TARGET_DEFINITIONS["telegram"])
     if discord_available:
-        values.append("discord")
-    return tuple(_UPDATE_TARGET_DEFINITIONS[value] for value in values)
+        definitions.append(_UPDATE_TARGET_DEFINITIONS["discord"])
+    return tuple(definitions)
