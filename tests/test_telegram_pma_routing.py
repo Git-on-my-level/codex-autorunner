@@ -4348,6 +4348,10 @@ async def test_pma_on_enables_mode(tmp_path: Path) -> None:
     await handler._handle_pma(message, "on", _RuntimeStub())
 
     assert record.pma_enabled is True
+    assert (
+        handler.sent[-1]
+        == "PMA mode enabled. Use /pma off to exit. Previous binding saved."
+    )
 
 
 @pytest.mark.anyio
@@ -4365,6 +4369,10 @@ async def test_pma_off_disables_mode(tmp_path: Path) -> None:
     await handler._handle_pma(message, "off", _RuntimeStub())
 
     assert record.pma_enabled is False
+    assert (
+        handler.sent[-1]
+        == f"PMA mode disabled. Restored binding to {tmp_path / 'repo'}."
+    )
 
 
 @pytest.mark.anyio
@@ -4375,7 +4383,44 @@ async def test_pma_status_reports_disabled_mode(tmp_path: Path) -> None:
 
     await handler._handle_pma(message, "status", _RuntimeStub())
 
-    assert handler.sent[-1] == "PMA mode: disabled"
+    assert handler.sent[-1] == "PMA mode: disabled\nCurrent workspace: unbound"
+
+
+@pytest.mark.anyio
+async def test_pma_status_reports_bound_workspace_when_disabled(tmp_path: Path) -> None:
+    workspace = tmp_path / "repo"
+    record = TelegramTopicRecord(pma_enabled=False, workspace_path=str(workspace))
+    handler = _PmaTargetsHandler(hub_root=tmp_path / "hub", record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "status", _RuntimeStub())
+
+    assert handler.sent[-1] == f"PMA mode: disabled\nCurrent workspace: {workspace}"
+
+
+@pytest.mark.anyio
+async def test_pma_on_is_idempotent_when_already_enabled(tmp_path: Path) -> None:
+    record = TelegramTopicRecord(pma_enabled=True)
+    handler = _PmaTargetsHandler(hub_root=tmp_path / "hub", record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "on", _RuntimeStub())
+
+    assert (
+        handler.sent[-1]
+        == "PMA mode is already enabled for this topic. Use /pma off to exit."
+    )
+
+
+@pytest.mark.anyio
+async def test_pma_without_subcommand_reports_status(tmp_path: Path) -> None:
+    record = TelegramTopicRecord(pma_enabled=False)
+    handler = _PmaTargetsHandler(hub_root=tmp_path / "hub", record=record)
+    message = _make_pma_message(chat_id=-1001, thread_id=55)
+
+    await handler._handle_pma(message, "", _RuntimeStub())
+
+    assert handler.sent[-1] == "PMA mode: disabled\nCurrent workspace: unbound"
 
 
 @pytest.mark.anyio

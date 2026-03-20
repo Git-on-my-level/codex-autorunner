@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -14,6 +15,9 @@ class TurnFooterSummary:
     elapsed_label: Optional[str] = None
     step: Optional[int] = None
     context_remaining_percent: Optional[int] = None
+
+
+_ELAPSED_LABEL_RE = re.compile(r"^(?:\d+s|\d+m \d+s|\d+h \d+m)$")
 
 
 def _has_turn_footer_metadata(summary: TurnFooterSummary) -> bool:
@@ -98,6 +102,13 @@ def _format_turn_metrics(
     return "\n".join(lines)
 
 
+def _looks_like_elapsed_label(value: str) -> bool:
+    normalized = " ".join(value.split()).strip()
+    if not normalized:
+        return False
+    return _ELAPSED_LABEL_RE.fullmatch(normalized) is not None
+
+
 def _parse_turn_footer_summary(summary_text: Optional[str]) -> TurnFooterSummary:
     if not isinstance(summary_text, str):
         return TurnFooterSummary()
@@ -133,11 +144,7 @@ def _parse_turn_footer_summary(summary_text: Optional[str]) -> TurnFooterSummary
             except (TypeError, ValueError):
                 context_remaining_percent = None
             continue
-        if (
-            any(ch.isdigit() for ch in part)
-            and any(unit in part for unit in ("s", "m", "h"))
-            and elapsed_label is None
-        ):
+        if elapsed_label is None and _looks_like_elapsed_label(part):
             elapsed_label = part
             continue
         if index == 0 and status is None:
