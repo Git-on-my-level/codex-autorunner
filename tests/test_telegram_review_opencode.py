@@ -94,6 +94,7 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         *,
         record: TelegramTopicRecord,
         supervisor: _SupervisorStub,
+        deliver_result: bool = True,
     ) -> None:
         self._logger = logging.getLogger("test")
         self._config = SimpleNamespace(
@@ -126,7 +127,9 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         self._intermediate: list[Optional[str]] = []
         self._delivery_delete_flags: list[bool] = []
         self._deleted: list[int] = []
+        self._edited: list[tuple[int, int, str]] = []
         self._placeholder_counter = 200
+        self._deliver_result = deliver_result
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
@@ -188,8 +191,9 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         return self._placeholder_counter
 
     async def _edit_message_text(
-        self, _chat_id: int, _message_id: int, _text: str
+        self, chat_id: int, message_id: int, text: str
     ) -> bool:
+        self._edited.append((chat_id, message_id, text))
         return True
 
     async def _delete_message(self, _chat_id: int, message_id: int) -> bool:
@@ -216,7 +220,7 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
         self._intermediate.append(intermediate_response)
         self._delivery_delete_flags.append(delete_placeholder_on_delivery)
         self._delivered.append(response)
-        return True
+        return self._deliver_result
 
     def _format_turn_metrics_text(
         self,
@@ -473,3 +477,93 @@ async def test_telegram_review_opencode_tracks_text_parts_in_progress(
     ]
     assert output_buffers
     assert any("delta output" in buffer for buffer in output_buffers)
+
+
+@pytest.mark.anyio
+async def test_finalize_codex_review_success_clears_interrupt_status_message(
+    tmp_path: Path,
+) -> None:
+    record = TelegramTopicRecord(workspace_path=str(tmp_path))
+    client = _OpenCodeClientStub(session_id="session-123")
+    supervisor = _SupervisorStub(client)
+    handler = _ReviewHandlerStub(record=record, supervisor=supervisor)
+    runtime = SimpleNamespace(
+        interrupt_requested=True,
+        interrupt_message_id=333,
+        interrupt_turn_id="turn-1",
+    )
+    turn_context = github_commands.CodexTurnContext(
+        placeholder_id=201,
+        turn_handle=SimpleNamespace(turn_id="turn-1"),
+        turn_key=None,
+        turn_semaphore=asyncio.Semaphore(1),
+        turn_started_at=None,
+        queued=False,
+    )
+    result = SimpleNamespace(
+        final_message="",
+        agent_messages=[],
+        errors=[],
+        status="interrupted",
+    )
+
+    await handler._finalize_codex_review_success(
+        _message(),
+        record,
+        "thread-1",
+        result,
+        turn_context,
+        runtime,
+    )
+
+    assert handler._deleted == [333]
+    assert handler._edited == []
+    assert runtime.interrupt_message_id is None
+    assert runtime.interrupt_turn_id is None
+
+
+@pytest.mark.anyio
+async def test_finalize_codex_review_success_keeps_interrupt_signal_when_delivery_fails(
+    tmp_path: Path,
+) -> None:
+    record = TelegramTopicRecord(workspace_path=str(tmp_path))
+    client = _OpenCodeClientStub(session_id="session-123")
+    supervisor = _SupervisorStub(client)
+    handler = _ReviewHandlerStub(
+        record=record,
+        supervisor=supervisor,
+        deliver_result=False,
+    )
+    runtime = SimpleNamespace(
+        interrupt_requested=True,
+        interrupt_message_id=334,
+        interrupt_turn_id="turn-2",
+    )
+    turn_context = github_commands.CodexTurnContext(
+        placeholder_id=201,
+        turn_handle=SimpleNamespace(turn_id="turn-2"),
+        turn_key=None,
+        turn_semaphore=asyncio.Semaphore(1),
+        turn_started_at=None,
+        queued=False,
+    )
+    result = SimpleNamespace(
+        final_message="",
+        agent_messages=[],
+        errors=[],
+        status="interrupted",
+    )
+
+    await handler._finalize_codex_review_success(
+        _message(),
+        record,
+        "thread-1",
+        result,
+        turn_context,
+        runtime,
+    )
+
+    assert handler._deleted == []
+    assert handler._edited == [(123, 334, "Interrupted.")]
+    assert runtime.interrupt_message_id is None
+    assert runtime.interrupt_turn_id is None

@@ -104,6 +104,7 @@ class _HandlerStub(TelegramCommandHandlers):
         max_parallel_turns: int,
         records: dict[str, TelegramTopicRecord],
         placeholder_events: Optional[dict[int, asyncio.Event]] = None,
+        deliver_result: bool = True,
     ) -> None:
         self._logger = logging.getLogger("test")
         self._config = SimpleNamespace(
@@ -130,6 +131,7 @@ class _HandlerStub(TelegramCommandHandlers):
         self._outbox_calls: list[dict[str, object]] = []
         self._delete_calls: list[tuple[object, object]] = []
         self._placeholder_events = placeholder_events or {}
+        self._deliver_result = deliver_result
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
@@ -297,7 +299,7 @@ class _HandlerStub(TelegramCommandHandlers):
                 "delete_placeholder_on_delivery": delete_placeholder_on_delivery,
             }
         )
-        return True
+        return self._deliver_result
 
     async def _send_message_with_outbox(
         self,
@@ -703,6 +705,98 @@ async def test_normal_opencode_turn_drops_no_response_sentinel_when_summary_pres
         "done · agent opencode · model-x · 1s · step 3"
     )
     assert handler._deliver_calls[-1]["intermediate_response"] is None
+
+
+@pytest.mark.anyio
+async def test_normal_turn_clears_interrupt_status_after_successful_delivery() -> None:
+    wait = asyncio.Event()
+    wait.set()
+    client = _ClientStub(turn_wait_events=[wait])
+    record = _record("thread-1")
+    records = {"10:11": record}
+    handler = _HandlerStub(
+        client=client,
+        max_parallel_turns=1,
+        records=records,
+        deliver_result=True,
+    )
+    runtime = _RuntimeStub(interrupt_message_id=777, interrupt_turn_id="turn-1")
+
+    async def _fake_run_turn_and_collect_result(
+        _message: TelegramMessage,
+        _runtime: _RuntimeStub,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            record=record,
+            thread_id="thread-1",
+            turn_id="turn-1",
+            response="final output",
+            placeholder_id=456,
+            elapsed_seconds=1.0,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            intermediate_response="",
+            interrupt_status_turn_id="turn-1",
+            interrupt_status_fallback_text="Interrupt requested; turn completed.",
+        )
+
+    handler._run_turn_and_collect_result = _fake_run_turn_and_collect_result  # type: ignore[assignment]
+
+    message = _message(message_id=1, thread_id=11)
+    await handler._handle_normal_message(message, runtime, record=record)
+
+    assert handler._delete_calls == [(10, 777)]
+    assert handler._edit_calls == []
+    assert runtime.interrupt_message_id is None
+    assert runtime.interrupt_turn_id is None
+
+
+@pytest.mark.anyio
+async def test_normal_turn_edits_interrupt_status_when_delivery_fails() -> None:
+    wait = asyncio.Event()
+    wait.set()
+    client = _ClientStub(turn_wait_events=[wait])
+    record = _record("thread-1")
+    records = {"10:11": record}
+    handler = _HandlerStub(
+        client=client,
+        max_parallel_turns=1,
+        records=records,
+        deliver_result=False,
+    )
+    runtime = _RuntimeStub(interrupt_message_id=778, interrupt_turn_id="turn-1")
+
+    async def _fake_run_turn_and_collect_result(
+        _message: TelegramMessage,
+        _runtime: _RuntimeStub,
+        **_kwargs: object,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            record=record,
+            thread_id="thread-1",
+            turn_id="turn-1",
+            response="final output",
+            placeholder_id=456,
+            elapsed_seconds=1.0,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+            intermediate_response="",
+            interrupt_status_turn_id="turn-1",
+            interrupt_status_fallback_text="Interrupted.",
+        )
+
+    handler._run_turn_and_collect_result = _fake_run_turn_and_collect_result  # type: ignore[assignment]
+
+    message = _message(message_id=1, thread_id=11)
+    await handler._handle_normal_message(message, runtime, record=record)
+
+    assert handler._delete_calls == []
+    assert handler._edit_calls == [(778, "Interrupted.")]
+    assert runtime.interrupt_message_id is None
+    assert runtime.interrupt_turn_id is None
 
 
 @pytest.mark.anyio
