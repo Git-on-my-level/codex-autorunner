@@ -250,6 +250,26 @@ def test_sanitize_runtime_thread_result_error_returns_public_error_for_empty_det
     )
 
 
+def test_resolve_discord_turn_policies_prefers_binding_preset() -> None:
+    assert discord_message_turns_module._resolve_discord_turn_policies(
+        {"approval_mode": "read-only"},
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    ) == ("on-request", "readOnly")
+
+
+def test_resolve_discord_turn_policies_prefers_explicit_binding_values() -> None:
+    assert discord_message_turns_module._resolve_discord_turn_policies(
+        {
+            "approval_mode": "full-access",
+            "approval_policy": "on-failure",
+            "sandbox_policy": "workspaceWrite",
+        },
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    ) == ("on-failure", "workspaceWrite")
+
+
 class _FailingChannelRest(_FakeRest):
     async def create_channel_message(
         self, *, channel_id: str, payload: dict[str, Any]
@@ -4013,6 +4033,10 @@ async def test_message_create_streaming_turn_exception_marks_progress_failed(
         )
         assert any(
             "Turn failed: Discord turn failed" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "(No response text returned.)" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
     finally:
