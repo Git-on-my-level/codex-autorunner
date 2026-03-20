@@ -50,6 +50,16 @@ class ChatApprovalHandlers:
         """Format an approval decision for display."""
         raise NotImplementedError
 
+    async def _chat_delete_message(
+        self,
+        *,
+        chat_id: str,
+        thread_id: Optional[str],
+        message_id: str,
+    ) -> bool:
+        """Delete a chat message."""
+        raise NotImplementedError
+
     async def handle_approval_interaction(
         self,
         context: ChatContext,
@@ -92,6 +102,16 @@ class ChatApprovalHandlers:
         )
         await self._chat_answer_interaction(interaction, f"Decision: {decision}")
         if pending.message_id is not None:
+            try:
+                deleted = await self._chat_delete_message(
+                    chat_id=pending.chat_id,
+                    thread_id=pending.thread_id,
+                    message_id=pending.message_id,
+                )
+            except Exception:
+                deleted = False
+            if deleted:
+                return
             try:
                 await self._chat_edit_message(
                     chat_id=pending.chat_id,
