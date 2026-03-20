@@ -327,6 +327,9 @@ class TelegramBotService(
         self._turn_progress_final_rendered: dict[TurnKey, str] = {}
         self._turn_progress_final_summary: dict[TurnKey, str] = {}
         self._turn_progress_updated_at: dict[TurnKey, float] = {}
+        self._turn_progress_backoff_until: dict[TurnKey, float] = {}
+        self._turn_progress_failure_streaks: dict[TurnKey, int] = {}
+        self._turn_progress_suppressed_counts: dict[TurnKey, int] = {}
         self._turn_progress_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._turn_progress_heartbeat_tasks: dict[TurnKey, asyncio.Task[None]] = {}
         self._turn_progress_locks: dict[TurnKey, asyncio.Lock] = {}
@@ -868,6 +871,9 @@ class TelegramBotService(
                 self._turn_progress_final_rendered.pop(key, None)
                 self._turn_progress_final_summary.pop(key, None)
                 self._turn_progress_updated_at.pop(key, None)
+                self._turn_progress_backoff_until.pop(key, None)
+                self._turn_progress_failure_streaks.pop(key, None)
+                self._turn_progress_suppressed_counts.pop(key, None)
                 task = self._turn_progress_tasks.pop(key, None)
                 if task and not task.done():
                     task.cancel()

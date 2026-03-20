@@ -166,6 +166,7 @@ from ...tickets.files import (
     read_ticket_frontmatter,
     safe_relpath,
 )
+from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ..chat.review_commits import _parse_review_commit_log
@@ -1719,6 +1720,7 @@ class DiscordBotService:
     def _is_user_ticket_pause(
         self, workspace_root: Path, record: FlowRunRecord
     ) -> bool:
+        resolved_workspace_root = workspace_root.resolve()
         state = getattr(record, "state", None)
         if not isinstance(state, dict):
             return False
@@ -1730,16 +1732,26 @@ class DiscordBotService:
         current_ticket = engine.get("current_ticket")
         if not isinstance(current_ticket, str) or not current_ticket.strip():
             return False
-        ticket_path = (workspace_root / current_ticket).resolve()
+        ticket_path = (resolved_workspace_root / current_ticket).resolve()
         if not ticket_path.is_file() or not is_within(
-            root=workspace_root, target=ticket_path
+            root=resolved_workspace_root,
+            target=ticket_path,
         ):
             return False
         ticket_doc, errors = read_ticket(ticket_path)
-        if errors or ticket_doc is None:
+        if not errors and ticket_doc is not None:
+            return ticket_doc.frontmatter.agent == "user" and not bool(
+                ticket_doc.frontmatter.done
+            )
+        try:
+            raw = ticket_path.read_text(encoding="utf-8")
+        except OSError:
             return False
-        return ticket_doc.frontmatter.agent == "user" and not bool(
-            ticket_doc.frontmatter.done
+        data, _body = parse_markdown_frontmatter(raw)
+        if not isinstance(data, dict):
+            return False
+        return str(data.get("agent") or "").strip().lower() == "user" and (
+            data.get("done") is False
         )
 
     async def _maybe_inject_github_context(

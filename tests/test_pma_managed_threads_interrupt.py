@@ -309,3 +309,59 @@ def test_interrupt_managed_thread_skips_failed_side_effects_when_turn_already_fi
     assert updated_turn is not None
     assert updated_turn["status"] == "ok"
     assert updated_turn["assistant_text"] == "completed before interrupt persisted"
+
+
+@pytest.mark.slow
+def test_interrupt_managed_thread_recovers_stale_backend_thread(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeClient:
+        async def turn_interrupt(
+            self, turn_id: str, *, thread_id: str | None = None
+        ) -> None:
+            _ = turn_id, thread_id
+            raise RuntimeError("thread not found: backend-thread-1")
+
+    class FakeSupervisor:
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return FakeClient()
+
+    app.state.app_server_supervisor = FakeSupervisor()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+    store = PmaThreadStore(hub_env.hub_root)
+    turn = store.create_turn(managed_thread_id, prompt="running")
+    managed_turn_id = turn["managed_turn_id"]
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
+
+    with TestClient(app) as client:
+        interrupt_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/interrupt",
+        )
+
+    assert interrupt_resp.status_code == 200
+    payload = interrupt_resp.json()
+    assert payload["status"] == "ok"
+    assert payload["interrupt_state"] == "recovered_lost_backend"
+    assert payload["backend_error"] == "Backend thread lost after restart"
+    updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
+    assert updated_turn is not None
+    assert updated_turn["status"] == "error"
+    assert updated_turn["error"] == "Backend thread lost after restart"
+    updated_thread = store.get_thread(managed_thread_id)
+    assert updated_thread is not None
+    assert updated_thread["backend_thread_id"] is None

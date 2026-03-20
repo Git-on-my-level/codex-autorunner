@@ -43,7 +43,11 @@ from .....core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
-from .....core.orchestration.service import BusyInterruptFailedError
+from .....core.orchestration.service import (
+    LOST_BACKEND_THREAD_ERROR,
+    MISSING_BACKEND_THREAD_ERROR,
+    BusyInterruptFailedError,
+)
 from .....core.orchestration.turn_timeline import persist_turn_timeline
 from .....core.pma_context import format_pma_discoverability_preamble
 from .....core.pma_thread_store import (
@@ -203,6 +207,178 @@ def _interrupt_failure_payload(
         "assistant_text": "",
         "error": detail,
         **delivery_payload,
+    }
+
+
+def _interrupt_recovered_lost_backend_payload(
+    *,
+    managed_thread_id: str,
+    managed_turn_id: str,
+    updated_turn: Optional[dict[str, Any]],
+    backend_error: str,
+    backend_interrupt_attempted: bool,
+) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "interrupt_state": "recovered_lost_backend",
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "turn": updated_turn,
+        "backend_error": backend_error,
+        "detail": "Recovered stale managed-thread state after backend thread was lost.",
+        "backend_interrupt_attempted": backend_interrupt_attempted,
+        "recovered_lost_backend": True,
+    }
+
+
+async def _interrupt_managed_thread_via_orchestration(
+    *,
+    managed_thread_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    from .....agents.registry import get_available_agents
+    from .....core.orchestration.catalog import map_agent_capabilities
+
+    hub_root = request.app.state.config.root
+    store = PmaThreadStore(hub_root)
+    thread = store.get_thread(managed_thread_id)
+    if thread is None:
+        raise HTTPException(status_code=404, detail="Managed thread not found")
+
+    agent = str(thread.get("agent") or "").strip().lower()
+    if agent:
+        available = get_available_agents(request.app.state)
+        descriptor = available.get(agent)
+        if descriptor is not None:
+            capabilities = map_agent_capabilities(descriptor.capabilities)
+            if "interrupt" not in capabilities:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Agent '{agent}' does not support interrupt (missing capability: interrupt)",
+                )
+
+    running_turn = store.get_running_turn(managed_thread_id)
+    if running_turn is None:
+        raise HTTPException(
+            status_code=409, detail="Managed thread has no running turn"
+        )
+    managed_turn_id = str(running_turn.get("managed_turn_id") or "")
+    if not managed_turn_id:
+        raise HTTPException(status_code=500, detail="Running turn is missing id")
+
+    backend_thread_id = normalize_optional_text(thread.get("backend_thread_id"))
+    backend_turn_id = normalize_optional_text(running_turn.get("backend_turn_id"))
+    backend_error: Optional[str] = None
+    backend_interrupt_attempted = bool(backend_thread_id)
+    service = _build_managed_thread_orchestration_service(
+        request,
+        thread_store=store,
+    )
+    try:
+        stop_outcome = await service.stop_thread(managed_thread_id)
+    except Exception:
+        logger.exception(
+            "Failed to interrupt managed-thread turn via orchestration service (managed_thread_id=%s, managed_turn_id=%s)",
+            managed_thread_id,
+            managed_turn_id,
+        )
+        interrupted_execution = service.get_execution(
+            managed_thread_id,
+            managed_turn_id,
+        )
+        stop_outcome = None
+        if interrupted_execution is None or interrupted_execution.status == "running":
+            backend_error = MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR
+    else:
+        interrupted_execution = stop_outcome.execution
+
+    if stop_outcome and stop_outcome.interrupted_active:
+        await notify_managed_thread_terminal_transition(
+            request,
+            thread=thread,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            to_state="interrupted",
+            reason=backend_error or "managed_turn_interrupted",
+        )
+        store.append_action(
+            "managed_thread_interrupt",
+            managed_thread_id=managed_thread_id,
+            payload_json=json.dumps(
+                {
+                    "agent": agent,
+                    "managed_turn_id": managed_turn_id,
+                    "backend_thread_id": backend_thread_id,
+                    "backend_turn_id": backend_turn_id,
+                    "backend_interrupt_attempted": backend_interrupt_attempted,
+                    "backend_error": backend_error,
+                },
+                ensure_ascii=True,
+            ),
+        )
+        updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
+        return {
+            "status": "ok",
+            "interrupt_state": "succeeded",
+            "managed_thread_id": managed_thread_id,
+            "managed_turn_id": managed_turn_id,
+            "turn": updated_turn,
+            "backend_error": backend_error,
+        }
+
+    if stop_outcome and stop_outcome.recovered_lost_backend:
+        resolved_backend_error = (
+            interrupted_execution.error
+            if interrupted_execution is not None
+            and interrupted_execution.error
+            in {
+                LOST_BACKEND_THREAD_ERROR,
+                MISSING_BACKEND_THREAD_ERROR,
+            }
+            else backend_error or LOST_BACKEND_THREAD_ERROR
+        )
+        await notify_managed_thread_terminal_transition(
+            request,
+            thread=thread,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            to_state="failed",
+            reason=resolved_backend_error,
+        )
+        store.append_action(
+            "managed_thread_interrupt",
+            managed_thread_id=managed_thread_id,
+            payload_json=json.dumps(
+                {
+                    "agent": agent,
+                    "managed_turn_id": managed_turn_id,
+                    "backend_thread_id": backend_thread_id,
+                    "backend_turn_id": backend_turn_id,
+                    "backend_interrupt_attempted": backend_interrupt_attempted,
+                    "backend_error": resolved_backend_error,
+                    "recovered_lost_backend": True,
+                },
+                ensure_ascii=True,
+            ),
+        )
+        updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
+        return _interrupt_recovered_lost_backend_payload(
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            updated_turn=updated_turn,
+            backend_error=resolved_backend_error,
+            backend_interrupt_attempted=backend_interrupt_attempted,
+        )
+
+    updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
+    return {
+        "status": "error",
+        "interrupt_state": "failed",
+        "managed_thread_id": managed_thread_id,
+        "managed_turn_id": managed_turn_id,
+        "turn": updated_turn,
+        "backend_error": backend_error or MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR,
+        "detail": MANAGED_THREAD_INTERRUPT_FAILED_DETAIL,
     }
 
 
@@ -1274,110 +1450,10 @@ def build_managed_thread_runtime_routes(
         managed_thread_id: str,
         request: Request,
     ) -> dict[str, Any]:
-        from .....agents.registry import get_available_agents
-        from .....core.orchestration.catalog import map_agent_capabilities
-
-        hub_root = request.app.state.config.root
-        store = PmaThreadStore(hub_root)
-        thread = store.get_thread(managed_thread_id)
-        if thread is None:
-            raise HTTPException(status_code=404, detail="Managed thread not found")
-
-        agent = str(thread.get("agent") or "").strip().lower()
-        if agent:
-            available = get_available_agents(request.app.state)
-            descriptor = available.get(agent)
-            if descriptor is not None:
-                capabilities = map_agent_capabilities(descriptor.capabilities)
-                if "interrupt" not in capabilities:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=f"Agent '{agent}' does not support interrupt (missing capability: interrupt)",
-                    )
-
-        running_turn = store.get_running_turn(managed_thread_id)
-        if running_turn is None:
-            raise HTTPException(
-                status_code=409, detail="Managed thread has no running turn"
-            )
-        managed_turn_id = str(running_turn.get("managed_turn_id") or "")
-        if not managed_turn_id:
-            raise HTTPException(status_code=500, detail="Running turn is missing id")
-
-        agent = str(thread.get("agent") or "").strip().lower()
-        backend_thread_id = normalize_optional_text(thread.get("backend_thread_id"))
-        backend_turn_id = normalize_optional_text(running_turn.get("backend_turn_id"))
-        backend_error: Optional[str] = None
-        backend_interrupt_attempted = True
-        service = _build_managed_thread_orchestration_service(
-            request,
-            thread_store=store,
+        return await _interrupt_managed_thread_via_orchestration(
+            managed_thread_id=managed_thread_id,
+            request=request,
         )
-        try:
-            interrupted_execution = await service.interrupt_thread(managed_thread_id)
-        except Exception:
-            logger.exception(
-                "Failed to interrupt managed-thread turn via orchestration service (managed_thread_id=%s, managed_turn_id=%s)",
-                managed_thread_id,
-                managed_turn_id,
-            )
-            interrupted_execution = service.get_execution(
-                managed_thread_id,
-                managed_turn_id,
-            )
-            if (
-                interrupted_execution is None
-                or interrupted_execution.status == "running"
-            ):
-                backend_error = MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR
-
-        interrupted = interrupted_execution is not None and (
-            interrupted_execution.status == "interrupted"
-        )
-        if interrupted:
-            await notify_managed_thread_terminal_transition(
-                request,
-                thread=thread,
-                managed_thread_id=managed_thread_id,
-                managed_turn_id=managed_turn_id,
-                to_state="interrupted",
-                reason=backend_error or "managed_turn_interrupted",
-            )
-            store.append_action(
-                "managed_thread_interrupt",
-                managed_thread_id=managed_thread_id,
-                payload_json=json.dumps(
-                    {
-                        "agent": agent,
-                        "managed_turn_id": managed_turn_id,
-                        "backend_thread_id": backend_thread_id,
-                        "backend_turn_id": backend_turn_id,
-                        "backend_interrupt_attempted": backend_interrupt_attempted,
-                        "backend_error": backend_error,
-                    },
-                    ensure_ascii=True,
-                ),
-            )
-            updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
-            return {
-                "status": "ok",
-                "interrupt_state": "succeeded",
-                "managed_thread_id": managed_thread_id,
-                "managed_turn_id": managed_turn_id,
-                "turn": updated_turn,
-                "backend_error": backend_error,
-            }
-
-        updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
-        return {
-            "status": "error",
-            "interrupt_state": "failed",
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "turn": updated_turn,
-            "backend_error": backend_error or MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR,
-            "detail": MANAGED_THREAD_INTERRUPT_FAILED_DETAIL,
-        }
 
 
 __all__ = [
