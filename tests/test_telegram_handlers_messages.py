@@ -475,6 +475,7 @@ async def test_enqueue_or_run_topic_work_wraps_queued_work_with_typing() -> None
 async def test_enqueue_or_run_topic_work_handles_coroutine_wrappers() -> None:
     timeline: list[tuple[object, ...]] = []
     queued: list[object] = []
+    wrapper_calls = 0
 
     async def _work() -> None:
         timeline.append(("inner",))
@@ -491,7 +492,9 @@ async def test_enqueue_or_run_topic_work_handles_coroutine_wrappers() -> None:
         placeholder_id: Optional[int],
         work: object,
     ) -> object:
+        nonlocal wrapper_calls
         _ = (chat_id, placeholder_id)
+        wrapper_calls += 1
         return work()
 
     def _enqueue_topic_work(_key: str, wrapped: object) -> None:
@@ -515,12 +518,99 @@ async def test_enqueue_or_run_topic_work_handles_coroutine_wrappers() -> None:
 
     assert timeline == []
     assert len(queued) == 1
+    assert wrapper_calls == 0
     await queued[0]()
     assert timeline == [
         ("begin", 3, 4),
         ("inner",),
         ("end", 3, 4),
     ]
+    assert wrapper_calls == 1
+
+
+@pytest.mark.anyio
+async def test_handle_message_inner_allow_during_turn_handles_coroutine_wrapper() -> (
+    None
+):
+    message = _message(
+        text="/status",
+        entities=(bot_command_entity("/status"),),
+    )
+    command_calls: list[tuple[str, bool]] = []
+    spawned_tasks: list[asyncio.Task[None]] = []
+    wrapper_calls = 0
+    runtime = object()
+
+    class _RouterStub:
+        def runtime_for(self, _key: str) -> object:
+            return runtime
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _handle_pending_review_commit(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _handle_pending_review_custom(*_args, **_kwargs) -> bool:
+        return False
+
+    async def _dismiss_review_custom_prompt(*_args, **_kwargs) -> None:
+        return None
+
+    async def _handle_command(
+        command: object, _message: object, runtime_arg: object
+    ) -> None:
+        command_calls.append((getattr(command, "name", ""), runtime_arg is runtime))
+
+    def _spawn_task(coro: object) -> asyncio.Task[None]:
+        task = asyncio.create_task(coro)
+        spawned_tasks.append(task)
+        return task
+
+    def _wrap_placeholder_work(
+        *,
+        chat_id: int,
+        placeholder_id: Optional[int],
+        work: object,
+    ) -> object:
+        nonlocal wrapper_calls
+        _ = (chat_id, placeholder_id)
+        wrapper_calls += 1
+        return work()
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _router=_RouterStub(),
+        _config=types.SimpleNamespace(trigger_mode="all"),
+        _resume_options={},
+        _bind_options={},
+        _flow_run_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={},
+        _handle_pending_resume=lambda *_args, **_kwargs: False,
+        _handle_pending_bind=lambda *_args, **_kwargs: False,
+        _resolve_topic_key=_resolve_topic_key,
+        _handle_pending_review_commit=_handle_pending_review_commit,
+        _handle_pending_review_custom=_handle_pending_review_custom,
+        _dismiss_review_custom_prompt=_dismiss_review_custom_prompt,
+        _command_specs={
+            "status": make_command_spec("status", "status", allow_during_turn=True)
+        },
+        _handle_command=_handle_command,
+        _wrap_placeholder_work=_wrap_placeholder_work,
+        _spawn_task=_spawn_task,
+    )
+
+    await handle_message_inner(handlers, message, placeholder_id=42)
+    assert wrapper_calls == 0
+    assert spawned_tasks
+    await asyncio.gather(*spawned_tasks)
+    assert wrapper_calls == 1
+    assert command_calls == [("status", True)]
 
 
 @pytest.mark.anyio

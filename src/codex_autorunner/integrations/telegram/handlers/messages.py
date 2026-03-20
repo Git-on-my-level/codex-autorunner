@@ -216,20 +216,13 @@ async def _enqueue_or_run_topic_work(
     placeholder_id: Optional[int],
     work: Any,
 ) -> None:
-    wrapped = work
-    wrap = getattr(handlers, "_wrap_placeholder_work", None)
-    if callable(wrap):
-        wrapped = wrap(
+    async def _run_wrapped() -> None:
+        await _run_placeholder_wrapped_work(
+            handlers,
             chat_id=chat_id,
             placeholder_id=placeholder_id,
             work=work,
         )
-
-    async def _run_wrapped() -> None:
-        if callable(wrapped):
-            await wrapped()
-            return
-        await wrapped
 
     async def _run_wrapped_with_typing() -> None:
         await _run_with_typing_indicator(
@@ -244,6 +237,27 @@ async def _enqueue_or_run_topic_work(
         enqueue(key, _run_wrapped_with_typing)
         return
     await _run_wrapped_with_typing()
+
+
+async def _run_placeholder_wrapped_work(
+    handlers: Any,
+    *,
+    chat_id: int,
+    placeholder_id: Optional[int],
+    work: Any,
+) -> None:
+    wrapped = work
+    wrap = getattr(handlers, "_wrap_placeholder_work", None)
+    if callable(wrap):
+        wrapped = wrap(
+            chat_id=chat_id,
+            placeholder_id=placeholder_id,
+            work=work,
+        )
+    if callable(wrapped):
+        await wrapped()
+        return
+    await wrapped
 
 
 async def handle_message(handlers: Any, message: TelegramMessage) -> None:
@@ -562,12 +576,14 @@ async def handle_message_inner(
             await handlers._handle_command(command, message, runtime)
 
         if spec and spec.allow_during_turn:
-            wrapped = handlers._wrap_placeholder_work(
-                chat_id=message.chat_id,
-                placeholder_id=placeholder_id,
-                work=work,
+            handlers._spawn_task(
+                _run_placeholder_wrapped_work(
+                    handlers,
+                    chat_id=message.chat_id,
+                    placeholder_id=placeholder_id,
+                    work=work,
+                )
             )
-            handlers._spawn_task(wrapped())
         else:
             await _enqueue_or_run_topic_work(
                 handlers,
