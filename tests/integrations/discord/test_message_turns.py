@@ -73,6 +73,7 @@ class _FakeRest:
         self.attachment_messages: list[dict[str, Any]] = []
         self.edited_channel_messages: list[dict[str, Any]] = []
         self.deleted_channel_messages: list[dict[str, Any]] = []
+        self.typing_calls: list[str] = []
         self.message_ops: list[dict[str, Any]] = []
         self.download_requests: list[dict[str, Any]] = []
         self.attachment_data_by_url: dict[str, bytes] = {}
@@ -167,6 +168,9 @@ class _FakeRest:
                 "message_id": message_id,
             }
         )
+
+    async def trigger_typing(self, *, channel_id: str) -> None:
+        self.typing_calls.append(channel_id)
 
     async def download_attachment(
         self, *, url: str, max_size_bytes: Optional[int] = None
@@ -5525,6 +5529,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
         )
         assert any("first orchestration reply" in content for content in contents)
         assert any("second orchestration reply" in content for content in contents)
+        assert rest.typing_calls.count("channel-1") >= 2
 
         thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
         threads = thread_store.list_threads(limit=10)

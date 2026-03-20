@@ -1279,6 +1279,17 @@ def _ensure_discord_thread_queue_worker(
 
     worker_task: Optional[asyncio.Task[Any]] = None
 
+    async def _run_with_discord_typing_indicator(
+        *,
+        channel_id: str,
+        work: Any,
+    ) -> None:
+        run_with_typing = getattr(service, "_run_with_typing_indicator", None)
+        if callable(run_with_typing):
+            await run_with_typing(channel_id=channel_id, work=work)
+            return
+        await work()
+
     async def _queue_worker() -> None:
         try:
             while True:
@@ -1294,36 +1305,47 @@ def _ensure_discord_thread_queue_worker(
                 )
                 if started is None:
                     break
-                finalized = await _finalize_discord_thread_execution(
-                    service,
-                    orchestration_service=orchestration_service,
-                    started=started,
+
+                async def _process_started_execution(
+                    started_execution: RuntimeThreadExecution = started,
+                ) -> None:
+                    finalized = await _finalize_discord_thread_execution(
+                        service,
+                        orchestration_service=orchestration_service,
+                        started=started_execution,
+                        channel_id=channel_id,
+                        public_execution_error=public_execution_error,
+                        timeout_error=timeout_error,
+                        interrupted_error=interrupted_error,
+                    )
+                    if finalized["status"] == "ok":
+                        message = str(finalized.get("assistant_text") or "").strip()
+                        if message:
+                            await service._send_channel_message_safe(
+                                channel_id,
+                                {"content": message},
+                                record_id=(
+                                    "discord-queued:"
+                                    f"{managed_thread_id}:{finalized['managed_turn_id']}"
+                                ),
+                            )
+                        return
+                    await service._send_channel_message_safe(
+                        channel_id,
+                        {
+                            "content": (
+                                f"Turn failed: {finalized.get('error') or public_execution_error}"
+                            )
+                        },
+                        record_id=(
+                            "discord-queued-error:"
+                            f"{managed_thread_id}:{finalized['managed_turn_id']}"
+                        ),
+                    )
+
+                await _run_with_discord_typing_indicator(
                     channel_id=channel_id,
-                    public_execution_error=public_execution_error,
-                    timeout_error=timeout_error,
-                    interrupted_error=interrupted_error,
-                )
-                if finalized["status"] == "ok":
-                    message = str(finalized.get("assistant_text") or "").strip()
-                    if message:
-                        await service._send_channel_message_safe(
-                            channel_id,
-                            {"content": message},
-                            record_id=(
-                                f"discord-queued:{managed_thread_id}:{finalized['managed_turn_id']}"
-                            ),
-                        )
-                    continue
-                await service._send_channel_message_safe(
-                    channel_id,
-                    {
-                        "content": (
-                            f"Turn failed: {finalized.get('error') or public_execution_error}"
-                        )
-                    },
-                    record_id=(
-                        f"discord-queued-error:{managed_thread_id}:{finalized['managed_turn_id']}"
-                    ),
+                    work=_process_started_execution,
                 )
         finally:
             if (
