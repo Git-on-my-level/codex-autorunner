@@ -66,3 +66,22 @@ async def test_clear_interrupt_status_message_falls_back_to_edit() -> None:
     assert handler.edited == [(456, 88, "Interrupt requested; turn completed.")]
     assert runtime.interrupt_message_id is None
     assert runtime.interrupt_turn_id is None
+
+
+@pytest.mark.anyio
+async def test_clear_interrupt_status_message_edits_when_outcome_not_visible() -> None:
+    handler = _InterruptCleanupStub(delete_result=True)
+    runtime = SimpleNamespace(interrupt_message_id=99, interrupt_turn_id="turn-3")
+
+    await handler._clear_interrupt_status_message(
+        chat_id=789,
+        runtime=runtime,
+        turn_id="turn-3",
+        fallback_text="Interrupted.",
+        outcome_visible=False,
+    )
+
+    assert handler.deleted == []
+    assert handler.edited == [(789, 99, "Interrupted.")]
+    assert runtime.interrupt_message_id is None
+    assert runtime.interrupt_turn_id is None

@@ -521,6 +521,7 @@ class GitHubCommands(SharedHelpers):
         turn_handle_id = (
             turn_context.turn_handle.turn_id if turn_context.turn_handle else None
         )
+        interrupt_status_fallback_text = None
         if is_interrupt_status(result.status):
             response = _compose_interrupt_response(response)
             if (
@@ -528,20 +529,10 @@ class GitHubCommands(SharedHelpers):
                 and runtime.interrupt_message_id is not None
                 and runtime.interrupt_turn_id == turn_handle_id
             ):
-                await self._clear_interrupt_status_message(
-                    chat_id=message.chat_id,
-                    runtime=runtime,
-                    turn_id=turn_handle_id,
-                    fallback_text="Interrupted.",
-                )
+                interrupt_status_fallback_text = "Interrupted."
             runtime.interrupt_requested = False
         elif runtime.interrupt_turn_id == turn_handle_id:
-            await self._clear_interrupt_status_message(
-                chat_id=message.chat_id,
-                runtime=runtime,
-                turn_id=turn_handle_id,
-                fallback_text="Interrupt requested; turn completed.",
-            )
+            interrupt_status_fallback_text = "Interrupt requested; turn completed."
             runtime.interrupt_requested = False
         log_event(
             self._logger,
@@ -568,8 +559,9 @@ class GitHubCommands(SharedHelpers):
             agent=self._effective_agent(record),
             model=getattr(record, "model", None),
         )
+        response_sent = False
         try:
-            await self._deliver_turn_response(
+            response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
@@ -579,12 +571,20 @@ class GitHubCommands(SharedHelpers):
         except TypeError as exc:
             if "intermediate_response" not in str(exc):
                 raise
-            await self._deliver_turn_response(
+            response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 placeholder_id=turn_context.placeholder_id,
                 response=response_text,
+            )
+        if interrupt_status_fallback_text and turn_handle_id:
+            await self._clear_interrupt_status_message(
+                chat_id=message.chat_id,
+                runtime=runtime,
+                turn_id=turn_handle_id,
+                fallback_text=interrupt_status_fallback_text,
+                outcome_visible=response_sent,
             )
         if turn_id:
             self._token_usage_by_turn.pop(turn_id, None)

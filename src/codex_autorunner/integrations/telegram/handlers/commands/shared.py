@@ -206,12 +206,13 @@ class SharedHelpers:
         runtime: Any,
         turn_id: Optional[str],
         fallback_text: Optional[str] = None,
+        outcome_visible: bool = True,
     ) -> None:
         """Clear an interrupt status message once the turn outcome is already visible.
 
         Prefer deleting the transient "Stopping current turn..." message so Telegram
-        does not restate the same terminal outcome in a second message. Fall back to
-        editing when deletion fails.
+        does not restate the same terminal outcome in a second message. When the turn
+        outcome was not delivered, preserve a terminal signal by editing in place.
         """
 
         if runtime.interrupt_turn_id != turn_id:
@@ -220,7 +221,9 @@ class SharedHelpers:
         if message_id is None:
             runtime.interrupt_turn_id = None
             return
-        cleared = await self._delete_message(chat_id, message_id)
+        cleared = False
+        if outcome_visible:
+            cleared = await self._delete_message(chat_id, message_id)
         if not cleared and fallback_text:
             await self._edit_message_text(chat_id, message_id, fallback_text)
         runtime.interrupt_message_id = None
