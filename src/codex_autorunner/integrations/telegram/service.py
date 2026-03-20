@@ -20,7 +20,7 @@ from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.flows.models import FlowRunRecord
 from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_seq
 from ...core.hub import HubSupervisor
-from ...core.locks import process_matches_identity
+from ...core.locks import FileLock, FileLockBusy
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
@@ -117,7 +117,6 @@ from .voice import TelegramVoiceManager
 
 TICKET_FLOW_WATCH_INTERVAL_SECONDS = 20
 TYPING_HEARTBEAT_INTERVAL_SECONDS = 4.0
-_TELEGRAM_LOCK_CMD_HINTS = ("codex_autorunner", "codex-autorunner", "car ")
 
 
 def _build_opencode_supervisor(
@@ -416,6 +415,7 @@ class TelegramBotService(
         self._housekeeping_task: Optional[asyncio.Task[None]] = None
         self._command_specs = build_command_specs(self)
         self._instance_lock_path: Optional[Path] = None
+        self._instance_lock: Optional[FileLock] = None
 
     async def _housekeeping_roots(self) -> list[Path]:
         roots: set[Path] = set()
@@ -639,45 +639,23 @@ class TelegramBotService(
         }
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as exc:
+            lock = FileLock(lock_path)
+            lock.acquire(blocking=False)
+        except FileLockBusy as exc:
             existing = _read_lock_payload(lock_path)
-            pid = existing.get("pid") if isinstance(existing, dict) else None
-            if isinstance(pid, int) and process_matches_identity(
-                pid,
-                expected_cmd_substrings=_TELEGRAM_LOCK_CMD_HINTS,
-            ):
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "telegram.lock.contended",
-                    lock_path=str(lock_path),
-                    **_lock_payload_summary(existing),
-                )
-                raise TelegramBotLockError(
-                    "Telegram bot already running for this token."
-                ) from exc
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
-            try:
-                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError as exc:
-                existing = _read_lock_payload(lock_path)
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "telegram.lock.contended",
-                    lock_path=str(lock_path),
-                    **_lock_payload_summary(existing),
-                )
-                raise TelegramBotLockError(
-                    "Telegram bot already running for this token."
-                ) from exc
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload) + "\n")
+            log_event(
+                self._logger,
+                logging.ERROR,
+                "telegram.lock.contended",
+                lock_path=str(lock_path),
+                **_lock_payload_summary(existing),
+            )
+            raise TelegramBotLockError(
+                "Telegram bot already running for this token."
+            ) from exc
+        lock.write_text(json.dumps(payload) + "\n")
         self._instance_lock_path = lock_path
+        self._instance_lock = lock
         log_event(
             self._logger,
             logging.INFO,
@@ -687,19 +665,23 @@ class TelegramBotService(
         )
 
     def _release_instance_lock(self) -> None:
+        lock = self._instance_lock
         lock_path = self._instance_lock_path
-        if lock_path is None:
+        if lock is None or lock_path is None:
             return
-        existing = _read_lock_payload(lock_path)
-        if isinstance(existing, dict):
-            pid = existing.get("pid")
-            if isinstance(pid, int) and pid != os.getpid():
-                return
         try:
-            lock_path.unlink()
-        except OSError:
-            pass
+            existing = _read_lock_payload(lock_path)
+            if isinstance(existing, dict):
+                pid = existing.get("pid")
+                if isinstance(pid, int) and pid == os.getpid():
+                    try:
+                        lock_path.unlink()
+                    except OSError:
+                        pass
+        finally:
+            lock.release()
         self._instance_lock_path = None
+        self._instance_lock = None
 
     def _ensure_turn_semaphore(self) -> asyncio.Semaphore:
         if self._turn_semaphore is None:

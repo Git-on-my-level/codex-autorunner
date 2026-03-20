@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.locks import FileLock
 from codex_autorunner.integrations.telegram.config import (
     TelegramBotConfig,
     TelegramBotLockError,
@@ -70,28 +71,25 @@ def test_telegram_bot_lock_contended(
     assert config.bot_token
     lock_path = _telegram_lock_path(config.bot_token)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_path.write_text(
-        json.dumps(
-            {
-                "pid": os.getpid(),
-                "started_at": "now",
-                "host": "test-host",
-                "cwd": str(tmp_path),
-                "config_root": str(tmp_path),
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.service.process_matches_identity",
-        lambda _pid, **_kwargs: True,
-    )
     service = _build_service_in_closed_loop(tmp_path, config)
-    try:
-        with pytest.raises(TelegramBotLockError):
-            service._acquire_instance_lock()
-    finally:
-        asyncio.run(service._app_server_supervisor.close_all())
+    with FileLock(lock_path) as held_lock:
+        held_lock.write_text(
+            json.dumps(
+                {
+                    "pid": os.getpid(),
+                    "started_at": "now",
+                    "host": "test-host",
+                    "cwd": str(tmp_path),
+                    "config_root": str(tmp_path),
+                }
+            )
+            + "\n"
+        )
+        try:
+            with pytest.raises(TelegramBotLockError):
+                service._acquire_instance_lock()
+        finally:
+            asyncio.run(service._app_server_supervisor.close_all())
     assert lock_path.exists()
 
 
@@ -116,11 +114,6 @@ def test_telegram_bot_lock_stale_pid_reused_is_replaced(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "codex_autorunner.integrations.telegram.service.process_matches_identity",
-        lambda _pid, **_kwargs: False,
-    )
-
     service = _build_service_in_closed_loop(tmp_path, config)
     try:
         service._acquire_instance_lock()
