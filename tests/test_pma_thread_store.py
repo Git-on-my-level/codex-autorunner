@@ -169,6 +169,97 @@ def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> Non
     assert store.get_queue_depth(thread["managed_thread_id"]) == 0
 
 
+def test_create_turn_recovers_stale_running_execution_before_admission(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    stale_running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    assert store.mark_turn_finished(stale_running_turn["managed_turn_id"], status="ok")
+    active_turn = store.create_turn(thread["managed_thread_id"], prompt="second")
+    assert store.mark_turn_interrupted(active_turn["managed_turn_id"])
+
+    # Simulate corrupted state: an older turn is incorrectly left as running.
+    with store._write_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET status = 'running',
+                       error_text = NULL,
+                       finished_at = NULL
+                 WHERE execution_id = ?
+                """,
+                (stale_running_turn["managed_turn_id"],),
+            )
+
+    recovered_running_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="fresh execution",
+    )
+    assert recovered_running_turn["status"] == "running"
+
+    stale_after = store.get_turn(
+        thread["managed_thread_id"], stale_running_turn["managed_turn_id"]
+    )
+    assert stale_after is not None
+    assert stale_after["status"] == "interrupted"
+    assert stale_after["error"] == "stale_running_execution_recovered"
+    assert stale_after["finished_at"]
+
+
+def test_claim_next_queued_turn_recovers_stale_running_execution(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    stale_running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    assert store.mark_turn_finished(stale_running_turn["managed_turn_id"], status="ok")
+    active_turn = store.create_turn(thread["managed_thread_id"], prompt="second")
+
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="third queued",
+        request_kind="review",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "third queued", "kind": "review"}},
+    )
+    assert queued_turn["status"] == "queued"
+    assert store.mark_turn_interrupted(active_turn["managed_turn_id"])
+
+    # Simulate corrupted state: an older turn is incorrectly left as running.
+    with store._write_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET status = 'running',
+                       error_text = NULL,
+                       finished_at = NULL
+                 WHERE execution_id = ?
+                """,
+                (stale_running_turn["managed_turn_id"],),
+            )
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is not None
+    execution, payload = claimed
+    assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
+    assert execution["status"] == "running"
+    assert payload["request"]["kind"] == "review"
+    assert payload["request"]["message_text"] == "third queued"
+
+    stale_after = store.get_turn(
+        thread["managed_thread_id"], stale_running_turn["managed_turn_id"]
+    )
+    assert stale_after is not None
+    assert stale_after["status"] == "interrupted"
+    assert stale_after["error"] == "stale_running_execution_recovered"
+    assert stale_after["finished_at"]
+
+
 def test_mark_turn_finished_does_not_override_interrupted_status(
     tmp_path: Path,
 ) -> None:

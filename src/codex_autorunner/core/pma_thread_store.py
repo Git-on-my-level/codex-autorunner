@@ -21,6 +21,8 @@ from .sqlite_utils import open_sqlite
 from .time_utils import now_iso
 
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
+_STALE_RUNNING_RECOVERY_ERROR = "stale_running_execution_recovered"
+_TERMINAL_RUNTIME_STATUSES = frozenset({"completed", "interrupted", "failed"})
 
 
 class ManagedThreadAlreadyHasRunningTurnError(RuntimeError):
@@ -500,6 +502,115 @@ class PmaThreadStore:
             )
         return self._fetch_thread(conn, managed_thread_id)
 
+    def _find_stale_running_turn_ids(
+        self, conn: Any, managed_thread_id: str
+    ) -> list[str]:
+        running_rows = conn.execute(
+            """
+            SELECT rowid AS execution_rowid, execution_id
+              FROM orch_thread_executions
+             WHERE thread_target_id = ?
+               AND status = 'running'
+             ORDER BY rowid ASC
+            """,
+            (managed_thread_id,),
+        ).fetchall()
+        if not running_rows:
+            return []
+
+        thread_row = conn.execute(
+            """
+            SELECT runtime_status, status_turn_id
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (managed_thread_id,),
+        ).fetchone()
+        runtime_status = (
+            str(thread_row["runtime_status"]).strip().lower()
+            if thread_row is not None and thread_row["runtime_status"] is not None
+            else ""
+        )
+        status_turn_id = (
+            str(thread_row["status_turn_id"]).strip()
+            if thread_row is not None and thread_row["status_turn_id"] is not None
+            else ""
+        )
+
+        stale_execution_ids: list[str] = []
+        for row in running_rows:
+            execution_id = str(row["execution_id"])
+            execution_rowid = int(row["execution_rowid"])
+            newer_terminal = conn.execute(
+                """
+                SELECT 1
+                  FROM orch_thread_executions AS e
+             LEFT JOIN orch_queue_items AS q
+                    ON q.source_kind = 'thread_execution'
+                   AND q.source_key = e.execution_id
+                 WHERE e.thread_target_id = ?
+                   AND e.status IN ('ok', 'error', 'interrupted')
+                   AND e.rowid > ?
+                   AND (q.queue_item_id IS NULL OR q.claimed_at IS NOT NULL)
+                 LIMIT 1
+                """,
+                (managed_thread_id, execution_rowid),
+            ).fetchone()
+            if newer_terminal is not None:
+                stale_execution_ids.append(execution_id)
+                continue
+            if (
+                runtime_status in _TERMINAL_RUNTIME_STATUSES
+                and status_turn_id
+                and status_turn_id != execution_id
+            ):
+                stale_execution_ids.append(execution_id)
+        return stale_execution_ids
+
+    def _recover_stale_running_turns(self, conn: Any, managed_thread_id: str) -> int:
+        stale_execution_ids = self._find_stale_running_turn_ids(conn, managed_thread_id)
+        if not stale_execution_ids:
+            return 0
+        recovered_at = now_iso()
+        placeholders = ",".join("?" for _ in stale_execution_ids)
+        with conn:
+            conn.execute(
+                f"""
+                UPDATE orch_thread_executions
+                   SET status = 'interrupted',
+                       error_text = COALESCE(error_text, ?),
+                       finished_at = ?
+                 WHERE execution_id IN ({placeholders})
+                   AND status = 'running'
+                """,
+                (
+                    _STALE_RUNNING_RECOVERY_ERROR,
+                    recovered_at,
+                    *stale_execution_ids,
+                ),
+            )
+            conn.execute(
+                f"""
+                UPDATE orch_queue_items
+                   SET state = 'failed',
+                       completed_at = ?,
+                       updated_at = ?,
+                       error_text = COALESCE(error_text, ?),
+                       result_json = ?
+                 WHERE source_kind = 'thread_execution'
+                   AND source_key IN ({placeholders})
+                   AND state = 'running'
+                """,
+                (
+                    recovered_at,
+                    recovered_at,
+                    _STALE_RUNNING_RECOVERY_ERROR,
+                    _json_dumps({"status": "interrupted"}),
+                    *stale_execution_ids,
+                ),
+            )
+        return len(stale_execution_ids)
+
     def create_thread(
         self,
         agent: str,
@@ -813,6 +924,7 @@ class PmaThreadStore:
             )
             if thread_status != "active":
                 raise ManagedThreadNotActiveError(managed_thread_id, thread_status)
+            self._recover_stale_running_turns(conn, managed_thread_id)
             running_exists = conn.execute(
                 """
                 SELECT 1
@@ -1118,21 +1230,11 @@ class PmaThreadStore:
         return [self._execution_row_to_record(row) for row in rows]
 
     def has_running_turn(self, managed_thread_id: str) -> bool:
-        with self._read_conn() as conn:
-            row = conn.execute(
-                """
-                SELECT 1
-                  FROM orch_thread_executions
-                 WHERE thread_target_id = ?
-                   AND status = 'running'
-                 LIMIT 1
-                """,
-                (managed_thread_id,),
-            ).fetchone()
-        return row is not None
+        return self.get_running_turn(managed_thread_id) is not None
 
     def get_running_turn(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
-        with self._read_conn() as conn:
+        with self._write_conn() as conn:
+            self._recover_stale_running_turns(conn, managed_thread_id)
             row = conn.execute(
                 """
                 SELECT *
@@ -1323,6 +1425,7 @@ class PmaThreadStore:
     ) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:
         claimed_at = now_iso()
         with self._write_conn() as conn:
+            self._recover_stale_running_turns(conn, managed_thread_id)
             running = conn.execute(
                 """
                 SELECT 1
