@@ -76,6 +76,8 @@ async def test_opencode_harness_reports_capabilities_from_contract() -> None:
     assert harness.capabilities == get_registered_agents()["opencode"].capabilities
     assert harness.supports("interrupt") is True
     assert harness.supports("review") is True
+    assert harness.supports("event_streaming") is True
+    assert harness.allows_parallel_event_stream() is False
     assert harness.supports("approvals") is False
     assert report.capabilities == harness.capabilities
 

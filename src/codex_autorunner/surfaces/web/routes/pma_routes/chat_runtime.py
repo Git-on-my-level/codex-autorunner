@@ -10,6 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from .....agents.base import harness_allows_parallel_event_stream
 from .....agents.codex.harness import CodexHarness
 from .....agents.opencode.harness import OpenCodeHarness
 from .....core.orchestration import (
@@ -1434,6 +1435,11 @@ def build_chat_runtime_router(
             if supervisor is None:
                 raise HTTPException(status_code=404, detail="OpenCode unavailable")
             harness = OpenCodeHarness(supervisor)
+            if not harness_allows_parallel_event_stream(harness):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Live turn events unavailable for this agent",
+                )
             return StreamingResponse(
                 harness.stream_events(
                     request.app.state.config.root, thread_id, turn_id

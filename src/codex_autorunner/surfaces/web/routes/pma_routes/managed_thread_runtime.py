@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from .....agents.base import harness_allows_parallel_event_stream
 from .....agents.managed_runtime import sync_managed_workspace_compat_files
 from .....core.car_context import (
     build_car_context_bundle,
@@ -857,7 +858,7 @@ def build_managed_thread_runtime_routes(
             if (
                 harness is not None
                 and callable(getattr(harness, "supports", None))
-                and harness.supports("event_streaming")
+                and harness_allows_parallel_event_stream(harness)
                 and current_backend_thread_id
                 and live_backend_turn_id
             ):

@@ -45,19 +45,29 @@ class _FakeHarness:
         ]
     )
 
-    def __init__(self, scripts: list[_HarnessScript]) -> None:
+    def __init__(
+        self,
+        scripts: list[_HarnessScript],
+        *,
+        allow_parallel_event_stream: bool = True,
+    ) -> None:
         self._scripts = list(scripts)
         self._turns: dict[tuple[str, str], _HarnessScript] = {}
         self.calls: list[dict[str, object]] = []
         self.resume_calls: list[str] = []
         self._session_counter = 0
         self._turn_counter = 0
+        self._allow_parallel_event_stream = allow_parallel_event_stream
+        self.stream_event_calls = 0
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         _ = workspace_root
 
     def supports(self, capability: str) -> bool:
         return RuntimeCapability(capability) in self.capabilities
+
+    def allows_parallel_event_stream(self) -> bool:
+        return self._allow_parallel_event_stream
 
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
@@ -138,6 +148,7 @@ class _FakeHarness:
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ):
         _ = workspace_root
+        self.stream_event_calls += 1
         script = self._turns[(conversation_id, turn_id)]
         streamed_raw_events = script.streamed_raw_events or script.raw_events
         for index, payload in enumerate(streamed_raw_events, start=1):
@@ -271,6 +282,52 @@ async def test_run_turn_maps_runtime_events_to_result_and_emits(tmp_path: Path):
     ]
     assert emitted[0][1]["message"]["method"] == "outputDelta"
     assert emitted[1][1]["delta"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_replays_final_events_when_parallel_streaming_is_disabled(
+    tmp_path: Path,
+):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="hello",
+                raw_events=[
+                    _message(
+                        "outputDelta",
+                        {
+                            "turnId": "turn-1",
+                            "delta": "hello",
+                            "deltaType": "assistant_stream",
+                        },
+                    )
+                ],
+            )
+        ],
+        allow_parallel_event_stream=False,
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
+
+    emitted = []
+
+    def _emit(event_type: FlowEventType, payload: dict):
+        emitted.append((event_type, payload))
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="main prompt",
+            workspace_root=tmp_path,
+            emit_event=_emit,
+        )
+    )
+
+    assert result.text == "hello"
+    assert harness.stream_event_calls == 0
+    assert [event_type for event_type, _ in emitted] == [
+        FlowEventType.APP_SERVER_EVENT,
+        FlowEventType.AGENT_STREAM_DELTA,
+    ]
 
 
 @pytest.mark.asyncio

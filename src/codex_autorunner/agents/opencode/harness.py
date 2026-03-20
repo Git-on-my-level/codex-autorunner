@@ -486,6 +486,10 @@ class OpenCodeHarness(AgentHarness):
         ]
     )
 
+    def allows_parallel_event_stream(self) -> bool:
+        # wait_for_turn() consumes the OpenCode event stream to collect output.
+        return False
+
     def __init__(self, supervisor: OpenCodeSupervisor) -> None:
         self._supervisor = supervisor
         self._pending_turns: dict[tuple[str, str], _PendingTurnConfig] = {}

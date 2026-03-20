@@ -60,6 +60,9 @@ class AgentHarness(ABC):
             return False
         return next(iter(normalized)) in self.capabilities
 
+    def allows_parallel_event_stream(self) -> bool:
+        return self.supports("event_streaming")
+
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
         _ = workspace_root
         raise UnsupportedAgentCapabilityError(
@@ -175,4 +178,18 @@ class AgentHarness(ABC):
         return _unsupported()
 
 
-__all__ = ["AgentHarness", "UnsupportedAgentCapabilityError"]
+def harness_allows_parallel_event_stream(harness: Any) -> bool:
+    supports = getattr(harness, "supports", None)
+    if not callable(supports) or not supports("event_streaming"):
+        return False
+    allows_parallel = getattr(harness, "allows_parallel_event_stream", None)
+    if callable(allows_parallel):
+        return bool(allows_parallel())
+    return True
+
+
+__all__ = [
+    "AgentHarness",
+    "UnsupportedAgentCapabilityError",
+    "harness_allows_parallel_event_stream",
+]
