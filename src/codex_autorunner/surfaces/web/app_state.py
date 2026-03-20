@@ -12,6 +12,7 @@ from typing import Any, Mapping, Optional, cast
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import validate_agent_id
 from ...bootstrap import ensure_hub_car_shim
+from ...core.app_server_command import resolve_app_server_command
 from ...core.config import (
     AppServerConfig,
     ConfigError,
@@ -373,7 +374,8 @@ def _build_app_server_supervisor(
     notification_handler: Optional[NotificationHandler] = None,
     approval_handler: Optional[ApprovalHandler] = None,
 ) -> tuple[Optional[WorkspaceAppServerSupervisor], Optional[float]]:
-    if not config.command:
+    command = resolve_app_server_command(config.command)
+    if not command:
         return None, None
 
     def _env_builder(
@@ -382,7 +384,7 @@ def _build_app_server_supervisor(
         state_dir.mkdir(parents=True, exist_ok=True)
         base_env_dict: Optional[dict[str, str]] = dict(base_env) if base_env else None
         return build_app_server_env(
-            config.command,
+            command,
             workspace_root,
             state_dir,
             logger=logger,
@@ -396,7 +398,7 @@ def _build_app_server_supervisor(
         asyncio.set_event_loop(asyncio.new_event_loop())
 
     supervisor = WorkspaceAppServerSupervisor(
-        config.command,
+        command,
         state_root=config.state_root,
         env_builder=_env_builder,
         logger=logger,

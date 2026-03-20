@@ -145,3 +145,45 @@ async def test_service_exposes_app_server_event_buffer_context(
     finally:
         await service._close_all_app_server_supervisors()
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_workspace_supervisor_uses_resolved_repo_app_server_command(
+    tmp_path: Path, monkeypatch
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    class _FakeSupervisor:
+        def __init__(self, command, **kwargs) -> None:
+            captured.append({"command": list(command), **kwargs})
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    monkeypatch.setattr(
+        discord_service_module,
+        "load_repo_config",
+        lambda *args, **kwargs: SimpleNamespace(
+            app_server=SimpleNamespace(command=["/custom/codex", "app-server", "--x"])
+        ),
+    )
+    monkeypatch.setattr(
+        discord_service_module, "WorkspaceAppServerSupervisor", _FakeSupervisor
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.command"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    try:
+        await service._app_server_supervisor_for_workspace(workspace)
+        assert captured
+        assert captured[0]["command"] == ["/custom/codex", "app-server", "--x"]
+    finally:
+        await store.close()

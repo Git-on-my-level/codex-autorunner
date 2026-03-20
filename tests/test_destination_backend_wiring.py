@@ -4,6 +4,7 @@ import asyncio
 import logging
 from pathlib import Path
 
+from codex_autorunner.core.app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     REPO_OVERRIDE_FILENAME,
@@ -150,6 +151,30 @@ def test_build_app_server_supervisor_factory_preserves_runtime_policy_settings(
         == config.app_server.turn_stall_max_recovery_attempts
     )
     assert kwargs["output_policy"] == config.app_server.output.policy
+
+
+def test_build_app_server_supervisor_factory_prefers_global_env_override(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    captured: dict[str, object] = {}
+
+    class _FakeSupervisor:
+        def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
+            captured["command"] = list(command)
+
+    monkeypatch.setenv(GLOBAL_APP_SERVER_COMMAND_ENV, "/env/codex app-server --global")
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.WorkspaceAppServerSupervisor",
+        _FakeSupervisor,
+    )
+
+    factory = build_app_server_supervisor_factory(config)
+    factory("autorunner", None)
+
+    assert captured["command"] == ["/env/codex", "app-server", "--global"]
 
 
 def test_agent_backend_factory_codex_supervisor_wraps_for_docker(

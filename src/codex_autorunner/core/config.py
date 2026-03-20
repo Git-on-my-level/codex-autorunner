@@ -22,6 +22,11 @@ import yaml
 
 from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
 from ..manifest import ManifestError, load_manifest
+from .app_server_command import (
+    GLOBAL_APP_SERVER_COMMAND_ENV,
+    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
+    resolve_app_server_command,
+)
 from .config_contract import CONFIG_VERSION, ConfigError
 from .destinations import default_local_destination, resolve_effective_repo_destination
 from .path_utils import ConfigPathError, resolve_config_path
@@ -205,7 +210,7 @@ def _default_telegram_bot_section(
         },
         "opencode_command": None,
         "state_file": ".codex-autorunner/telegram_state.sqlite3",
-        "app_server_command_env": "CAR_TELEGRAM_APP_SERVER_COMMAND",
+        "app_server_command_env": GLOBAL_APP_SERVER_COMMAND_ENV,
         "app_server_command": ["codex", "app-server"],
         "app_server": {
             "max_handles": 20,
@@ -1669,7 +1674,10 @@ def _parse_app_server_config(
     defaults: Dict[str, Any],
 ) -> AppServerConfig:
     cfg = cfg if isinstance(cfg, dict) else {}
-    command = _parse_command(cfg.get("command", defaults.get("command")))
+    command = resolve_app_server_command(
+        cfg.get("command", defaults.get("command")),
+        env=os.environ,
+    )
     state_root_raw = cfg.get("state_root", defaults.get("state_root"))
     if state_root_raw is None:
         raise ConfigError("app_server.state_root is required")
@@ -2248,9 +2256,11 @@ VOICE_ENV_OVERRIDES = (
     "CODEX_AUTORUNNER_VOICE_MIN_HOLD_MS",
 )
 
+COMMON_ENV_OVERRIDES = (GLOBAL_APP_SERVER_COMMAND_ENV,)
+
 TELEGRAM_ENV_OVERRIDES = (
     "CAR_OPENCODE_COMMAND",
-    "CAR_TELEGRAM_APP_SERVER_COMMAND",
+    LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
 )
 
 DISCORD_ENV_OVERRIDES = (
@@ -2281,6 +2291,9 @@ def collect_env_overrides(
     if _has_value("CAR_GLOBAL_STATE_ROOT"):
         overrides.append("CAR_GLOBAL_STATE_ROOT")
     for key in VOICE_ENV_OVERRIDES:
+        if _has_value(key):
+            overrides.append(key)
+    for key in COMMON_ENV_OVERRIDES:
         if _has_value(key):
             overrides.append(key)
     if include_telegram:

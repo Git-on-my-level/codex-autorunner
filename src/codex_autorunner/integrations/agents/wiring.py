@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
+from ...core.app_server_command import resolve_app_server_command
 from ...core.config import RepoConfig
 from ...core.destinations import DockerDestination
 from ...core.ports.agent_backend import AgentBackend
@@ -230,10 +231,10 @@ class AgentBackendFactory:
     def _ensure_codex_supervisor(self) -> WorkspaceAppServerSupervisor:
         if self._codex_supervisor is not None:
             return self._codex_supervisor
-        if not self._config.app_server.command:
+        supervisor_command = resolve_app_server_command(self._config.app_server.command)
+        if not supervisor_command:
             raise ValueError("app_server.command is required for codex backend")
 
-        supervisor_command = list(self._config.app_server.command)
         state_root = self._config.app_server.state_root
         if isinstance(self._destination, DockerDestination):
             wrapped = wrap_command_for_destination(
@@ -298,10 +299,10 @@ def build_app_server_supervisor_factory(
     def factory(
         event_prefix: str, notification_handler: Optional[NotificationHandler]
     ) -> WorkspaceAppServerSupervisor:
-        if not config.app_server.command:
+        supervisor_command = resolve_app_server_command(config.app_server.command)
+        if not supervisor_command:
             raise ValueError("app_server.command is required for supervisor")
 
-        supervisor_command = list(config.app_server.command)
         state_root = config.app_server.state_root
         if isinstance(destination, DockerDestination):
             wrapped = wrap_command_for_destination(
