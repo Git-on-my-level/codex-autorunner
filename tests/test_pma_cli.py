@@ -3,6 +3,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
@@ -890,6 +891,90 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             None,
         ),
     ]
+
+
+def test_pma_cli_thread_archive_reports_unreachable_host_port(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _raise_connect_error(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env, params
+        raise httpx.ConnectError(
+            "[Errno 1] Operation not permitted", request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.setattr(pma_cli, "_request_json", _raise_connect_error)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "archive", "--id", "thread-1", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "Failed to archive managed PMA thread thread-1." in result.output
+    assert "Resolved URL: http://127.0.0.1:4321/hub/pma/threads/thread-1/archive" in (
+        result.output
+    )
+    assert "Failure type: hub host/port unreachable." in result.output
+    assert "running in this runtime" in result.output
+
+
+def test_pma_cli_thread_archive_reports_base_path_mismatch(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _raise_http_status(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env, params
+        request = httpx.Request("POST", url)
+        response = httpx.Response(404, request=request, json={"detail": "Not Found"})
+        raise httpx.HTTPStatusError("Not Found", request=request, response=response)
+
+    monkeypatch.setattr(pma_cli, "_request_json", _raise_http_status)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "archive", "--id", "thread-1", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "Failed to archive managed PMA thread thread-1." in result.output
+    assert "Failure type: possible base-path mismatch." in result.output
+    assert "HTTP status: 404" in result.output
+    assert "server.base_path" in result.output
 
 
 def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(

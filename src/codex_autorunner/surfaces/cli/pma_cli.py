@@ -16,6 +16,7 @@ from ...core.car_context import (
     normalize_car_context_profile,
 )
 from ...core.config import load_hub_config
+from .commands.utils import format_hub_request_error
 
 logger = logging.getLogger(__name__)
 
@@ -1847,13 +1848,21 @@ def pma_thread_archive(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
+        archive_url = _build_pma_url(config, f"/threads/{managed_thread_id}/archive")
         data = _request_json(
             "POST",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/archive"),
+            archive_url,
             token_env=config.server_auth_token_env,
         )
     except httpx.HTTPError as exc:
-        typer.echo(f"HTTP error: {exc}", err=True)
+        typer.echo(
+            format_hub_request_error(
+                action=f"Failed to archive managed PMA thread {managed_thread_id}.",
+                url=archive_url,
+                exc=exc,
+            ),
+            err=True,
+        )
         raise typer.Exit(code=1) from None
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
