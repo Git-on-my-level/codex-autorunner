@@ -69,6 +69,13 @@ _UPDATE_TARGET_ALIASES = {
     "discord": "discord",
     "dc": "discord",
 }
+_UPDATE_TARGET_STATUS = UpdateTargetDefinition(
+    value="status",
+    label="Status",
+    description="Show update status",
+    restart_notice="",
+    includes_web=False,
+)
 
 
 def _format_service_list(services: tuple[str, ...]) -> str:
@@ -101,6 +108,31 @@ def _all_target_definition(
 
 def all_update_target_definitions() -> tuple[UpdateTargetDefinition, ...]:
     return tuple(_UPDATE_TARGET_DEFINITIONS[key] for key in _UPDATE_TARGET_ORDER)
+
+
+def update_target_label_pairs(
+    definitions: tuple[UpdateTargetDefinition, ...] | None = None,
+) -> tuple[tuple[str, str], ...]:
+    items = definitions if definitions is not None else all_update_target_definitions()
+    return tuple((definition.value, definition.label) for definition in items)
+
+
+def update_target_command_choices(
+    *, include_status: bool = False
+) -> tuple[dict[str, str], ...]:
+    choices = tuple(
+        {"name": definition.label, "value": definition.value}
+        for definition in all_update_target_definitions()
+    )
+    if not include_status:
+        return choices
+    return (
+        *choices,
+        {
+            "name": _UPDATE_TARGET_STATUS.label,
+            "value": _UPDATE_TARGET_STATUS.value,
+        },
+    )
 
 
 def normalize_update_target(raw: Optional[str]) -> str:

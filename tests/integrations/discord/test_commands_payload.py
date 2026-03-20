@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from codex_autorunner.core.update_targets import update_target_command_choices
 from codex_autorunner.integrations.discord.commands import build_application_commands
 
 
@@ -170,8 +171,10 @@ def test_agent_and_effort_options_include_choices() -> None:
 
     update = _find_option(car_options, "update")
     update_target = _find_option(update["options"], "target")
-    target_choices = {choice["value"] for choice in update_target.get("choices", [])}
-    assert target_choices == {"both", "web", "chat", "telegram", "discord", "status"}
+    assert update_target["description"] == "Target service group or status"
+    assert update_target.get("choices", []) == list(
+        update_target_command_choices(include_status=True)
+    )
 
     experimental = _find_option(car_options, "experimental")
     experimental_action = _find_option(experimental["options"], "action")

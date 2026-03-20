@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 import codex_autorunner.surfaces.web.routes.system as system
+from codex_autorunner.core.update_targets import (
+    update_target_command_choices,
+    update_target_label_pairs,
+)
 
 
 @pytest.mark.parametrize(
@@ -131,6 +135,24 @@ def test_available_update_target_options_include_discord_when_active(
     )
     assert definitions[0].description == "Web + Discord"
     assert definitions[0].restart_notice == "The web UI and Discord will restart."
+
+
+def test_update_target_helpers_share_the_same_core_definitions() -> None:
+    assert update_target_label_pairs() == (
+        ("both", "All"),
+        ("web", "Web only"),
+        ("chat", "Chat apps (Telegram + Discord)"),
+        ("telegram", "Telegram only"),
+        ("discord", "Discord only"),
+    )
+    assert update_target_command_choices(include_status=True) == (
+        {"name": "All", "value": "both"},
+        {"name": "Web only", "value": "web"},
+        {"name": "Chat apps (Telegram + Discord)", "value": "chat"},
+        {"name": "Telegram only", "value": "telegram"},
+        {"name": "Discord only", "value": "discord"},
+        {"name": "Status", "value": "status"},
+    )
 
 
 @pytest.mark.parametrize(

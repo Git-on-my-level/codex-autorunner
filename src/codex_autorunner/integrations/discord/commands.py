@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...core.update_targets import update_target_command_choices
+
 # Discord application command option types.
 SUB_COMMAND = 1
 SUB_COMMAND_GROUP = 2
@@ -104,16 +106,11 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "target",
-                            "description": "Target: both, web, chat, telegram, discord, or status",
+                            "description": "Target service group or status",
                             "required": False,
-                            "choices": [
-                                {"name": "both", "value": "both"},
-                                {"name": "web", "value": "web"},
-                                {"name": "chat", "value": "chat"},
-                                {"name": "telegram", "value": "telegram"},
-                                {"name": "discord", "value": "discord"},
-                                {"name": "status", "value": "status"},
-                            ],
+                            "choices": list(
+                                update_target_command_choices(include_status=True)
+                            ),
                         }
                     ],
                 },
