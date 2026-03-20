@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
+
+from ...core.update_targets import (
+    UpdateTargetDefinition,
+    all_update_target_definitions,
+)
 
 DISCORD_BUTTON_STYLE_PRIMARY = 1
 DISCORD_BUTTON_STYLE_SECONDARY = 2
@@ -365,17 +370,26 @@ def build_review_commit_picker(
 
 def build_update_target_picker(
     *,
+    target_definitions: Optional[Sequence[UpdateTargetDefinition]] = None,
     custom_id: str = "update_target_select",
     placeholder: str = "Select update target...",
 ) -> dict[str, Any]:
+    definitions = (
+        tuple(target_definitions)
+        if target_definitions is not None
+        else all_update_target_definitions()
+    )
     options = [
-        build_select_option("both", "both", description="Web + Chat apps"),
-        build_select_option("web", "web", description="Web UI only"),
-        build_select_option("chat", "chat", description="Telegram + Discord"),
-        build_select_option("telegram", "telegram", description="Telegram only"),
-        build_select_option("discord", "discord", description="Discord only"),
-        build_select_option("status", "status", description="Show update status"),
+        build_select_option(
+            definition.label,
+            definition.value,
+            description=definition.description,
+        )
+        for definition in definitions[: DISCORD_SELECT_OPTION_MAX_OPTIONS - 1]
     ]
+    options.append(
+        build_select_option("Status", "status", description="Show update status")
+    )
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
     )

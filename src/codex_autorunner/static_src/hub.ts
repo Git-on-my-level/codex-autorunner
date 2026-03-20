@@ -12,6 +12,15 @@ import { registerAutoRefresh } from "./autoRefresh.js";
 import { HUB_BASE } from "./env.js";
 import { preserveScroll } from "./preserve.js";
 import { initNotificationBell } from "./notificationBell.js";
+import {
+  describeUpdateTarget,
+  getUpdateTarget,
+  includesWebUpdateTarget,
+  normalizeUpdateTarget,
+  type UpdateTargetsResponse,
+  updateRestartNotice,
+  updateTargetOptionsFromResponse,
+} from "./updateTargets.js";
 
 interface HubTicketFlow {
   status: string;
@@ -891,60 +900,6 @@ async function loadHubUsage({ silent = false, allowRetry = true }: LoadHubUsageO
   }
 }
 
-const UPDATE_TARGET_LABELS: Record<string, string> = {
-  both: "Web + Chat Apps",
-  web: "web only",
-  chat: "Chat Apps (Telegram + Discord)",
-  telegram: "Telegram only",
-  discord: "Discord only",
-};
-
-type UpdateTarget = "both" | "web" | "chat" | "telegram" | "discord";
-
-function normalizeUpdateTarget(value: unknown): UpdateTarget {
-  if (!value) return "both";
-  if (
-    value === "both" ||
-    value === "web" ||
-    value === "chat" ||
-    value === "telegram" ||
-    value === "discord"
-  ) {
-    return value as UpdateTarget;
-  }
-  return "both";
-}
-
-function getUpdateTarget(selectId: string | null): UpdateTarget {
-  const select = selectId ? (document.getElementById(selectId) as HTMLSelectElement | null) : null;
-  return normalizeUpdateTarget(select ? select.value : "both");
-}
-
-function describeUpdateTarget(target: UpdateTarget): string {
-  return UPDATE_TARGET_LABELS[target] || UPDATE_TARGET_LABELS.both;
-}
-
-function includesWebUpdateTarget(target: UpdateTarget): boolean {
-  return target === "both" || target === "web";
-}
-
-function updateRestartNotice(target: UpdateTarget): string {
-  if (target === "chat") return "Telegram and Discord bots will restart.";
-  if (target === "telegram") return "The Telegram bot will restart.";
-  if (target === "discord") return "The Discord bot will restart.";
-  return "The service will restart.";
-}
-
-interface UpdateTargetOptionResponse {
-  value?: string;
-  label?: string;
-}
-
-interface UpdateTargetsResponse {
-  targets?: UpdateTargetOptionResponse[];
-  default_target?: string;
-}
-
 async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
   const select = selectId ? (document.getElementById(selectId) as HTMLSelectElement | null) : null;
   if (!select) return;
@@ -955,26 +910,11 @@ async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
   } catch (_err) {
     return;
   }
-  const rawOptions = Array.isArray(payload?.targets) ? payload.targets : [];
-  const options: Array<{ value: UpdateTarget; label: string }> = [];
-  const seen = new Set<string>();
-  rawOptions.forEach((entry) => {
-    const rawValue = typeof entry?.value === "string" ? entry.value : "";
-    if (!["both", "web", "chat", "telegram", "discord"].includes(rawValue)) return;
-    if (!rawValue) return;
-    const value = normalizeUpdateTarget(rawValue);
-    if (seen.has(value)) return;
-    seen.add(value);
-    const label = typeof entry?.label === "string" && entry.label.trim()
-      ? entry.label.trim()
-      : describeUpdateTarget(value);
-    options.push({ value, label });
-  });
+  const { options, defaultTarget } = updateTargetOptionsFromResponse(payload);
   if (!options.length) return;
 
   const previous = normalizeUpdateTarget(select.value || "both");
   const hasPrevious = options.some((item) => item.value === previous);
-  const defaultTarget = normalizeUpdateTarget(payload?.default_target || "both");
   const fallback = options.some((item) => item.value === defaultTarget)
     ? defaultTarget
     : options[0].value;

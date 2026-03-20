@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ...core.update_targets import all_update_target_definitions
 from ..chat.agents import (
     DEFAULT_CHAT_AGENT,
     DEFAULT_CHAT_AGENT_MODELS,
@@ -74,12 +75,9 @@ REVIEW_COMMIT_PICKER_PROMPT = (
 )
 FLOW_RUNS_PICKER_PROMPT = "Select a ticket flow run (buttons below)."
 REVIEW_COMMIT_BUTTON_LABEL_LIMIT = 80
-UPDATE_TARGET_OPTIONS = (
-    ("both", "Both (Web + Chat Apps)"),
-    ("web", "Web only"),
-    ("chat", "Chat Apps (Telegram + Discord)"),
-    ("telegram", "Telegram only"),
-    ("discord", "Discord only"),
+UPDATE_TARGET_OPTIONS = tuple(
+    (definition.value, definition.label)
+    for definition in all_update_target_definitions()
 )
 TRACE_MESSAGE_TOKENS = (
     "failed",

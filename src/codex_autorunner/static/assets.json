@@ -155,6 +155,9 @@
       "path": "generated/turnResume.js"
     },
     {
+      "path": "generated/updateTargets.js"
+    },
+    {
       "path": "generated/utils.js"
     },
     {

@@ -39,8 +39,10 @@ _update_status_path = update_core._update_status_path
 _normalize_update_backend = update_core._normalize_update_backend
 _resolve_update_backend = update_core._resolve_update_backend
 _required_update_commands = update_core._required_update_commands
+_available_update_target_definitions = update_core._available_update_target_definitions
 _available_update_target_options = update_core._available_update_target_options
 _default_update_target = update_core._default_update_target
+_get_update_target_definition = update_core._get_update_target_definition
 shutil = update_core.shutil
 subprocess = update_core.subprocess
 sys = update_core.sys
@@ -222,9 +224,10 @@ def build_system_routes() -> APIRouter:
                     else None
                 ),
             )
+            target_info = _get_update_target_definition(update_target)
             return {
                 "status": "ok",
-                "message": f"Update started ({update_target}). Service will restart shortly.",
+                "message": f"Update started ({target_info.label}). Service will restart shortly.",
                 "target": update_target,
             }
         except UpdateInProgressError as exc:
@@ -253,7 +256,7 @@ def build_system_routes() -> APIRouter:
             if isinstance(raw_services, dict):
                 update_services = raw_services
 
-        options = _available_update_target_options(
+        options = _available_update_target_definitions(
             raw_config=raw_config if isinstance(raw_config, dict) else None,
             update_backend=update_backend,
             linux_service_names=update_services,
@@ -265,8 +268,14 @@ def build_system_routes() -> APIRouter:
         )
         return {
             "targets": [
-                SystemUpdateTargetOption(value=value, label=label)
-                for value, label in options
+                SystemUpdateTargetOption(
+                    value=definition.value,
+                    label=definition.label,
+                    description=definition.description,
+                    includes_web=definition.includes_web,
+                    restart_notice=definition.restart_notice,
+                )
+                for definition in options
             ],
             "default_target": default_target,
         }

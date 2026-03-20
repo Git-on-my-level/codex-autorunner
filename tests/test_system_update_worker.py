@@ -81,10 +81,23 @@ def test_available_update_target_options_include_telegram_when_enableable(
         linux_service_names={"hub": "car-hub"},
     )
     assert options == (
-        ("both", "Web + Chat Apps"),
+        ("both", "All"),
         ("web", "Web only"),
         ("telegram", "Telegram only"),
     )
+    definitions = system._available_update_target_definitions(
+        raw_config={
+            "telegram_bot": {
+                "enabled": True,
+                "bot_token_env": "CAR_TELEGRAM_BOT_TOKEN",
+            },
+            "discord_bot": {"enabled": False},
+        },
+        update_backend="systemd-user",
+        linux_service_names={"hub": "car-hub"},
+    )
+    assert definitions[0].description == "Web + Telegram"
+    assert definitions[0].restart_notice == "The web UI and Telegram will restart."
 
 
 def test_available_update_target_options_include_discord_when_active(
@@ -104,10 +117,20 @@ def test_available_update_target_options_include_discord_when_active(
         linux_service_names={"hub": "car-hub", "discord": "car-discord"},
     )
     assert options == (
-        ("both", "Web + Chat Apps"),
+        ("both", "All"),
         ("web", "Web only"),
         ("discord", "Discord only"),
     )
+    definitions = system._available_update_target_definitions(
+        raw_config={
+            "telegram_bot": {"enabled": False},
+            "discord_bot": {"enabled": False},
+        },
+        update_backend="systemd-user",
+        linux_service_names={"hub": "car-hub", "discord": "car-discord"},
+    )
+    assert definitions[0].description == "Web + Discord"
+    assert definitions[0].restart_notice == "The web UI and Discord will restart."
 
 
 @pytest.mark.parametrize(

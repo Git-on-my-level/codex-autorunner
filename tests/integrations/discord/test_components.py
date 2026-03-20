@@ -232,3 +232,5 @@ class TestBuildUpdateTargetPicker:
         assert menu["custom_id"] == "update_target_select"
         values = {opt["value"] for opt in menu["options"]}
         assert values == {"both", "web", "chat", "telegram", "discord", "status"}
+        all_option = next(opt for opt in menu["options"] if opt["value"] == "both")
+        assert all_option["label"] == "All"

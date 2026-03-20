@@ -22,6 +22,7 @@ from ....core.update import (
     _spawn_update_process,
 )
 from ....core.update_paths import resolve_update_paths
+from ....core.update_targets import get_update_target_label
 from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
 from ...chat.media import (
@@ -2645,8 +2646,9 @@ Summary applied.""",
                     chat_id, failure, thread_id=thread_id, reply_to=reply_to
                 )
             return
+        target_label = get_update_target_label(update_target)
         message = (
-            f"Update started ({update_target}). The selected service(s) will restart."
+            f"Update started ({target_label}). The selected service(s) will restart."
         )
         if callback and selection_key:
             await self._answer_callback(callback, "Update started")
