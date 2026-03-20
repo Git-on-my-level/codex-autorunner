@@ -289,11 +289,11 @@ When a shell command is received:
 
 The `/approvals` command sets approval mode and policy via presets:
 
+- `yolo`: `approval_policy=never`, `sandbox_policy=dangerFullAccess`
+- `safe`: `approval_policy=on-request`, `sandbox_policy=workspaceWrite`
 - `read-only`: `approval_policy=on-request`, `sandbox_policy=readOnly`
 - `auto`: `approval_policy=on-request`, `sandbox_policy=workspaceWrite`
 - `full-access`: `approval_policy=never`, `sandbox_policy=dangerFullAccess`
-
-Default approval mode is `yolo`, which maps to `full-access` preset.
 
 ### Security Considerations
 

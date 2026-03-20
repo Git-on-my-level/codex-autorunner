@@ -226,17 +226,6 @@ def _extract_thread_info(payload: Any) -> dict[str, Any]:
     }
 
 
-def _normalize_approval_preset(raw: str) -> Optional[str]:
-    cleaned = re.sub(r"[^a-z0-9]+", "-", raw.strip().lower()).strip("-")
-    if cleaned in ("readonly", "read-only", "read_only"):
-        return "read-only"
-    if cleaned in ("fullaccess", "full-access", "full_access", "full"):
-        return "full-access"
-    if cleaned in ("auto", "agent"):
-        return "auto"
-    return None
-
-
 def _clear_policy_overrides(record: "TelegramTopicRecord") -> None:
     record.approval_policy = None
     record.sandbox_policy = None

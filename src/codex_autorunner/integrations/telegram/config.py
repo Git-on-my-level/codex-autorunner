@@ -14,6 +14,7 @@ from ...core.app_server_command import (
     LEGACY_TELEGRAM_APP_SERVER_COMMAND_ENV,
     resolve_app_server_command,
 )
+from ..chat.approval_modes import resolve_approval_mode_policies
 from ..chat.collaboration_policy import (
     CollaborationPolicy,
     CollaborationPolicyError,
@@ -42,6 +43,7 @@ DEFAULT_ALLOWED_UPDATES = ("message", "edited_message", "callback_query")
 DEFAULT_POLL_TIMEOUT_SECONDS = 30
 DEFAULT_POLL_REQUEST_TIMEOUT_SECONDS: Optional[float] = None
 DEFAULT_SAFE_APPROVAL_POLICY = "on-request"
+DEFAULT_SAFE_SANDBOX_POLICY = "workspaceWrite"
 DEFAULT_YOLO_APPROVAL_POLICY = "never"
 DEFAULT_YOLO_SANDBOX_POLICY = "dangerFullAccess"
 DEFAULT_PARSE_MODE = "HTML"
@@ -107,10 +109,8 @@ class TelegramBotDefaults:
     yolo_sandbox_policy: str
 
     def policies_for_mode(self, mode: str) -> tuple[Optional[str], Optional[str]]:
-        normalized = normalize_approval_mode(mode, default=APPROVAL_MODE_YOLO)
-        if normalized == APPROVAL_MODE_YOLO:
-            return self.yolo_approval_policy, self.yolo_sandbox_policy
-        return self.approval_policy, self.sandbox_policy
+        approval_policy, sandbox_policy = resolve_approval_mode_policies(mode)
+        return approval_policy, sandbox_policy
 
 
 @dataclass(frozen=True)
@@ -297,7 +297,7 @@ class TelegramBotConfig:
         approval_policy = defaults_raw.get(
             "approval_policy", DEFAULT_SAFE_APPROVAL_POLICY
         )
-        sandbox_policy = defaults_raw.get("sandbox_policy")
+        sandbox_policy = defaults_raw.get("sandbox_policy", DEFAULT_SAFE_SANDBOX_POLICY)
         if sandbox_policy is not None:
             sandbox_policy = str(sandbox_policy)
         yolo_approval_policy = str(

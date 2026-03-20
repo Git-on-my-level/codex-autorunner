@@ -171,6 +171,7 @@ from ...tickets.files import (
 from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
+from ..chat.approval_modes import APPROVAL_MODE_USAGE, normalize_approval_mode
 from ..chat.review_commits import _parse_review_commit_log
 from ..chat.thread_summaries import (
     _coerce_thread_list,
@@ -10954,23 +10955,18 @@ class DiscordBotService:
                         f"Approval policy: {approval_policy}",
                         f"Sandbox policy: {sandbox_policy}",
                         "",
-                        "Usage: /car approvals yolo|safe|read-only|auto|full-access",
+                        f"Usage: /car approvals {APPROVAL_MODE_USAGE}",
                     ]
                 ),
             )
             return
 
-        if mode in ("yolo", "off", "disable"):
-            new_mode = "yolo"
-        elif mode in ("safe", "on", "enable"):
-            new_mode = "safe"
-        elif mode in ("read-only", "auto", "full-access"):
-            new_mode = mode
-        else:
+        new_mode = normalize_approval_mode(mode, include_command_aliases=True)
+        if new_mode is None:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"Unknown mode: {mode}. Valid options: yolo, safe, read-only, auto, full-access",
+                f"Unknown mode: {mode}. Valid options: {APPROVAL_MODE_USAGE}",
             )
             return
 
