@@ -68,6 +68,9 @@ from ...integrations.chat.models import ChatMessageEvent
 from ...integrations.chat.runtime_thread_errors import (
     resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
 )
+from ...integrations.chat.runtime_thread_errors import (
+    sanitize_runtime_thread_error,
+)
 from ..chat.managed_thread_progress import (
     ProgressRuntimeState,
     apply_run_event_to_progress_tracker,
@@ -104,11 +107,13 @@ class DiscordMessageTurnResult:
 
 _APPROVAL_MODE_POLICY_PRESETS: dict[str, tuple[str, str]] = {
     "yolo": ("never", "dangerFullAccess"),
-    "safe": ("on-request", "workspaceWrite"),
-    "auto": ("on-request", "workspaceWrite"),
-    "read-only": ("on-request", "readOnly"),
+    "safe": ("never", "workspaceWrite"),
+    "auto": ("never", "workspaceWrite"),
+    "read-only": ("never", "readOnly"),
     "full-access": ("never", "dangerFullAccess"),
 }
+
+_sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
 
 
 def _resolve_discord_turn_policies(
@@ -1707,6 +1712,12 @@ async def run_managed_thread_turn_for_message(
         f"{prompt_text}\n"
         "</user_message>\n"
     )
+    binding = await service._store.get_binding(channel_id=orchestrator_channel_key)
+    approval_mode, sandbox_policy = _resolve_discord_turn_policies(
+        binding,
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    )
     return await _run_discord_orchestrated_turn_for_message(
         service,
         workspace_root=workspace_root,
@@ -1723,8 +1734,8 @@ async def run_managed_thread_turn_for_message(
         public_execution_error=DISCORD_PMA_PUBLIC_EXECUTION_ERROR,
         timeout_error="Discord PMA turn timed out",
         interrupted_error="Discord PMA turn interrupted",
-        approval_mode="on-request",
-        sandbox_policy="dangerFullAccess",
+        approval_mode=approval_mode,
+        sandbox_policy=sandbox_policy,
         max_actions=DISCORD_PMA_PROGRESS_MAX_ACTIONS,
         min_edit_interval_seconds=DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
         heartbeat_interval_seconds=DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,

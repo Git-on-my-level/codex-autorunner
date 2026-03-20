@@ -255,7 +255,17 @@ def test_resolve_discord_turn_policies_prefers_binding_preset() -> None:
         {"approval_mode": "read-only"},
         default_approval_policy="never",
         default_sandbox_policy="dangerFullAccess",
-    ) == ("on-request", "readOnly")
+    ) == ("never", "readOnly")
+
+
+def test_resolve_discord_turn_policies_keeps_safe_in_workspace_write_without_prompting() -> (
+    None
+):
+    assert discord_message_turns_module._resolve_discord_turn_policies(
+        {"approval_mode": "safe"},
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+    ) == ("never", "workspaceWrite")
 
 
 def test_resolve_discord_turn_policies_prefers_explicit_binding_values() -> None:
@@ -268,6 +278,52 @@ def test_resolve_discord_turn_policies_prefers_explicit_binding_values() -> None
         default_approval_policy="never",
         default_sandbox_policy="dangerFullAccess",
     ) == ("on-failure", "workspaceWrite")
+
+
+@pytest.mark.asyncio
+async def test_run_managed_thread_turn_for_message_uses_binding_policies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def _fake_run_discord_orchestrated_turn_for_message(
+        *args: Any, **kwargs: Any
+    ):
+        _ = args
+        captured.update(kwargs)
+        return DiscordMessageTurnResult(final_message="ok")
+
+    class _Store:
+        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
+            assert channel_id == "channel-1"
+            return {"approval_mode": "safe"}
+
+    service = SimpleNamespace(
+        _config=_config(tmp_path),
+        _store=_Store(),
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "_run_discord_orchestrated_turn_for_message",
+        _fake_run_discord_orchestrated_turn_for_message,
+    )
+
+    result = await discord_message_turns_module.run_managed_thread_turn_for_message(
+        service,
+        workspace_root=tmp_path,
+        prompt_text="hello",
+        input_items=None,
+        agent="codex",
+        model_override=None,
+        reasoning_effort=None,
+        session_key="session-1",
+        orchestrator_channel_key="channel-1",
+    )
+
+    assert result.final_message == "ok"
+    assert captured["approval_mode"] == "never"
+    assert captured["sandbox_policy"] == "workspaceWrite"
 
 
 class _FailingChannelRest(_FakeRest):
