@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
@@ -22,10 +22,12 @@ from .....core.flows.ux_helpers import (
     build_flow_status_snapshot,
     issue_md_has_content,
     issue_md_path,
+    resolve_ticket_flow_archive_mode,
     seed_issue_from_github,
     seed_issue_from_text,
     select_default_ticket_flow_run,
     summarize_flow_freshness,
+    ticket_flow_archive_requires_force,
     ticket_progress,
 )
 from .....core.flows.worker_process import FlowWorkerHealth, check_worker_health
@@ -168,6 +170,57 @@ class FlowCommands(SharedHelpers):
         cache = {}
         self._flow_repo_context = cache
         return cache
+
+    @staticmethod
+    def _flow_archive_prompt_text(record: object) -> str:
+        run_id = getattr(record, "id", "unknown")
+        status = getattr(getattr(record, "status", None), "value", "unknown")
+        return (
+            f"Run {_code(run_id)} is {status}. Archiving it will reset the live "
+            "tickets/contextspace state and move the current run artifacts into the "
+            "archive. Archive it anyway?"
+        )
+
+    def _build_flow_archive_confirmation_keyboard(
+        self,
+        run_id: str,
+        *,
+        repo_id: Optional[str] = None,
+        prompt_variant: bool,
+    ) -> dict[str, Any]:
+        confirm_action = (
+            "archive_confirm_prompt" if prompt_variant else "archive_confirm"
+        )
+        cancel_action = "archive_cancel_prompt" if prompt_variant else "archive_cancel"
+        return build_inline_keyboard(
+            [
+                [
+                    InlineButton(
+                        "Archive now",
+                        encode_flow_callback(confirm_action, run_id, repo_id=repo_id),
+                    ),
+                    InlineButton(
+                        "Cancel",
+                        encode_flow_callback(cancel_action, run_id, repo_id=repo_id),
+                    ),
+                ]
+            ]
+        )
+
+    def _resolve_flow_archive_record(
+        self,
+        store: FlowStore,
+        run_id_raw: Optional[str],
+    ) -> tuple[Optional[object], Optional[str]]:
+        run_id, error = self._resolve_run_id_input(store, run_id_raw)
+        record = store.get_flow_run(run_id) if run_id else None
+        if run_id_raw and error:
+            return None, error
+        if error is None and record is None:
+            record = select_default_ticket_flow_run(store)
+        if error is None and record is None:
+            error = "No ticket flow run found."
+        return record, error
 
     def _remember_flow_repo_context(
         self, run_id: Optional[str], repo_id: Optional[str]
@@ -721,45 +774,70 @@ class FlowCommands(SharedHelpers):
                         notice = "Recovered." if updated else "No changes needed."
             finally:
                 store.close()
-        elif action == "archive":
+        elif action in {
+            "archive",
+            "archive_confirm",
+            "archive_cancel",
+            "archive_confirm_prompt",
+            "archive_cancel_prompt",
+        }:
+            if action == "archive_cancel":
+                await self._answer_callback(callback, "Archive cancelled")
+                await self._render_flow_status_callback(
+                    callback,
+                    repo_root,
+                    run_id_raw,
+                    repo_id=effective_repo_id,
+                )
+                return
+            if action == "archive_cancel_prompt":
+                await self._answer_callback(callback, "Archive cancelled")
+                await self._edit_callback_message(
+                    callback,
+                    "Archive cancelled.",
+                    reply_markup={"inline_keyboard": []},
+                )
+                return
+
             store = _load_flow_store(repo_root)
-            record = None
             try:
                 store.initialize()
-                run_id, error = self._resolve_run_id_input(store, run_id_raw)
-                record = store.get_flow_run(run_id) if run_id else None
-                if run_id_raw and error:
-                    record = None
-                if error is None and record is None:
-                    record = _select_latest_run(
-                        store,
-                        lambda run: (
-                            run.status.is_terminal()
-                            or run.status == FlowRunStatus.PAUSED
-                        ),
-                    )
-                if error is None and record is None:
-                    error = "No paused or terminal ticket flow run found."
+                record, error = self._resolve_flow_archive_record(store, run_id_raw)
             finally:
                 store.close()
 
             if error is None:
-                try:
-                    force_archive = record.status in (
-                        FlowRunStatus.STOPPING,
-                        FlowRunStatus.PAUSED,
+                archive_mode = resolve_ticket_flow_archive_mode(record)
+                if archive_mode == "blocked":
+                    error = (
+                        f"Run {record.id} is {record.status.value}. "
+                        "Stop or pause it before archiving."
                     )
-                    summary = flow_service.archive_flow_run(
-                        record.id,
-                        force=force_archive,
-                        delete_run=True,
+                elif action == "archive" and archive_mode == "confirm":
+                    await self._answer_callback(callback, "Confirm archive?")
+                    await self._edit_callback_message(
+                        callback,
+                        self._flow_archive_prompt_text(record),
+                        reply_markup=self._build_flow_archive_confirmation_keyboard(
+                            record.id,
+                            repo_id=effective_repo_id,
+                            prompt_variant=False,
+                        ),
                     )
-                    notice = (
-                        f"Archived {summary['archived_tickets']} tickets and "
-                        f"{'moved' if summary['archived_runs'] else 'skipped'} run artifacts."
-                    )
-                except ValueError as exc:
-                    error = str(exc)
+                    return
+                else:
+                    try:
+                        summary = flow_service.archive_flow_run(
+                            record.id,
+                            force=ticket_flow_archive_requires_force(record),
+                            delete_run=True,
+                        )
+                        notice = (
+                            f"Archived {summary['archived_tickets']} tickets and "
+                            f"{'moved' if summary['archived_runs'] else 'skipped'} run artifacts."
+                        )
+                    except ValueError as exc:
+                        error = str(exc)
         else:
             await self._answer_callback(callback, "Unknown action")
             return
@@ -1952,13 +2030,11 @@ You are the first ticket in a new ticket_flow run.
     ) -> None:
         force = self._has_flag(argv, "--force")
         store = _load_flow_store(repo_root)
-        record = None
         try:
             store.initialize()
             run_id_raw = self._first_non_flag(argv)
-            run_id, error = self._resolve_run_id_input(store, run_id_raw)
-            record = store.get_flow_run(run_id) if run_id else None
-            if run_id_raw and error:
+            record, error = self._resolve_flow_archive_record(store, run_id_raw)
+            if error:
                 await self._send_message(
                     message.chat_id,
                     error,
@@ -1966,33 +2042,36 @@ You are the first ticket in a new ticket_flow run.
                     reply_to=message.message_id,
                 )
                 return
-            if record is None:
-                record = _select_latest_run(
-                    store,
-                    lambda run: (
-                        run.status.is_terminal()
-                        or run.status == FlowRunStatus.PAUSED
-                        or (force and run.status == FlowRunStatus.STOPPING)
-                    ),
-                )
-            if record is None:
-                await self._send_message(
-                    message.chat_id,
-                    "No paused or terminal ticket flow run found.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
         finally:
             store.close()
 
-        force_archive = record.status in (
-            FlowRunStatus.STOPPING,
-            FlowRunStatus.PAUSED,
-        )
+        archive_mode = resolve_ticket_flow_archive_mode(record)
+        if archive_mode == "blocked":
+            await self._send_message(
+                message.chat_id,
+                f"Run {_code(record.id)} is {record.status.value}. Stop or pause it before archiving.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                parse_mode="Markdown",
+            )
+            return
+        if archive_mode == "confirm" and not force:
+            await self._send_message(
+                message.chat_id,
+                self._flow_archive_prompt_text(record),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                reply_markup=self._build_flow_archive_confirmation_keyboard(
+                    record.id,
+                    prompt_variant=True,
+                ),
+                parse_mode="Markdown",
+            )
+            return
+
         summary = self._ticket_flow_orchestration_service(repo_root).archive_flow_run(
             record.id,
-            force=force_archive,
+            force=ticket_flow_archive_requires_force(record),
             delete_run=True,
         )
 

@@ -2367,17 +2367,18 @@ async function archiveTicketFlow(): Promise<void> {
     flash("No ticket flow run to archive", "info");
     return;
   }
-  const confirmed = await confirmModal(
-    "Archive this flow? Tickets, contextspace, and run artifacts will move into the run archive and the live workspace state will be reset."
-  );
-  if (!confirmed) {
-    return;
+  const force = currentFlowStatus === "stopping" || currentFlowStatus === "paused";
+  if (force) {
+    const confirmed = await confirmModal(
+      "Archive this incomplete flow? Tickets, contextspace, and run artifacts will move into the run archive and the live workspace state will be reset."
+    );
+    if (!confirmed) {
+      return;
+    }
   }
   setButtonsDisabled(true);
   archiveBtn.textContent = "Archiving…";
   try {
-    // Force archive if flow is stuck in stopping or paused state
-    const force = currentFlowStatus === "stopping" || currentFlowStatus === "paused";
     const res = (await api(`/api/flows/${currentRunId}/archive?force=${force}`, {
       method: "POST",
       body: {},

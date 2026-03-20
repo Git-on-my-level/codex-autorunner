@@ -50,10 +50,12 @@ from ...core.flows.ux_helpers import (
     build_flow_status_snapshot,
     ensure_worker,
     issue_md_path,
+    resolve_ticket_flow_archive_mode,
     seed_issue_from_github,
     seed_issue_from_text,
     select_default_ticket_flow_run,
     summarize_flow_freshness,
+    ticket_flow_archive_requires_force,
     ticket_progress,
 )
 from ...core.git_utils import GitError, reset_branch_from_origin_main
@@ -192,6 +194,7 @@ from .collaboration_helpers import (
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
+    DISCORD_BUTTON_STYLE_DANGER,
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_action_row,
     build_agent_picker,
@@ -2434,6 +2437,37 @@ class DiscordBotService:
         if resolved_run_id is None:
             return None
         return resolved_run_id
+
+    @staticmethod
+    def _flow_archive_prompt_text(record: FlowRunRecord) -> str:
+        return (
+            f"Run {record.id} is {record.status.value}. "
+            "Archiving it will reset the live tickets/contextspace state and move the "
+            "current run artifacts into the archive. Archive it anyway?"
+        )
+
+    @staticmethod
+    def _build_flow_archive_confirmation_components(
+        run_id: str,
+        *,
+        prompt_variant: bool,
+    ) -> list[dict[str, Any]]:
+        confirm_action = (
+            "archive_confirm_prompt" if prompt_variant else "archive_confirm"
+        )
+        cancel_action = "archive_cancel_prompt" if prompt_variant else "archive_cancel"
+        return [
+            build_action_row(
+                [
+                    build_button(
+                        "Archive now",
+                        f"flow:{run_id}:{confirm_action}",
+                        style=DISCORD_BUTTON_STYLE_DANGER,
+                    ),
+                    build_button("Cancel", f"flow:{run_id}:{cancel_action}"),
+                ]
+            )
+        ]
 
     async def _run_agent_turn_for_message(
         self,
@@ -7910,15 +7944,20 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        run_id_opt = await self._resolve_flow_run_input(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            action="archive",
-            run_id_opt=options.get("run_id"),
-        )
-        if run_id_opt is None:
-            return
+        confirmed = bool(options.get("confirmed"))
+        run_id_opt = options.get("run_id")
+        if isinstance(run_id_opt, str) and run_id_opt.strip():
+            run_id_opt = await self._resolve_flow_run_input(
+                interaction_id,
+                interaction_token,
+                workspace_root=workspace_root,
+                action="archive",
+                run_id_opt=run_id_opt,
+            )
+            if run_id_opt is None:
+                return
+        else:
+            run_id_opt = ""
         try:
             store = self._open_flow_store(workspace_root)
         except (sqlite3.Error, OSError, RuntimeError) as exc:
@@ -7953,7 +7992,7 @@ class DiscordBotService:
                     ) from None
             else:
                 try:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
+                    target = select_default_ticket_flow_run(store)
                 except (sqlite3.Error, OSError) as exc:
                     log_event(
                         self._logger,
@@ -7966,7 +8005,6 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = runs[0] if runs else None
         finally:
             store.close()
 
@@ -7975,6 +8013,30 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 "No ticket_flow run found to archive.",
+            )
+            return
+
+        archive_mode = resolve_ticket_flow_archive_mode(target)
+        if archive_mode == "blocked":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                (
+                    f"Run {target.id} is {target.status.value}. "
+                    "Stop or pause it before archiving."
+                ),
+            )
+            return
+
+        if archive_mode == "confirm" and not confirmed:
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                self._flow_archive_prompt_text(target),
+                self._build_flow_archive_confirmation_components(
+                    target.id,
+                    prompt_variant=True,
+                ),
             )
             return
 
@@ -7991,14 +8053,35 @@ class DiscordBotService:
             message_id=interaction_id,
         )
         flow_service = self._ticket_flow_orchestration_service(workspace_root)
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         try:
-            summary = flow_service.archive_flow_run(
+            summary = await asyncio.to_thread(
+                flow_service.archive_flow_run,
                 target.id,
-                force=False,
+                force=ticket_flow_archive_requires_force(target),
                 delete_run=True,
             )
+        except KeyError:
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=(
+                    f"Run {target.id} no longer exists. "
+                    "Use /car flow status or /car flow runs to inspect historical runs."
+                ),
+            )
+            return
         except ValueError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=str(exc),
+            )
             return
 
         outbound_text = (
@@ -8007,10 +8090,11 @@ class DiscordBotService:
             f"runs_archived={summary['archived_runs']}, "
             f"contextspace={summary['archived_contextspace']})."
         )
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            outbound_text,
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=outbound_text,
         )
 
     async def _handle_flow_reply(
@@ -9862,7 +9946,104 @@ class DiscordBotService:
                 interaction_token,
                 f"Stop requested for run {updated.run_id} ({updated.status}).",
             )
-        elif action == "archive":
+        elif action in {
+            "archive",
+            "archive_confirm",
+            "archive_cancel",
+            "archive_confirm_prompt",
+            "archive_cancel_prompt",
+        }:
+            if action == "archive_cancel":
+                await self._handle_flow_status(
+                    interaction_id,
+                    interaction_token,
+                    workspace_root=workspace_root,
+                    options={"run_id": run_id},
+                    channel_id=channel_id,
+                    guild_id=guild_id,
+                    update_message=True,
+                )
+                return
+            if action == "archive_cancel_prompt":
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text="Archive cancelled.",
+                    components=[],
+                )
+                return
+
+            try:
+                store = self._open_flow_store(workspace_root)
+            except (sqlite3.Error, OSError, RuntimeError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.store_open_failed",
+                    workspace_root=str(workspace_root),
+                    exc=exc,
+                )
+                raise DiscordTransientError(
+                    f"Failed to open flow database: {exc}",
+                    user_message="Unable to access flow database. Please try again later.",
+                ) from None
+            try:
+                target = self._resolve_flow_run_by_id(store, run_id=run_id)
+            except (sqlite3.Error, OSError) as exc:
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "discord.flow.query_failed",
+                    exc=exc,
+                    run_id=run_id,
+                )
+                raise DiscordTransientError(
+                    f"Failed to query flow run: {exc}",
+                    user_message="Unable to query flow database. Please try again later.",
+                ) from None
+            finally:
+                store.close()
+
+            if target is None:
+                stale_text = (
+                    f"Run {run_id} no longer exists. "
+                    "Use /car flow status or /car flow runs to inspect historical runs."
+                )
+                await self._respond_ephemeral(
+                    interaction_id, interaction_token, stale_text
+                )
+                return
+
+            archive_mode = resolve_ticket_flow_archive_mode(target)
+            blocked_text = f"Run {target.id} is {target.status.value}. Stop or pause it before archiving."
+            if archive_mode == "blocked":
+                if action.endswith("_prompt"):
+                    await self._update_component_message(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        text=blocked_text,
+                        components=[],
+                    )
+                else:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        blocked_text,
+                    )
+                return
+
+            if action == "archive" and archive_mode == "confirm":
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text=self._flow_archive_prompt_text(target),
+                    components=self._build_flow_archive_confirmation_components(
+                        target.id,
+                        prompt_variant=False,
+                    ),
+                )
+                return
+
             deferred = await self._defer_component_update(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
@@ -9871,7 +10052,7 @@ class DiscordBotService:
                 summary = await asyncio.to_thread(
                     flow_service.archive_flow_run,
                     run_id,
-                    force=False,
+                    force=ticket_flow_archive_requires_force(target),
                     delete_run=True,
                 )
             except KeyError:

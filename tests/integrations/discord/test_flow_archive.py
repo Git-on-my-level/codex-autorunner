@@ -230,7 +230,107 @@ async def test_flow_archive_command_deletes_run_record_by_default(
     with FlowStore(workspace / ".codex-autorunner" / "flows.db") as store:
         store.initialize()
         assert store.get_flow_run(run_id) is not None
-    assert "Archived run" in rest.interaction_responses[0]["payload"]["data"]["content"]
+    assert rest.interaction_responses[0]["payload"]["type"] == 5
+    assert "Archived run" in rest.followup_messages[0]["payload"]["content"]
+
+
+@pytest.mark.anyio
+async def test_flow_archive_command_without_run_id_uses_latest_run_without_picker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    older_run_id = str(uuid.uuid4())
+    latest_run_id = str(uuid.uuid4())
+    _create_run(workspace, older_run_id, FlowRunStatus.COMPLETED)
+    _create_run(workspace, latest_run_id, FlowRunStatus.COMPLETED)
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+    flow_service = _FlowServiceStub(
+        {
+            "run_id": latest_run_id,
+            "archived_tickets": 0,
+            "archived_runs": True,
+            "archived_contextspace": False,
+        }
+    )
+    prompted: list[str] = []
+
+    async def _fake_prompt(*_args: Any, action: str, **_kwargs: Any) -> None:
+        prompted.append(action)
+
+    service._prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    try:
+        await service._handle_flow_archive(
+            "interaction-archive-latest",
+            "token-archive-latest",
+            workspace_root=workspace,
+            options={},
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+    finally:
+        await service._store.close()
+
+    assert prompted == []
+    assert flow_service.archive_calls == [
+        {"run_id": latest_run_id, "force": False, "delete_run": True}
+    ]
+    assert rest.interaction_responses[0]["payload"]["type"] == 5
+    assert "Archived run" in rest.followup_messages[0]["payload"]["content"]
+
+
+@pytest.mark.anyio
+async def test_flow_archive_command_without_run_id_blocks_latest_active_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    older_run_id = str(uuid.uuid4())
+    latest_run_id = str(uuid.uuid4())
+    _create_run(workspace, older_run_id, FlowRunStatus.COMPLETED)
+    _create_run(workspace, latest_run_id, FlowRunStatus.RUNNING)
+
+    rest = _FakeRest()
+    service = _service(tmp_path, rest)
+    flow_service = _FlowServiceStub(
+        {
+            "run_id": older_run_id,
+            "archived_tickets": 0,
+            "archived_runs": True,
+            "archived_contextspace": False,
+        }
+    )
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    try:
+        await service._handle_flow_archive(
+            "interaction-archive-blocked",
+            "token-archive-blocked",
+            workspace_root=workspace,
+            options={},
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+    finally:
+        await service._store.close()
+
+    assert flow_service.archive_calls == []
+    assert rest.interaction_responses[0]["payload"]["type"] == 4
+    assert latest_run_id in rest.interaction_responses[0]["payload"]["data"]["content"]
+    assert (
+        "Stop or pause it before archiving"
+        in rest.interaction_responses[0]["payload"]["data"]["content"]
+    )
 
 
 @pytest.mark.anyio
@@ -239,6 +339,7 @@ async def test_flow_archive_button_deletes_run_record_by_default(
 ) -> None:
     workspace = _workspace(tmp_path)
     run_id = str(uuid.uuid4())
+    _create_run(workspace, run_id, FlowRunStatus.COMPLETED)
 
     rest = _FakeRest()
     service = _service(tmp_path, rest)
@@ -366,11 +467,12 @@ async def test_flow_archive_button_retires_stale_card_on_missing_run(
     finally:
         await service._store.close()
 
-    assert rest.interaction_responses[0]["payload"]["type"] == 6
-    edited = rest.edited_original_interaction_responses[0]["payload"]
-    assert run_id in edited["content"]
-    assert "no longer exists" in edited["content"]
-    assert edited["components"] == []
+    assert rest.interaction_responses[0]["payload"]["type"] == 4
+    content = rest.interaction_responses[0]["payload"]["data"]["content"]
+    assert run_id in content
+    assert "no longer exists" in content
+    assert rest.edited_original_interaction_responses == []
+    assert rest.followup_messages == []
 
 
 @pytest.mark.anyio
@@ -379,6 +481,7 @@ async def test_flow_archive_button_keeps_original_card_on_validation_error(
 ) -> None:
     workspace = _workspace(tmp_path)
     run_id = str(uuid.uuid4())
+    _create_run(workspace, run_id, FlowRunStatus.COMPLETED)
 
     rest = _FakeRest()
     service = _service(tmp_path, rest)
