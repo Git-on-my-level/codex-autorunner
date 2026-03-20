@@ -8,6 +8,7 @@ import codex_autorunner.integrations.telegram.handlers.messages as msg_module
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramAudio,
     TelegramDocument,
+    TelegramForwardOrigin,
     TelegramMessage,
     TelegramPhotoSize,
     TelegramVoice,
@@ -221,6 +222,21 @@ def test_should_bypass_topic_queue_for_custom_answer() -> None:
     )
     message = _message(text="Purple")
     assert should_bypass_topic_queue(handlers, message) is True
+
+
+def test_should_not_bypass_topic_queue_for_forwarded_command_text() -> None:
+    spec = make_command_spec("status", "status", allow_during_turn=True)
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _command_specs={"status": spec},
+        _pending_questions={},
+    )
+    message = _message(
+        text="/status",
+        entities=(bot_command_entity("/status"),),
+        forward_origin=TelegramForwardOrigin(source_label="Ops", message_id=9),
+    )
+    assert should_bypass_topic_queue(handlers, message) is False
 
 
 def test_has_batchable_media_with_photos() -> None:

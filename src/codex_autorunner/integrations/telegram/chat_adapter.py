@@ -17,6 +17,7 @@ from ..chat.models import (
     ChatAction,
     ChatAttachment,
     ChatEvent,
+    ChatForwardInfo,
     ChatInteractionEvent,
     ChatInteractionRef,
     ChatMessageEvent,
@@ -227,6 +228,7 @@ class TelegramChatAdapter(ChatAdapter):
             is_edited=message.is_edited,
             reply_to=reply_to,
             attachments=attachments,
+            forwarded_from=self._map_forward_origin(message),
         )
 
     def _map_callback(
@@ -299,6 +301,22 @@ class TelegramChatAdapter(ChatAdapter):
                 )
             )
         return tuple(attachments)
+
+    def _map_forward_origin(
+        self, message: TelegramMessage
+    ) -> Optional[ChatForwardInfo]:
+        if message.forward_origin is None:
+            return None
+        return ChatForwardInfo(
+            source_label=message.forward_origin.source_label,
+            message_id=(
+                str(message.forward_origin.message_id)
+                if message.forward_origin.message_id is not None
+                else None
+            ),
+            text=content if (content := (message.text or message.caption)) else None,
+            is_automatic=message.forward_origin.is_automatic,
+        )
 
     def _thread_ref(self, chat_id: int, thread_id: Optional[int]) -> ChatThreadRef:
         return ChatThreadRef(

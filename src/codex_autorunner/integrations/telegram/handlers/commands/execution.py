@@ -97,6 +97,7 @@ from ...constants import (
     WHISPER_TRANSCRIPT_DISCLAIMER,
     TurnKey,
 )
+from ...forwarding import format_forwarded_telegram_message_text
 from ...helpers import (
     _clear_pending_compact_seed,
     _compact_preview,
@@ -3548,6 +3549,7 @@ class ExecutionCommands(SharedHelpers):
         prompt_text = (
             text_override if text_override is not None else (message.text or "")
         )
+        prompt_text = format_forwarded_telegram_message_text(message, prompt_text)
         prompt_text = self._prepare_turn_prompt(
             prompt_text, transcript_text=transcript_text
         )

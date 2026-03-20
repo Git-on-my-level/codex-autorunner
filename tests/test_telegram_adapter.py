@@ -1067,6 +1067,28 @@ def test_api_schema_optional_fields() -> None:
     assert schema.entities is None
 
 
+def test_api_schema_parse_message_forward_origin() -> None:
+    message = {
+        "message_id": 8,
+        "chat": {"id": 123, "type": "private"},
+        "text": "forwarded",
+        "date": 1234567890,
+        "forward_origin": {
+            "type": "channel",
+            "message_id": 91,
+            "chat": {"id": -1001, "title": "Deploys"},
+        },
+        "is_automatic_forward": True,
+    }
+
+    schema = parse_message_payload(message)
+
+    assert isinstance(schema, TelegramMessageSchema)
+    assert schema.forward_origin is not None
+    assert schema.forward_origin["message_id"] == 91
+    assert schema.is_automatic_forward is True
+
+
 def test_api_schema_invalid_payload_returns_none() -> None:
     assert parse_message_payload(None) is None
     assert parse_message_payload("invalid") is None

@@ -18,6 +18,7 @@ from ..chat.models import (
     ChatAction,
     ChatAttachment,
     ChatEvent,
+    ChatForwardInfo,
     ChatInteractionEvent,
     ChatInteractionRef,
     ChatMessageEvent,
@@ -50,6 +51,7 @@ from .rendering import (
 from .rest import DiscordRestClient
 
 DISCORD_EPHEMERAL_FLAG = 64
+DISCORD_MESSAGE_REFERENCE_TYPE_FORWARD = 1
 _MAX_INTERACTION_TOKEN_CACHE = 4096
 _MAX_MESSAGE_INTERACTION_TOKEN_CACHE = 4096
 
@@ -224,10 +226,18 @@ class DiscordChatAdapter(ChatAdapter):
 
         content = payload.get("content", "")
         attachments = self._parse_discord_attachments(payload)
+        forwarded_from = self._parse_forwarded_message(payload)
+        if forwarded_from is not None:
+            attachments = self._merge_attachments(
+                attachments,
+                self._parse_forwarded_attachments(payload),
+            )
 
         reply_to: Optional[ChatMessageRef] = None
         message_reference = payload.get("message_reference")
-        if isinstance(message_reference, dict):
+        if isinstance(
+            message_reference, dict
+        ) and not self._is_forward_message_reference(message_reference):
             ref_message_id = message_reference.get("message_id")
             ref_channel_id = message_reference.get("channel_id")
             if ref_message_id and ref_channel_id:
@@ -247,6 +257,7 @@ class DiscordChatAdapter(ChatAdapter):
             is_edited=False,
             reply_to=reply_to,
             attachments=attachments,
+            forwarded_from=forwarded_from,
         )
 
     def _parse_discord_attachments(
@@ -299,6 +310,77 @@ class DiscordChatAdapter(ChatAdapter):
             )
 
         return tuple(attachments)
+
+    def _parse_forwarded_message(
+        self, payload: dict[str, Any]
+    ) -> Optional[ChatForwardInfo]:
+        message_reference = payload.get("message_reference")
+        if not isinstance(message_reference, dict):
+            return None
+        if not self._is_forward_message_reference(message_reference):
+            return None
+
+        source_label = None
+        channel_id = message_reference.get("channel_id")
+        if isinstance(channel_id, str) and channel_id:
+            source_label = f"channel {channel_id}"
+        snapshot_message = self._first_forwarded_snapshot_message(payload)
+        forwarded_text = None
+        if isinstance(snapshot_message, dict):
+            snapshot_content = snapshot_message.get("content")
+            if isinstance(snapshot_content, str) and snapshot_content.strip():
+                forwarded_text = snapshot_content
+        return ChatForwardInfo(
+            source_label=source_label,
+            message_id=_string_or_none(message_reference.get("message_id")),
+            text=forwarded_text,
+        )
+
+    def _parse_forwarded_attachments(
+        self, payload: dict[str, Any]
+    ) -> tuple[ChatAttachment, ...]:
+        snapshot_message = self._first_forwarded_snapshot_message(payload)
+        if not isinstance(snapshot_message, dict):
+            return ()
+        return self._parse_discord_attachments(snapshot_message)
+
+    def _first_forwarded_snapshot_message(
+        self, payload: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
+        snapshots = payload.get("message_snapshots")
+        if not isinstance(snapshots, list):
+            return None
+        for snapshot in snapshots:
+            if not isinstance(snapshot, dict):
+                continue
+            message = snapshot.get("message")
+            if isinstance(message, dict):
+                return message
+        return None
+
+    def _is_forward_message_reference(self, reference: dict[str, Any]) -> bool:
+        ref_type = reference.get("type")
+        if ref_type == DISCORD_MESSAGE_REFERENCE_TYPE_FORWARD:
+            return True
+        if isinstance(ref_type, str):
+            return ref_type.strip().upper() == "FORWARD"
+        return False
+
+    def _merge_attachments(
+        self,
+        primary: tuple[ChatAttachment, ...],
+        secondary: tuple[ChatAttachment, ...],
+    ) -> tuple[ChatAttachment, ...]:
+        if not secondary:
+            return primary
+        merged: list[ChatAttachment] = list(primary)
+        seen_ids = {attachment.file_id for attachment in merged}
+        for attachment in secondary:
+            if attachment.file_id in seen_ids:
+                continue
+            merged.append(attachment)
+            seen_ids.add(attachment.file_id)
+        return tuple(merged)
 
     def _parse_interaction_to_event(
         self, payload: dict[str, Any]
@@ -654,3 +736,9 @@ def _remember_token(
     cache[key] = token
     while len(cache) > max_size:
         cache.pop(next(iter(cache)), None)
+
+
+def _string_or_none(value: object) -> Optional[str]:
+    if value is None:
+        return None
+    return str(value)

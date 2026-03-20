@@ -79,6 +79,8 @@ class TelegramMessageSchema(BaseTelegramSchema):
     voice: Optional[dict[str, Any]] = None
     media_group_id: Optional[str] = None
     is_topic_message: bool = False
+    forward_origin: Optional[dict[str, Any]] = None
+    is_automatic_forward: bool = False
     reply_to_message: Optional[dict[str, Any]] = None
 
 

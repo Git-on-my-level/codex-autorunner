@@ -125,6 +125,13 @@ class TelegramMessageEntity:
 
 
 @dataclass(frozen=True)
+class TelegramForwardOrigin:
+    source_label: Optional[str] = None
+    message_id: Optional[int] = None
+    is_automatic: bool = False
+
+
+@dataclass(frozen=True)
 class TelegramMessage:
     update_id: int
     message_id: int
@@ -146,6 +153,7 @@ class TelegramMessage:
 
     # Extra metadata used for trigger gating / UX (optional, depends on update payload).
     chat_type: Optional[str] = None
+    forward_origin: Optional[TelegramForwardOrigin] = None
     reply_to_message_id: Optional[int] = None
     reply_to_is_bot: bool = False
     reply_to_username: Optional[str] = None
@@ -374,6 +382,10 @@ def _parse_message(
     document = _parse_document(schema.document)
     audio = _parse_audio(schema.audio)
     voice = _parse_voice(schema.voice)
+    forward_origin = _parse_forward_origin(
+        schema.forward_origin,
+        is_automatic=schema.is_automatic_forward,
+    )
 
     return TelegramMessage(
         update_id=update_id,
@@ -394,6 +406,7 @@ def _parse_message(
         voice=voice,
         media_group_id=schema.media_group_id,
         chat_type=chat_type,
+        forward_origin=forward_origin,
         reply_to_message_id=reply_to_message_id,
         reply_to_is_bot=reply_to_is_bot,
         reply_to_username=reply_to_username,
@@ -457,6 +470,42 @@ def _extract_chat_title(chat_payload: Any) -> Optional[str]:
         parts.append(last_name.strip())
     if parts:
         return " ".join(parts)
+    return None
+
+
+def _parse_forward_origin(
+    payload: Any, *, is_automatic: bool
+) -> Optional[TelegramForwardOrigin]:
+    if not isinstance(payload, dict):
+        if not is_automatic:
+            return None
+        return TelegramForwardOrigin(is_automatic=True)
+
+    message_id = payload.get("message_id")
+    if not isinstance(message_id, int):
+        message_id = None
+    return TelegramForwardOrigin(
+        source_label=_extract_forward_source_label(payload),
+        message_id=message_id,
+        is_automatic=is_automatic,
+    )
+
+
+def _extract_forward_source_label(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    origin_type = payload.get("type")
+    if origin_type == "user":
+        return _extract_chat_title(payload.get("sender_user"))
+    if origin_type == "hidden_user":
+        sender_name = payload.get("sender_user_name")
+        if isinstance(sender_name, str) and sender_name.strip():
+            return sender_name.strip()
+        return None
+    if origin_type == "chat":
+        return _extract_chat_title(payload.get("sender_chat"))
+    if origin_type == "channel":
+        return _extract_chat_title(payload.get("chat"))
     return None
 
 

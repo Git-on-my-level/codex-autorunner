@@ -62,6 +62,7 @@ from .errors import (
     ChatAdapterTimeoutError,
     ChatAdapterTransientError,
 )
+from .forwarding import compose_forwarded_message_text
 from .handlers import (
     ChatApprovalHandlers,
     ChatContext,
@@ -82,6 +83,7 @@ from .models import (
     ChatAction,
     ChatAttachment,
     ChatEvent,
+    ChatForwardInfo,
     ChatInteractionEvent,
     ChatInteractionRef,
     ChatMessageEvent,
@@ -120,6 +122,7 @@ __all__ = [
     "CallbackCodec",
     "ChatDispatcher",
     "ChatEvent",
+    "ChatForwardInfo",
     "ChatInteractionEvent",
     "ChatInteractionRef",
     "ChatMessageEvent",
@@ -169,6 +172,7 @@ __all__ = [
     "audio_content_type_for_input",
     "audio_extension_for_input",
     "chat_agent_supports_effort",
+    "compose_forwarded_message_text",
     "conversation_id_for",
     "decode_logical_callback",
     "default_chat_model_for_agent",

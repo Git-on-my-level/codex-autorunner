@@ -28,6 +28,10 @@ from ..adapter import (
 )
 from ..config import TelegramMediaCandidate
 from ..constants import TELEGRAM_MAX_MESSAGE_LENGTH
+from ..forwarding import (
+    format_forwarded_telegram_message_text,
+    is_forwarded_telegram_message,
+)
 from ..trigger_mode import should_trigger_run
 from .questions import handle_custom_text_input
 
@@ -264,12 +268,13 @@ async def handle_message(handlers: Any, message: TelegramMessage) -> None:
             return
 
     should_bypass = False
+    is_forwarded = is_forwarded_telegram_message(message)
     if trimmed_text:
-        if is_interrupt_alias(trimmed_text):
+        if is_interrupt_alias(trimmed_text) and not is_forwarded:
             should_bypass = True
-        elif trimmed_text.startswith("!") and not has_media:
+        elif trimmed_text.startswith("!") and not has_media and not is_forwarded:
             should_bypass = True
-        elif parse_command(
+        elif not is_forwarded and parse_command(
             text_candidate, entities=entities, bot_username=handlers._bot_username
         ):
             should_bypass = True
@@ -313,6 +318,8 @@ def should_bypass_topic_queue(handlers: Any, message: TelegramMessage) -> bool:
         return False
     trimmed_text = text_candidate.strip()
     if not trimmed_text:
+        return False
+    if is_forwarded_telegram_message(message):
         return False
     if is_interrupt_alias(trimmed_text):
         return True
@@ -436,7 +443,7 @@ async def handle_message_inner(
         await _clear_placeholder()
         return
 
-    if text and is_interrupt_alias(text):
+    if text and is_interrupt_alias(text) and not is_forwarded_telegram_message(message):
         if not command_policy_result.command_allowed:
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_placeholder()
@@ -445,7 +452,12 @@ async def handle_message_inner(
         await _clear_placeholder()
         return
 
-    if text and text.startswith("!") and not has_media:
+    if (
+        text
+        and text.startswith("!")
+        and not has_media
+        and not is_forwarded_telegram_message(message)
+    ):
         if not command_policy_result.command_allowed:
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_placeholder()
@@ -483,7 +495,7 @@ async def handle_message_inner(
         parse_command(
             command_text, entities=entities, bot_username=handlers._bot_username
         )
-        if command_text
+        if command_text and not is_forwarded_telegram_message(message)
         else None
     )
     if await handlers._handle_pending_review_custom(
@@ -648,7 +660,11 @@ async def handle_message_inner(
             return
         run_id, run_record = paused
         success, result = await handlers._write_user_reply_from_telegram(
-            workspace_root or Path("."), run_id, run_record, message, text
+            workspace_root or Path("."),
+            run_id,
+            run_record,
+            message,
+            format_forwarded_telegram_message_text(message, text),
         )
         await handlers._send_message(
             message.chat_id,
@@ -1233,7 +1249,12 @@ async def handle_media_message(
             )
             return
         success, result = await handlers._write_user_reply_from_telegram(
-            workspace_root, run_id, run_record, message, reply_text, files
+            workspace_root,
+            run_id,
+            run_record,
+            message,
+            format_forwarded_telegram_message_text(message, reply_text),
+            files,
         )
         await handlers._send_message(
             message.chat_id,

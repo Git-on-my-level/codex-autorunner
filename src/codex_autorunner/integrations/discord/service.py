@@ -115,6 +115,7 @@ from ...integrations.chat.dispatcher import (
     DispatchContext,
     DispatchResult,
 )
+from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.media import (
     audio_content_type_for_input,
     audio_extension_for_input,
@@ -711,7 +712,7 @@ class DiscordBotService:
         *,
         is_explicit_command: bool,
     ) -> CollaborationEvaluationResult:
-        text = (event.text or "").strip()
+        text = compose_forwarded_message_text(event.text, event.forwarded_from)
         return evaluate_collaboration_policy(
             self._collaboration_policy,
             CollaborationEvaluationContext(
@@ -852,7 +853,8 @@ class DiscordBotService:
     def _is_turn_candidate_message_event(self, event: ChatMessageEvent) -> bool:
         text = (event.text or "").strip()
         has_attachments = bool(event.attachments)
-        if not text and not has_attachments:
+        has_forwarded_content = event.forwarded_from is not None
+        if not text and not has_attachments and not has_forwarded_content:
             return False
         if text.startswith("/"):
             return False
@@ -1243,7 +1245,8 @@ class DiscordBotService:
         channel_id = context.chat_id
         text = (event.text or "").strip()
         has_attachments = bool(event.attachments)
-        if not text and not has_attachments:
+        has_forwarded_content = event.forwarded_from is not None
+        if not text and not has_attachments and not has_forwarded_content:
             return
         if text.startswith("/"):
             return

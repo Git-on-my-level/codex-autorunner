@@ -48,6 +48,16 @@ class ChatAttachment:
 
 
 @dataclass(frozen=True)
+class ChatForwardInfo:
+    """Normalized provenance for a forwarded inbound message."""
+
+    source_label: Optional[str] = None
+    message_id: Optional[str] = None
+    text: Optional[str] = None
+    is_automatic: bool = False
+
+
+@dataclass(frozen=True)
 class ChatAction:
     """Adapter-neutral action button descriptor for outbound messages."""
 
@@ -68,6 +78,7 @@ class ChatMessageEvent:
     is_edited: bool = False
     reply_to: Optional[ChatMessageRef] = None
     attachments: tuple[ChatAttachment, ...] = field(default_factory=tuple)
+    forwarded_from: Optional[ChatForwardInfo] = None
 
 
 @dataclass(frozen=True)

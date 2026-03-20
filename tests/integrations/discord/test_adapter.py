@@ -208,6 +208,54 @@ def test_adapter_infers_audio_kind_with_generic_content_type_and_duration() -> N
     assert event.attachments[0].kind == "audio"
 
 
+def test_adapter_parses_forwarded_snapshot_without_reply_reference() -> None:
+    adapter = DiscordChatAdapter(
+        rest_client=_UnusedRestClient(),  # type: ignore[arg-type]
+        application_id="app-1",
+    )
+
+    event = adapter.parse_message_event(
+        {
+            "id": "m-forward",
+            "channel_id": "channel-1",
+            "guild_id": "guild-1",
+            "content": "",
+            "author": {"id": "user-1", "bot": False},
+            "attachments": [],
+            "message_reference": {
+                "type": 1,
+                "channel_id": "channel-9",
+                "message_id": "origin-7",
+            },
+            "message_snapshots": [
+                {
+                    "message": {
+                        "content": "forwarded from elsewhere",
+                        "attachments": [
+                            {
+                                "id": "att-forward-1",
+                                "filename": "note.txt",
+                                "content_type": "text/plain",
+                                "size": 9,
+                                "url": "https://cdn.discordapp.com/attachments/note.txt",
+                            }
+                        ],
+                    }
+                }
+            ],
+        }
+    )
+
+    assert isinstance(event, ChatMessageEvent)
+    assert event.reply_to is None
+    assert event.forwarded_from is not None
+    assert event.forwarded_from.source_label == "channel channel-9"
+    assert event.forwarded_from.message_id == "origin-7"
+    assert event.forwarded_from.text == "forwarded from elsewhere"
+    assert len(event.attachments) == 1
+    assert event.attachments[0].file_id == "att-forward-1"
+
+
 def test_discord_text_renderer_split_text_has_no_part_prefix() -> None:
     renderer = DiscordTextRenderer()
     rendered = RenderedText(text=("alpha " * 500), parse_mode=None)
