@@ -977,6 +977,49 @@ def test_pma_cli_thread_archive_reports_base_path_mismatch(
     assert "server.base_path" in result.output
 
 
+def test_pma_cli_thread_archive_preserves_not_found_detail(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _raise_thread_not_found(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = method, payload, token_env, params
+        request = httpx.Request("POST", url)
+        response = httpx.Response(
+            404, request=request, json={"detail": "Managed thread not found"}
+        )
+        raise httpx.HTTPStatusError("Not Found", request=request, response=response)
+
+    monkeypatch.setattr(pma_cli, "_request_json", _raise_thread_not_found)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "archive", "--id", "thread-missing", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 1
+    assert "Failed to archive managed PMA thread thread-missing." in result.output
+    assert "Failure type: HTTP status 404." in result.output
+    assert "Server detail: Managed thread not found" in result.output
+    assert "possible base-path mismatch" not in result.output
+
+
 def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
     monkeypatch, tmp_path: Path
 ) -> None:

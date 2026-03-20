@@ -154,7 +154,10 @@ def format_hub_request_error(
         lines.append(
             "If the service runs elsewhere, update `server.host`/`server.port` in the hub config."
         )
-    elif status_code in {404, 405}:
+    detail = _http_error_detail(exc)
+    if status_code in {404, 405} and _looks_like_route_mismatch_status(
+        status_code, detail
+    ):
         lines.append("Failure type: possible base-path mismatch.")
         lines.append(f"HTTP status: {status_code}")
         lines.append(
@@ -169,10 +172,12 @@ def format_hub_request_error(
         lines.append(
             "Hint: Ensure the hub service is reachable from this runtime and the configured base path is correct."
         )
+        if detail:
+            lines.append(f"Server detail: {detail}")
 
-    detail = str(exc).strip()
-    if detail:
-        lines.append(f"Underlying error: {detail}")
+    underlying = str(exc).strip()
+    if underlying:
+        lines.append(f"Underlying error: {underlying}")
     return "\n".join(lines)
 
 
@@ -202,6 +207,36 @@ def _http_status_code(exc: BaseException) -> Optional[int]:
     if response is None:
         return None
     return response.status_code
+
+
+def _http_error_detail(exc: BaseException) -> Optional[str]:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    response = exc.response
+    if response is None:
+        return None
+    try:
+        parsed = response.json()
+    except Exception:
+        return None
+    if isinstance(parsed, dict):
+        for key in ("detail", "error", "message"):
+            value = parsed.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+    return None
+
+
+def _looks_like_route_mismatch_status(status_code: int, detail: Optional[str]) -> bool:
+    canonical = (detail or "").strip().lower()
+    if status_code == 404:
+        return canonical in {"", "not found"}
+    if status_code == 405:
+        return canonical in {"", "method not allowed"}
+    return False
 
 
 def request_form_json(
