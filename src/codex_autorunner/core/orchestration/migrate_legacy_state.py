@@ -927,18 +927,18 @@ def backfill_legacy_pma_lifecycle_events(hub_root: Path, conn: Any) -> dict[str,
 
 
 __all__ = [
-    "LEGACY_PMA_AUTOMATION_PATH",
     "LEGACY_PMA_AUDIT_LOG_PATH",
+    "LEGACY_PMA_AUTOMATION_PATH",
     "LEGACY_PMA_LIFECYCLE_LOG_PATH",
     "LEGACY_PMA_QUEUE_DIR",
     "LEGACY_PMA_REACTIVE_PATH",
-    "LEGACY_PMA_TRANSCRIPTS_DIR",
     "LEGACY_PMA_THREADS_DB_PATH",
-    "backfill_legacy_automation_state",
+    "LEGACY_PMA_TRANSCRIPTS_DIR",
     "backfill_legacy_audit_entries",
+    "backfill_legacy_automation_state",
     "backfill_legacy_pma_lifecycle_events",
     "backfill_legacy_queue_state",
     "backfill_legacy_reactive_state",
-    "backfill_legacy_transcript_mirrors",
     "backfill_legacy_thread_state",
+    "backfill_legacy_transcript_mirrors",
 ]

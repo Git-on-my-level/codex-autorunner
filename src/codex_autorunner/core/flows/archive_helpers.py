@@ -328,8 +328,8 @@ def archive_flow_run_artifacts(
 
 
 __all__ = [
+    "_build_flow_archive_entries",
     "archive_flow_run_artifacts",
     "flow_run_archive_root",
     "flow_run_artifacts_root",
-    "_build_flow_archive_entries",
 ]

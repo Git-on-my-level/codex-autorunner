@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,8 @@ from codex_autorunner.core.filesystem import copy_path
 from .frontmatter import parse_markdown_frontmatter
 from .lint import lint_dispatch_frontmatter
 from .models import Dispatch, DispatchRecord
+
+logger = logging.getLogger(__name__)
 
 _lifecycle_emitter: Optional[Callable[[str, str, str, Dict[str, Any], str], None]] = (
     None
@@ -33,8 +36,8 @@ def _emit_lifecycle(
     if _lifecycle_emitter:
         try:
             _lifecycle_emitter(event_type, repo_id, run_id, data, origin)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Lifecycle emitter failed: %s", e)
 
 
 @dataclass(frozen=True)

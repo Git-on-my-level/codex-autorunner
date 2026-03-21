@@ -11,6 +11,8 @@ from .agents.types import AgentId, ConversationRef, ModelCatalog, ModelSpec, Tur
 from .plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 
 __all__ = [
+    "CAR_AGENT_ENTRYPOINT_GROUP",
+    "CAR_PLUGIN_API_VERSION",
     "AgentCapability",
     "AgentDescriptor",
     "AgentHarness",
@@ -19,7 +21,5 @@ __all__ = [
     "ModelCatalog",
     "ModelSpec",
     "TurnRef",
-    "CAR_AGENT_ENTRYPOINT_GROUP",
-    "CAR_PLUGIN_API_VERSION",
     "reload_agents",
 ]

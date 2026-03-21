@@ -19,10 +19,10 @@ from .retry import _extract_retry_after_seconds
 from .state import OutboxRecord, TelegramStateStore, topic_key
 
 __all__ = [
-    "_outbox_key",
     "OUTBOX_OPERATION_SEND_DELETE_PLACEHOLDER",
     "OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER",
     "TelegramOutboxManager",
+    "_outbox_key",
 ]
 
 SendMessageFn = Callable[..., Awaitable[None]]

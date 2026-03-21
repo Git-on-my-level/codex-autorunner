@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from pathlib import Path
 from typing import Iterator, Optional
 
 from ..config import HubConfig, TemplateRepoConfig
 from ..git_utils import run_git
 from .git_mirror import ensure_git_mirror
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -90,8 +93,8 @@ def _get_file_content(git_dir: Path, path: Path, ref: str = "HEAD") -> Optional[
         )
         if result.returncode == 0:
             return result.stdout
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to get file content at %s:%s: %s", ref, path, e)
     return None
 
 

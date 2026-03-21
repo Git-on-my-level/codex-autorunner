@@ -152,5 +152,5 @@ def sync_active_run_current_ticket_paths_after_reorder(
     finally:
         try:
             store.close()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug("Store close failed: %s", e)

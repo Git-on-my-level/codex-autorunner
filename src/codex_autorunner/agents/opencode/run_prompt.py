@@ -307,7 +307,7 @@ async def run_opencode_prompt(
 
 
 __all__ = [
-    "OpenCodeRunResult",
     "OpenCodeRunConfig",
+    "OpenCodeRunResult",
     "run_opencode_prompt",
 ]

@@ -1571,12 +1571,12 @@ class RuntimeContext:
 
 
 __all__ = [
-    "RuntimeContext",
-    "LockError",
-    "doctor",
     "DoctorCheck",
     "DoctorReport",
+    "LockError",
+    "RuntimeContext",
     "clear_stale_lock",
+    "doctor",
     "hub_destination_doctor_checks",
     "hub_worktree_doctor_checks",
     "pma_doctor_checks",

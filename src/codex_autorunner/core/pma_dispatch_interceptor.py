@@ -334,6 +334,6 @@ class PmaDispatchInterceptor:
 __all__ = [
     "DispatchInterceptRule",
     "InterceptionResult",
-    "default_dispatch_rules",
     "PmaDispatchInterceptor",
+    "default_dispatch_rules",
 ]

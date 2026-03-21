@@ -34,7 +34,7 @@ from .static_assets import (
     render_index_html,
 )
 
-__all__ = ["create_app", "create_repo_app", "create_hub_app"]
+__all__ = ["create_app", "create_hub_app", "create_repo_app"]
 
 
 def create_hub_app(

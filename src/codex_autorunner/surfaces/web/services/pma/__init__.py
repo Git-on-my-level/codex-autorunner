@@ -6,6 +6,6 @@ from .common import (
 
 __all__ = [
     "build_idempotency_key",
-    "pma_config_from_raw",
     "normalize_optional_text",
+    "pma_config_from_raw",
 ]

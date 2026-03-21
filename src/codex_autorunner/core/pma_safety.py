@@ -273,7 +273,7 @@ class PmaSafetyChecker:
 
 
 __all__ = [
+    "PmaSafetyChecker",
     "PmaSafetyConfig",
     "SafetyCheckResult",
-    "PmaSafetyChecker",
 ]

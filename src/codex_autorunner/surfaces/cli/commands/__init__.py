@@ -16,18 +16,18 @@ from .utils import (
 from .worktree import register_worktree_commands
 
 __all__ = [
-    "register_dispatch_commands",
+    "apply_agent_override",
+    "normalize_ticket_suffix",
     "register_chat_commands",
     "register_cleanup_commands",
     "register_discord_commands",
+    "register_dispatch_commands",
     "register_hub_commands",
     "register_hub_tickets_commands",
     "register_inbox_commands",
     "register_repos_commands",
-    "register_templates_commands",
     "register_telegram_commands",
+    "register_templates_commands",
     "register_worktree_commands",
-    "apply_agent_override",
-    "normalize_ticket_suffix",
     "ticket_filename",
 ]

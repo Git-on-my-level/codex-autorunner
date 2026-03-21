@@ -34,7 +34,7 @@ class AppServerSupervisorFactory(Protocol):
 
 
 __all__ = [
-    "NotificationHandler",
-    "BackendFactory",
     "AppServerSupervisorFactory",
+    "BackendFactory",
+    "NotificationHandler",
 ]

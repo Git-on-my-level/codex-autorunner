@@ -1181,10 +1181,10 @@ class LifecycleEventEmitter:
 
 
 __all__ = [
-    "LifecycleEventType",
     "LifecycleEvent",
-    "LifecycleEventStore",
     "LifecycleEventEmitter",
-    "default_lifecycle_events_path",
+    "LifecycleEventStore",
+    "LifecycleEventType",
     "default_lifecycle_events_db_path",
+    "default_lifecycle_events_path",
 ]

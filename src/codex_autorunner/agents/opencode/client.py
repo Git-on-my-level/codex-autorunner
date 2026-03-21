@@ -719,4 +719,4 @@ def _normalize_template_path(path: str) -> str:
     return re.sub(r"{[^/]+}", "{}", path)
 
 
-__all__ = ["OpenCodeClient", "OpenCodeProtocolError", "OpenCodeApiProfile"]
+__all__ = ["OpenCodeApiProfile", "OpenCodeClient", "OpenCodeProtocolError"]

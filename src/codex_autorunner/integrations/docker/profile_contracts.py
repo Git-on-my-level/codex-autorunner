@@ -94,10 +94,10 @@ def expand_profile_paths(
 
 __all__ = [
     "DOCKER_PROFILE_FULL_DEV",
-    "DockerProfileContract",
-    "DockerProfileMount",
     "FULL_DEV_PROFILE_CONTRACT",
     "SUPPORTED_DOCKER_PROFILES",
+    "DockerProfileContract",
+    "DockerProfileMount",
     "expand_profile_paths",
     "expand_profile_template",
     "resolve_docker_profile_contract",

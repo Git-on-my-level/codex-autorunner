@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ from .contract import (
     SCHEMA_VERSION,
     default_runtime_schema_path,
 )
+
+logger = logging.getLogger(__name__)
 
 SECRET_PATTERNS = [
     r"sk-[a-zA-Z0-9]{20,}",
@@ -167,8 +170,8 @@ def _collect_template_info(
         try:
             templates = index_templates(hub_config, hub_config.root)
             template_count = len(templates)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to index templates: %s", e)
 
     return {
         "enabled": True,

@@ -397,10 +397,10 @@ __all__ = [
     "issue_md_has_content",
     "issue_md_path",
     "resolve_ticket_flow_archive_mode",
+    "seed_issue_from_github",
+    "seed_issue_from_text",
     "select_default_ticket_flow_run",
     "summarize_flow_freshness",
     "ticket_flow_archive_requires_force",
     "ticket_progress",
-    "seed_issue_from_github",
-    "seed_issue_from_text",
 ]

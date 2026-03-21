@@ -567,8 +567,8 @@ class ReviewService:
             return
         try:
             self._lock_handle.release()
-        except Exception:
-            pass
+        except Exception as e:
+            self._logger.debug("Lock release failed: %s", e)
         self._lock_handle = None
 
     def _load_state(self) -> dict[str, Any]:

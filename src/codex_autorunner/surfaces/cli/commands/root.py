@@ -748,6 +748,6 @@ def register_root_commands(app: typer.Typer) -> None:
 
 
 __all__ = [
-    "register_root_commands",
     "_resolve_repo_api_path",
+    "register_root_commands",
 ]

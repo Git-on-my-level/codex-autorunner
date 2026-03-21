@@ -285,8 +285,8 @@ class TranscriptMirrorStore:
 
 
 __all__ = [
-    "TranscriptMirrorStore",
     "TranscriptMirrorRow",
+    "TranscriptMirrorStore",
     "build_plain_text_transcript",
     "build_text_preview",
     "sanitize_transcript_metadata",
