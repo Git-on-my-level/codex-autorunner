@@ -7,12 +7,11 @@ from typing import Literal, cast
 from ..core import drafts as draft_utils
 from ..core.logging_utils import log_event
 from ..core.state_roots import resolve_repo_state_root
+from .catalog import CONTEXTSPACE_DOC_CATALOG, ContextspaceDocCatalogEntry
 
 ContextspaceDocKind = Literal["active_context", "decisions", "spec"]
-CONTEXTSPACE_DOC_KINDS: tuple[ContextspaceDocKind, ...] = (
-    "active_context",
-    "decisions",
-    "spec",
+CONTEXTSPACE_DOC_KINDS: tuple[ContextspaceDocKind, ...] = tuple(
+    cast(ContextspaceDocKind, entry.kind) for entry in CONTEXTSPACE_DOC_CATALOG
 )
 
 logger = logging.getLogger(__name__)
@@ -25,13 +24,24 @@ def normalize_contextspace_doc_kind(kind: str) -> ContextspaceDocKind:
     return cast(ContextspaceDocKind, key)
 
 
+def contextspace_doc_catalog() -> tuple[ContextspaceDocCatalogEntry, ...]:
+    return CONTEXTSPACE_DOC_CATALOG
+
+
+def contextspace_doc_entry(kind: str) -> ContextspaceDocCatalogEntry:
+    key = normalize_contextspace_doc_kind(kind)
+    for entry in CONTEXTSPACE_DOC_CATALOG:
+        if entry.kind == key:
+            return entry
+    raise ValueError("invalid contextspace doc kind")
+
+
 def contextspace_dir(repo_root: Path) -> Path:
     return resolve_repo_state_root(repo_root) / "contextspace"
 
 
 def contextspace_doc_path(repo_root: Path, kind: str) -> Path:
-    key = normalize_contextspace_doc_kind(kind)
-    return contextspace_dir(repo_root) / f"{key}.md"
+    return contextspace_dir(repo_root) / contextspace_doc_entry(kind).path
 
 
 def read_contextspace_doc(repo_root: Path, kind: str) -> str:
@@ -39,6 +49,17 @@ def read_contextspace_doc(repo_root: Path, kind: str) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8")
+
+
+def read_contextspace_docs(repo_root: Path) -> dict[ContextspaceDocKind, str]:
+    return {
+        entry.kind: read_contextspace_doc(repo_root, entry.kind)
+        for entry in CONTEXTSPACE_DOC_CATALOG
+    }
+
+
+def serialize_contextspace_doc_catalog() -> list[dict[str, str]]:
+    return [entry.as_dict() for entry in CONTEXTSPACE_DOC_CATALOG]
 
 
 def write_contextspace_doc(repo_root: Path, kind: str, content: str) -> str:
@@ -74,9 +95,13 @@ def write_contextspace_doc(repo_root: Path, kind: str, content: str) -> str:
 __all__ = [
     "CONTEXTSPACE_DOC_KINDS",
     "ContextspaceDocKind",
+    "contextspace_doc_catalog",
+    "contextspace_doc_entry",
     "contextspace_dir",
     "contextspace_doc_path",
     "normalize_contextspace_doc_kind",
     "read_contextspace_doc",
+    "read_contextspace_docs",
+    "serialize_contextspace_doc_catalog",
     "write_contextspace_doc",
 ]

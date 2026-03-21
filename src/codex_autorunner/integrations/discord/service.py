@@ -36,9 +36,12 @@ from ...core.filebox import (
     outbox_sent_dir,
 )
 from ...core.flows import (
+    FLOW_ACTION_SPECS,
+    FLOW_ACTIONS_WITH_RUN_PICKER,
     FlowRunRecord,
     FlowRunStatus,
     FlowStore,
+    flow_action_label,
     flow_run_duration_seconds,
     format_flow_duration,
     list_unseen_ticket_flow_dispatches,
@@ -296,15 +299,6 @@ TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
 TICKETS_SELECT_ID = "tickets_select"
 TICKETS_MODAL_PREFIX = "tickets_modal"
 TICKETS_BODY_INPUT_ID = "ticket_body"
-FLOW_ACTIONS_WITH_RUN_PICKER = {
-    "status",
-    "restart",
-    "resume",
-    "stop",
-    "archive",
-    "recover",
-    "reply",
-}
 
 
 class AppServerUnavailableError(Exception):
@@ -358,19 +352,6 @@ def _opencode_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]
     if not idle_ttl_seconds or idle_ttl_seconds <= 0:
         return None
     return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
-
-
-def _flow_action_label(action: str) -> str:
-    labels = {
-        "status": "status",
-        "restart": "restart",
-        "resume": "resume",
-        "stop": "stop",
-        "archive": "archive",
-        "recover": "recover",
-        "reply": "reply",
-    }
-    return labels.get(action, action)
 
 
 def _flow_run_matches_action(record: FlowRunRecord, action: str) -> bool:
@@ -2706,12 +2687,12 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"No ticket_flow runs available for {_flow_action_label(action)}.",
+                f"No ticket_flow runs available for {flow_action_label(action)}.",
             )
             return
         run_tuples = [(record.id, record.status.value) for record in filtered]
         custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
-        prompt = f"Select a run to {_flow_action_label(action)}:"
+        prompt = f"Select a run to {flow_action_label(action)}:"
         await self._respond_with_components(
             interaction_id,
             interaction_token,
@@ -2720,7 +2701,7 @@ class DiscordBotService:
                 build_flow_runs_picker(
                     run_tuples,
                     custom_id=custom_id,
-                    placeholder=f"Select run to {_flow_action_label(action)}...",
+                    placeholder=f"Select run to {flow_action_label(action)}...",
                 )
             ],
         )
@@ -2777,7 +2758,7 @@ class DiscordBotService:
             ]
             prompt = (
                 f"Matched {len(filtered_items)} runs for `{query_text}`. "
-                f"Select a run to {_flow_action_label(action)}:"
+                f"Select a run to {flow_action_label(action)}:"
             )
             await self._respond_with_components(
                 interaction_id,
@@ -2787,7 +2768,7 @@ class DiscordBotService:
                     build_flow_runs_picker(
                         filtered_items,
                         custom_id=custom_id,
-                        placeholder=f"Select run to {_flow_action_label(action)}...",
+                        placeholder=f"Select run to {flow_action_label(action)}...",
                     )
                 ],
             )
@@ -4915,6 +4896,7 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
+        flow_usage_overrides = {"runs": "[limit]"}
         lines = [
             "**CAR Commands:**",
             "",
@@ -4950,17 +4932,10 @@ class DiscordBotService:
             "/car session logout - Log out of the Codex account",
             "",
             "**Flow Commands:**",
-            "/car flow status [run_id] - Show flow status",
-            "/car flow runs [limit] - List flow runs",
-            "/car flow issue <issue#|url> - Seed ISSUE.md from GitHub",
-            "/car flow plan <text> - Seed ISSUE.md from plan text",
-            "/car flow start [force_new] - Start flow (or reuse active/paused)",
-            "/car flow restart [run_id] - Restart flow with a fresh run",
-            "/car flow resume [run_id] - Resume a paused flow",
-            "/car flow stop [run_id] - Stop a flow",
-            "/car flow archive [run_id] - Archive a flow",
-            "/car flow recover [run_id] - Reconcile active flow run state",
-            "/car flow reply <text> [run_id] - Reply to paused flow",
+            *[
+                f"/car flow {spec.name} {flow_usage_overrides.get(spec.name, spec.usage)} - {spec.description}"
+                for spec in FLOW_ACTION_SPECS
+            ],
             "",
             "**File Commands:**",
             "/car files inbox - List inbox files",

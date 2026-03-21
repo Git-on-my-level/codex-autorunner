@@ -8,10 +8,13 @@ from typing import Any, Callable, Optional
 
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
+    FLOW_ACTION_TOKENS,
     FlowStore,
     flow_duration_seconds,
+    flow_help_lines,
     flow_run_duration_seconds,
     format_flow_duration,
+    normalize_flow_action,
 )
 from .....core.flows.hub_overview import build_hub_flow_overview_entries
 from .....core.flows.models import FlowRunStatus
@@ -57,21 +60,6 @@ from .shared import SharedHelpers
 
 _logger = logging.getLogger(__name__)
 _FLOW_REPO_CONTEXT_CACHE_MAX = 512
-_FLOW_ACTION_TOKENS = {
-    "help",
-    "status",
-    "runs",
-    "start",
-    "bootstrap",
-    "restart",
-    "issue",
-    "plan",
-    "resume",
-    "stop",
-    "recover",
-    "archive",
-    "reply",
-}
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -111,29 +99,16 @@ def _split_flow_action(args: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
-def _normalize_flow_action(action: str) -> str:
-    normalized = (action or "").strip().lower()
-    if not normalized:
-        return "help"
-    return normalized
-
-
 def _flow_help_lines() -> list[str]:
-    return [
-        "Flow commands:",
-        "/flow status [run_id]",
-        "/flow runs [N]",
-        "/flow start [--force-new]",
-        "/flow restart [run_id]",
-        "/flow issue <issue#|url>",
-        "/flow plan <text>",
-        "/flow resume [run_id]",
-        "/flow stop [run_id]",
-        "/flow recover [run_id]",
-        "/flow archive [run_id] [--force]",
-        "/flow reply <message>",
-        "Use /pma to access full flow controls via web app.",
-    ]
+    lines = flow_help_lines(
+        prefix="/flow",
+        usage_overrides={
+            "start": "[--force-new]",
+            "reply": "<message>",
+        },
+    )
+    lines.append("Use /pma to access full flow controls via web app.")
+    return lines
 
 
 def _code(value: object) -> str:
@@ -341,7 +316,7 @@ class FlowCommands(SharedHelpers):
             return repo_root, resolved[1], consumed
 
         # Preserve flow actions unless the token resolved as an exact repo/path above.
-        if (argv[0] or "").strip().lower() in _FLOW_ACTION_TOKENS:
+        if (argv[0] or "").strip().lower() in FLOW_ACTION_TOKENS:
             return None, None, 0
 
         repos = self._flow_manifest_repos()
@@ -506,7 +481,7 @@ class FlowCommands(SharedHelpers):
             action_raw = "status"
             argv = ["status"]
             effective_args = "status"
-        action = _normalize_flow_action(action_raw)
+        action = normalize_flow_action(action_raw)
         _, remainder = _split_flow_action(effective_args)
         rest_argv = argv[1:]
 
@@ -560,7 +535,7 @@ class FlowCommands(SharedHelpers):
                     message, repo_root, rest_argv, repo_id=target_repo_id
                 )
                 return
-            if action in {"start", "bootstrap"}:
+            if action == "start":
                 await self._handle_flow_bootstrap(
                     message,
                     repo_root,

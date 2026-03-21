@@ -5,6 +5,7 @@
 import { api, resolvePath, getAuthToken, flash, escapeHtml } from "./utils.js";
 import { createDocChat, } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
+import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js";
 import { getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, refreshAgentControls, } from "./agentControls.js";
 import { createFileBoxWidget } from "./fileboxUi.js";
 import { handleStreamEvent } from "./streamUtils.js";
@@ -114,7 +115,7 @@ async function initFileBoxUI() {
         uploadInput: elements.chatUploadInput,
         uploadBtn: elements.chatUploadBtn,
         refreshBtn: elements.outboxRefresh,
-        uploadBox: "inbox",
+        uploadBox: DEFAULT_FILEBOX_BOX,
         emptyMessage: "No files",
         onChange: (listing) => {
             if (pendingUploadNames.length && pmaChat) {
@@ -1201,7 +1202,7 @@ function attachHandlers() {
         initChatPasteUpload({
             textarea: elements.input,
             basePath: "/hub/pma/files",
-            box: "inbox",
+            box: DEFAULT_FILEBOX_BOX,
             insertStyle: "markdown",
             onUploaded: () => {
                 void fileBoxCtrl?.refresh();
@@ -1215,12 +1216,12 @@ function attachHandlers() {
     }
     if (elements.inboxClear) {
         elements.inboxClear.addEventListener("click", () => {
-            void clearPMABox("inbox");
+            void clearPMABox(FILEBOX_BOXES[0]);
         });
     }
     if (elements.outboxClear) {
         elements.outboxClear.addEventListener("click", () => {
-            void clearPMABox("outbox");
+            void clearPMABox(FILEBOX_BOXES[1]);
         });
     }
     if (elements.scanReposBtn) {

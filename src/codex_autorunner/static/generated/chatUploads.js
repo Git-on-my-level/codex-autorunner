@@ -1,5 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, resolvePath } from "./utils.js";
+import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"];
 const IMAGE_MIME_EXT = {
     "image/png": "png",
@@ -110,7 +111,7 @@ export function initChatPasteUpload(options) {
         if (!files.length)
             return;
         event.preventDefault();
-        const box = options.box || "inbox";
+        const box = options.box || DEFAULT_FILEBOX_BOX;
         const insertStyle = options.insertStyle || "markdown";
         try {
             const entries = await uploadImages(options.basePath, box, files, options.pathPrefix);

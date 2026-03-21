@@ -1,4 +1,5 @@
 import { api, flash, resolvePath } from "./utils.js";
+import { DEFAULT_FILEBOX_BOX, type FileBoxBox } from "./fileboxCatalog.js";
 
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif"];
 const IMAGE_MIME_EXT: Record<string, string> = {
@@ -10,7 +11,7 @@ const IMAGE_MIME_EXT: Record<string, string> = {
   "image/heif": "heif",
 };
 
-type UploadBox = "inbox" | "outbox";
+type UploadBox = FileBoxBox;
 type InsertStyle = "markdown" | "path" | "both";
 
 type PasteUploadOptions = {
@@ -133,7 +134,7 @@ export function initChatPasteUpload(options: PasteUploadOptions): void {
     if (!files.length) return;
     event.preventDefault();
 
-    const box = options.box || "inbox";
+    const box = options.box || DEFAULT_FILEBOX_BOX;
     const insertStyle = options.insertStyle || "markdown";
     try {
       const entries = await uploadImages(options.basePath, box, files, options.pathPrefix);

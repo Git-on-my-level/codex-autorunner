@@ -4,7 +4,8 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ....contextspace.paths import (
     CONTEXTSPACE_DOC_KINDS,
-    read_contextspace_doc,
+    read_contextspace_docs,
+    serialize_contextspace_doc_catalog,
     write_contextspace_doc,
 )
 from ....tickets.spec_ingest import (
@@ -21,14 +22,19 @@ from ..schemas import (
 def build_contextspace_routes() -> APIRouter:
     router = APIRouter(prefix="/api", tags=["contextspace"])
 
+    def _contextspace_payload(repo_root):
+        docs = read_contextspace_docs(repo_root)
+        return {
+            "active_context": docs["active_context"],
+            "decisions": docs["decisions"],
+            "spec": docs["spec"],
+            "kinds": serialize_contextspace_doc_catalog(),
+        }
+
     @router.get("/contextspace", response_model=ContextspaceResponse)
     def get_contextspace(request: Request):
         repo_root = request.app.state.engine.repo_root
-        return {
-            "active_context": read_contextspace_doc(repo_root, "active_context"),
-            "decisions": read_contextspace_doc(repo_root, "decisions"),
-            "spec": read_contextspace_doc(repo_root, "spec"),
-        }
+        return _contextspace_payload(repo_root)
 
     @router.put("/contextspace/{kind}", response_model=ContextspaceResponse)
     def put_contextspace(
@@ -39,11 +45,7 @@ def build_contextspace_routes() -> APIRouter:
             raise HTTPException(status_code=400, detail="invalid contextspace doc kind")
         repo_root = request.app.state.engine.repo_root
         write_contextspace_doc(repo_root, key, payload.content)
-        return {
-            "active_context": read_contextspace_doc(repo_root, "active_context"),
-            "decisions": read_contextspace_doc(repo_root, "decisions"),
-            "spec": read_contextspace_doc(repo_root, "spec"),
-        }
+        return _contextspace_payload(repo_root)
 
     @router.post("/contextspace/spec/ingest", response_model=SpecIngestTicketsResponse)
     def ingest_contextspace_spec(request: Request):

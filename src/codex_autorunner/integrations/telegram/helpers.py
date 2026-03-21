@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ...core.coercion import coerce_int
+from ...core.flows import flow_help_lines
 from ...core.injected_context import strip_injected_context_blocks
 from ...core.redaction import redact_text
 from ...core.state_roots import resolve_global_state_root
@@ -876,14 +877,15 @@ def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
         lines.append("")
         lines.append("Flow:")
         lines.append("/flow")
-        lines.append("/flow status [run_id]")
-        lines.append("/flow issue <issue#|url>")
-        lines.append("/flow plan <text>")
-        lines.append("/flow resume [run_id]")
-        lines.append("/flow stop [run_id]")
-        lines.append("/flow recover [run_id]")
-        lines.append("/flow archive [run_id] [--force]")
-        lines.append("/flow reply <message>")
+        lines.extend(
+            flow_help_lines(
+                prefix="/flow",
+                usage_overrides={
+                    "start": "[--force-new]",
+                    "reply": "<message>",
+                },
+            )[1:]
+        )
         lines.append("(Use /pma for full flow controls via web app)")
         if "reply" in command_specs:
             lines.append("/reply <message> (legacy)")

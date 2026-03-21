@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,10 @@ def ensure_structure(repo_root: Path) -> None:
         outbox_sent_dir(repo_root),
     ):
         path.mkdir(parents=True, exist_ok=True)
+
+
+def empty_listing() -> dict[str, list[Any]]:
+    return {box: [] for box in BOXES}
 
 
 def sanitize_filename(name: str) -> str:
@@ -102,10 +106,10 @@ def _format_mtime(ts: float | None) -> str | None:
 
 def list_filebox(repo_root: Path) -> Dict[str, List[FileBoxEntry]]:
     ensure_structure(repo_root)
-    results: Dict[str, List[FileBoxEntry]] = {}
-    for box in BOXES:
-        results[box] = _gather_files([("filebox", _box_dir(repo_root, box))], box)
-    return results
+    return {
+        box: _gather_files([("filebox", _box_dir(repo_root, box))], box)
+        for box in BOXES
+    }
 
 
 def _box_dir(repo_root: Path, box: str) -> Path:
@@ -178,6 +182,7 @@ __all__ = [
     "BOXES",
     "FileBoxEntry",
     "delete_file",
+    "empty_listing",
     "filebox_root",
     "inbox_dir",
     "list_filebox",

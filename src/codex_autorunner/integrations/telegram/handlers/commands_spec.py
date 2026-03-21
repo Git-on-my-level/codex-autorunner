@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+from ....core.flows import flow_action_summary
 from ....core.update_targets import update_target_values
 from ..adapter import TelegramMessage
 
@@ -60,7 +61,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "flow": CommandSpec(
             "flow",
-            "ticket flow controls (status, runs, start, restart, issue, plan, resume, stop, recover, archive, reply)",
+            f"ticket flow controls ({flow_action_summary()})",
             lambda message, args, _runtime: handlers._handle_flow(message, args),
             allow_during_turn=True,
         ),

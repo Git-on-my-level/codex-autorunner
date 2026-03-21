@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.contextspace.paths import CONTEXTSPACE_DOC_KINDS
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import file_chat as file_chat_routes
 
@@ -19,7 +20,13 @@ def test_workspace_docs_read_write(hub_env, client, repo: Path):
     res = client.get(f"/repos/{hub_env.repo_id}/api/contextspace")
     assert res.status_code == 200
     data = res.json()
-    assert set(data) == {"active_context", "decisions", "spec"}
+    assert set(data) == {"active_context", "decisions", "spec", "kinds"}
+    assert [entry["kind"] for entry in data["kinds"]] == list(CONTEXTSPACE_DOC_KINDS)
+    assert [entry["path"] for entry in data["kinds"]] == [
+        "active_context.md",
+        "decisions.md",
+        "spec.md",
+    ]
 
     active_context = "# Test Context"
     decisions = "# Test Decisions"

@@ -16,6 +16,7 @@ from ...core.car_context import (
     normalize_car_context_profile,
 )
 from ...core.config import load_hub_config
+from ...core.filebox import BOXES
 from .commands.utils import format_hub_request_error
 
 logger = logging.getLogger(__name__)
@@ -248,6 +249,10 @@ def _format_seconds(seconds: Optional[int]) -> str:
         return f"{minutes}m{sec:02d}s"
     hours, rem_minutes = divmod(minutes, 60)
     return f"{hours}h{rem_minutes:02d}m"
+
+
+def _box_choices_text() -> str:
+    return "|".join(BOXES)
 
 
 def _format_tail_event_line(event: dict[str, Any]) -> str:
@@ -1975,35 +1980,25 @@ def pma_files(
     if output_json:
         typer.echo(json.dumps(data, indent=2))
     else:
-        inbox = data.get("inbox", []) if isinstance(data, dict) else []
-        outbox = data.get("outbox", []) if isinstance(data, dict) else []
-
-        typer.echo(f"Inbox ({len(inbox)}):")
-        for file in inbox:
-            if not isinstance(file, dict):
-                continue
-            name = file.get("name", "")
-            size = file.get("size", 0)
-            modified = file.get("modified_at", "")
-            source = file.get("source", "")
-            source_str = f", source={source}" if source else ""
-            typer.echo(f"  - {name} ({size} bytes, {modified}{source_str})")
-
-        typer.echo(f"\nOutbox ({len(outbox)}):")
-        for file in outbox:
-            if not isinstance(file, dict):
-                continue
-            name = file.get("name", "")
-            size = file.get("size", 0)
-            modified = file.get("modified_at", "")
-            source = file.get("source", "")
-            source_str = f", source={source}" if source else ""
-            typer.echo(f"  - {name} ({size} bytes, {modified}{source_str})")
+        for index, box in enumerate(BOXES):
+            entries = data.get(box, []) if isinstance(data, dict) else []
+            heading = box.capitalize()
+            prefix = "\n" if index else ""
+            typer.echo(f"{prefix}{heading} ({len(entries)}):")
+            for file in entries:
+                if not isinstance(file, dict):
+                    continue
+                name = file.get("name", "")
+                size = file.get("size", 0)
+                modified = file.get("modified_at", "")
+                source = file.get("source", "")
+                source_str = f", source={source}" if source else ""
+                typer.echo(f"  - {name} ({size} bytes, {modified}{source_str})")
 
 
 @pma_app.command("upload")
 def pma_upload(
-    box: str = typer.Argument(..., help="Target box (inbox|outbox)"),
+    box: str = typer.Argument(..., help=f"Target box ({_box_choices_text()})"),
     files: list[Path] = typer.Argument(..., help="Files to upload"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
@@ -2016,8 +2011,8 @@ def pma_upload(
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    if box not in ("inbox", "outbox"):
-        typer.echo("Box must be 'inbox' or 'outbox'", err=True)
+    if box not in BOXES:
+        typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
         raise typer.Exit(code=1) from None
 
     url = _build_pma_url(config, f"/files/{box}")
@@ -2063,7 +2058,7 @@ def pma_upload(
 
 @pma_app.command("download")
 def pma_download(
-    box: str = typer.Argument(..., help="Source box (inbox|outbox)"),
+    box: str = typer.Argument(..., help=f"Source box ({_box_choices_text()})"),
     filename: str = typer.Argument(..., help="File to download"),
     output: Optional[Path] = typer.Option(
         None, "--output", "-o", help="Output path (default: current directory)"
@@ -2078,8 +2073,8 @@ def pma_download(
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    if box not in ("inbox", "outbox"):
-        typer.echo("Box must be 'inbox' or 'outbox'", err=True)
+    if box not in BOXES:
+        typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
         raise typer.Exit(code=1) from None
 
     url = _build_pma_url(config, f"/files/{box}/{filename}")
@@ -2098,7 +2093,9 @@ def pma_download(
 
 @pma_app.command("delete")
 def pma_delete(
-    box: Optional[str] = typer.Argument(None, help="Target box (inbox|outbox)"),
+    box: Optional[str] = typer.Argument(
+        None, help=f"Target box ({_box_choices_text()})"
+    ),
     filename: Optional[str] = typer.Argument(None, help="File to delete"),
     all_files: bool = typer.Option(False, "--all", help="Delete all files in the box"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
@@ -2113,8 +2110,11 @@ def pma_delete(
         raise typer.Exit(code=1) from None
 
     if all_files:
-        if not box or box not in ("inbox", "outbox"):
-            typer.echo("Box must be 'inbox' or 'outbox' when using --all", err=True)
+        if not box or box not in BOXES:
+            typer.echo(
+                f"Box must be one of: {', '.join(BOXES)} when using --all",
+                err=True,
+            )
             raise typer.Exit(code=1) from None
         url = _build_pma_url(config, f"/files/{box}")
         method = "DELETE"
@@ -2123,8 +2123,8 @@ def pma_delete(
         if not box or not filename:
             typer.echo("Box and filename are required (or use --all)", err=True)
             raise typer.Exit(code=1) from None
-        if box not in ("inbox", "outbox"):
-            typer.echo("Box must be 'inbox' or 'outbox'", err=True)
+        if box not in BOXES:
+            typer.echo(f"Box must be one of: {', '.join(BOXES)}", err=True)
             raise typer.Exit(code=1) from None
         url = _build_pma_url(config, f"/files/{box}/{filename}")
         method = "DELETE"

@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.contextspace.paths import (
+    CONTEXTSPACE_DOC_KINDS,
+    contextspace_doc_catalog,
     contextspace_doc_path,
     normalize_contextspace_doc_kind,
     write_contextspace_doc,
@@ -26,6 +28,17 @@ def test_contextspace_doc_path_uses_canonical_location(tmp_path: Path) -> None:
     assert contextspace_doc_path(repo_root, "active_context") == (
         repo_root / ".codex-autorunner" / "contextspace" / "active_context.md"
     )
+
+
+def test_contextspace_doc_catalog_matches_canonical_kinds() -> None:
+    catalog = contextspace_doc_catalog()
+
+    assert [entry.kind for entry in catalog] == list(CONTEXTSPACE_DOC_KINDS)
+    assert [entry.path for entry in catalog] == [
+        "active_context.md",
+        "decisions.md",
+        "spec.md",
+    ]
 
 
 def test_write_contextspace_doc_logs_draft_invalidation_failure(
