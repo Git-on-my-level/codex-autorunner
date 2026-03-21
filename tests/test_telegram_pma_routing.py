@@ -1424,6 +1424,134 @@ class _ManagedThreadPMAHandler(_PMAHandler):
 
 
 @pytest.mark.anyio
+async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    queued_started = object()
+    begin_calls = 0
+
+    class _Handler:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+            self._spawned_tasks: set[asyncio.Task[object]] = set()
+
+        def _spawn_task(self, coro):  # type: ignore[no-untyped-def]
+            task = asyncio.create_task(coro)
+            self._spawned_tasks.add(task)
+            task.add_done_callback(self._spawned_tasks.discard)
+            return task
+
+        async def _begin_typing_indicator(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> None:
+            events.append(("begin", chat_id, thread_id))
+
+        async def _end_typing_indicator(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> None:
+            events.append(("end", chat_id, thread_id))
+
+        async def _send_message(
+            self,
+            chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int],
+            reply_to: Optional[int],
+        ) -> None:
+            _ = reply_to
+            events.append(("send", chat_id, thread_id, text))
+
+        async def _flush_outbox_files(
+            self,
+            record: TelegramTopicRecord,
+            *,
+            chat_id: int,
+            thread_id: Optional[int],
+            reply_to: Optional[int],
+        ) -> None:
+            _ = record, reply_to
+            events.append(("flush", chat_id, thread_id))
+
+    class _OrchestrationServiceStub:
+        def get_running_execution(self, managed_thread_id: str) -> None:
+            _ = managed_thread_id
+            return None
+
+    async def _fake_begin_next(
+        orchestration_service: object,
+        managed_thread_id: str,
+    ) -> Optional[object]:
+        nonlocal begin_calls
+        _ = orchestration_service, managed_thread_id
+        if begin_calls == 0:
+            begin_calls += 1
+            return queued_started
+        return None
+
+    async def _fake_finalize(
+        handlers: object,
+        *,
+        orchestration_service: object,
+        started: object,
+        surface_key: str,
+        chat_id: int,
+        thread_id: Optional[int],
+        public_execution_error: str,
+        timeout_error: str,
+        interrupted_error: str,
+    ) -> dict[str, object]:
+        _ = (
+            handlers,
+            orchestration_service,
+            surface_key,
+            chat_id,
+            thread_id,
+            public_execution_error,
+            timeout_error,
+            interrupted_error,
+        )
+        assert started is queued_started
+        events.append("finalize")
+        return {"status": "ok", "assistant_text": "queued telegram reply"}
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "begin_next_queued_runtime_thread_execution",
+        _fake_begin_next,
+    )
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_finalize_telegram_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    handler = _Handler()
+    execution_commands_module._ensure_telegram_managed_thread_queue_worker(
+        handler,
+        orchestration_service=_OrchestrationServiceStub(),
+        managed_thread_id="managed-thread-1",
+        surface_key="telegram:-1001:101",
+        record=TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=True),
+        chat_id=-1001,
+        thread_id=101,
+    )
+
+    spawned = list(handler._spawned_tasks)
+    assert len(spawned) == 1
+    await asyncio.gather(*spawned)
+
+    assert events == [
+        ("begin", -1001, 101),
+        "finalize",
+        ("send", -1001, 101, "queued telegram reply"),
+        ("flush", -1001, 101),
+        ("end", -1001, 101),
+    ]
+
+
+@pytest.mark.anyio
 async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

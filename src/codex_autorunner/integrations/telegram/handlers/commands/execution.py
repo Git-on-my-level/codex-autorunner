@@ -771,6 +771,39 @@ def _ensure_telegram_managed_thread_queue_worker(
 
     worker_task: Optional[asyncio.Task[Any]] = None
 
+    async def _run_with_telegram_typing_indicator(work: Any) -> None:
+        begin = getattr(handlers, "_begin_typing_indicator", None)
+        end = getattr(handlers, "_end_typing_indicator", None)
+        began = False
+        if callable(begin):
+            try:
+                await begin(chat_id, thread_id)
+                began = True
+            except Exception as exc:
+                log_event(
+                    handlers._logger,
+                    logging.DEBUG,
+                    "telegram.typing.begin.failed",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    exc=exc,
+                )
+        try:
+            await work()
+        finally:
+            if began and callable(end):
+                try:
+                    await end(chat_id, thread_id)
+                except Exception as exc:
+                    log_event(
+                        handlers._logger,
+                        logging.DEBUG,
+                        "telegram.typing.end.failed",
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        exc=exc,
+                    )
+
     async def _queue_worker() -> None:
         try:
             while True:
@@ -783,42 +816,50 @@ def _ensure_telegram_managed_thread_queue_worker(
                 )
                 if started is None:
                     break
-                finalized = await _finalize_telegram_managed_thread_execution(
-                    handlers,
-                    orchestration_service=orchestration_service,
-                    started=started,
-                    surface_key=surface_key,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    public_execution_error=public_execution_error,
-                    timeout_error=timeout_error,
-                    interrupted_error=interrupted_error,
-                )
-                if finalized["status"] == "ok":
-                    message_text = str(finalized.get("assistant_text") or "").strip()
-                    if message_text:
-                        await handlers._send_message(
-                            chat_id,
-                            message_text,
+
+                async def _process_started_execution(
+                    started_execution: RuntimeThreadExecution = started,
+                ) -> None:
+                    finalized = await _finalize_telegram_managed_thread_execution(
+                        handlers,
+                        orchestration_service=orchestration_service,
+                        started=started_execution,
+                        surface_key=surface_key,
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        public_execution_error=public_execution_error,
+                        timeout_error=timeout_error,
+                        interrupted_error=interrupted_error,
+                    )
+                    if finalized["status"] == "ok":
+                        message_text = str(
+                            finalized.get("assistant_text") or ""
+                        ).strip()
+                        if message_text:
+                            await handlers._send_message(
+                                chat_id,
+                                message_text,
+                                thread_id=thread_id,
+                                reply_to=None,
+                            )
+                        await handlers._flush_outbox_files(
+                            record,
+                            chat_id=chat_id,
                             thread_id=thread_id,
                             reply_to=None,
                         )
-                    await handlers._flush_outbox_files(
-                        record,
-                        chat_id=chat_id,
+                        return
+                    await handlers._send_message(
+                        chat_id,
+                        (
+                            "Turn failed: "
+                            f"{finalized.get('error') or public_execution_error}"
+                        ),
                         thread_id=thread_id,
                         reply_to=None,
                     )
-                    continue
-                await handlers._send_message(
-                    chat_id,
-                    (
-                        "Turn failed: "
-                        f"{finalized.get('error') or public_execution_error}"
-                    ),
-                    thread_id=thread_id,
-                    reply_to=None,
-                )
+
+                await _run_with_telegram_typing_indicator(_process_started_execution)
         finally:
             if (
                 worker_task is not None
