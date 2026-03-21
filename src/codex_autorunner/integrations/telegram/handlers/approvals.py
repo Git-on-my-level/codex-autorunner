@@ -7,15 +7,16 @@ from typing import Any
 from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ...app_server.client import ApprovalDecision
-from ...chat.handlers.approvals import ChatApprovalHandlers
+from ...chat.handlers.approvals import (
+    ChatApprovalHandlers,
+    normalize_backend_approval_request,
+)
 from ...chat.handlers.models import ChatContext
 from ...chat.models import ChatInteractionEvent, ChatInteractionRef, ChatMessageRef
 from ..adapter import ApprovalCallback, TelegramCallbackQuery, build_approval_keyboard
 from ..config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from ..helpers import (
     _approval_age_seconds,
-    _coerce_id,
-    _extract_turn_thread_id,
     _format_approval_prompt,
 )
 from ..state import PendingApprovalRecord, TopicRouter
@@ -73,15 +74,12 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
     async def _handle_approval_request(
         self, message: dict[str, Any]
     ) -> ApprovalDecision:
-        req_id_value = message.get("id")
-        request_id = str(req_id_value).strip() if req_id_value is not None else ""
-        params = (
-            message.get("params") if isinstance(message.get("params"), dict) else {}
-        )
-        turn_id = _coerce_id(params.get("turnId")) if isinstance(params, dict) else None
-        if not request_id or not turn_id:
+        request_data = normalize_backend_approval_request(message)
+        if request_data is None:
             return "cancel"
-        codex_thread_id = _extract_turn_thread_id(params)
+        request_id = request_data.request_id
+        turn_id = request_data.turn_id
+        codex_thread_id = request_data.backend_thread_id
         ctx = self._resolve_turn_context(turn_id, thread_id=codex_thread_id)
         if ctx is None:
             return "cancel"
