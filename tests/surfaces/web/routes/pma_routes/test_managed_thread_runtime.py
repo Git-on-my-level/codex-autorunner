@@ -541,6 +541,96 @@ def test_managed_thread_message_route_injects_core_context_when_profile_is_core(
     assert "<injected context>" in captured["request"].metadata["runtime_prompt"]
 
 
+def test_managed_thread_message_route_uses_live_runtime_binding_for_compact_seed(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    store.set_thread_compact_seed(managed_thread_id, "compact summary")
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def get_thread_runtime_binding(self, thread_target_id: str):
+            _ = thread_target_id
+            return SimpleNamespace(backend_thread_id="backend-thread-1")
+
+        def record_execution_result(self, *args, **kwargs):
+            _ = args, kwargs
+            return SimpleNamespace(status="ok", error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id, sandbox_policy
+        captured["request"] = request
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+            ),
+            thread=SimpleNamespace(backend_thread_id="backend-thread-1"),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "await_runtime_thread_outcome",
+        _fake_await,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert response.status_code == 200
+    runtime_prompt = captured["request"].metadata["runtime_prompt"]
+    assert "Context summary (from compaction):" not in runtime_prompt
+    assert "compact summary" not in runtime_prompt
+    assert runtime_prompt.endswith("hello from route\n</user_message>\n")
+
+
 def test_managed_thread_message_route_preserves_literal_message_whitespace(
     hub_env,
     monkeypatch,
@@ -861,6 +951,10 @@ def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
     calls: list[str] = []
 
     class FakeService:
+        def get_thread_runtime_binding(self, thread_target_id: str):
+            _ = thread_target_id
+            return SimpleNamespace(backend_thread_id="backend-thread-1")
+
         async def interrupt_thread(self, thread_target_id: str):
             calls.append(thread_target_id)
             store.mark_turn_interrupted(managed_turn_id)
@@ -899,6 +993,18 @@ def test_managed_thread_interrupt_route_uses_orchestration_service_seam(
 
     assert response.status_code == 200
     assert calls == [managed_thread_id]
+    with open_orchestration_sqlite(hub_env.hub_root) as conn:
+        row = conn.execute(
+            """
+            SELECT payload_json
+              FROM orch_thread_actions
+             ORDER BY CAST(action_id AS INTEGER) DESC
+             LIMIT 1
+            """
+        ).fetchone()
+    assert row is not None
+    payload = json.loads(row["payload_json"])
+    assert payload["backend_interrupt_attempted"] is True
 
 
 def test_interrupt_fails_for_agent_without_interrupt_capability(

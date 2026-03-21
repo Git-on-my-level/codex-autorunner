@@ -402,6 +402,5 @@ def test_interrupt_managed_thread_recovers_stale_backend_thread(hub_env) -> None
     assert updated_turn is not None
     assert updated_turn["status"] == "interrupted"
     assert updated_turn["error"] is None
-    updated_thread = store.get_thread(managed_thread_id)
-    assert updated_thread is not None
-    assert updated_thread["backend_thread_id"] is None
+    updated_binding = store.get_thread_runtime_binding(managed_thread_id)
+    assert updated_binding is None

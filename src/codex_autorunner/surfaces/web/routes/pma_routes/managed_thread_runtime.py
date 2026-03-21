@@ -204,6 +204,21 @@ def _compose_execution_prompt(
     return f"{preamble}{car_context}\n\n{user_message}"
 
 
+def _get_live_thread_runtime_binding(service: Any, managed_thread_id: str) -> Any:
+    getter = getattr(service, "get_thread_runtime_binding", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter(managed_thread_id)
+    except Exception:
+        logger.debug(
+            "Failed to resolve live runtime binding for managed thread %s",
+            managed_thread_id,
+            exc_info=True,
+        )
+        return None
+
+
 def _sanitize_managed_thread_result_error(detail: Any) -> str:
     sanitized = normalize_optional_text(detail)
     if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, "PMA chat timed out"}:
@@ -314,13 +329,16 @@ async def _interrupt_managed_thread_via_orchestration(
     if not managed_turn_id:
         raise HTTPException(status_code=500, detail="Running turn is missing id")
 
-    backend_thread_id = normalize_optional_text(thread.get("backend_thread_id"))
-    backend_turn_id = normalize_optional_text(running_turn.get("backend_turn_id"))
-    backend_error: Optional[str] = None
     service = _build_managed_thread_orchestration_service(
         request,
         thread_store=store,
     )
+    runtime_binding = _get_live_thread_runtime_binding(service, managed_thread_id)
+    backend_thread_id = normalize_optional_text(
+        getattr(runtime_binding, "backend_thread_id", None)
+    )
+    backend_turn_id = normalize_optional_text(running_turn.get("backend_turn_id"))
+    backend_error: Optional[str] = None
     try:
         stop_outcome = await service.stop_thread(managed_thread_id)
     except Exception:
@@ -1262,7 +1280,6 @@ def build_managed_thread_runtime_routes(
         reasoning = normalize_optional_text(payload.reasoning) or defaults.get(
             "reasoning"
         )
-        stored_backend_id = normalize_optional_text(thread.get("backend_thread_id"))
         compact_seed = normalize_optional_text(thread.get("compact_seed"))
         metadata = thread.get("metadata")
         if not isinstance(metadata, dict):
@@ -1274,10 +1291,18 @@ def build_managed_thread_runtime_routes(
             ),
         )
         approval_policy, sandbox_policy = _resolve_managed_thread_policies(thread)
+        service = _build_managed_thread_orchestration_service(
+            request,
+            thread_store=thread_store,
+        )
+        runtime_binding = _get_live_thread_runtime_binding(service, managed_thread_id)
+        live_backend_thread_id = normalize_optional_text(
+            getattr(runtime_binding, "backend_thread_id", None)
+        )
         execution_prompt = _compose_execution_prompt(
             agent=thread.get("agent"),
             hub_root=hub_root,
-            stored_backend_id=stored_backend_id,
+            stored_backend_id=live_backend_thread_id,
             compact_seed=compact_seed,
             message=message,
             context_profile=context_profile,
@@ -1291,10 +1316,6 @@ def build_managed_thread_runtime_routes(
                     prompt_text=message,
                 ),
             )
-        service = _build_managed_thread_orchestration_service(
-            request,
-            thread_store=thread_store,
-        )
         try:
             started_execution = await begin_runtime_thread_execution(
                 service,
@@ -1331,7 +1352,7 @@ def build_managed_thread_runtime_routes(
                     "next_step": "Resume the thread or create a new active thread.",
                     "managed_thread_id": managed_thread_id,
                     "managed_turn_id": None,
-                    "backend_thread_id": stored_backend_id or "",
+                    "backend_thread_id": live_backend_thread_id or "",
                     "assistant_text": "",
                     "error": detail,
                 },
@@ -1356,7 +1377,7 @@ def build_managed_thread_runtime_routes(
                         (running_turn or {}).get("managed_turn_id") or ""
                     )
                     or None,
-                    "backend_thread_id": stored_backend_id or "",
+                    "backend_thread_id": live_backend_thread_id or "",
                     "assistant_text": "",
                     "error": "Managed thread already has a running turn",
                 },
@@ -1367,7 +1388,9 @@ def build_managed_thread_runtime_routes(
                 content=_interrupt_failure_payload(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=exc.active_execution_id,
-                    backend_thread_id=exc.backend_thread_id or stored_backend_id or "",
+                    backend_thread_id=exc.backend_thread_id
+                    or live_backend_thread_id
+                    or "",
                     detail=exc.detail,
                     delivery_payload=delivery_payload,
                 ),
@@ -1383,7 +1406,7 @@ def build_managed_thread_runtime_routes(
                 "execution_state": "completed",
                 "managed_thread_id": managed_thread_id,
                 "managed_turn_id": None,
-                "backend_thread_id": stored_backend_id or "",
+                "backend_thread_id": live_backend_thread_id or "",
                 "assistant_text": "",
                 "error": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
                 **delivery_payload,
@@ -1393,7 +1416,7 @@ def build_managed_thread_runtime_routes(
             raise HTTPException(status_code=500, detail="Failed to create managed turn")
         backend_thread_id = (
             normalize_optional_text(started_execution.thread.backend_thread_id)
-            or stored_backend_id
+            or live_backend_thread_id
             or ""
         )
         execution_status = str(
@@ -1450,7 +1473,7 @@ def build_managed_thread_runtime_routes(
                 thread_store=thread_store,
                 thread=thread,
                 started=started,
-                fallback_backend_thread_id=stored_backend_id,
+                fallback_backend_thread_id=live_backend_thread_id,
                 delivery_payload=delivery_payload,
             )
 
