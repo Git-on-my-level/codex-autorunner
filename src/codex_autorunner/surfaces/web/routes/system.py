@@ -17,6 +17,7 @@ from ....core.update import (
     _read_update_status,
     _spawn_update_process,
     _system_update_check,
+    _update_target_restarts_surface,
 )
 from ....core.update_paths import resolve_update_paths
 from ....core.utils import find_repo_root
@@ -219,7 +220,9 @@ def build_system_routes() -> APIRouter:
                     ),
                 )
             update_target = _normalize_update_target(target_raw)
-            if not force_update:
+            if not force_update and _update_target_restarts_surface(
+                update_target, surface="web"
+            ):
                 warning = _format_update_confirmation_warning(
                     active_count=_count_active_terminal_sessions(request),
                     singular_label="terminal session",

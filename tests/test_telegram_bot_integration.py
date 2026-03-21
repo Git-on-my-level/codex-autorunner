@@ -1381,6 +1381,51 @@ async def test_update_with_explicit_target_prompts_for_confirmation_when_turn_ac
 
 
 @pytest.mark.anyio
+async def test_update_web_target_skips_confirmation_when_turn_active(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    message = build_message("/update web", message_id=21)
+    captured: dict[str, object] = {}
+
+    async def _fake_prompt_update_confirmation(
+        _msg: TelegramMessage, *, update_target: Optional[str] = None
+    ) -> None:
+        captured["prompted"] = update_target
+
+    async def _fake_start_update(
+        *,
+        chat_id: int,
+        thread_id: Optional[int],
+        update_target: str,
+        reply_to: Optional[int] = None,
+        callback=None,
+        selection_key: Optional[str] = None,
+    ) -> None:
+        captured["chat_id"] = chat_id
+        captured["thread_id"] = thread_id
+        captured["update_target"] = update_target
+        captured["reply_to"] = reply_to
+
+    service._turn_contexts[("thread-1", "turn-1")] = object()  # type: ignore[assignment]
+    service._prompt_update_confirmation = _fake_prompt_update_confirmation  # type: ignore[assignment]
+    service._start_update = _fake_start_update  # type: ignore[assignment]
+
+    try:
+        await service._handle_update(message, "web", None)
+    finally:
+        await service._app_server_supervisor.close_all()
+
+    assert captured == {
+        "chat_id": 123,
+        "thread_id": None,
+        "update_target": "web",
+        "reply_to": 21,
+    }
+
+
+@pytest.mark.anyio
 async def test_outbox_lock_rebinds_across_event_loops(tmp_path: Path) -> None:
     config = make_config(tmp_path, fixture_command("basic"))
     service = build_service_in_closed_loop(tmp_path, config)

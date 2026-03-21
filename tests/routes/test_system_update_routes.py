@@ -89,3 +89,36 @@ def test_system_update_force_bypasses_active_session_warning(
     assert payload["status"] == "ok"
     assert payload["requires_confirmation"] is False
     assert observed["update_target"] == "both"
+
+
+def test_system_update_chat_target_skips_terminal_warning(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app = _build_app(tmp_path)
+    app.state.terminal_sessions = {"session-1": _AliveSession()}
+
+    observed: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        system_routes_module,
+        "resolve_update_paths",
+        lambda config=None: SimpleNamespace(cache_dir=tmp_path / "update-cache"),
+    )
+
+    def _fake_spawn_update_process(**kwargs: Any) -> None:
+        observed.update(kwargs)
+
+    monkeypatch.setattr(
+        system_routes_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    with TestClient(app) as client:
+        response = client.post("/system/update", json={"target": "chat"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["requires_confirmation"] is False
+    assert observed["update_target"] == "chat"

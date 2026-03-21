@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable, Optional, cast
 
-from ....core.update import _normalize_update_target
+from ....core.update import _normalize_update_target, _update_target_restarts_surface
 from ...chat.handlers.models import ChatContext
 from ...chat.handlers.selections import ChatSelectionHandlers
 from ...chat.models import ChatThreadRef
@@ -371,7 +371,9 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             await self._finalize_selection(key, callback, "Update target invalid.")
             return
         chat_id, thread_id = _split_topic_key(key)
-        if self._has_active_turns():
+        if self._has_active_turns() and _update_target_restarts_surface(
+            update_target, surface="telegram"
+        ):
             message = getattr(callback, "message", None)
             if message is None:
                 await self._answer_callback(callback, "Active session detected")

@@ -82,6 +82,7 @@ from ...core.update import (
     _normalize_update_target,
     _read_update_status,
     _spawn_update_process,
+    _update_target_restarts_surface,
 )
 from ...core.update_paths import resolve_update_paths
 from ...core.update_targets import get_update_target_label
@@ -6365,7 +6366,9 @@ class DiscordBotService:
                 ],
             )
             return
-        if not confirmed:
+        if not confirmed and _update_target_restarts_surface(
+            update_target, surface="discord"
+        ):
             warning = _format_update_confirmation_warning(
                 active_count=self._active_update_session_count(),
                 singular_label="Codex session",

@@ -21,6 +21,7 @@ from ....core.update import (
     _format_update_confirmation_warning,
     _normalize_update_target,
     _spawn_update_process,
+    _update_target_restarts_surface,
 )
 from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
@@ -2992,7 +2993,9 @@ Summary applied.""",
             return
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._update_options.pop(key, None)
-        if self._has_active_turns():
+        if self._has_active_turns() and _update_target_restarts_surface(
+            update_target, surface="telegram"
+        ):
             await self._prompt_update_confirmation(
                 message,
                 update_target=update_target,

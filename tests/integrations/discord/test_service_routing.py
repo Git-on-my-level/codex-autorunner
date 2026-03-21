@@ -4840,6 +4840,52 @@ async def test_component_interaction_update_cancel_reports_cancelled(
 
 
 @pytest.mark.anyio
+async def test_car_update_web_target_skips_confirmation_when_sessions_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "web"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _fake_spawn_update_process(**kwargs: Any) -> None:
+        observed.update(kwargs)
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+    service._active_update_session_count = lambda: 1  # type: ignore[method-assign]
+
+    try:
+        await service.run_forever()
+        assert observed["update_target"] == "web"
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "update started (web only)" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_run_forever_sends_pending_update_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -307,6 +307,22 @@ def _format_update_confirmation_warning(
     )
 
 
+def _update_target_restarts_surface(
+    raw_target: Optional[str],
+    *,
+    surface: str,
+) -> bool:
+    definition = _get_update_target_definition(raw_target)
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface == "web":
+        return bool(definition.includes_web)
+    if normalized_surface == "telegram":
+        return definition.value in {"both", "chat", "telegram"}
+    if normalized_surface == "discord":
+        return definition.value in {"both", "chat", "discord"}
+    raise ValueError(f"Unsupported update surface: {surface}")
+
+
 def _update_status_path() -> Path:
     return resolve_update_paths().status_path
 
