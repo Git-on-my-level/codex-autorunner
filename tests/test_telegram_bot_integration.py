@@ -1355,6 +1355,32 @@ async def test_resume_paginates_thread_list(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_update_with_explicit_target_prompts_for_confirmation_when_turn_active(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    message = build_message("/update both", message_id=20)
+    captured: dict[str, object] = {}
+
+    async def _fake_prompt_update_confirmation(
+        msg: TelegramMessage, *, update_target: Optional[str] = None
+    ) -> None:
+        captured["message_id"] = msg.message_id
+        captured["update_target"] = update_target
+
+    service._turn_contexts[("thread-1", "turn-1")] = object()  # type: ignore[assignment]
+    service._prompt_update_confirmation = _fake_prompt_update_confirmation  # type: ignore[assignment]
+
+    try:
+        await service._handle_update(message, "both", None)
+    finally:
+        await service._app_server_supervisor.close_all()
+
+    assert captured == {"message_id": 20, "update_target": "both"}
+
+
+@pytest.mark.anyio
 async def test_outbox_lock_rebinds_across_event_loops(tmp_path: Path) -> None:
     config = make_config(tmp_path, fixture_command("basic"))
     service = build_service_in_closed_loop(tmp_path, config)

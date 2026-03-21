@@ -4760,6 +4760,86 @@ async def test_car_update_starts_worker_with_explicit_target(
 
 
 @pytest.mark.anyio
+async def test_car_update_prompts_for_confirmation_when_sessions_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "both"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    service._active_update_session_count = lambda: 1  # type: ignore[method-assign]
+    spawned = False
+
+    def _fake_spawn_update_process(**_kwargs: Any) -> None:
+        nonlocal spawned
+        spawned = True
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    try:
+        await service.run_forever()
+        assert spawned is False
+        assert len(rest.interaction_responses) == 1
+        data = rest.interaction_responses[0]["payload"]["data"]
+        assert "active codex session" in data["content"].lower()
+        components = data.get("components") or []
+        assert components
+        buttons = components[0]["components"]
+        assert buttons[0]["custom_id"] == "update_confirm:both"
+        assert buttons[1]["custom_id"] == "update_cancel:both"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_interaction_update_cancel_reports_cancelled(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_component_interaction(custom_id="update_cancel:both", values=["both"])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "update cancelled" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_run_forever_sends_pending_update_notice(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

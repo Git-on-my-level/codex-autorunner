@@ -77,6 +77,7 @@ from ...core.ticket_flow_summary import build_ticket_flow_display
 from ...core.update import (
     UpdateInProgressError,
     _available_update_target_definitions,
+    _format_update_confirmation_warning,
     _normalize_update_ref,
     _normalize_update_target,
     _read_update_status,
@@ -295,6 +296,8 @@ MODEL_SEARCH_FETCH_LIMIT = 200
 SESSION_RESUME_SELECT_ID = "session_resume_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 UPDATE_TARGET_SELECT_ID = "update_target_select"
+UPDATE_CONFIRM_PREFIX = "update_confirm"
+UPDATE_CANCEL_PREFIX = "update_cancel"
 REVIEW_COMMIT_SELECT_ID = "review_commit_select"
 MODEL_EFFORT_SELECT_ID = "model_effort_select"
 BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
@@ -6324,6 +6327,7 @@ class DiscordBotService:
         options: dict[str, Any],
     ) -> None:
         raw_target = options.get("target")
+        confirmed = bool(options.get("confirmed"))
         if not isinstance(raw_target, str) or not raw_target.strip():
             await self._respond_with_components(
                 interaction_id,
@@ -6361,6 +6365,21 @@ class DiscordBotService:
                 ],
             )
             return
+        if not confirmed:
+            warning = _format_update_confirmation_warning(
+                active_count=self._active_update_session_count(),
+                singular_label="Codex session",
+            )
+            if warning:
+                await self._respond_with_components(
+                    interaction_id,
+                    interaction_token,
+                    format_discord_message(warning),
+                    self._build_update_confirmation_components(
+                        update_target=update_target
+                    ),
+                )
+                return
 
         repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
         if not repo_url:
@@ -6440,6 +6459,37 @@ class DiscordBotService:
             text,
         )
         self._update_status_notifier.schedule_watch({"chat_id": channel_id})
+
+    def _active_update_session_count(self) -> int:
+        try:
+            threads = self._discord_thread_service().list_thread_targets(
+                lifecycle_status="active"
+            )
+        except Exception:
+            return 0
+        return sum(
+            1
+            for thread in threads
+            if str(getattr(thread, "status", "") or "").strip().lower() == "running"
+        )
+
+    def _build_update_confirmation_components(
+        self,
+        *,
+        update_target: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            build_action_row(
+                [
+                    build_button(
+                        "Update anyway",
+                        f"{UPDATE_CONFIRM_PREFIX}:{update_target}",
+                        style=DISCORD_BUTTON_STYLE_DANGER,
+                    ),
+                    build_button("Cancel", f"{UPDATE_CANCEL_PREFIX}:{update_target}"),
+                ]
+            )
+        ]
 
     def _update_status_path(self) -> Path:
         return resolve_update_paths().status_path
@@ -10089,6 +10139,31 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     options={"target": values[0]},
+                )
+                return
+
+            if custom_id.startswith(f"{UPDATE_CONFIRM_PREFIX}:"):
+                raw_target = custom_id.split(":", 1)[1].strip()
+                if not raw_target:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select an update target and try again.",
+                    )
+                    return
+                await self._handle_car_update(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"target": raw_target, "confirmed": True},
+                )
+                return
+
+            if custom_id.startswith(f"{UPDATE_CANCEL_PREFIX}:"):
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Update cancelled.",
                 )
                 return
 
