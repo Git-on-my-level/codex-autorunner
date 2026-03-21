@@ -786,6 +786,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 or str(exc).strip()
                 or "Runtime thread execution failed"
             )
+            log_event(
+                logger,
+                logging.WARNING,
+                "orchestration.thread.start_failed",
+                exc=exc,
+                thread_target_id=thread.thread_target_id,
+                execution_id=execution.execution_id,
+                backend_thread_id=thread.backend_thread_id,
+                request_kind=request.kind,
+                reported_error=detail,
+            )
             try:
                 return self.thread_store.record_execution_result(
                     thread.thread_target_id,

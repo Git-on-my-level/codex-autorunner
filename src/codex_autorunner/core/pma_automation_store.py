@@ -358,6 +358,7 @@ class PmaAutomationStore:
         self._hub_root = hub_root
         self._persistence = PmaAutomationPersistence(hub_root)
         self._path = self._persistence.path
+        self._legacy_automation_backfill_complete = False
 
     @property
     def path(self) -> Path:
@@ -370,9 +371,16 @@ class PmaAutomationStore:
         with file_lock(self._lock_path()):
             return self._load_unlocked() or default_pma_automation_state()
 
-    def _load_unlocked(self) -> Optional[dict[str, Any]]:
+    def _migrate_legacy_if_needed(self) -> None:
+        if self._legacy_automation_backfill_complete:
+            return
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             backfill_legacy_automation_state(self._hub_root, conn)
+        self._legacy_automation_backfill_complete = True
+
+    def _load_unlocked(self) -> Optional[dict[str, Any]]:
+        self._migrate_legacy_if_needed()
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             subscriptions = self._load_subscriptions_from_sqlite(conn)
             timers = self._load_timers_from_sqlite(conn)
             wakeups = self._load_wakeups_from_sqlite(conn)
@@ -417,12 +425,12 @@ class PmaAutomationStore:
         timers: list[PmaAutomationTimer],
         wakeups: list[PmaAutomationWakeup],
     ) -> None:
+        self._migrate_legacy_if_needed()
         state["updated_at"] = _iso_now()
         state["subscriptions"] = [entry.to_dict() for entry in subscriptions]
         state["timers"] = [entry.to_dict() for entry in timers]
         state["wakeups"] = [entry.to_dict() for entry in wakeups]
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            backfill_legacy_automation_state(self._hub_root, conn)
             with conn:
                 conn.execute("DELETE FROM orch_automation_wakeups")
                 conn.execute("DELETE FROM orch_automation_timers")

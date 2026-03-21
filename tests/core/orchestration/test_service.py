@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -818,6 +820,7 @@ async def test_send_review_rejects_when_harness_lacks_review_capability(
 
 async def test_send_message_records_failed_execution_when_runtime_setup_fails(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     harness = _FakeHarness(ensure_ready_error=FileNotFoundError("codex"))
     service = _build_service(tmp_path, harness)
@@ -825,22 +828,42 @@ async def test_send_message_records_failed_execution_when_runtime_setup_fails(
     workspace_root.mkdir()
     thread = service.create_thread_target("codex", workspace_root)
 
-    execution = await service.send_message(
-        MessageRequest(
-            target_id=thread.thread_target_id,
-            target_kind="thread",
-            message_text="Need an answer",
-            metadata={"execution_error_message": "Managed thread execution failed"},
+    with caplog.at_level(
+        logging.WARNING,
+        logger="codex_autorunner.core.orchestration.service",
+    ):
+        execution = await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="Need an answer",
+                metadata={"execution_error_message": "Managed thread execution failed"},
+            )
         )
-    )
 
     running = service.get_running_execution(thread.thread_target_id)
+    payloads = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "codex_autorunner.core.orchestration.service"
+    ]
+    failure_event = next(
+        payload
+        for payload in payloads
+        if payload.get("event") == "orchestration.thread.start_failed"
+    )
 
     assert harness.ensure_ready_calls == [workspace_root]
     assert harness.new_conversation_calls == []
     assert execution.status == "error"
     assert execution.error == "Managed thread execution failed"
     assert running is None
+    assert failure_event["thread_target_id"] == thread.thread_target_id
+    assert failure_event["execution_id"] == execution.execution_id
+    assert failure_event["request_kind"] == "message"
+    assert failure_event["error"] == "codex"
+    assert failure_event["error_type"] == "FileNotFoundError"
+    assert failure_event["reported_error"] == "Managed thread execution failed"
 
 
 async def test_interrupt_thread_rejects_when_harness_lacks_interrupt_capability(

@@ -42,6 +42,40 @@ def test_subscription_idempotent_dedupe_and_lifecycle_matching(tmp_path) -> None
     assert matches[0]["subscription_id"] == first.subscription_id
 
 
+def test_legacy_backfill_runs_once_per_store_instance(tmp_path, monkeypatch) -> None:
+    call_count = 0
+
+    def _fake_backfill(*args, **kwargs):
+        nonlocal call_count
+        _ = args, kwargs
+        call_count += 1
+        return {"subscriptions": 0, "timers": 0, "wakeups": 0}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_automation_store.backfill_legacy_automation_state",
+        _fake_backfill,
+    )
+
+    store = PmaAutomationStore(tmp_path)
+
+    state = store.load()
+    created, deduped = store.upsert_subscription(
+        event_types=["flow_failed"],
+        thread_id="thread-1",
+        idempotency_key="sub-key-1",
+    )
+    matches = store.match_lifecycle_subscriptions(
+        event_type="flow_failed",
+        thread_id="thread-1",
+    )
+
+    assert state["subscriptions"] == []
+    assert deduped is False
+    assert created.thread_id == "thread-1"
+    assert len(matches) == 1
+    assert call_count == 1
+
+
 def test_due_timers_fire_once(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path)
 
