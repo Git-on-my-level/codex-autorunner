@@ -17,6 +17,10 @@ if TYPE_CHECKING:
     from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...core.filebox_retention import (
+    prune_filebox_root,
+    resolve_filebox_retention_policy,
+)
 from ...core.flows.models import FlowRunRecord
 from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_seq
 from ...core.hub import HubSupervisor
@@ -534,6 +538,32 @@ class TelegramBotService(
             try:
                 roots = await self._housekeeping_roots()
                 if roots:
+                    try:
+                        policy = resolve_filebox_retention_policy(self._hub_config.pma)
+                        for root in roots:
+                            summary = await asyncio.to_thread(
+                                prune_filebox_root,
+                                root,
+                                policy=policy,
+                            )
+                            if summary.inbox_pruned or summary.outbox_pruned:
+                                log_event(
+                                    self._logger,
+                                    logging.INFO,
+                                    "telegram.filebox.cleanup",
+                                    root=str(root),
+                                    inbox_pruned=summary.inbox_pruned,
+                                    outbox_pruned=summary.outbox_pruned,
+                                    bytes_before=summary.bytes_before,
+                                    bytes_after=summary.bytes_after,
+                                )
+                    except Exception as exc:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.filebox.cleanup_failed",
+                            exc=exc,
+                        )
                     await asyncio.to_thread(
                         run_housekeeping_for_roots,
                         config,

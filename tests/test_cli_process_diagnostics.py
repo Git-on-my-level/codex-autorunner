@@ -18,6 +18,10 @@ from codex_autorunner.core.diagnostics.process_snapshot import (
     ProcessInfo,
     ProcessSnapshot,
 )
+from codex_autorunner.core.filebox_retention import (
+    FileBoxPruneSummary,
+    FileBoxRetentionPolicy,
+)
 from codex_autorunner.core.force_attestation import (
     FORCE_ATTESTATION_REQUIRED_ERROR,
     FORCE_ATTESTATION_REQUIRED_PHRASE,
@@ -221,6 +225,69 @@ def test_cleanup_archives_uses_repo_retention_policy(monkeypatch, repo: Path) ->
     assert captured["runs_dry_run"] is True
     assert "Dry run: worktrees:" in result.stdout
     assert "runs:" in result.stdout
+
+
+def test_cleanup_filebox_uses_repo_retention_policy(monkeypatch, repo: Path) -> None:
+    captured: dict[str, object] = {}
+    cleanup_app = typer.Typer()
+    cleanup_cmd.register_cleanup_commands(
+        cleanup_app,
+        require_repo_config=lambda _repo, _hub: types.SimpleNamespace(
+            repo_root=repo,
+            config=types.SimpleNamespace(
+                pma=types.SimpleNamespace(
+                    filebox_inbox_max_age_days=7,
+                    filebox_outbox_max_age_days=7,
+                )
+            ),
+        ),
+    )
+
+    def _fake_prune_filebox(
+        path: Path, *, policy, scope="both", dry_run=False, now=None
+    ):
+        captured["path"] = path
+        captured["policy"] = policy
+        captured["scope"] = scope
+        captured["dry_run"] = dry_run
+        captured["now"] = now
+        return FileBoxPruneSummary(
+            inbox_kept=4,
+            inbox_pruned=1,
+            outbox_kept=8,
+            outbox_pruned=2,
+            bytes_before=300,
+            bytes_after=90,
+            pruned_paths=(),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_filebox_root",
+        _fake_prune_filebox,
+    )
+
+    result = runner.invoke(
+        cleanup_app,
+        [
+            "filebox",
+            "--repo",
+            str(repo),
+            "--scope",
+            "outbox",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["path"] == repo
+    assert captured["policy"] == FileBoxRetentionPolicy(
+        inbox_max_age_days=7,
+        outbox_max_age_days=7,
+    )
+    assert captured["scope"] == "outbox"
+    assert captured["dry_run"] is True
+    assert "Dry run: inbox: kept=4 pruned=1" in result.stdout
+    assert "outbox: kept=8 pruned=2" in result.stdout
 
 
 def test_doctor_processes_skips_opencode_lifecycle_when_repo_config_missing(

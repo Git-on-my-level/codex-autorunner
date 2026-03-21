@@ -718,6 +718,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         ],
         "reactive_debounce_seconds": 300,
         "reactive_origin_blocklist": ["pma"],
+        "filebox_inbox_max_age_days": 7,
+        "filebox_outbox_max_age_days": 7,
         # Worktree cleanup policies
         "cleanup_require_archive": True,
         "cleanup_auto_delete_orphans": False,
@@ -904,6 +906,8 @@ class PmaConfig:
     reactive_event_types: List[str] = dataclasses.field(default_factory=list)
     reactive_debounce_seconds: int = 300
     reactive_origin_blocklist: List[str] = dataclasses.field(default_factory=list)
+    filebox_inbox_max_age_days: int = 7
+    filebox_outbox_max_age_days: int = 7
     # Worktree cleanup policies
     cleanup_require_archive: bool = True
     cleanup_auto_delete_orphans: bool = False
@@ -1989,6 +1993,10 @@ def _parse_pma_config(
             value = fallback
         return max(0, value)
 
+    filebox_inbox_max_age_days = _parse_nonnegative_int("filebox_inbox_max_age_days", 7)
+    filebox_outbox_max_age_days = _parse_nonnegative_int(
+        "filebox_outbox_max_age_days", 7
+    )
     worktree_archive_max_snapshots_per_repo = _parse_nonnegative_int(
         "worktree_archive_max_snapshots_per_repo", 10
     )
@@ -2022,6 +2030,8 @@ def _parse_pma_config(
         reactive_event_types=reactive_event_types,
         reactive_debounce_seconds=reactive_debounce_seconds,
         reactive_origin_blocklist=reactive_origin_blocklist,
+        filebox_inbox_max_age_days=filebox_inbox_max_age_days,
+        filebox_outbox_max_age_days=filebox_outbox_max_age_days,
         cleanup_require_archive=cleanup_require_archive,
         cleanup_auto_delete_orphans=cleanup_auto_delete_orphans,
         worktree_archive_profile=worktree_archive_profile,

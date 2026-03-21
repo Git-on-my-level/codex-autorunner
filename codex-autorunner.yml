@@ -240,6 +240,10 @@ pma:
   context_log_tail_lines: 120
   # Max upload size for PMA filebox (bytes).
   max_upload_bytes: 10000000
+  # Auto-delete inbox files older than this many days.
+  filebox_inbox_max_age_days: 7
+  # Auto-delete outbox, outbox/pending, and outbox/sent files older than this many days.
+  filebox_outbox_max_age_days: 7
   # Enable PMA dispatch interception (auto-resolve trivial dispatches before user notification).
   # When enabled, PMA intercepts dispatches and auto-resolves matching ones.
   dispatch_interception_enabled: false

@@ -201,6 +201,8 @@
     "default_agent": "codex",
     "docs_max_chars": 12000,
     "enabled": true,
+    "filebox_inbox_max_age_days": 7,
+    "filebox_outbox_max_age_days": 7,
     "freshness_stale_threshold_seconds": 1800,
     "max_messages": 10,
     "max_repos": 25,

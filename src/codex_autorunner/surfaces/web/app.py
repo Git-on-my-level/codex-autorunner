@@ -10,6 +10,10 @@ from fastapi.responses import HTMLResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
+from ...core.filebox_retention import (
+    prune_filebox_root,
+    resolve_filebox_retention_policy,
+)
 from ...core.logging_utils import safe_log
 from ...core.managed_processes import reap_managed_processes
 from ...housekeeping import reap_managed_docker_containers, run_housekeeping_once
@@ -136,6 +140,32 @@ def create_hub_app(
             async def _housekeeping_loop():
                 while True:
                     try:
+                        try:
+                            filebox_summary = await asyncio.to_thread(
+                                prune_filebox_root,
+                                app.state.config.root,
+                                policy=resolve_filebox_retention_policy(
+                                    app.state.config.pma
+                                ),
+                            )
+                            if (
+                                filebox_summary.inbox_pruned
+                                or filebox_summary.outbox_pruned
+                            ):
+                                app.state.logger.info(
+                                    "FileBox cleanup: inbox_pruned=%s outbox_pruned=%s bytes_before=%s bytes_after=%s",
+                                    filebox_summary.inbox_pruned,
+                                    filebox_summary.outbox_pruned,
+                                    filebox_summary.bytes_before,
+                                    filebox_summary.bytes_after,
+                                )
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "FileBox cleanup task failed",
+                                exc,
+                            )
                         await asyncio.to_thread(
                             run_housekeeping_once,
                             app.state.config.housekeeping,

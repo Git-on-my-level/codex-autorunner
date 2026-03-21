@@ -11,6 +11,10 @@ from ....core.archive_retention import (
     resolve_run_archive_retention_policy,
     resolve_worktree_archive_retention_policy,
 )
+from ....core.filebox_retention import (
+    prune_filebox_root,
+    resolve_filebox_retention_policy,
+)
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from ....core.managed_processes import reap_managed_processes
 from ....core.report_retention import (
@@ -150,3 +154,40 @@ def register_cleanup_commands(
             )
         prefix = "Dry run: " if dry_run else ""
         typer.echo(prefix + " | ".join(outputs))
+
+    @cleanup_app.command("filebox")
+    def cleanup_filebox(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        scope: str = typer.Option(
+            "both",
+            "--scope",
+            help="FileBox scope to prune: inbox, outbox, or both.",
+        ),
+        dry_run: bool = typer.Option(
+            False, "--dry-run", help="Preview FileBox pruning without deleting files."
+        ),
+    ) -> None:
+        """Prune stale FileBox files under .codex-autorunner/filebox."""
+        engine = require_repo_config(repo, hub)
+        scope_value = scope.strip().lower()
+        if scope_value not in {"inbox", "outbox", "both"}:
+            raise typer.BadParameter("scope must be one of: inbox, outbox, both")
+        summary = prune_filebox_root(
+            engine.repo_root,
+            policy=resolve_filebox_retention_policy(engine.config.pma),
+            scope=scope_value,
+            dry_run=dry_run,
+        )
+        prefix = "Dry run: " if dry_run else ""
+        typer.echo(
+            prefix
+            + " | ".join(
+                [
+                    f"inbox: kept={summary.inbox_kept} pruned={summary.inbox_pruned}",
+                    f"outbox: kept={summary.outbox_kept} pruned={summary.outbox_pruned}",
+                    f"bytes_before={summary.bytes_before}",
+                    f"bytes_after={summary.bytes_after}",
+                ]
+            )
+        )

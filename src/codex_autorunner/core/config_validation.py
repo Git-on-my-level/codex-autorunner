@@ -1050,6 +1050,8 @@ def _validate_pma_config(cfg: Dict[str, Any]) -> None:
     if isinstance(profile, str) and profile.strip().lower() not in {"portable", "full"}:
         raise ConfigError("pma.worktree_archive_profile must be 'portable' or 'full'")
     for key in (
+        "filebox_inbox_max_age_days",
+        "filebox_outbox_max_age_days",
         "worktree_archive_max_snapshots_per_repo",
         "worktree_archive_max_age_days",
         "worktree_archive_max_total_bytes",
