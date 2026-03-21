@@ -33,6 +33,7 @@ from codex_autorunner.integrations.telegram.adapter import (
     TelegramPhotoSize,
     TelegramVoice,
 )
+from codex_autorunner.integrations.telegram.config import TelegramBotDefaults
 from codex_autorunner.integrations.telegram.handlers import (
     messages as telegram_messages_module,
 )
@@ -292,6 +293,143 @@ async def test_pma_prompt_routing_preserves_native_input_items(tmp_path: Path) -
     assert isinstance(result, _TurnRunResult)
     captured = handler._captured.get("input_items")
     assert captured == input_items
+
+
+@pytest.mark.anyio
+async def test_pma_managed_thread_turn_forwards_yolo_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(pma_enabled=True, workspace_path=None, agent="codex")
+    handler = _ExecutionStub(record, tmp_path)
+    handler._config = SimpleNamespace(
+        root=tmp_path,
+        defaults=TelegramBotDefaults(
+            approval_mode="yolo",
+            approval_policy="on-request",
+            sandbox_policy="workspaceWrite",
+            yolo_approval_policy="never",
+            yolo_sandbox_policy="dangerFullAccess",
+        ),
+        agent_turn_timeout_seconds={"codex": None, "opencode": None},
+    )
+    handler._spawn_task = lambda coro: None
+    handler._effective_policies = (
+        lambda current_record: WorkspaceCommands._effective_policies(
+            handler, current_record
+        )
+    )
+    captured: dict[str, Any] = {}
+
+    async def _fake_run(_handlers: Any, **kwargs: Any) -> _TurnRunResult:
+        captured["approval_policy"] = kwargs["approval_policy"]
+        captured["sandbox_policy"] = kwargs["sandbox_policy"]
+        return _TurnRunResult(
+            record=kwargs["record"],
+            thread_id="managed-thread-1",
+            turn_id="managed-turn-1",
+            response="ok",
+            placeholder_id=None,
+            elapsed_seconds=0.0,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+        )
+
+    monkeypatch.setattr(
+        execution_commands_module, "_run_telegram_managed_thread_turn", _fake_run
+    )
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=123,
+        thread_id=456,
+        from_user_id=789,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    result = await handler._run_turn_and_collect_result(
+        message,
+        runtime=SimpleNamespace(),
+        text_override=None,
+        send_placeholder=False,
+    )
+
+    assert isinstance(result, _TurnRunResult)
+    assert captured["approval_policy"] == "never"
+    assert captured["sandbox_policy"] == "dangerFullAccess"
+
+
+@pytest.mark.anyio
+async def test_pma_managed_thread_turn_forwards_non_yolo_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        agent="codex",
+        approval_mode="read-only",
+    )
+    handler = _ExecutionStub(record, tmp_path)
+    handler._config = SimpleNamespace(
+        root=tmp_path,
+        defaults=TelegramBotDefaults(
+            approval_mode="yolo",
+            approval_policy="on-request",
+            sandbox_policy="workspaceWrite",
+            yolo_approval_policy="never",
+            yolo_sandbox_policy="dangerFullAccess",
+        ),
+        agent_turn_timeout_seconds={"codex": None, "opencode": None},
+    )
+    handler._spawn_task = lambda coro: None
+    handler._effective_policies = (
+        lambda current_record: WorkspaceCommands._effective_policies(
+            handler, current_record
+        )
+    )
+    captured: dict[str, Any] = {}
+
+    async def _fake_run(_handlers: Any, **kwargs: Any) -> _TurnRunResult:
+        captured["approval_policy"] = kwargs["approval_policy"]
+        captured["sandbox_policy"] = kwargs["sandbox_policy"]
+        return _TurnRunResult(
+            record=kwargs["record"],
+            thread_id="managed-thread-1",
+            turn_id="managed-turn-1",
+            response="ok",
+            placeholder_id=None,
+            elapsed_seconds=0.0,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+        )
+
+    monkeypatch.setattr(
+        execution_commands_module, "_run_telegram_managed_thread_turn", _fake_run
+    )
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=123,
+        thread_id=456,
+        from_user_id=789,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    result = await handler._run_turn_and_collect_result(
+        message,
+        runtime=SimpleNamespace(),
+        text_override=None,
+        send_placeholder=False,
+    )
+
+    assert isinstance(result, _TurnRunResult)
+    assert captured["approval_policy"] == "on-request"
+    assert captured["sandbox_policy"] == "readOnly"
 
 
 @pytest.mark.anyio

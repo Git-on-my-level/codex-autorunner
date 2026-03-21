@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from ...core.car_context import CarContextProfile
+from ...integrations.chat.approval_modes import normalize_approval_mode
 
 
 class Payload(BaseModel):
@@ -286,10 +287,24 @@ class PmaManagedThreadCreateRequest(Payload):
         default=None,
         validation_alias=AliasChoices("context_profile", "contextProfile"),
     )
+    approval_mode: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("approval_mode", "approvalMode"),
+    )
     notify_on_explicit: bool = Field(default=False, exclude=True)
     terminal_followup_explicit: bool = Field(default=False, exclude=True)
     notify_lane_explicit: bool = Field(default=False, exclude=True)
     notify_once_explicit: bool = Field(default=False, exclude=True)
+
+    @field_validator("approval_mode")
+    @classmethod
+    def _normalize_approval_mode(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = normalize_approval_mode(value)
+        if normalized is None:
+            raise ValueError("approval_mode is invalid")
+        return normalized
 
     @model_validator(mode="before")
     @classmethod
@@ -297,12 +312,6 @@ class PmaManagedThreadCreateRequest(Payload):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
-        repo_id = payload.pop("repo_id", None)
-        if repo_id is None:
-            repo_id = payload.pop("repoId", None)
-        if repo_id is not None:
-            payload.setdefault("resource_kind", "repo")
-            payload.setdefault("resource_id", repo_id)
         payload["notify_on_explicit"] = any(
             key in value for key in ("notify_on", "notifyOn")
         )

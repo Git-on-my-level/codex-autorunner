@@ -121,6 +121,7 @@ class ThreadTarget:
     last_message_preview: Optional[str] = None
     compact_seed: Optional[str] = None
     context_profile: Optional[CarContextProfile] = None
+    approval_mode: Optional[str] = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTarget":
@@ -169,6 +170,14 @@ class ThreadTarget:
                 data.get("context_profile")
                 or (
                     data.get("metadata", {}).get("context_profile")
+                    if isinstance(data.get("metadata"), dict)
+                    else None
+                )
+            ),
+            approval_mode=_normalize_optional_text(
+                data.get("approval_mode")
+                or (
+                    data.get("metadata", {}).get("approval_mode")
                     if isinstance(data.get("metadata"), dict)
                     else None
                 )

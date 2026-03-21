@@ -139,6 +139,7 @@ def test_managed_thread_message_route_uses_orchestration_service_seam(
     assert payload["status"] == "ok"
     assert payload["assistant_text"] == "assistant-output"
     assert payload["delivered_message"] == "hello from route"
+    assert captured["request"].approval_mode == "never"
     assert captured["sandbox_policy"] == "dangerFullAccess"
     assert captured["request"].context_profile == "car_ambient"
     assert "<injected context>" not in captured["request"].metadata["runtime_prompt"]
@@ -261,6 +262,113 @@ def test_managed_thread_message_route_honors_explicit_core_context_profile(
         .startswith(format_pma_discoverability_preamble(hub_root=hub_env.hub_root))
     )
     assert "<injected context>" in captured["request"].metadata["runtime_prompt"]
+
+
+def test_managed_thread_message_route_honors_explicit_approval_override(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    captured: dict[str, Any] = {}
+
+    class FakeService:
+        def get_thread_target(self, thread_target_id: str):
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                backend_thread_id="backend-thread-1",
+            )
+
+        def record_execution_result(
+            self,
+            thread_target_id: str,
+            execution_id: str,
+            *,
+            status: str,
+            assistant_text: Optional[str] = None,
+            error: Optional[str] = None,
+            backend_turn_id: Optional[str] = None,
+            transcript_turn_id: Optional[str] = None,
+        ):
+            _ = (
+                thread_target_id,
+                execution_id,
+                assistant_text,
+                error,
+                backend_turn_id,
+                transcript_turn_id,
+            )
+            return SimpleNamespace(status=status, error=None)
+
+        def get_execution(self, thread_target_id: str, execution_id: str):
+            _ = thread_target_id, execution_id
+            return None
+
+    async def _fake_begin(
+        service, request, *, client_request_id=None, sandbox_policy=None
+    ):
+        _ = service, client_request_id
+        captured["request"] = request
+        captured["sandbox_policy"] = sandbox_policy
+        return SimpleNamespace(
+            execution=SimpleNamespace(
+                execution_id="managed-turn-1",
+                backend_id="backend-turn-1",
+            ),
+            thread=SimpleNamespace(
+                backend_thread_id="backend-thread-1",
+            ),
+            workspace_root=hub_env.repo_root.resolve(),
+            request=request,
+        )
+
+    async def _fake_await(*args, **kwargs):
+        _ = args, kwargs
+        return RuntimeThreadOutcome(
+            status="ok",
+            assistant_text="assistant-output",
+            error=None,
+            backend_thread_id="backend-thread-1",
+            backend_turn_id="backend-turn-1",
+        )
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "_build_managed_thread_orchestration_service",
+        lambda request, *, thread_store=None: FakeService(),
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "begin_runtime_thread_execution",
+        _fake_begin,
+    )
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "await_runtime_thread_outcome",
+        _fake_await,
+    )
+
+    with TestClient(app) as client:
+        create_response = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+                "approval_mode": "read-only",
+            },
+        )
+        assert create_response.status_code == 200
+        managed_thread_id = create_response.json()["thread"]["managed_thread_id"]
+        response = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "hello from route"},
+        )
+
+    assert create_response.json()["thread"]["approval_mode"] == "read-only"
+    assert response.status_code == 200
+    assert captured["request"].approval_mode == "on-request"
+    assert captured["sandbox_policy"] == "readOnly"
 
 
 def test_managed_thread_message_route_injects_core_context_when_profile_is_core(

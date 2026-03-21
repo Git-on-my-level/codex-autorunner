@@ -58,6 +58,7 @@ from .....core.pma_thread_store import (
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import Completed, Failed, RunEvent
 from .....core.time_utils import now_iso
+from .....integrations.chat.approval_modes import resolve_approval_mode_policies
 from .....integrations.discord.rendering import (
     chunk_discord_message,
     format_discord_message,
@@ -114,6 +115,29 @@ def _truncate_text(value: Any, limit: int) -> str:
     if len(s) <= limit:
         return s
     return s[: limit - 3] + "..."
+
+
+def _resolve_managed_thread_policies(
+    thread: dict[str, Any],
+) -> tuple[Optional[str], Optional[Any]]:
+    metadata = thread.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return resolve_approval_mode_policies(
+        normalize_optional_text(
+            thread.get("approval_mode") or metadata.get("approval_mode")
+        ),
+        default_approval_policy="never",
+        default_sandbox_policy="dangerFullAccess",
+        override_approval_policy=normalize_optional_text(
+            thread.get("approval_policy") or metadata.get("approval_policy")
+        ),
+        override_sandbox_policy=(
+            thread.get("sandbox_policy")
+            if thread.get("sandbox_policy") is not None
+            else metadata.get("sandbox_policy")
+        ),
+    )
 
 
 def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
@@ -838,6 +862,7 @@ def build_managed_thread_runtime_routes(
                 resource_kind=thread.get("resource_kind")
             ),
         )
+        approval_policy, sandbox_policy = _resolve_managed_thread_policies(thread)
         execution_prompt = _compose_execution_prompt(
             agent=thread.get("agent"),
             hub_root=hub_root,
@@ -869,7 +894,7 @@ def build_managed_thread_runtime_routes(
                     busy_policy=busy_policy,
                     model=model,
                     reasoning=reasoning,
-                    approval_mode="on-request",
+                    approval_mode=approval_policy,
                     context_profile=context_profile,
                     metadata={
                         "runtime_prompt": execution_prompt,
@@ -878,7 +903,7 @@ def build_managed_thread_runtime_routes(
                         ),
                     },
                 ),
-                sandbox_policy="dangerFullAccess",
+                sandbox_policy=sandbox_policy,
             )
         except ManagedThreadNotActiveError as exc:
             if exc.status == "archived":

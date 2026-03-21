@@ -3680,6 +3680,7 @@ class ExecutionCommands(SharedHelpers):
             and getattr(self._config, "root", None) is not None
             and callable(getattr(self, "_spawn_task", None))
         ):
+            approval_policy, sandbox_policy = self._effective_policies(record)
             return await _run_telegram_managed_thread_turn(
                 self,
                 message=message,
@@ -3695,6 +3696,8 @@ class ExecutionCommands(SharedHelpers):
                 placeholder_id=placeholder_id,
                 allow_new_thread=allow_new_thread,
                 missing_thread_message=missing_thread_message,
+                approval_policy=approval_policy,
+                sandbox_policy=sandbox_policy,
             )
 
         if getattr(self._config, "root", None) is not None and callable(

@@ -64,6 +64,7 @@ def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     assert thread["status_reason"] == "thread_created"
     assert thread["status_terminal"] is False
     assert thread["context_profile"] == "car_ambient"
+    assert thread["approval_mode"] == "yolo"
     assert thread["managed_thread_id"]
     notification = resp.json().get("notification") or {}
     subscription = notification.get("subscription") or {}
@@ -99,6 +100,7 @@ def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     assert thread["workspace_root"] == str((hub_env.hub_root / rel_workspace).resolve())
     assert thread["name"] == "Workspace thread"
     assert thread["context_profile"] == "car_ambient"
+    assert thread["approval_mode"] == "yolo"
 
 
 def test_create_managed_thread_with_agent_workspace_owner(
@@ -136,6 +138,7 @@ def test_create_managed_thread_with_agent_workspace_owner(
     assert thread["resource_id"] == workspace.id
     assert thread["workspace_root"] == str(workspace.path.resolve())
     assert thread["context_profile"] == "none"
+    assert thread["approval_mode"] == "yolo"
 
 
 def test_create_managed_thread_accepts_explicit_context_profile(hub_env) -> None:
@@ -153,6 +156,29 @@ def test_create_managed_thread_accepts_explicit_context_profile(hub_env) -> None
 
     assert resp.status_code == 200
     assert resp.json()["thread"]["context_profile"] == "car_core"
+
+
+def test_create_managed_thread_accepts_explicit_approval_mode(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "approval_mode": "safe",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["approval_mode"] == "safe"
+
+    store = PmaThreadStore(hub_env.hub_root)
+    stored = store.get_thread(thread["managed_thread_id"])
+    assert stored is not None
+    assert stored["metadata"]["approval_mode"] == "safe"
 
 
 def test_create_managed_thread_rejects_mismatched_agent_workspace_runtime(
@@ -630,7 +656,14 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
 
     fake_supervisor = FakeSupervisor()
     app.state.app_server_supervisor = fake_supervisor
-    app.state.app_server_events = object()
+
+    class FakeEvents:
+        async def stream(self, conversation_id: str, turn_id: str):
+            _ = conversation_id, turn_id
+            if False:
+                yield ""
+
+    app.state.app_server_events = FakeEvents()
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -873,7 +906,10 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 "resource_id": hub_env.repo_id,
                 "display_name": "Orchestrated thread",
                 "backend_thread_id": "backend-thread-1",
-                "metadata": {"context_profile": "car_ambient"},
+                "metadata": {
+                    "context_profile": "car_ambient",
+                    "approval_mode": "yolo",
+                },
             },
         ),
         (
