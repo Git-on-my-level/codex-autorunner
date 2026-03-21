@@ -27,7 +27,7 @@ def test_flow_action_catalog_has_expected_order() -> None:
 
 def test_flow_action_catalog_marks_picker_actions() -> None:
     assert FLOW_ACTIONS_WITH_RUN_PICKER == frozenset(
-        {"restart", "resume", "stop", "archive", "recover", "reply"}
+        {"status", "restart", "resume", "stop", "archive", "recover", "reply"}
     )
 
 

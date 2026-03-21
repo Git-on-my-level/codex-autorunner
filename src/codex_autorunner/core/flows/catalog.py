@@ -13,7 +13,7 @@ class FlowActionSpec:
 
 
 FLOW_ACTION_SPECS: tuple[FlowActionSpec, ...] = (
-    FlowActionSpec("status", "Show flow status", "[run_id]"),
+    FlowActionSpec("status", "Show flow status", "[run_id]", requires_run_picker=True),
     FlowActionSpec("runs", "List flow runs", "[N]"),
     FlowActionSpec("issue", "Seed ISSUE.md from a GitHub issue", "<issue#|url>"),
     FlowActionSpec("plan", "Seed ISSUE.md from plan text", "<text>"),

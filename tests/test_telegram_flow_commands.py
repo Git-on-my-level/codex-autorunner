@@ -28,7 +28,7 @@ def test_normalize_flow_action_canonicalizes_bootstrap_alias() -> None:
 
 def test_flow_action_catalog_exposes_picker_and_tokens() -> None:
     assert FLOW_ACTIONS_WITH_RUN_PICKER == frozenset(
-        {"restart", "resume", "stop", "archive", "recover", "reply"}
+        {"status", "restart", "resume", "stop", "archive", "recover", "reply"}
     )
     assert "help" in FLOW_ACTION_TOKENS
     assert "bootstrap" in FLOW_ACTION_TOKENS
