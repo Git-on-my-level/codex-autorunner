@@ -2090,6 +2090,29 @@ def _stale_terminal_ticket_flow_run_reason(
     )
 
 
+def _ticket_flow_recommended_actions(
+    *,
+    state: str,
+    record_status: FlowRunStatus,
+    has_pending_dispatch: bool,
+    status_cmd: str,
+    resume_cmd: str,
+    start_cmd: str,
+    stop_cmd: str,
+) -> list[str]:
+    if state == "completed":
+        return [start_cmd]
+    if state == "dead":
+        return [f"{resume_cmd} --force", status_cmd, stop_cmd]
+    if record_status == FlowRunStatus.PAUSED:
+        if has_pending_dispatch:
+            return [resume_cmd, status_cmd, stop_cmd]
+        return [f"{resume_cmd} --force", status_cmd, stop_cmd]
+    if state == "blocked":
+        return [f"{resume_cmd} --force", status_cmd, stop_cmd]
+    return [status_cmd]
+
+
 def _resolve_paused_dispatch_state(
     *,
     repo_root: Path,
@@ -2348,20 +2371,15 @@ def build_ticket_flow_run_state(
     elif record.status == FlowRunStatus.PAUSED:
         blocking_reason = reason_summary or "Waiting for user input"
 
-    recommended_actions: list[str] = []
-    if state == "completed":
-        recommended_actions = [start_cmd]
-    elif state == "dead":
-        recommended_actions = [f"{resume_cmd} --force", status_cmd, stop_cmd]
-    elif record.status == FlowRunStatus.PAUSED:
-        if has_pending_dispatch:
-            recommended_actions = [resume_cmd, status_cmd, stop_cmd]
-        else:
-            recommended_actions = [f"{resume_cmd} --force", status_cmd, stop_cmd]
-    elif state == "blocked":
-        recommended_actions = [f"{resume_cmd} --force", status_cmd, stop_cmd]
-    else:
-        recommended_actions = [status_cmd]
+    recommended_actions = _ticket_flow_recommended_actions(
+        state=state,
+        record_status=record.status,
+        has_pending_dispatch=has_pending_dispatch,
+        status_cmd=status_cmd,
+        resume_cmd=resume_cmd,
+        start_cmd=start_cmd,
+        stop_cmd=stop_cmd,
+    )
 
     return {
         "state": state,
@@ -2433,6 +2451,20 @@ def get_latest_ticket_flow_run_state_with_record(
             "Failed to get latest ticket flow run state for repo %s: %s", repo_id, exc
         )
         return None, None
+
+
+def _ticket_flow_inbox_item_type_and_next_action(
+    *, repo_root: Path, record: FlowRunRecord
+) -> tuple[str, str]:
+    if record.status == FlowRunStatus.RUNNING:
+        health = check_worker_health(repo_root, str(record.id))
+        if health.status in {"dead", "invalid", "mismatch"}:
+            return "worker_dead", "restart_worker"
+    if record.status == FlowRunStatus.FAILED:
+        return "run_failed", "diagnose_or_restart"
+    if record.status == FlowRunStatus.STOPPED:
+        return "run_stopped", "diagnose_or_restart"
+    return "run_state_attention", "inspect_and_resume"
 
 
 def _gather_inbox(
@@ -2576,19 +2608,11 @@ def _gather_inbox(
                             }
                         )
                     else:
-                        item_type = "run_state_attention"
-                        next_action = "inspect_and_resume"
-                        if record.status == FlowRunStatus.RUNNING:
-                            health = check_worker_health(repo_root, str(record.id))
-                            if health.status in {"dead", "invalid", "mismatch"}:
-                                item_type = "worker_dead"
-                                next_action = "restart_worker"
-                        elif record.status == FlowRunStatus.FAILED:
-                            item_type = "run_failed"
-                            next_action = "diagnose_or_restart"
-                        elif record.status == FlowRunStatus.STOPPED:
-                            item_type = "run_stopped"
-                            next_action = "diagnose_or_restart"
+                        item_type, next_action = (
+                            _ticket_flow_inbox_item_type_and_next_action(
+                                repo_root=repo_root, record=record
+                            )
+                        )
                         messages.append(
                             {
                                 **base_item,
