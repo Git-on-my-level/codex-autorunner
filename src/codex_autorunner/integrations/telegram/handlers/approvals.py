@@ -73,18 +73,18 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
     async def _handle_approval_request(
         self, message: dict[str, Any]
     ) -> ApprovalDecision:
-        req_id = message.get("id")
+        req_id_value = message.get("id")
+        request_id = str(req_id_value).strip() if req_id_value is not None else ""
         params = (
             message.get("params") if isinstance(message.get("params"), dict) else {}
         )
         turn_id = _coerce_id(params.get("turnId")) if isinstance(params, dict) else None
-        if req_id is None or not turn_id:
+        if not request_id or not turn_id:
             return "cancel"
         codex_thread_id = _extract_turn_thread_id(params)
         ctx = self._resolve_turn_context(turn_id, thread_id=codex_thread_id)
         if ctx is None:
             return "cancel"
-        request_id = str(req_id)
         prompt = _format_approval_prompt(message)
         created_at = now_iso()
         approval_record = PendingApprovalRecord(

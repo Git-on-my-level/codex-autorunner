@@ -149,3 +149,25 @@ async def test_telegram_approval_request_accepts_zero_request_id() -> None:
     pending.future.set_result("accept")
 
     assert await task == "accept"
+
+
+@pytest.mark.anyio
+async def test_telegram_approval_request_rejects_blank_request_id() -> None:
+    handlers = _TelegramApprovalHarness()
+
+    decision = await handlers._handle_approval_request(
+        {
+            "id": "",
+            "method": "item/commandExecution/requestApproval",
+            "params": {
+                "turnId": "turn-1",
+                "threadId": "codex-thread-1",
+                "command": ["/bin/zsh", "-c", "pwd"],
+            },
+        }
+    )
+
+    assert decision == "cancel"
+    assert handlers._bot.calls == []
+    assert handlers._store.upserted_records == []
+    assert handlers._pending_approvals == {}
