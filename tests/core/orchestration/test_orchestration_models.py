@@ -40,7 +40,6 @@ def test_thread_target_normalizes_managed_thread_mapping() -> None:
         {
             "managed_thread_id": "mt-1",
             "agent": "codex",
-            "backend_thread_id": "backend-1",
             "repo_id": "repo-1",
             "workspace_root": "/tmp/repo",
             "name": "Backlog Thread",
@@ -50,10 +49,10 @@ def test_thread_target_normalizes_managed_thread_mapping() -> None:
 
     assert target.thread_target_id == "mt-1"
     assert target.agent_id == AgentId("codex")
-    assert target.backend_thread_id == "backend-1"
     assert target.resource_kind == "repo"
     assert target.resource_id == "repo-1"
     assert target.status == "running"
+    assert "backend_thread_id" not in target.to_dict()
 
 
 def test_binding_normalizes_surface_mapping() -> None:

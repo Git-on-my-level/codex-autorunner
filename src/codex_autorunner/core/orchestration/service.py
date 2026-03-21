@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional, cast
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..logging_utils import log_event
@@ -34,6 +34,7 @@ from .models import (
     ThreadStopOutcome,
     ThreadTarget,
 )
+from .runtime_bindings import RuntimeThreadBinding, get_runtime_thread_binding
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
 from .transcript_mirror import TranscriptMirrorStore
 
@@ -89,6 +90,24 @@ def _thread_target_from_store_row(record: Mapping[str, Any]) -> ThreadTarget:
     return ThreadTarget.from_mapping(record)
 
 
+def _thread_target_from_store_row_with_runtime_binding(
+    store: PmaThreadStore, record: Mapping[str, Any]
+) -> ThreadTarget:
+    thread_record = dict(record)
+    managed_thread_id = str(thread_record.get("managed_thread_id") or "").strip()
+    runtime_binding = (
+        store.get_thread_runtime_binding(managed_thread_id)
+        if managed_thread_id
+        else None
+    )
+    if runtime_binding is not None:
+        thread_record["backend_thread_id"] = runtime_binding.backend_thread_id
+        thread_record["backend_runtime_instance_id"] = (
+            runtime_binding.backend_runtime_instance_id
+        )
+    return ThreadTarget.from_mapping(thread_record)
+
+
 def _normalize_request_kind(value: Any) -> MessageRequestKind:
     normalized = str(value or "").strip().lower()
     if normalized == "review":
@@ -118,6 +137,20 @@ async def _resolve_harness_runtime_instance_id(
         return None
     normalized = runtime_instance_id.strip()
     return normalized or None
+
+
+def _resolve_thread_runtime_binding(
+    thread_store: ThreadExecutionStore, thread_target_id: str
+) -> Optional[RuntimeThreadBinding]:
+    getter = getattr(thread_store, "get_thread_runtime_binding", None)
+    if callable(getter):
+        binding = getter(thread_target_id)
+        if binding is not None:
+            return cast(RuntimeThreadBinding, binding)
+    hub_root = getattr(thread_store, "hub_root", None)
+    if isinstance(hub_root, Path):
+        return get_runtime_thread_binding(hub_root, thread_target_id)
+    return None
 
 
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
@@ -192,7 +225,12 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         record = self._store.get_thread(thread_target_id)
         if record is None:
             return None
-        return _thread_target_from_store_row(record)
+        return _thread_target_from_store_row_with_runtime_binding(self._store, record)
+
+    def get_thread_runtime_binding(
+        self, thread_target_id: str
+    ) -> Optional[RuntimeThreadBinding]:
+        return self._store.get_thread_runtime_binding(thread_target_id)
 
     def list_thread_targets(
         self,
@@ -206,7 +244,7 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         limit: int = 200,
     ) -> list[ThreadTarget]:
         return [
-            _thread_target_from_store_row(record)
+            _thread_target_from_store_row_with_runtime_binding(self._store, record)
             for record in self._store.list_threads(
                 agent=agent_id,
                 status=lifecycle_status,
@@ -761,12 +799,20 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             runtime_instance_id = await _resolve_harness_runtime_instance_id(
                 harness, workspace_root
             )
-            conversation_id = thread.backend_thread_id
+            runtime_binding = _resolve_thread_runtime_binding(
+                self.thread_store, thread.thread_target_id
+            )
+            conversation_id = (
+                runtime_binding.backend_thread_id
+                if runtime_binding is not None
+                else None
+            )
             if (
                 conversation_id
                 and runtime_instance_id
-                and thread.backend_runtime_instance_id
-                and thread.backend_runtime_instance_id != runtime_instance_id
+                and runtime_binding
+                and runtime_binding.backend_runtime_instance_id
+                and runtime_binding.backend_runtime_instance_id != runtime_instance_id
             ):
                 log_event(
                     logger,
@@ -774,7 +820,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                     "orchestration.thread.stale_backend_binding",
                     thread_target_id=thread.thread_target_id,
                     backend_thread_id=conversation_id,
-                    stored_runtime_instance_id=thread.backend_runtime_instance_id,
+                    stored_runtime_instance_id=runtime_binding.backend_runtime_instance_id,
                     current_runtime_instance_id=runtime_instance_id,
                     action="start_new_conversation",
                 )
@@ -825,7 +871,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                             )
                         elif (
                             runtime_instance_id
-                            and thread.backend_runtime_instance_id
+                            and runtime_binding
+                            and runtime_binding.backend_runtime_instance_id
                             != runtime_instance_id
                         ):
                             self.thread_store.set_thread_backend_id(
@@ -906,6 +953,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 or str(exc).strip()
                 or "Runtime thread execution failed"
             )
+            runtime_binding = _resolve_thread_runtime_binding(
+                self.thread_store, thread.thread_target_id
+            )
             log_event(
                 logger,
                 logging.WARNING,
@@ -913,7 +963,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 exc=exc,
                 thread_target_id=thread.thread_target_id,
                 execution_id=execution.execution_id,
-                backend_thread_id=thread.backend_thread_id,
+                backend_thread_id=(
+                    runtime_binding.backend_thread_id if runtime_binding else None
+                ),
                 request_kind=request.kind,
                 fresh_conversation_retry_attempted=fresh_conversation_retry_attempted,
                 reported_error=detail,
@@ -971,6 +1023,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             raise KeyError(f"Unknown thread target '{request.target_id}'")
         if not thread.workspace_root:
             raise RuntimeError("Thread target is missing workspace_root")
+        runtime_binding = _resolve_thread_runtime_binding(
+            self.thread_store, thread.thread_target_id
+        )
 
         definition = self.get_agent_definition(thread.agent_id)
         if definition is None:
@@ -988,9 +1043,6 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 await self.stop_thread(thread.thread_target_id)
             except Exception as exc:
                 current_running = self.get_running_execution(thread.thread_target_id)
-                current_thread = (
-                    self.get_thread_target(thread.thread_target_id) or thread
-                )
                 raise BusyInterruptFailedError(
                     thread_target_id=thread.thread_target_id,
                     active_execution_id=(
@@ -998,17 +1050,18 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                         if current_running is not None
                         else running.execution_id
                     ),
-                    backend_thread_id=current_thread.backend_thread_id,
+                    backend_thread_id=(
+                        runtime_binding.backend_thread_id if runtime_binding else None
+                    ),
                 ) from exc
             current_running = self.get_running_execution(thread.thread_target_id)
             if current_running is not None:
-                current_thread = (
-                    self.get_thread_target(thread.thread_target_id) or thread
-                )
                 raise BusyInterruptFailedError(
                     thread_target_id=thread.thread_target_id,
                     active_execution_id=current_running.execution_id,
-                    backend_thread_id=current_thread.backend_thread_id,
+                    backend_thread_id=(
+                        runtime_binding.backend_thread_id if runtime_binding else None
+                    ),
                 )
             thread = self.get_thread_target(thread.thread_target_id) or thread
 
@@ -1086,13 +1139,16 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
         if not thread.workspace_root:
             raise RuntimeError("Thread target is missing workspace_root")
+        runtime_binding = _resolve_thread_runtime_binding(
+            self.thread_store, thread_target_id
+        )
 
         execution = self.get_running_execution(thread_target_id)
         if execution is None:
             raise KeyError(
                 f"Thread target '{thread_target_id}' has no running execution"
             )
-        if not thread.backend_thread_id:
+        if runtime_binding is None or not runtime_binding.backend_thread_id:
             return self.thread_store.record_execution_interrupted(
                 thread_target_id, execution.execution_id
             )
@@ -1106,13 +1162,13 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             "orchestration.thread.interrupt_requested",
             thread_target_id=thread_target_id,
             execution_id=execution.execution_id,
-            backend_thread_id=thread.backend_thread_id,
+            backend_thread_id=runtime_binding.backend_thread_id,
             backend_turn_id=execution.backend_id,
             agent_id=thread.agent_id,
         )
         await harness.interrupt(
             Path(thread.workspace_root),
-            thread.backend_thread_id,
+            runtime_binding.backend_thread_id,
             execution.backend_id,
         )
         log_event(
@@ -1121,7 +1177,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             "orchestration.thread.interrupt_acknowledged",
             thread_target_id=thread_target_id,
             execution_id=execution.execution_id,
-            backend_thread_id=thread.backend_thread_id,
+            backend_thread_id=runtime_binding.backend_thread_id,
             backend_turn_id=execution.backend_id,
             agent_id=thread.agent_id,
         )
@@ -1134,7 +1190,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             "orchestration.thread.interrupt_recorded",
             thread_target_id=thread_target_id,
             execution_id=interrupted.execution_id,
-            backend_thread_id=thread.backend_thread_id,
+            backend_thread_id=runtime_binding.backend_thread_id,
             backend_turn_id=interrupted.backend_id,
             status=interrupted.status,
         )
@@ -1209,6 +1265,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         thread = self.get_thread_target(thread_target_id)
         if thread is None:
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
+        runtime_binding = _resolve_thread_runtime_binding(
+            self.thread_store, thread_target_id
+        )
 
         cancelled_queued = self.cancel_queued_executions(thread_target_id)
         execution = self.get_running_execution(thread_target_id)
@@ -1218,7 +1277,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 cancelled_queued=cancelled_queued,
             )
 
-        backend_thread_id = thread.backend_thread_id
+        backend_thread_id = (
+            runtime_binding.backend_thread_id if runtime_binding is not None else None
+        )
         if not backend_thread_id:
             interrupted = self._interrupt_lost_backend_execution(
                 thread_target_id=thread_target_id,
@@ -1242,8 +1303,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             )
         if (
             runtime_instance_id
-            and thread.backend_runtime_instance_id
-            and thread.backend_runtime_instance_id != runtime_instance_id
+            and runtime_binding
+            and runtime_binding.backend_runtime_instance_id
+            and runtime_binding.backend_runtime_instance_id != runtime_instance_id
         ):
             log_event(
                 logger,
@@ -1252,7 +1314,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 thread_target_id=thread_target_id,
                 execution_id=execution.execution_id,
                 backend_thread_id=backend_thread_id,
-                stored_runtime_instance_id=thread.backend_runtime_instance_id,
+                stored_runtime_instance_id=runtime_binding.backend_runtime_instance_id,
                 current_runtime_instance_id=runtime_instance_id,
             )
             interrupted = self._interrupt_lost_backend_execution(
@@ -1316,7 +1378,12 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         if execution is None:
             return None
 
-        backend_thread_id = thread.backend_thread_id
+        runtime_binding = _resolve_thread_runtime_binding(
+            self.thread_store, thread_target_id
+        )
+        backend_thread_id = (
+            runtime_binding.backend_thread_id if runtime_binding is not None else None
+        )
         return self._recover_lost_backend_execution(
             thread_target_id=thread_target_id,
             execution=execution,

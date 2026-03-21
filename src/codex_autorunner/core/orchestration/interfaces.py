@@ -131,7 +131,11 @@ class RuntimeThreadHarness(Protocol):
 
 @runtime_checkable
 class ThreadExecutionStore(Protocol):
-    """Persistence boundary for orchestration thread targets and executions."""
+    """Persistence boundary for orchestration thread targets and executions.
+
+    `backend_thread_id` / `backend_runtime_instance_id` parameters are runtime
+    binding inputs, not durable thread identity.
+    """
 
     def create_thread_target(
         self,

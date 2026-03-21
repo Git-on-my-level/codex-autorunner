@@ -42,7 +42,8 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     assert created["status_terminal"] is False
     assert created["repo_id"] == "repo-123"
     assert created["name"] == "Primary"
-    assert created["backend_thread_id"] == "backend-1"
+    assert "backend_thread_id" not in created
+    assert "backend_runtime_instance_id" not in created
 
     fetched = store.get_thread(created["managed_thread_id"])
     assert fetched is not None
@@ -80,8 +81,12 @@ def test_backend_thread_binding_is_shared_across_store_instances(
     restarted = PmaThreadStore(hub_root)
     fetched = restarted.get_thread(managed_thread_id)
     assert fetched is not None
-    assert fetched["backend_thread_id"] == "backend-1"
-    assert fetched["backend_runtime_instance_id"] == "runtime-1"
+    binding = restarted.get_thread_runtime_binding(managed_thread_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-1"
+    assert binding.backend_runtime_instance_id == "runtime-1"
+    assert "backend_thread_id" not in fetched
+    assert "backend_runtime_instance_id" not in fetched
 
 
 def test_backend_thread_binding_can_be_cleared_across_restart(tmp_path: Path) -> None:
@@ -103,14 +108,14 @@ def test_backend_thread_binding_can_be_cleared_across_restart(tmp_path: Path) ->
     restarted = PmaThreadStore(hub_root)
     fetched = restarted.get_thread(managed_thread_id)
     assert fetched is not None
-    assert fetched["backend_thread_id"] is None
-    assert fetched["backend_runtime_instance_id"] is None
+    binding = restarted.get_thread_runtime_binding(managed_thread_id)
+    assert binding is None
 
     listed = restarted.list_threads(agent="codex", status="active")
     assert len(listed) == 1
     assert listed[0]["managed_thread_id"] == managed_thread_id
-    assert listed[0]["backend_thread_id"] is None
-    assert listed[0]["backend_runtime_instance_id"] is None
+    assert "backend_thread_id" not in listed[0]
+    assert "backend_runtime_instance_id" not in listed[0]
 
     with open_sqlite(restarted.path) as conn:
         row = conn.execute(
@@ -185,8 +190,12 @@ def test_set_thread_backend_id_preserves_runtime_tag_when_omitted(
 
     updated = store.get_thread(thread["managed_thread_id"])
     assert updated is not None
-    assert updated["backend_thread_id"] == "backend-2"
-    assert updated["backend_runtime_instance_id"] == "runtime-1"
+    binding = store.get_thread_runtime_binding(thread["managed_thread_id"])
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-2"
+    assert binding.backend_runtime_instance_id == "runtime-1"
+    assert "backend_thread_id" not in updated
+    assert "backend_runtime_instance_id" not in updated
 
 
 def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:
@@ -503,7 +512,9 @@ def test_set_compact_seed_and_reset_backend_id(tmp_path: Path) -> None:
     updated = store.get_thread(thread["managed_thread_id"])
     assert updated is not None
     assert updated["compact_seed"] == "compact-seed"
-    assert updated["backend_thread_id"] is None
+    assert "backend_thread_id" not in updated
+    assert "backend_runtime_instance_id" not in updated
+    assert store.get_thread_runtime_binding(thread["managed_thread_id"]) is None
 
 
 def test_transient_failure_recovery_promotes_status_back_to_completed(

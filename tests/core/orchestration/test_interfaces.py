@@ -438,7 +438,6 @@ def test_runtime_protocols_match_orchestration_contract() -> None:
     thread = ThreadTarget(
         thread_target_id="thread-1",
         agent_id="codex",
-        backend_thread_id="backend-1",
         workspace_root="/tmp/workspace",
         status="running",
     )

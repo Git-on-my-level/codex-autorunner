@@ -101,7 +101,7 @@ class NativeTargetDefinition:
 
 @dataclass(frozen=True)
 class ThreadTarget:
-    """Orchestration-visible durable runtime thread/session."""
+    """Orchestration-visible durable managed thread."""
 
     thread_target_id: str
     agent_id: str
@@ -183,7 +183,10 @@ class ThreadTarget:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload.pop("backend_thread_id", None)
+        payload.pop("backend_runtime_instance_id", None)
+        return payload
 
 
 @dataclass(frozen=True)

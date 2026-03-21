@@ -17,6 +17,7 @@ from .managed_thread_status import (
 from .orchestration.migrate_legacy_state import backfill_legacy_thread_state
 from .orchestration.models import normalize_resource_owner_fields
 from .orchestration.runtime_bindings import (
+    RuntimeThreadBinding,
     clear_runtime_thread_binding,
     get_runtime_thread_binding,
     set_runtime_thread_binding,
@@ -408,10 +409,6 @@ class PmaThreadStore:
             if "metadata_json" in row.keys()
             else {}
         )
-        runtime_binding = get_runtime_thread_binding(
-            self._hub_root,
-            str(row["thread_target_id"]),
-        )
         resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
             resource_kind=row["resource_kind"],
             resource_id=row["resource_id"],
@@ -425,16 +422,6 @@ class PmaThreadStore:
             "resource_id": resource_id,
             "workspace_root": row["workspace_root"],
             "name": row["display_name"],
-            "backend_thread_id": (
-                runtime_binding.backend_thread_id
-                if runtime_binding is not None
-                else None
-            ),
-            "backend_runtime_instance_id": (
-                runtime_binding.backend_runtime_instance_id
-                if runtime_binding is not None
-                else None
-            ),
             "status": row["lifecycle_status"] or "active",
             "normalized_status": row["runtime_status"] or "idle",
             "status_reason_code": row["status_reason"],
@@ -449,6 +436,11 @@ class PmaThreadStore:
             "updated_at": row["updated_at"],
         }
         return _normalize_thread_record(record)
+
+    def get_thread_runtime_binding(
+        self, managed_thread_id: str
+    ) -> Optional[RuntimeThreadBinding]:
+        return get_runtime_thread_binding(self._hub_root, managed_thread_id)
 
     @staticmethod
     def _execution_row_to_record(row: Any) -> dict[str, Any]:
@@ -1691,6 +1683,9 @@ class PmaThreadStore:
                 legacy_conn.execute("DELETE FROM pma_managed_threads")
                 for row in thread_rows:
                     legacy = self._thread_row_to_record(row)
+                    runtime_binding = get_runtime_thread_binding(
+                        self._hub_root, legacy["managed_thread_id"]
+                    )
                     legacy_conn.execute(
                         """
                         INSERT INTO pma_managed_threads (
@@ -1724,7 +1719,11 @@ class PmaThreadStore:
                             legacy["resource_id"],
                             legacy["workspace_root"],
                             legacy["name"],
-                            legacy["backend_thread_id"],
+                            (
+                                runtime_binding.backend_thread_id
+                                if runtime_binding is not None
+                                else None
+                            ),
                             legacy["status"],
                             legacy["normalized_status"],
                             legacy["status_reason_code"],

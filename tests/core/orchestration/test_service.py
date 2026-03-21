@@ -206,6 +206,12 @@ def _build_service(
     )
 
 
+def _thread_runtime_binding(
+    service: HarnessBackedOrchestrationService, thread_target_id: str
+):
+    return service.thread_store.get_thread_runtime_binding(thread_target_id)
+
+
 def test_service_lists_definitions_and_resolves_thread_targets(tmp_path: Path) -> None:
     harness = _FakeHarness()
     service = _build_service(tmp_path, harness)
@@ -374,7 +380,9 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
     assert execution.status == "running"
     assert execution.backend_id == "backend-turn-1"
     assert refreshed_thread is not None
-    assert refreshed_thread.backend_thread_id == "backend-conversation-1"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
     assert refreshed_thread.last_execution_id == execution.execution_id
     assert refreshed_thread.last_message_preview == "Ship it"
     assert running is not None
@@ -407,6 +415,9 @@ async def test_send_review_resumes_existing_backend_thread(tmp_path: Path) -> No
     assert harness.start_review_calls[0]["conversation_id"] == "backend-existing-1"
     assert execution.request_kind == "review"
     assert execution.backend_id == "review-turn-1"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-existing-1"
 
     persisted = service.get_execution(thread.thread_target_id, execution.execution_id)
     assert persisted is not None
@@ -441,7 +452,9 @@ async def test_send_message_persists_canonical_resumed_conversation_id(
     assert harness.start_turn_calls[0]["conversation_id"] == "backend-canonical-2"
     assert execution.backend_id == "backend-turn-1"
     assert refreshed_thread is not None
-    assert refreshed_thread.backend_thread_id == "backend-canonical-2"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-canonical-2"
 
 
 async def test_send_message_starts_fresh_when_resume_conversation_is_missing(
@@ -472,7 +485,9 @@ async def test_send_message_starts_fresh_when_resume_conversation_is_missing(
     assert harness.new_conversation_calls == [(workspace_root, None)]
     assert harness.start_turn_calls[0]["conversation_id"] == "backend-conversation-1"
     assert refreshed_thread is not None
-    assert refreshed_thread.backend_thread_id == "backend-conversation-1"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-conversation-1"
 
 
 async def test_send_message_starts_fresh_when_backend_runtime_instance_is_stale(
@@ -507,8 +522,10 @@ async def test_send_message_starts_fresh_when_backend_runtime_instance_is_stale(
     assert harness.new_conversation_calls == [(workspace_root, None)]
     assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-2"
     assert refreshed_thread is not None
-    assert refreshed_thread.backend_thread_id == "backend-fresh-2"
-    assert refreshed_thread.backend_runtime_instance_id == "runtime-new"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-fresh-2"
+    assert binding.backend_runtime_instance_id == "runtime-new"
 
 
 async def test_send_message_retries_with_fresh_conversation_when_existing_binding_is_invalid(
@@ -562,7 +579,9 @@ async def test_send_message_retries_with_fresh_conversation_when_existing_bindin
     ]
     assert harness.new_conversation_calls == [(workspace_root, None)]
     assert refreshed_thread is not None
-    assert refreshed_thread.backend_thread_id == "backend-fresh-2"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-fresh-2"
     assert any(
         payload.get("event") == "orchestration.thread.refreshing_backend_binding"
         and payload.get("thread_target_id") == thread.thread_target_id
@@ -627,7 +646,9 @@ async def test_send_review_retries_with_fresh_conversation_when_existing_binding
     ]
     assert harness.new_conversation_calls == [(workspace_root, None)]
     assert refreshed_thread is not None
-    assert refreshed_thread.backend_thread_id == "backend-fresh-2"
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-fresh-2"
     assert execution.backend_id == "review-turn-2"
     assert any(
         payload.get("event") == "orchestration.thread.refreshing_backend_binding"
@@ -1010,7 +1031,8 @@ async def test_stop_thread_marks_interrupted_when_backend_binding_is_missing(
     assert outcome.execution.error is None
     refreshed_thread = service.get_thread_target(thread.thread_target_id)
     assert refreshed_thread is not None
-    assert refreshed_thread.backend_thread_id is None
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is None
     assert service.get_running_execution(thread.thread_target_id) is None
 
 
@@ -1047,8 +1069,8 @@ async def test_stop_thread_marks_interrupted_when_runtime_instance_is_stale_with
     assert outcome.execution.error is None
     refreshed_thread = service.get_thread_target(thread.thread_target_id)
     assert refreshed_thread is not None
-    assert refreshed_thread.backend_thread_id is None
-    assert refreshed_thread.backend_runtime_instance_id is None
+    binding = _thread_runtime_binding(service, thread.thread_target_id)
+    assert binding is None
     assert service.get_running_execution(thread.thread_target_id) is None
 
 
