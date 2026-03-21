@@ -301,6 +301,18 @@ def _get_telegram_thread_binding(
     return orchestration_service, binding, thread
 
 
+def _get_thread_runtime_binding(
+    orchestration_service: Any, thread_target_id: str
+) -> Any:
+    getter = getattr(orchestration_service, "get_thread_runtime_binding", None)
+    if not callable(getter) or not thread_target_id:
+        return None
+    try:
+        return getter(thread_target_id)
+    except Exception:
+        return None
+
+
 async def _resolve_telegram_managed_thread(
     handlers: Any,
     *,
@@ -327,6 +339,8 @@ async def _resolve_telegram_managed_thread(
         else None
     )
     backend_runtime_instance_id: Optional[str] = None
+    if pma_enabled:
+        normalized_backend_thread_id = None
     if normalized_backend_thread_id:
         backend_runtime_instance_id = (
             await orchestration_service.resolve_backend_runtime_instance_id(
@@ -467,7 +481,7 @@ async def _sync_telegram_thread_binding(
     repo_id: Optional[str],
     resource_kind: Optional[str],
     resource_id: Optional[str],
-    backend_thread_id: str,
+    backend_thread_id: Optional[str],
     mode: str,
     pma_enabled: bool,
     replace_existing: bool = False,
@@ -479,14 +493,19 @@ async def _sync_telegram_thread_binding(
     )
     canonical_workspace = str(workspace_root.resolve())
     normalized_repo_id = repo_id.strip() if isinstance(repo_id, str) else None
-    backend_runtime_instance_id = (
-        await orchestration_service.resolve_backend_runtime_instance_id(
-            agent,
-            workspace_root,
+    effective_backend_thread_id = None if pma_enabled else backend_thread_id
+    backend_runtime_instance_id: Optional[str] = None
+    if effective_backend_thread_id is not None:
+        backend_runtime_instance_id = (
+            await orchestration_service.resolve_backend_runtime_instance_id(
+                agent,
+                workspace_root,
+            )
         )
-    )
-    if backend_runtime_instance_id is None:
-        raise RuntimeError("Agent runtime unavailable for backend_thread_id binding")
+        if backend_runtime_instance_id is None:
+            raise RuntimeError(
+                "Agent runtime unavailable for backend_thread_id binding"
+            )
     if replace_existing and current_thread is not None:
         stop_outcome = await orchestration_service.stop_thread(
             current_thread.thread_target_id
@@ -509,7 +528,7 @@ async def _sync_telegram_thread_binding(
     ):
         current_thread = orchestration_service.resume_thread_target(
             current_thread.thread_target_id,
-            backend_thread_id=backend_thread_id,
+            backend_thread_id=effective_backend_thread_id,
             backend_runtime_instance_id=backend_runtime_instance_id,
         )
     else:
@@ -520,8 +539,12 @@ async def _sync_telegram_thread_binding(
             resource_kind=resource_kind,
             resource_id=resource_id,
             display_name=f"telegram:{surface_key}",
-            backend_thread_id=backend_thread_id,
-            metadata={"backend_runtime_instance_id": backend_runtime_instance_id},
+            backend_thread_id=effective_backend_thread_id,
+            metadata=(
+                {"backend_runtime_instance_id": backend_runtime_instance_id}
+                if backend_runtime_instance_id is not None
+                else None
+            ),
         )
     orchestration_service.upsert_binding(
         surface_kind="telegram",
@@ -564,13 +587,18 @@ async def _finalize_telegram_managed_thread_execution(
         str(started.request.message_text or ""),
         RESUME_PREVIEW_USER_LIMIT,
     )
-    current_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
+    runtime_binding = _get_thread_runtime_binding(
+        orchestration_service, managed_thread_id
+    )
+    current_backend_thread_id = str(
+        getattr(runtime_binding, "backend_thread_id", None)
+        or started.thread.backend_thread_id
+        or ""
+    ).strip()
     event_state = runtime_event_state or RuntimeThreadRunEventState()
     stream_task: Optional[asyncio.Task[None]] = None
 
-    stream_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
-    if not stream_backend_thread_id:
-        stream_backend_thread_id = str(started.thread.thread_target_id or "").strip()
+    stream_backend_thread_id = current_backend_thread_id
     stream_backend_turn_id = str(started.execution.backend_id or "").strip()
     if not stream_backend_turn_id:
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
@@ -647,8 +675,15 @@ async def _finalize_telegram_managed_thread_execution(
     )
 
     finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
+    runtime_binding = _get_thread_runtime_binding(
+        orchestration_service, managed_thread_id
+    )
     resolved_backend_thread_id = (
-        str(getattr(finalized_thread, "backend_thread_id", None) or "").strip()
+        str(
+            getattr(runtime_binding, "backend_thread_id", None)
+            or getattr(finalized_thread, "backend_thread_id", None)
+            or ""
+        ).strip()
         or outcome.backend_thread_id
         or current_backend_thread_id
     )

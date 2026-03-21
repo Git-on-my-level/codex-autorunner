@@ -4642,6 +4642,84 @@ async def test_car_new_resets_pma_session_key_for_current_agent(tmp_path: Path) 
 
 
 @pytest.mark.anyio
+async def test_car_session_resume_reactivates_thread_without_backend_rebinding(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    resumed_calls: list[tuple[str, dict[str, Any]]] = []
+    archived_thread = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="codex",
+        workspace_root=str(workspace),
+        lifecycle_status="archived",
+        backend_thread_id="legacy-backend",
+    )
+
+    class _FakeThreadService:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            return SimpleNamespace(thread_target_id="thread-1", mode="repo")
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return archived_thread
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            resumed_calls.append((thread_target_id, kwargs))
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                agent_id="codex",
+                workspace_root=str(workspace),
+                lifecycle_status="active",
+                backend_thread_id="legacy-backend",
+            )
+
+    service._get_discord_thread_binding = (  # type: ignore[assignment]
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="repo"),
+            archived_thread,
+        )
+    )
+    service._attach_discord_thread_binding = lambda *args, **kwargs: None  # type: ignore[assignment]
+    service._list_discord_thread_targets_for_picker = (  # type: ignore[assignment]
+        lambda *args, **kwargs: []
+    )
+
+    try:
+        await service._handle_car_resume(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            options={"thread_id": "thread-1"},
+        )
+        assert resumed_calls == [("thread-1", {})]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

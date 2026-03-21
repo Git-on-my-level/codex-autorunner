@@ -2447,6 +2447,81 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
 
 
 @pytest.mark.anyio
+async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _FakeThreadService:
+        async def resolve_backend_runtime_instance_id(
+            self, agent_id: str, workspace_root: Path
+        ) -> Optional[str]:
+            raise AssertionError(
+                "runtime instance lookup should be skipped in PMA mode"
+            )
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            calls.append((thread_target_id, dict(kwargs)))
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                agent_id="codex",
+                workspace_root=str(workspace),
+                lifecycle_status="active",
+                backend_thread_id=None,
+            )
+
+        def create_thread_target(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("create should not be used in this test")
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            return None
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="pma"),
+            SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                workspace_root=str(workspace),
+                lifecycle_status="archived",
+                backend_thread_id="legacy-backend",
+            ),
+        ),
+    )
+
+    _service, resolved = (
+        await execution_commands_module._resolve_telegram_managed_thread(
+            SimpleNamespace(_logger=logging.getLogger("test")),
+            surface_key="telegram:-1001:101",
+            workspace_root=workspace.resolve(),
+            agent="codex",
+            repo_id="repo-1",
+            mode="pma",
+            pma_enabled=True,
+            backend_thread_id="stale-backend",
+            allow_new_thread=False,
+        )
+    )
+
+    assert resolved is not None
+    assert resolved.thread_target_id == "thread-1"
+    assert calls == [
+        (
+            "thread-1",
+            {
+                "backend_thread_id": None,
+                "backend_runtime_instance_id": None,
+            },
+        )
+    ]
+
+
+@pytest.mark.anyio
 async def test_pma_native_input_items_route_through_managed_thread_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4122,6 +4197,89 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
         ("archive", "thread-1"),
         ("create", "codex"),
         ("bind", "thread-2"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_sync_telegram_thread_binding_ignores_backend_id_in_pma_mode() -> None:
+    workspace = Path("/tmp/telegram-sync-pma-workspace").resolve()
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class _FakeThreadService:
+        async def resolve_backend_runtime_instance_id(
+            self, agent_id: str, workspace_root: Path
+        ) -> Optional[str]:
+            raise AssertionError(
+                "runtime instance lookup should be skipped in PMA mode"
+            )
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            calls.append((thread_target_id, dict(kwargs)))
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                agent_id="codex",
+                workspace_root=str(workspace),
+            )
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            calls.append(("create", dict(kwargs)))
+            assert workspace_root == workspace
+            return SimpleNamespace(
+                thread_target_id="thread-2",
+                agent_id=agent,
+                workspace_root=str(workspace_root),
+            )
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            calls.append(("bind", str(kwargs["thread_target_id"])))
+
+    handlers = SimpleNamespace(_logger=logging.getLogger("test"))
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="pma"),
+            SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                workspace_root=str(workspace),
+            ),
+        ),
+    )
+    try:
+        (
+            _service,
+            thread,
+        ) = await execution_commands_module._sync_telegram_thread_binding(
+            handlers,
+            surface_key="topic-1",
+            workspace_root=workspace,
+            agent="codex",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-2",
+            mode="pma",
+            pma_enabled=True,
+            replace_existing=False,
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert thread.thread_target_id == "thread-1"
+    assert calls == [
+        (
+            "thread-1",
+            {
+                "backend_thread_id": None,
+                "backend_runtime_instance_id": None,
+            },
+        ),
+        ("bind", "thread-1"),
     ]
 
 

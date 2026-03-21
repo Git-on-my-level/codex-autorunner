@@ -113,6 +113,18 @@ class DiscordMessageTurnResult:
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
 
 
+def _get_thread_runtime_binding(
+    orchestration_service: Any, thread_target_id: str
+) -> Any:
+    getter = getattr(orchestration_service, "get_thread_runtime_binding", None)
+    if not callable(getter) or not thread_target_id:
+        return None
+    try:
+        return getter(thread_target_id)
+    except Exception:
+        return None
+
+
 def _resolve_discord_turn_policies(
     binding: Optional[dict[str, Any]],
     *,
@@ -1076,13 +1088,18 @@ async def _finalize_discord_thread_execution(
         str(started.request.message_text or ""),
         max_len=120,
     )
-    current_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
+    runtime_binding = _get_thread_runtime_binding(
+        orchestration_service, managed_thread_id
+    )
+    current_backend_thread_id = str(
+        getattr(runtime_binding, "backend_thread_id", None)
+        or started.thread.backend_thread_id
+        or ""
+    ).strip()
     event_state = runtime_event_state or RuntimeThreadRunEventState()
     stream_task: Optional[asyncio.Task[None]] = None
 
-    stream_backend_thread_id = str(started.thread.backend_thread_id or "").strip()
-    if not stream_backend_thread_id:
-        stream_backend_thread_id = str(started.thread.thread_target_id or "").strip()
+    stream_backend_thread_id = current_backend_thread_id
     stream_backend_turn_id = str(started.execution.backend_id or "").strip()
     if not stream_backend_turn_id:
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
@@ -1176,8 +1193,15 @@ async def _finalize_discord_thread_execution(
     )
 
     finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
+    finalized_runtime_binding = _get_thread_runtime_binding(
+        orchestration_service, managed_thread_id
+    )
     resolved_backend_thread_id = (
-        str(getattr(finalized_thread, "backend_thread_id", None) or "").strip()
+        str(
+            getattr(finalized_runtime_binding, "backend_thread_id", None)
+            or getattr(finalized_thread, "backend_thread_id", None)
+            or ""
+        ).strip()
         or outcome.backend_thread_id
         or current_backend_thread_id
     )

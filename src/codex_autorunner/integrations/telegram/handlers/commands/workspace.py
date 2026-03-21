@@ -3022,6 +3022,7 @@ class WorkspaceCommands(SharedHelpers):
         if updated_record is not None and updated_record.workspace_path:
             from .execution import _sync_telegram_thread_binding
 
+            pma_enabled = bool(updated_record.pma_enabled)
             await _sync_telegram_thread_binding(
                 self,
                 surface_key=key,
@@ -3045,9 +3046,9 @@ class WorkspaceCommands(SharedHelpers):
                     and updated_record.resource_id.strip()
                     else None
                 ),
-                backend_thread_id=thread_id,
-                mode="repo",
-                pma_enabled=False,
+                backend_thread_id=None if pma_enabled else thread_id,
+                mode="pma" if pma_enabled else "repo",
+                pma_enabled=pma_enabled,
             )
         await self._answer_callback(callback, "Resumed thread")
         summary = None

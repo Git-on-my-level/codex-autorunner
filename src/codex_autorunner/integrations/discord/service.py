@@ -6342,22 +6342,9 @@ class DiscordBotService:
                 .strip()
                 .lower()
             )
-            backend_thread_id = str(
-                getattr(target_thread, "backend_thread_id", "") or ""
-            ).strip()
             if lifecycle_status and lifecycle_status != "active":
                 try:
-                    backend_runtime_instance_id = None
-                    if backend_thread_id:
-                        backend_runtime_instance_id = await orchestration_service.resolve_backend_runtime_instance_id(
-                            agent,
-                            workspace_root,
-                        )
-                    orchestration_service.resume_thread_target(
-                        thread_id,
-                        backend_thread_id=backend_thread_id or None,
-                        backend_runtime_instance_id=backend_runtime_instance_id,
-                    )
+                    orchestration_service.resume_thread_target(thread_id)
                 except Exception:
                     pass
             self._attach_discord_thread_binding(
