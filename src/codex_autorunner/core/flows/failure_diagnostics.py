@@ -12,6 +12,17 @@ logger = logging.getLogger(__name__)
 _MAX_STDERR_LINES = 5
 _MAX_STDERR_CHARS = 320
 _MAX_SUMMARY_CHARS = 160
+CANONICAL_FAILURE_REASON_CODE_FIELD = "failure_reason_code"
+
+_LEGACY_FAILURE_CLASS_REASON_CODES: dict[str, FailureReasonCode] = {
+    "worker_dead": FailureReasonCode.WORKER_DEAD,
+    "timeout": FailureReasonCode.TIMEOUT,
+    "network": FailureReasonCode.NETWORK_ERROR,
+}
+
+_LEGACY_ENGINE_REASON_CODES: dict[str, FailureReasonCode] = {
+    "network": FailureReasonCode.NETWORK_ERROR,
+}
 
 
 def _coerce_str(value: Any) -> Optional[str]:
@@ -288,11 +299,13 @@ def _derive_failure_reason_code(
         return FailureReasonCode.PREFLIGHT_ERROR
     if _is_repo_not_found(msg):
         return FailureReasonCode.REPO_NOT_FOUND
+    if "worker died" in msg or "worker-dead" in msg or "worker_dead" in msg:
+        return FailureReasonCode.WORKER_DEAD
     if "timeout" in msg or "timed out" in msg:
         return FailureReasonCode.TIMEOUT
     if _is_network_error(msg):
         return FailureReasonCode.NETWORK_ERROR
-    if "worker died" in msg or "crash" in msg:
+    if "crash" in msg:
         return FailureReasonCode.AGENT_CRASH
     if msg:
         return FailureReasonCode.UNCAUGHT_EXCEPTION
@@ -372,7 +385,9 @@ def build_failure_payload(
         "stderr_tail": stderr_tail,
         "retryable": retryable,
         "failure_class": failure_class,
-        "failure_reason_code": failure_reason_code.value,
+        # Downstream consumers should rely on this field as the authoritative
+        # terminal failure classification contract.
+        CANONICAL_FAILURE_REASON_CODE_FIELD: failure_reason_code.value,
         "last_event_seq": last_event_seq,
         "last_event_at": last_event_at,
     }
@@ -385,6 +400,71 @@ def get_failure_payload(record: FlowRunRecord) -> Optional[dict[str, Any]]:
     if isinstance(failure, dict) and failure:
         return failure
     return None
+
+
+def _coerce_failure_reason_code(value: Any) -> Optional[FailureReasonCode]:
+    normalized = _coerce_str(value)
+    if normalized is None:
+        return None
+    try:
+        return FailureReasonCode(normalized.lower())
+    except ValueError:
+        return None
+
+
+def _coerce_failure_reason_code_with_aliases(
+    value: Any, *, aliases: Optional[dict[str, FailureReasonCode]] = None
+) -> Optional[FailureReasonCode]:
+    canonical = _coerce_failure_reason_code(value)
+    if canonical is not None:
+        return canonical
+    normalized = _coerce_str(value)
+    if normalized is None or not aliases:
+        return None
+    return aliases.get(normalized.lower())
+
+
+def get_terminal_failure_reason_code(
+    record: FlowRunRecord,
+) -> Optional[FailureReasonCode]:
+    """Return the canonical terminal failure classification for a run record.
+
+    The authoritative contract is `state.failure.failure_reason_code`. This
+    accessor falls back to legacy terminal metadata so downstream consumers can
+    depend on one function instead of re-deriving worker-dead and related states.
+    """
+
+    failure_payload = get_failure_payload(record)
+    if isinstance(failure_payload, dict):
+        canonical = _coerce_failure_reason_code_with_aliases(
+            failure_payload.get(CANONICAL_FAILURE_REASON_CODE_FIELD)
+        )
+        if canonical is not None:
+            return canonical
+        legacy_class = _coerce_str(failure_payload.get("failure_class"))
+        if legacy_class is not None:
+            mapped = _LEGACY_FAILURE_CLASS_REASON_CODES.get(legacy_class.lower())
+            if mapped is not None:
+                return mapped
+
+    state = record.state if isinstance(record.state, dict) else {}
+    engine = state.get("ticket_engine") if isinstance(state, dict) else None
+    if isinstance(engine, dict):
+        engine_reason = _coerce_failure_reason_code_with_aliases(
+            engine.get("reason_code"),
+            aliases=_LEGACY_ENGINE_REASON_CODES,
+        )
+        if engine_reason is not None:
+            return engine_reason
+    error_message = _coerce_str(record.error_message)
+    reason_code = _derive_failure_reason_code(
+        state=state,
+        error_message=error_message,
+        note=None,
+    )
+    if reason_code == FailureReasonCode.UNKNOWN and not error_message:
+        return None
+    return reason_code
 
 
 def ensure_failure_payload(

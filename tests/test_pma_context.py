@@ -111,6 +111,15 @@ def _seed_failed_worker_dead_run(repo_root: Path, run_id: str) -> None:
     )
 
 
+def _seed_failed_worker_dead_legacy_run(repo_root: Path, run_id: str) -> None:
+    _seed_failed_run(
+        repo_root,
+        run_id,
+        state={"ticket_engine": {"reason_code": "worker_dead"}},
+        error_message=None,
+    )
+
+
 def _write_dispatch_history(
     repo_root: Path, run_id: str, seq: int, *, mode: str = "pause"
 ) -> None:
@@ -834,6 +843,29 @@ def test_build_hub_snapshot_suppresses_stale_failed_worker_dead_run_when_no_tick
     canonical = repo_entry.get("canonical_state_v1") or {}
     assert canonical.get("latest_run_id") == run_id
     assert canonical.get("latest_run_status") == "failed"
+
+
+def test_build_hub_snapshot_suppresses_stale_failed_worker_dead_legacy_run_when_no_tickets_remain(
+    hub_env,
+) -> None:
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    for ticket in ticket_dir.glob("TICKET-*.md"):
+        ticket.unlink()
+
+    run_id = "69696969-6969-6969-6969-696969696969"
+    _seed_failed_worker_dead_legacy_run(hub_env.repo_root, run_id)
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    assert (snapshot.get("inbox") or []) == []
+    assert (snapshot.get("action_queue") or []) == []
 
 
 def test_build_hub_snapshot_repo_entries_include_canonical_state_v1(hub_env) -> None:

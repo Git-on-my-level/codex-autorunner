@@ -16,7 +16,11 @@ from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..tickets.replies import resolve_reply_paths
 from .config import load_hub_config, load_repo_config
 from .filebox import BOXES, empty_listing, list_filebox
-from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
+from .flows.failure_diagnostics import (
+    format_failure_summary,
+    get_failure_payload,
+    get_terminal_failure_reason_code,
+)
 from .flows.models import (
     FlowRunRecord,
     FlowRunStatus,
@@ -2044,33 +2048,8 @@ def _ticket_flow_has_tickets(repo_root: Path) -> Optional[bool]:
 
 
 def _terminal_ticket_flow_failure_is_worker_dead(record: FlowRunRecord) -> bool:
-    failure_payload = get_failure_payload(record)
-    if isinstance(failure_payload, Mapping):
-        failure_reason_code = str(
-            failure_payload.get("failure_reason_code") or ""
-        ).strip()
-        failure_class = str(failure_payload.get("failure_class") or "").strip()
-        if failure_reason_code.lower() == "worker_dead":
-            return True
-        if failure_class.lower() == "worker_dead":
-            return True
-
-    state_payload = record.state if isinstance(record.state, Mapping) else {}
-    ticket_engine = state_payload.get("ticket_engine")
-    if isinstance(ticket_engine, Mapping):
-        reason_code = str(ticket_engine.get("reason_code") or "").strip().lower()
-        if reason_code == "worker_dead":
-            return True
-
-    error_message = (
-        record.error_message.strip().lower()
-        if isinstance(record.error_message, str)
-        else ""
-    )
-    return any(
-        needle in error_message
-        for needle in ("worker died", "worker-dead", "worker_dead")
-    )
+    reason_code = get_terminal_failure_reason_code(record)
+    return reason_code is not None and reason_code.value == "worker_dead"
 
 
 def _stale_terminal_ticket_flow_run_reason(
