@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.agents.opencode import harness as harness_module
 from codex_autorunner.agents.opencode.harness import OpenCodeHarness
 from codex_autorunner.agents.registry import get_registered_agents
 from codex_autorunner.core.orchestration.runtime_thread_events import (
@@ -233,6 +234,109 @@ async def test_opencode_harness_progress_event_stream_reuses_pending_turn_collec
     assert streamed[0] == result.raw_events[0]
     assert merge_runtime_thread_raw_events(streamed, result.raw_events) == list(
         result.raw_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_progress_event_stream_accepts_nested_item_session_id() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="item/agentMessage/delta",
+                data='{"item":{"sessionID":"session-1"},"itemId":"item-1","delta":"hello world"}',
+            ),
+            SSEEvent(
+                event="message.completed",
+                data='{"sessionID":"session-1","text":"hello world"}',
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    streamed: list[Any] = []
+
+    async def _collect_stream() -> None:
+        async for raw_event in harness.progress_event_stream(
+            workspace, "session-1", turn.turn_id
+        ):
+            streamed.append(raw_event)
+
+    stream_task = asyncio.create_task(_collect_stream())
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+    await stream_task
+
+    assert result.status == "ok"
+    assert "item/agentMessage/delta" in [
+        event["message"]["method"] for event in streamed
+    ]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_logs_skipped_progress_events_without_session_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="item/reasoning/summaryTextDelta",
+                data='{"item":{"type":"reasoning"},"delta":"thinking"}',
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+    logged_events: list[dict[str, Any]] = []
+
+    def _capture_log_event(
+        logger: Any,
+        level: int,
+        event: str,
+        **fields: Any,
+    ) -> None:
+        _ = logger
+        logged_events.append({"level": level, "event": event, **fields})
+
+    monkeypatch.setattr(harness_module, "log_event", _capture_log_event)
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+
+    assert result.status == "ok"
+    assert any(
+        event["event"] == "opencode.progress_event.skipped"
+        and event["reason"] == "missing_session_id"
+        and event["method"] == "item/reasoning/summaryTextDelta"
+        for event in logged_events
     )
 
 

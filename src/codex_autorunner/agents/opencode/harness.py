@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from ...core.logging_utils import log_event
 from ...core.sse import format_sse, parse_sse_lines
 from ..base import AgentHarness
 from ..types import (
@@ -101,6 +102,30 @@ def _collect_permission_paths(
                 _append(item)
 
     return candidates
+
+
+def _progress_event_shape_hint(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    hints: list[str] = []
+    keys = sorted(str(key) for key in payload.keys())
+    if keys:
+        hints.append(f"keys={','.join(keys[:6])}")
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        property_keys = sorted(str(key) for key in properties.keys())
+        if property_keys:
+            hints.append(f"properties={','.join(property_keys[:6])}")
+    item = payload.get("item")
+    if not isinstance(item, dict) and isinstance(properties, dict):
+        nested_item = properties.get("item")
+        if isinstance(nested_item, dict):
+            item = nested_item
+    if isinstance(item, dict):
+        item_keys = sorted(str(key) for key in item.keys())
+        if item_keys:
+            hints.append(f"item={','.join(item_keys[:6])}")
+    return " ".join(hints) or None
 
 
 def _workspace_permission_decision(
@@ -877,6 +902,21 @@ class OpenCodeHarness(AgentHarness):
                                 and session_id
                             ):
                                 _publish_progress_event(wrapped)
+                            elif not is_idle:
+                                log_event(
+                                    _logger,
+                                    logging.DEBUG,
+                                    "opencode.progress_event.skipped",
+                                    method=event.event,
+                                    conversation_id=conversation_id,
+                                    event_session_id=session_id,
+                                    reason=(
+                                        "missing_session_id"
+                                        if not session_id
+                                        else "session_mismatch"
+                                    ),
+                                    shape_hint=_progress_event_shape_hint(parsed),
+                                )
                         yield event
                 finally:
                     _close_progress_streams()

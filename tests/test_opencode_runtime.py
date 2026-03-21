@@ -23,6 +23,24 @@ def test_extract_session_id_prefers_nested_session_id() -> None:
     assert extract_session_id(payload) == "session-xyz"
 
 
+def test_extract_session_id_reads_nested_item_session_id() -> None:
+    payload = {"item": {"sessionID": "session-xyz"}}
+    assert extract_session_id(payload) == "session-xyz"
+
+
+def test_extract_session_id_reads_properties_item_nested_session_object() -> None:
+    payload = {"properties": {"item": {"session": {"id": "session-xyz"}}}}
+    assert extract_session_id(payload) == "session-xyz"
+
+
+def test_extract_session_id_preserves_existing_precedence_over_nested_item() -> None:
+    payload = {
+        "sessionID": "session-top",
+        "properties": {"item": {"sessionID": "session-item"}},
+    }
+    assert extract_session_id(payload) == "session-top"
+
+
 @pytest.mark.anyio
 async def test_collect_output_uses_delta() -> None:
     seen_deltas: list[str] = []
