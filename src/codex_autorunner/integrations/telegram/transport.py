@@ -83,6 +83,7 @@ class TelegramMessageTransport:
         reply_to: Optional[int],
         placeholder_id: Optional[int] = None,
         delete_placeholder_on_delivery: bool = True,
+        overflow_mode_override: Optional[str] = None,
     ) -> bool:
         operation: Optional[str] = None
         if placeholder_id is not None:
@@ -99,6 +100,7 @@ class TelegramMessageTransport:
             text=text,
             created_at=now_iso(),
             operation=operation,
+            overflow_mode_override=overflow_mode_override,
         )
         return await self._outbox_manager.send_message_with_outbox(record)
 
@@ -276,19 +278,33 @@ class TelegramMessageTransport:
         response: str,
         intermediate_response: Optional[str] = None,
         delete_placeholder_on_delivery: bool = True,
+        overflow_mode_override: Optional[str] = None,
     ) -> bool:
         delivered_response = self._resolve_delivered_turn_response(
             response,
             intermediate_response=intermediate_response,
         )
-        return await self._send_message_with_outbox(
-            chat_id,
-            delivered_response,
-            thread_id=thread_id,
-            reply_to=reply_to,
-            placeholder_id=placeholder_id,
-            delete_placeholder_on_delivery=delete_placeholder_on_delivery,
-        )
+        try:
+            return await self._send_message_with_outbox(
+                chat_id,
+                delivered_response,
+                thread_id=thread_id,
+                reply_to=reply_to,
+                placeholder_id=placeholder_id,
+                delete_placeholder_on_delivery=delete_placeholder_on_delivery,
+                overflow_mode_override=overflow_mode_override,
+            )
+        except TypeError as exc:
+            if "overflow_mode_override" not in str(exc):
+                raise
+            return await self._send_message_with_outbox(
+                chat_id,
+                delivered_response,
+                thread_id=thread_id,
+                reply_to=reply_to,
+                placeholder_id=placeholder_id,
+                delete_placeholder_on_delivery=delete_placeholder_on_delivery,
+            )
 
     def _format_turn_metrics_text(
         self,
@@ -359,6 +375,7 @@ class TelegramMessageTransport:
         reply_to: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
         parse_mode: Optional[str] = None,
+        overflow_mode_override: Optional[str] = None,
     ) -> None:
         if _should_trace_message(text):
             text = _with_conversation_id(
@@ -383,7 +400,9 @@ class TelegramMessageTransport:
                 # Back-compat for subclasses/tests that don't accept parse_mode kwarg
                 rendered, used_mode = self._render_message(text)  # type: ignore[misc]
             if used_mode and len(rendered) > TELEGRAM_MAX_MESSAGE_LENGTH:
-                overflow_mode = getattr(self._config, "message_overflow", "document")
+                overflow_mode = overflow_mode_override or getattr(
+                    self._config, "message_overflow", "document"
+                )
                 if overflow_mode == "split" and used_mode in (
                     "HTML",
                     "Markdown",

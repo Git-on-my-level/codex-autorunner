@@ -114,6 +114,7 @@ class _HandlerStub(TelegramCommandHandlers):
             ),
             app_server_turn_timeout_seconds=None,
             agent_turn_timeout_seconds={"codex": None, "opencode": None},
+            message_overflow="document",
         )
         self._router = _RouterStub(records)
         self._turn_semaphore = asyncio.Semaphore(max_parallel_turns)
@@ -287,6 +288,7 @@ class _HandlerStub(TelegramCommandHandlers):
         response: str,
         intermediate_response: Optional[str] = None,
         delete_placeholder_on_delivery: bool = True,
+        overflow_mode_override: Optional[str] = None,
     ) -> bool:
         self._deliver_calls.append(
             {
@@ -297,6 +299,7 @@ class _HandlerStub(TelegramCommandHandlers):
                 "response": response,
                 "intermediate_response": intermediate_response,
                 "delete_placeholder_on_delivery": delete_placeholder_on_delivery,
+                "overflow_mode_override": overflow_mode_override,
             }
         )
         return self._deliver_result
@@ -591,6 +594,7 @@ async def test_normal_turn_appends_metrics_footer_to_response_by_default() -> No
     assert "agent codex · gpt-4.1-mini · 12s · step 3 · ctx 20%" in delivered
     assert "Token usage: total 80 input 60 output 20" in delivered
     assert "Turn time:" not in delivered
+    assert handler._deliver_calls[-1]["overflow_mode_override"] == "split"
     assert metrics_calls == []
 
 
@@ -648,6 +652,7 @@ async def test_normal_turn_separate_metrics_stay_out_of_response_when_configured
 
     assert "Token usage:" not in handler._deliver_calls[-1]["response"]
     assert "Turn time:" not in handler._deliver_calls[-1]["response"]
+    assert handler._deliver_calls[-1]["overflow_mode_override"] is None
     assert metrics_calls == [
         {
             "chat_id": 10,

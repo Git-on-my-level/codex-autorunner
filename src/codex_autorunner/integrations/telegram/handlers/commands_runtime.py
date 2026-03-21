@@ -375,6 +375,7 @@ class TelegramCommandHandlers(
             outcome.token_usage, outcome.elapsed_seconds
         )
         metrics_mode = self._metrics_mode()
+        overflow_mode_override = None
         resolved_agent = self._effective_agent(outcome.record)
         response_text = outcome.response
         intermediate_response = outcome.intermediate_response
@@ -394,6 +395,8 @@ class TelegramCommandHandlers(
                 model=getattr(outcome.record, "model", None),
             )
             intermediate_response = None
+            if getattr(self._config, "message_overflow", "document") == "document":
+                overflow_mode_override = "split"
         elif resolved_agent == "opencode":
             response_text = compose_turn_response_with_footer(
                 response_text,
@@ -412,9 +415,13 @@ class TelegramCommandHandlers(
                 placeholder_id=outcome.placeholder_id,
                 response=response_text,
                 intermediate_response=intermediate_response,
+                overflow_mode_override=overflow_mode_override,
             )
         except TypeError as exc:
-            if "intermediate_response" not in str(exc):
+            if not any(
+                key in str(exc)
+                for key in ("intermediate_response", "overflow_mode_override")
+            ):
                 raise
             response_sent = await self._deliver_turn_response(
                 chat_id=message.chat_id,

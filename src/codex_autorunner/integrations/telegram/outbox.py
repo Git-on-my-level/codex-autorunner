@@ -282,12 +282,23 @@ class TelegramOutboxManager:
             pass
         with self._conversation_context(record.chat_id, record.thread_id):
             try:
-                await self._send_message(
-                    record.chat_id,
-                    record.text,
-                    thread_id=record.thread_id,
-                    reply_to=record.reply_to_message_id,
-                )
+                try:
+                    await self._send_message(
+                        record.chat_id,
+                        record.text,
+                        thread_id=record.thread_id,
+                        reply_to=record.reply_to_message_id,
+                        overflow_mode_override=record.overflow_mode_override,
+                    )
+                except TypeError as exc:
+                    if "overflow_mode_override" not in str(exc):
+                        raise
+                    await self._send_message(
+                        record.chat_id,
+                        record.text,
+                        thread_id=record.thread_id,
+                        reply_to=record.reply_to_message_id,
+                    )
             except Exception as exc:
                 retry_after = _extract_retry_after_seconds(exc)
                 record.attempts += 1

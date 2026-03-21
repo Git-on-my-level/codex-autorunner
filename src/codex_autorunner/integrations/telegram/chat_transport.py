@@ -26,6 +26,7 @@ class _TelegramTransportOwner(Protocol):
         thread_id: Optional[int],
         reply_to: Optional[int],
         placeholder_id: Optional[int] = None,
+        overflow_mode_override: Optional[str] = None,
     ) -> bool: ...
 
     async def _send_message(
@@ -37,6 +38,7 @@ class _TelegramTransportOwner(Protocol):
         reply_to: Optional[int] = None,
         reply_markup: Optional[dict[str, Any]] = None,
         parse_mode: Optional[str] = None,
+        overflow_mode_override: Optional[str] = None,
     ) -> None: ...
 
     async def _edit_message_text(

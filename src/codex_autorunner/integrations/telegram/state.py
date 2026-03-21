@@ -530,6 +530,7 @@ class OutboxRecord:
     operation: Optional[str] = None
     message_id: Optional[int] = None
     outbox_key: Optional[str] = None
+    overflow_mode_override: Optional[str] = None
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> Optional["OutboxRecord"]:
@@ -549,6 +550,7 @@ class OutboxRecord:
         operation = payload.get("operation")
         message_id = payload.get("message_id")
         outbox_key = payload.get("outbox_key")
+        overflow_mode_override = payload.get("overflow_mode_override")
         if not isinstance(record_id, str) or not record_id:
             return None
         if not isinstance(chat_id, int):
@@ -579,6 +581,8 @@ class OutboxRecord:
             message_id = None
         if not isinstance(outbox_key, str):
             outbox_key = None
+        if not isinstance(overflow_mode_override, str):
+            overflow_mode_override = None
         return cls(
             record_id=record_id,
             chat_id=chat_id,
@@ -594,6 +598,7 @@ class OutboxRecord:
             operation=operation,
             message_id=message_id,
             outbox_key=outbox_key,
+            overflow_mode_override=overflow_mode_override,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -612,6 +617,7 @@ class OutboxRecord:
             "operation": self.operation,
             "message_id": self.message_id,
             "outbox_key": self.outbox_key,
+            "overflow_mode_override": self.overflow_mode_override,
         }
 
 

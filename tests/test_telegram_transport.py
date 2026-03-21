@@ -15,6 +15,7 @@ from codex_autorunner.integrations.telegram.transport import TelegramMessageTran
 @dataclass
 class _DummyConfig:
     parse_mode: Optional[str]
+    message_overflow: str = "document"
 
 
 class _DummyBot:
@@ -26,6 +27,10 @@ class _DummyBot:
     async def send_message_chunks(self, chat_id, text, **kwargs):  # type: ignore[no-untyped-def]
         self.sent_messages.append({"chat_id": chat_id, "text": text, **kwargs})
         return []
+
+    async def send_message(self, chat_id, text, **kwargs):  # type: ignore[no-untyped-def]
+        self.sent_messages.append({"chat_id": chat_id, "text": text, **kwargs})
+        return {}
 
     async def send_document(self, chat_id, document, **kwargs):  # type: ignore[no-untyped-def]
         self.sent_docs.append({"chat_id": chat_id, "document": document, **kwargs})
@@ -84,6 +89,24 @@ async def test_send_long_message_uses_markdown_document(parse_mode: str) -> None
     assert payload["filename"] == "response.md"
     assert payload["caption"] == "Response too long; attached as response.md."
     assert payload["document"] == long_text.encode("utf-8")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("parse_mode", ["Markdown", "MarkdownV2", "HTML"])
+async def test_send_long_message_split_override_keeps_inline_chunks(
+    parse_mode: str,
+) -> None:
+    transport = _DummyTransport(parse_mode=parse_mode)
+    long_text = "x" * (TELEGRAM_MAX_MESSAGE_LENGTH + 5)
+
+    await transport._send_message(
+        123,
+        long_text,
+        overflow_mode_override="split",
+    )
+
+    assert not transport._bot.sent_docs
+    assert transport._bot.sent_messages
 
 
 @pytest.mark.anyio
