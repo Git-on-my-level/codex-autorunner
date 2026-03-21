@@ -444,6 +444,48 @@ async def test_runtime_threads_allow_wait_results_without_raw_events(
     assert outcome.raw_events == ()
 
 
+async def test_runtime_threads_preserve_wait_exception_detail(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+
+    async def _raising_wait(
+        workspace_root: Path,
+        conversation_id: str,
+        turn_id: Optional[str],
+        *,
+        timeout: Optional[float] = None,
+    ) -> TerminalTurnResult:
+        _ = timeout
+        harness.wait_calls.append((workspace_root, conversation_id, turn_id))
+        raise RuntimeError("transport disconnected")
+
+    harness.wait_for_turn = _raising_wait  # type: ignore[method-assign]
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    outcome = await await_runtime_thread_outcome(
+        started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "error"
+    assert outcome.error == "transport disconnected"
+    assert outcome.raw_events == ()
+
+
 async def test_runtime_threads_prefer_final_output_over_post_completion_errors(
     tmp_path: Path,
 ) -> None:

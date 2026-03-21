@@ -11722,6 +11722,10 @@ class DiscordBotService:
             text = format_discord_message("No active turn to interrupt.")
             await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         try:
             stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
@@ -11732,7 +11736,12 @@ class DiscordBotService:
                 and not stop_outcome.cancelled_queued
             ):
                 text = format_discord_message("No active turn to interrupt.")
-                await self._respond_ephemeral(interaction_id, interaction_token, text)
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
                 return
             parts = []
             if stop_outcome.interrupted_active:
@@ -11750,7 +11759,12 @@ class DiscordBotService:
             )
             if parts:
                 text = format_discord_message(" ".join(parts))
-            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
         except Exception as exc:
             log_event(
                 self._logger,
@@ -11762,7 +11776,12 @@ class DiscordBotService:
                 exc=exc,
             )
             text = format_discord_message("Interrupt failed. Please try again.")
-            await self._respond_ephemeral(interaction_id, interaction_token, text)
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
 
     async def _handle_cancel_turn_button(
         self,

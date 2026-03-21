@@ -206,11 +206,12 @@ async def await_runtime_thread_outcome(
             )
 
         result = await collector_task
-    except Exception:
+    except Exception as exc:
+        detail = str(exc or "").strip()
         return RuntimeThreadOutcome(
             status="error",
             assistant_text="",
-            error=execution_error_message,
+            error=detail or execution_error_message,
             backend_thread_id=backend_thread_id,
             backend_turn_id=backend_turn_id,
             raw_events=(),

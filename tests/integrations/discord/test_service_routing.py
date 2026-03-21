@@ -4533,7 +4533,9 @@ async def test_car_interrupt_uses_orchestration_thread_state(tmp_path: Path) -> 
         )
         assert interrupted == ["thread-1"]
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "stopping current turn" in content
         assert "cancelled 2 queued turn" in content
     finally:
@@ -4591,7 +4593,9 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
             channel_id="channel-1",
         )
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "recovered stale session" in content
         assert "backend thread was lost" in content
     finally:
