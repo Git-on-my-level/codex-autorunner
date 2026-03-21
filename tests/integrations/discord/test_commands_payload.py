@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from codex_autorunner.core.flows import FLOW_ACTION_NAMES, FLOW_ACTION_SPECS
 from codex_autorunner.core.update_targets import update_target_command_choices
 from codex_autorunner.integrations.chat.agents import (
     chat_agent_command_choices,
@@ -71,18 +72,9 @@ def test_build_application_commands_structure_is_stable() -> None:
 
     flow = _find_option(options, "flow")
     flow_options = flow["options"]
-    assert [opt["name"] for opt in flow_options] == [
-        "status",
-        "runs",
-        "issue",
-        "plan",
-        "start",
-        "restart",
-        "resume",
-        "stop",
-        "archive",
-        "recover",
-        "reply",
+    assert [opt["name"] for opt in flow_options] == list(FLOW_ACTION_NAMES)
+    assert [(opt["name"], opt["description"]) for opt in flow_options] == [
+        (spec.name, spec.description) for spec in FLOW_ACTION_SPECS
     ]
 
     pma = next(cmd for cmd in commands if cmd["name"] == "pma")

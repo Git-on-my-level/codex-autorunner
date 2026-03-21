@@ -1,4 +1,16 @@
 from .archive_helpers import archive_flow_run_artifacts
+from .catalog import (
+    FLOW_ACTION_NAMES,
+    FLOW_ACTION_SPECS,
+    FLOW_ACTION_TOKENS,
+    FLOW_ACTIONS_WITH_RUN_PICKER,
+    FlowActionSpec,
+    flow_action_label,
+    flow_action_spec,
+    flow_action_summary,
+    flow_help_lines,
+    normalize_flow_action,
+)
 from .controller import FlowController
 from .definition import FlowDefinition, StepFn, StepOutcome
 from .models import (
@@ -24,6 +36,11 @@ from .runtime import FlowRuntime
 from .store import FlowStore
 
 __all__ = [
+    "FLOW_ACTION_NAMES",
+    "FLOW_ACTION_SPECS",
+    "FLOW_ACTION_TOKENS",
+    "FLOW_ACTIONS_WITH_RUN_PICKER",
+    "FlowActionSpec",
     "FlowArtifact",
     "FlowController",
     "FlowDefinition",
@@ -38,12 +55,17 @@ __all__ = [
     "StepOutcome",
     "TicketFlowDispatchSnapshot",
     "archive_flow_run_artifacts",
+    "flow_action_label",
+    "flow_action_spec",
+    "flow_action_summary",
     "flow_duration_seconds",
+    "flow_help_lines",
     "flow_run_duration_seconds",
     "format_flow_duration",
     "format_pause_reason",
     "latest_dispatch_seq",
     "list_unseen_ticket_flow_dispatches",
     "load_latest_paused_ticket_flow_dispatch",
+    "normalize_flow_action",
     "parse_flow_timestamp",
 ]

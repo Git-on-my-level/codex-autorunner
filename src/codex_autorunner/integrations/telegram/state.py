@@ -15,6 +15,12 @@ from urllib.parse import quote, unquote
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
 from ..chat.agents import VALID_CHAT_AGENT_VALUES, normalize_chat_agent
+from ..chat.approval_modes import (
+    APPROVAL_MODE_VALUES,
+)
+from ..chat.approval_modes import (
+    normalize_approval_mode as normalize_chat_approval_mode,
+)
 
 logger = logging.getLogger("codex_autorunner.integrations.telegram.state")
 
@@ -22,7 +28,7 @@ STATE_VERSION = 5
 TOPIC_ROOT = "root"
 APPROVAL_MODE_YOLO = "yolo"
 APPROVAL_MODE_SAFE = "safe"
-APPROVAL_MODES = {APPROVAL_MODE_YOLO, APPROVAL_MODE_SAFE}
+APPROVAL_MODES = set(APPROVAL_MODE_VALUES)
 AGENT_VALUES = set(VALID_CHAT_AGENT_VALUES)
 STALE_SCOPED_TOPIC_DAYS = 30
 MAX_SCOPED_TOPICS_PER_BASE = 5
@@ -31,11 +37,9 @@ MAX_SCOPED_TOPICS_PER_BASE = 5
 def normalize_approval_mode(
     mode: Optional[str], *, default: str = APPROVAL_MODE_YOLO
 ) -> str:
-    if not isinstance(mode, str):
-        return default
-    key = mode.strip().lower()
-    if key in APPROVAL_MODES:
-        return key
+    normalized = normalize_chat_approval_mode(mode, default=default)
+    if isinstance(normalized, str) and normalized in APPROVAL_MODES:
+        return normalized
     return default
 
 

@@ -10,6 +10,11 @@ import {
 } from "./docChatCore.js";
 import { initChatPasteUpload } from "./chatUploads.js";
 import {
+  DEFAULT_FILEBOX_BOX,
+  FILEBOX_BOXES,
+  type FileBoxBox,
+} from "./fileboxCatalog.js";
+import {
   getSelectedAgent,
   getSelectedModel,
   getSelectedReasoning,
@@ -182,7 +187,7 @@ async function initFileBoxUI(): Promise<void> {
     uploadInput: elements.chatUploadInput,
     uploadBtn: elements.chatUploadBtn,
     refreshBtn: elements.outboxRefresh,
-    uploadBox: "inbox",
+    uploadBox: DEFAULT_FILEBOX_BOX,
     emptyMessage: "No files",
     onChange: (listing) => {
       if (pendingUploadNames.length && pmaChat) {
@@ -815,7 +820,7 @@ function updateClearButtons(listing: FileBoxListing | null): void {
   }
 }
 
-async function clearPMABox(box: "inbox" | "outbox"): Promise<void> {
+async function clearPMABox(box: FileBoxBox): Promise<void> {
   const confirmed = window.confirm(`Clear ${box}? This will delete all files.`);
   if (!confirmed) return;
   await api(`/hub/pma/files/${box}`, { method: "DELETE" });
@@ -1352,7 +1357,7 @@ function attachHandlers(): void {
     initChatPasteUpload({
       textarea: elements.input,
       basePath: "/hub/pma/files",
-      box: "inbox",
+      box: DEFAULT_FILEBOX_BOX,
       insertStyle: "markdown",
       onUploaded: () => {
         void fileBoxCtrl?.refresh();
@@ -1368,13 +1373,13 @@ function attachHandlers(): void {
 
   if (elements.inboxClear) {
     elements.inboxClear.addEventListener("click", () => {
-      void clearPMABox("inbox");
+      void clearPMABox(FILEBOX_BOXES[0]);
     });
   }
 
   if (elements.outboxClear) {
     elements.outboxClear.addEventListener("click", () => {
-      void clearPMABox("outbox");
+      void clearPMABox(FILEBOX_BOXES[1]);
     });
   }
 

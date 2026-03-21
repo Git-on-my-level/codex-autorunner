@@ -170,6 +170,8 @@ class _TurnRunResult:
     transcript_message_id: Optional[int]
     transcript_text: Optional[str]
     intermediate_response: str = ""
+    interrupt_status_turn_id: Optional[str] = None
+    interrupt_status_fallback_text: Optional[str] = None
 
 
 @dataclass
@@ -366,6 +368,65 @@ def _resolve_telegram_managed_thread(
         },
     )
     return orchestration_service, thread
+
+
+async def _reset_telegram_thread_binding(
+    handlers: Any,
+    *,
+    surface_key: str,
+    workspace_root: Path,
+    agent: str,
+    repo_id: Optional[str],
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+    mode: str,
+    pma_enabled: bool,
+) -> tuple[bool, str]:
+    orchestration_service, _binding, current_thread = _get_telegram_thread_binding(
+        handlers,
+        surface_key=surface_key,
+        mode=mode,
+    )
+    had_previous = current_thread is not None
+    normalized_repo_id = repo_id.strip() if isinstance(repo_id, str) else None
+    if current_thread is not None:
+        stop_outcome = await orchestration_service.stop_thread(
+            current_thread.thread_target_id
+        )
+        if stop_outcome.recovered_lost_backend:
+            log_event(
+                handlers._logger,
+                logging.INFO,
+                "telegram.thread.recovered_lost_backend",
+                surface_key=surface_key,
+                managed_thread_id=current_thread.thread_target_id,
+                mode=mode,
+            )
+        orchestration_service.archive_thread_target(current_thread.thread_target_id)
+    replacement = orchestration_service.create_thread_target(
+        agent,
+        workspace_root,
+        repo_id=normalized_repo_id or None,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        display_name=f"telegram:{surface_key}",
+    )
+    orchestration_service.upsert_binding(
+        surface_kind="telegram",
+        surface_key=surface_key,
+        thread_target_id=replacement.thread_target_id,
+        agent_id=agent,
+        repo_id=normalized_repo_id or None,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+        mode=mode,
+        metadata={
+            "topic_key": surface_key,
+            "pma_enabled": pma_enabled,
+            "surface_key": surface_key,
+        },
+    )
+    return had_previous, replacement.thread_target_id
 
 
 async def _sync_telegram_thread_binding(
@@ -710,6 +771,39 @@ def _ensure_telegram_managed_thread_queue_worker(
 
     worker_task: Optional[asyncio.Task[Any]] = None
 
+    async def _run_with_telegram_typing_indicator(work: Any) -> None:
+        begin = getattr(handlers, "_begin_typing_indicator", None)
+        end = getattr(handlers, "_end_typing_indicator", None)
+        began = False
+        if callable(begin):
+            try:
+                await begin(chat_id, thread_id)
+                began = True
+            except Exception as exc:
+                log_event(
+                    handlers._logger,
+                    logging.DEBUG,
+                    "telegram.typing.begin.failed",
+                    chat_id=chat_id,
+                    thread_id=thread_id,
+                    exc=exc,
+                )
+        try:
+            await work()
+        finally:
+            if began and callable(end):
+                try:
+                    await end(chat_id, thread_id)
+                except Exception as exc:
+                    log_event(
+                        handlers._logger,
+                        logging.DEBUG,
+                        "telegram.typing.end.failed",
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        exc=exc,
+                    )
+
     async def _queue_worker() -> None:
         try:
             while True:
@@ -722,42 +816,50 @@ def _ensure_telegram_managed_thread_queue_worker(
                 )
                 if started is None:
                     break
-                finalized = await _finalize_telegram_managed_thread_execution(
-                    handlers,
-                    orchestration_service=orchestration_service,
-                    started=started,
-                    surface_key=surface_key,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    public_execution_error=public_execution_error,
-                    timeout_error=timeout_error,
-                    interrupted_error=interrupted_error,
-                )
-                if finalized["status"] == "ok":
-                    message_text = str(finalized.get("assistant_text") or "").strip()
-                    if message_text:
-                        await handlers._send_message(
-                            chat_id,
-                            message_text,
+
+                async def _process_started_execution(
+                    started_execution: RuntimeThreadExecution = started,
+                ) -> None:
+                    finalized = await _finalize_telegram_managed_thread_execution(
+                        handlers,
+                        orchestration_service=orchestration_service,
+                        started=started_execution,
+                        surface_key=surface_key,
+                        chat_id=chat_id,
+                        thread_id=thread_id,
+                        public_execution_error=public_execution_error,
+                        timeout_error=timeout_error,
+                        interrupted_error=interrupted_error,
+                    )
+                    if finalized["status"] == "ok":
+                        message_text = str(
+                            finalized.get("assistant_text") or ""
+                        ).strip()
+                        if message_text:
+                            await handlers._send_message(
+                                chat_id,
+                                message_text,
+                                thread_id=thread_id,
+                                reply_to=None,
+                            )
+                        await handlers._flush_outbox_files(
+                            record,
+                            chat_id=chat_id,
                             thread_id=thread_id,
                             reply_to=None,
                         )
-                    await handlers._flush_outbox_files(
-                        record,
-                        chat_id=chat_id,
+                        return
+                    await handlers._send_message(
+                        chat_id,
+                        (
+                            "Turn failed: "
+                            f"{finalized.get('error') or public_execution_error}"
+                        ),
                         thread_id=thread_id,
                         reply_to=None,
                     )
-                    continue
-                await handlers._send_message(
-                    chat_id,
-                    (
-                        "Turn failed: "
-                        f"{finalized.get('error') or public_execution_error}"
-                    ),
-                    thread_id=thread_id,
-                    reply_to=None,
-                )
+
+                await _run_with_telegram_typing_indicator(_process_started_execution)
         finally:
             if (
                 worker_task is not None
@@ -1187,35 +1289,32 @@ async def _run_telegram_managed_thread_turn(
     )
     if finalized["status"] != "ok":
         failure_message = str(finalized.get("error") or public_execution_error)
+        interrupt_status_fallback_text: Optional[str] = None
         if finalized["status"] == "interrupted":
             failure_message = _compose_interrupt_response(failure_message)
             if (
                 runtime.interrupt_message_id is not None
                 and runtime.interrupt_turn_id == backend_turn_id
             ):
-                await handlers._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupted.",
-                )
-                runtime.interrupt_message_id = None
-                runtime.interrupt_turn_id = None
+                interrupt_status_fallback_text = "Interrupted."
         elif runtime.interrupt_turn_id == backend_turn_id:
-            if runtime.interrupt_message_id is not None:
-                await handlers._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupt requested; turn completed.",
-                )
-            runtime.interrupt_message_id = None
-            runtime.interrupt_turn_id = None
+            interrupt_status_fallback_text = "Interrupt requested; turn completed."
+        response_sent = False
         if send_failure_response:
-            await handlers._deliver_turn_response(
+            response_sent = await handlers._deliver_turn_response(
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
                 placeholder_id=prepared_placeholder_id,
                 response=failure_message,
+            )
+        if interrupt_status_fallback_text:
+            await handlers._clear_interrupt_status_message(
+                chat_id=message.chat_id,
+                runtime=runtime,
+                turn_id=backend_turn_id,
+                fallback_text=interrupt_status_fallback_text,
+                outcome_visible=response_sent,
             )
         return _TurnRunFailure(
             failure_message,
@@ -1273,15 +1372,9 @@ async def _run_telegram_managed_thread_turn(
             _apply_state,
         )
     response_text = str(finalized.get("assistant_text") or "")
+    interrupt_status_fallback_text = None
     if runtime.interrupt_turn_id == backend_turn_id:
-        if runtime.interrupt_message_id is not None:
-            await handlers._edit_message_text(
-                message.chat_id,
-                runtime.interrupt_message_id,
-                "Interrupt requested; turn completed.",
-            )
-        runtime.interrupt_message_id = None
-        runtime.interrupt_turn_id = None
+        interrupt_status_fallback_text = "Interrupt requested; turn completed."
     return _TurnRunResult(
         record=record,
         thread_id=resolved_backend_thread_id,
@@ -1293,6 +1386,8 @@ async def _run_telegram_managed_thread_turn(
         transcript_message_id=transcript_message_id,
         transcript_text=transcript_text,
         intermediate_response=intermediate_response,
+        interrupt_status_turn_id=backend_turn_id or None,
+        interrupt_status_fallback_text=interrupt_status_fallback_text,
     )
 
 
@@ -3257,29 +3352,17 @@ class ExecutionCommands(SharedHelpers):
                 )
 
         turn_handle_id = turn_handle.turn_id if turn_handle else None
+        interrupt_status_fallback_text = None
         if is_interrupt_status(result.status):
             response = _compose_interrupt_response(response)
             if (
                 runtime.interrupt_message_id is not None
                 and runtime.interrupt_turn_id == turn_handle_id
             ):
-                await self._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupted.",
-                )
-                runtime.interrupt_message_id = None
-                runtime.interrupt_turn_id = None
+                interrupt_status_fallback_text = "Interrupted."
             runtime.interrupt_requested = False
         elif runtime.interrupt_turn_id == turn_handle_id:
-            if runtime.interrupt_message_id is not None:
-                await self._edit_message_text(
-                    message.chat_id,
-                    runtime.interrupt_message_id,
-                    "Interrupt requested; turn completed.",
-                )
-            runtime.interrupt_message_id = None
-            runtime.interrupt_turn_id = None
+            interrupt_status_fallback_text = "Interrupt requested; turn completed."
             runtime.interrupt_requested = False
 
         log_event(
@@ -3308,6 +3391,8 @@ class ExecutionCommands(SharedHelpers):
             transcript_message_id=transcript_message_id,
             transcript_text=transcript_text,
             intermediate_response=turn_delivery_state.get("intermediate_response", ""),
+            interrupt_status_turn_id=turn_handle_id,
+            interrupt_status_fallback_text=interrupt_status_fallback_text,
         )
 
     def _prepare_turn_prompt(

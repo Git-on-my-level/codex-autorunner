@@ -160,7 +160,7 @@ def _default_telegram_bot_section(
         "defaults": {
             "approval_mode": "yolo",
             "approval_policy": "on-request",
-            "sandbox_policy": "dangerFullAccess",
+            "sandbox_policy": "workspaceWrite",
             "yolo_approval_policy": "never",
             "yolo_sandbox_policy": "dangerFullAccess",
         },

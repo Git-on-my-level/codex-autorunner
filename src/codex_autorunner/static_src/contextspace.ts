@@ -9,7 +9,8 @@ import {
   fetchContextspace,
   ingestSpecToTickets,
   listTickets,
-  type ContextspaceKind,
+  type ContextspaceDocKindInfo,
+  type ContextspaceResponse,
   writeContextspace,
 } from "./contextspaceApi.js";
 import {
@@ -29,51 +30,27 @@ import { initChatPasteUpload } from "./chatUploads.js";
 import { initDocChatVoice } from "./docChatVoice.js";
 import { renderDiff } from "./diffRenderer.js";
 import { subscribe } from "./bus.js";
+import { DEFAULT_FILEBOX_BOX } from "./fileboxCatalog.js";
 import { isRepoHealthy } from "./health.js";
 import { loadPendingTurn, savePendingTurn, clearPendingTurn } from "./turnResume.js";
 import { resumeFileChatTurn } from "./turnEvents.js";
 
 type ContextspaceDoc = {
-  kind: ContextspaceKind;
+  kind: string;
   label: string;
   path: string;
   description: string;
 };
 
 type WorkspaceState = {
-  target: ContextspaceKind;
+  target: string;
   content: string;
   draft: FileDraft | null;
   hasTickets: boolean;
   loading: boolean;
   docEditor: DocEditor | null;
+  docs: ContextspaceDoc[];
 };
-
-const DOCS: ContextspaceDoc[] = [
-  {
-    kind: "active_context",
-    label: "Active Context",
-    path: "active_context.md",
-    description: "Short-lived working context for the current effort.",
-  },
-  {
-    kind: "decisions",
-    label: "Decisions",
-    path: "decisions.md",
-    description: "Durable architectural and product decisions.",
-  },
-  {
-    kind: "spec",
-    label: "Spec",
-    path: "spec.md",
-    description: "Source-of-truth requirements for ticket generation.",
-  },
-];
-
-const DOC_INDEX: Record<ContextspaceKind, ContextspaceDoc> = DOCS.reduce(
-  (acc, doc) => ({ ...acc, [doc.kind]: doc }),
-  {} as Record<ContextspaceKind, ContextspaceDoc>
-);
 
 const CONTEXTSPACE_CHAT_EVENT_LIMIT = 8;
 const CONTEXTSPACE_CHAT_EVENT_MAX = 50;
@@ -86,6 +63,7 @@ const state: WorkspaceState = {
   hasTickets: true,
   loading: false,
   docEditor: null,
+  docs: [],
 };
 
 const workspaceChat = createDocChat({
@@ -163,17 +141,57 @@ function els() {
   };
 }
 
-function docForKind(kind: ContextspaceKind): ContextspaceDoc {
-  return DOC_INDEX[kind];
+function normalizeDocCatalog(
+  docs: ContextspaceDocKindInfo[] | null | undefined
+): ContextspaceDoc[] {
+  if (!Array.isArray(docs)) return [];
+  const seen = new Set<string>();
+  const normalized: ContextspaceDoc[] = [];
+  for (const doc of docs) {
+    if (!doc || typeof doc.kind !== "string") continue;
+    const kind = doc.kind.trim().toLowerCase();
+    const path = typeof doc.path === "string" ? doc.path.trim() : "";
+    const label = typeof doc.label === "string" ? doc.label.trim() : "";
+    const description =
+      typeof doc.description === "string" ? doc.description.trim() : "";
+    if (!kind || !path || seen.has(kind)) continue;
+    seen.add(kind);
+    normalized.push({
+      kind,
+      path,
+      label: label || kind,
+      description: description || kind,
+    });
+  }
+  return normalized;
 }
 
-function normalizeKind(value: string | null | undefined): ContextspaceKind | null {
+function _fallbackDoc(kind: string): ContextspaceDoc {
+  const safeKind = (kind || "").trim().toLowerCase() || "contextspace";
+  const label = safeKind.replace(/_/g, " ");
+  return {
+    kind: safeKind,
+    path: `${safeKind}.md`,
+    label,
+    description: "Contextspace document.",
+  };
+}
+
+function currentDocs(): ContextspaceDoc[] {
+  return state.docs;
+}
+
+function docForKind(kind: string): ContextspaceDoc {
+  return currentDocs().find((doc) => doc.kind === kind) || _fallbackDoc(kind);
+}
+
+function normalizeKind(value: string | null | undefined): string | null {
   const trimmed = (value || "").trim().toLowerCase().replace(/\.md$/, "");
-  const match = DOCS.find((doc) => doc.kind === trimmed);
+  const match = currentDocs().find((doc) => doc.kind === trimmed);
   return match?.kind || null;
 }
 
-function kindFromPendingTarget(targetValue: string | null | undefined): ContextspaceKind | null {
+function kindFromPendingTarget(targetValue: string | null | undefined): string | null {
   const raw = (targetValue || "").trim();
   if (!raw.toLowerCase().startsWith("contextspace:")) return null;
   const [, suffix = ""] = raw.split(":", 2);
@@ -188,8 +206,13 @@ function currentTarget(): string {
   return `contextspace:${state.target}`;
 }
 
-function contextspaceThreadKey(kind: ContextspaceKind): string {
+function contextspaceThreadKey(kind: string): string {
   return `file_chat.contextspace_${docForKind(kind).path}`;
+}
+
+function contentForKind(response: ContextspaceResponse, kind: string): string {
+  const value = response[kind];
+  return typeof value === "string" ? value : "";
 }
 
 function setStatus(text: string): void {
@@ -265,9 +288,10 @@ function hideRemovedControls(): void {
 function renderDocTargets(): void {
   const { fileList, fileSelect, breadcrumbs, filePillName } = els();
   const active = state.target;
+  const docs = currentDocs();
   if (fileList) {
     fileList.innerHTML = "";
-    DOCS.forEach((doc) => {
+    docs.forEach((doc) => {
       const button = document.createElement("button");
       button.className = `workspace-file-row${doc.kind === active ? " active" : ""}`;
       button.type = "button";
@@ -285,7 +309,7 @@ function renderDocTargets(): void {
 
   if (fileSelect) {
     fileSelect.innerHTML = "";
-    DOCS.forEach((doc) => {
+    docs.forEach((doc) => {
       const option = document.createElement("option");
       option.value = doc.kind;
       option.textContent = doc.path;
@@ -361,7 +385,7 @@ function recreateEditor(content: string): void {
 }
 
 async function loadDoc(
-  kind: ContextspaceKind,
+  kind: string,
   options: { reason?: "initial" | "manual" | "background" } = {}
 ): Promise<void> {
   const reason = options.reason || "manual";
@@ -378,8 +402,15 @@ async function loadDoc(
 
   try {
     const response = await fetchContextspace();
-    state.target = kind;
-    state.content = response[kind] || "";
+    state.docs = normalizeDocCatalog(response.kinds);
+    if (!state.docs.length) {
+      throw new Error("Contextspace catalog unavailable from API response");
+    }
+    const resolvedKind = state.docs.some((doc) => doc.kind === kind)
+      ? kind
+      : state.docs[0].kind;
+    state.target = resolvedKind;
+    state.content = contentForKind(response, resolvedKind);
     workspaceChat.setTarget(currentTarget());
     renderDocTargets();
     recreateEditor(state.content);
@@ -781,7 +812,7 @@ export async function initContextspace(): Promise<void> {
     initChatPasteUpload({
       textarea: chatInput,
       basePath: "/api/filebox",
-      box: "inbox",
+      box: DEFAULT_FILEBOX_BOX,
       insertStyle: "both",
       pathPrefix: ".codex-autorunner/filebox",
     });

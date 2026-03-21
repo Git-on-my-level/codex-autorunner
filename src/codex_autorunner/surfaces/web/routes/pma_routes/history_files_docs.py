@@ -21,6 +21,7 @@ from .....bootstrap import (
     pma_prompt_content,
 )
 from .....core import filebox
+from .....core.filebox import BOXES
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_audit import PmaActionType
 from .....core.pma_context import get_active_context_auto_prune_meta
@@ -184,10 +185,10 @@ def build_history_files_docs_router(
     @router.get("/files")
     async def list_pma_files(request: Request) -> dict[str, list[dict[str, Any]]]:
         hub_root = request.app.state.config.root
-        result: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
+        result: dict[str, list[dict[str, Any]]] = {box: [] for box in BOXES}
         async with await _get_pma_lock():
             listing = await asyncio.to_thread(filebox.list_filebox, hub_root)
-        for box in ("inbox", "outbox"):
+        for box in BOXES:
             entries = listing.get(box, [])
             result[box] = [
                 _serialize_pma_entry(entry, request=request)
@@ -197,7 +198,7 @@ def build_history_files_docs_router(
 
     @router.post("/files/{box}")
     async def upload_pma_file(box: str, request: Request):
-        if box not in ("inbox", "outbox"):
+        if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         max_upload_bytes = request.app.state.config.pma.max_upload_bytes
@@ -253,7 +254,7 @@ def build_history_files_docs_router(
 
     @router.get("/files/{box}/{filename}")
     def download_pma_file(box: str, filename: str, request: Request):
-        if box not in ("inbox", "outbox"):
+        if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         try:
@@ -276,7 +277,7 @@ def build_history_files_docs_router(
 
     @router.delete("/files/{box}/{filename}")
     async def delete_pma_file(box: str, filename: str, request: Request):
-        if box not in ("inbox", "outbox"):
+        if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         entry: Optional[filebox.FileBoxEntry] = None
@@ -311,7 +312,7 @@ def build_history_files_docs_router(
 
     @router.delete("/files/{box}")
     async def delete_pma_box(box: str, request: Request):
-        if box not in ("inbox", "outbox"):
+        if box not in BOXES:
             raise HTTPException(status_code=400, detail="Invalid box")
         hub_root = request.app.state.config.root
         deleted_files: list[str] = []

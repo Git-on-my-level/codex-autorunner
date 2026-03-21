@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional
 
-from ...core.flows import FlowRunStatus
+from ...core.flows import FLOW_ACTIONS_WITH_RUN_PICKER, FlowRunStatus
 from ...core.utils import canonicalize_path
 from ...integrations.chat.picker_filter import filter_picker_items
 from .components import DISCORD_SELECT_OPTION_MAX_OPTIONS
@@ -14,15 +14,6 @@ MODEL_SEARCH_FETCH_LIMIT = 200
 REPO_AUTOCOMPLETE_TOKEN_PREFIX = "repo@"
 WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "workspace@"
 AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX = "agent_workspace@"
-FLOW_ACTIONS_WITH_RUN_PICKER = {
-    "status",
-    "restart",
-    "resume",
-    "stop",
-    "archive",
-    "recover",
-    "reply",
-}
 
 
 def repo_autocomplete_value(repo_id: str) -> str:

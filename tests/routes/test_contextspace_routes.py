@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
+from codex_autorunner.contextspace.paths import CONTEXTSPACE_DOC_KINDS
 from codex_autorunner.web.app import create_repo_app
 
 
@@ -24,3 +25,14 @@ def test_contextspace_rejects_invalid_doc_kind(tmp_path: Path) -> None:
     res = client.put("/api/contextspace/binary", json={"content": "nope"})
     assert res.status_code == 400
     assert res.json()["detail"] == "invalid contextspace doc kind"
+
+
+def test_contextspace_get_includes_catalog(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    client = _client_for_repo(repo_root)
+
+    res = client.get("/api/contextspace")
+    assert res.status_code == 200
+    payload = res.json()
+    assert [entry["kind"] for entry in payload["kinds"]] == list(CONTEXTSPACE_DOC_KINDS)

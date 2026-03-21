@@ -63,7 +63,6 @@ def apply_run_event_to_progress_tracker(
                 tracker.note_output(delta)
             else:
                 tracker.note_output(delta, new_segment=True)
-            tracker.end_output_segment()
         elif run_event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:
             item_id = progress_item_id_for_log_line(delta)
             if item_id:

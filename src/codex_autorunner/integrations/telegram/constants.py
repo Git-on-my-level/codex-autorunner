@@ -134,11 +134,6 @@ DEFAULT_AGENT_MODELS = dict(DEFAULT_CHAT_AGENT_MODELS)
 LEGACY_DEFAULT_AGENT_MODELS = DEFAULT_AGENT_MODELS
 CONTEXT_BASELINE_TOKENS = 12000
 APPROVAL_POLICY_VALUES = {"untrusted", "on-failure", "on-request", "never"}
-APPROVAL_PRESETS = {
-    "read-only": ("on-request", "readOnly"),
-    "auto": ("on-request", "workspaceWrite"),
-    "full-access": ("never", "dangerFullAccess"),
-}
 SHELL_OUTPUT_TRUNCATION_SUFFIX = "\n...(truncated)"
 SHELL_MESSAGE_BUFFER_CHARS = 200
 COMPACT_SUMMARY_PROMPT = (

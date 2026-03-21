@@ -31,10 +31,18 @@ class ContextspaceWriteRequest(Payload):
     content: str = ""
 
 
+class ContextspaceDocKindInfo(ResponseModel):
+    kind: str
+    path: str
+    label: str
+    description: str
+
+
 class ContextspaceResponse(ResponseModel):
     active_context: str
     decisions: str
     spec: str
+    kinds: List[ContextspaceDocKindInfo] = Field(default_factory=list)
 
 
 class ArchiveSnapshotSummary(ResponseModel):

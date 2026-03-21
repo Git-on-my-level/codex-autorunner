@@ -2,15 +2,18 @@ import asyncio
 from typing import Any, Optional
 
 from ....app_server.client import CodexAppServerError
+from ....chat.approval_modes import (
+    APPROVAL_MODE_USAGE,
+    normalize_approval_mode,
+)
 from ...adapter import TelegramMessage
 from ...config import AppServerUnavailableError
-from ...constants import APPROVAL_POLICY_VALUES, APPROVAL_PRESETS
+from ...constants import APPROVAL_POLICY_VALUES
 from ...helpers import (
     _clear_policy_overrides,
     _extract_rate_limits,
     _format_persist_note,
     _format_sandbox_policy,
-    _normalize_approval_preset,
     _set_policy_overrides,
 )
 from .shared import SharedHelpers
@@ -47,18 +50,11 @@ class ApprovalsCommands(SharedHelpers):
         if not argv:
             await self._send_approval_status(message, record)
             return
-        mode = argv[0].lower()
-        if mode in ("yolo", "off", "disable", "disabled"):
-            await self._set_approval_mode(message, "yolo", persist=persist)
-            return
-        if mode in ("safe", "on", "enable", "enabled"):
-            await self._set_approval_mode(message, "safe", persist=persist)
-            return
-        preset = _normalize_approval_preset(mode)
-        if mode == "preset" and len(argv) > 1:
-            preset = _normalize_approval_preset(argv[1])
-        if preset:
-            await self._apply_preset_policy(message, preset, persist=persist)
+        mode = normalize_approval_mode(argv[0], include_command_aliases=True)
+        if argv[0].lower() == "preset" and len(argv) > 1:
+            mode = normalize_approval_mode(argv[1], include_command_aliases=True)
+        if mode is not None:
+            await self._set_approval_mode(message, mode, persist=persist)
             return
         approval_policy = argv[0] if argv[0] in APPROVAL_POLICY_VALUES else None
         if approval_policy:
@@ -87,7 +83,7 @@ class ApprovalsCommands(SharedHelpers):
                     f"Approval mode: {record.approval_mode}",
                     f"Approval policy: {approval_policy or 'default'}",
                     f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
-                    "Usage: /approvals yolo|safe|read-only|auto|full-access",
+                    f"Usage: /approvals {APPROVAL_MODE_USAGE}",
                 ]
             ),
             thread_id=message.thread_id,
@@ -98,7 +94,7 @@ class ApprovalsCommands(SharedHelpers):
         """Send the usage hint for the /approvals command."""
         await self._send_message(
             message.chat_id,
-            "Usage: /approvals yolo|safe|read-only|auto|full-access",
+            f"Usage: /approvals {APPROVAL_MODE_USAGE}",
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -106,7 +102,7 @@ class ApprovalsCommands(SharedHelpers):
     async def _set_approval_mode(
         self, message: TelegramMessage, mode: str, *, persist: bool
     ) -> None:
-        """Switch between safe and yolo modes and clear overrides."""
+        """Set a canonical approval mode and clear explicit overrides."""
         await self._router.set_approval_mode(message.chat_id, message.thread_id, mode)
         await self._router.update_topic(
             message.chat_id,
@@ -116,30 +112,6 @@ class ApprovalsCommands(SharedHelpers):
         await self._send_message(
             message.chat_id,
             _format_persist_note(f"Approval mode set to {mode}.", persist=persist),
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-
-    async def _apply_preset_policy(
-        self, message: TelegramMessage, preset: str, *, persist: bool
-    ) -> None:
-        """Apply an approval preset and persist if requested."""
-        approval_policy, sandbox_policy = APPROVAL_PRESETS[preset]
-        await self._router.update_topic(
-            message.chat_id,
-            message.thread_id,
-            lambda record: _set_policy_overrides(
-                record,
-                approval_policy=approval_policy,
-                sandbox_policy=sandbox_policy,
-            ),
-        )
-        await self._send_message(
-            message.chat_id,
-            _format_persist_note(
-                f"Approval policy set to {approval_policy} with sandbox {sandbox_policy}.",
-                persist=persist,
-            ),
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )

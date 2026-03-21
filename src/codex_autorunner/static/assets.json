@@ -68,6 +68,9 @@
       "path": "generated/eventSummarizer.js"
     },
     {
+      "path": "generated/fileboxCatalog.js"
+    },
+    {
       "path": "generated/fileboxUi.js"
     },
     {

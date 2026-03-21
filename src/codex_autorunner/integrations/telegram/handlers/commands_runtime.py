@@ -433,6 +433,18 @@ class TelegramCommandHandlers(
                 placeholder_id=outcome.placeholder_id,
                 final_response_sent_at=now_iso(),
             )
+        interrupt_status_turn_id = getattr(outcome, "interrupt_status_turn_id", None)
+        interrupt_status_fallback_text = getattr(
+            outcome, "interrupt_status_fallback_text", None
+        )
+        if interrupt_status_fallback_text and interrupt_status_turn_id:
+            await self._clear_interrupt_status_message(
+                chat_id=message.chat_id,
+                runtime=runtime,
+                turn_id=interrupt_status_turn_id,
+                fallback_text=interrupt_status_fallback_text,
+                outcome_visible=response_sent,
+            )
         if metrics and metrics_mode == "separate":
             await self._send_turn_metrics(
                 chat_id=message.chat_id,
@@ -2269,9 +2281,21 @@ class TelegramCommandHandlers(
         if isinstance(outcome, _TurnRunFailure):
             return
         summary_text = outcome.response.strip() or "(no summary)"
-        _summary_message_id, _display_text = await self._send_compact_summary_message(
+        summary_message_id, _display_text = await self._send_compact_summary_message(
             message, summary_text, reply_markup=None
         )
+        interrupt_status_turn_id = getattr(outcome, "interrupt_status_turn_id", None)
+        interrupt_status_fallback_text = getattr(
+            outcome, "interrupt_status_fallback_text", None
+        )
+        if interrupt_status_fallback_text and interrupt_status_turn_id:
+            await self._clear_interrupt_status_message(
+                chat_id=message.chat_id,
+                runtime=runtime,
+                turn_id=interrupt_status_turn_id,
+                fallback_text=interrupt_status_fallback_text,
+                outcome_visible=summary_message_id is not None,
+            )
         if outcome.turn_id:
             self._token_usage_by_turn.pop(outcome.turn_id, None)
         await self._delete_message(message.chat_id, outcome.placeholder_id)

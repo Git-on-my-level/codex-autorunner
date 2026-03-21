@@ -1035,6 +1035,57 @@ class WorkspaceCommands(SharedHelpers):
                                 pma_key=pma_key,
                                 exc=exc,
                             )
+            if getattr(self._config, "root", None) is not None and callable(
+                getattr(self, "_spawn_task", None)
+            ):
+                from .execution import _reset_telegram_thread_binding
+
+                hub_root = getattr(self, "_hub_root", None)
+                if hub_root is not None and record is not None:
+                    try:
+                        await _reset_telegram_thread_binding(
+                            self,
+                            surface_key=key,
+                            workspace_root=canonicalize_path(Path(hub_root)),
+                            agent=self._effective_agent(record),
+                            repo_id=(
+                                record.repo_id.strip()
+                                if isinstance(record.repo_id, str)
+                                and record.repo_id.strip()
+                                else None
+                            ),
+                            resource_kind=(
+                                record.resource_kind.strip()
+                                if isinstance(record.resource_kind, str)
+                                and record.resource_kind.strip()
+                                else None
+                            ),
+                            resource_id=(
+                                record.resource_id.strip()
+                                if isinstance(record.resource_id, str)
+                                and record.resource_id.strip()
+                                else None
+                            ),
+                            mode="pma",
+                            pma_enabled=True,
+                        )
+                    except Exception as exc:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.pma.reset.managed_thread_reset_failed",
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            exc=exc,
+                        )
+                        await self._send_message(
+                            message.chat_id,
+                            "Failed to reset PMA thread; check logs for details.",
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                        )
+                        return
             await self._send_message(
                 message.chat_id,
                 "PMA thread reset. Send a message to start a fresh PMA turn.",
@@ -1221,6 +1272,57 @@ class WorkspaceCommands(SharedHelpers):
                                 pma_key=pma_key,
                                 exc=exc,
                             )
+            if getattr(self._config, "root", None) is not None and callable(
+                getattr(self, "_spawn_task", None)
+            ):
+                from .execution import _reset_telegram_thread_binding
+
+                hub_root = getattr(self, "_hub_root", None)
+                if hub_root is not None and record is not None:
+                    try:
+                        await _reset_telegram_thread_binding(
+                            self,
+                            surface_key=key,
+                            workspace_root=canonicalize_path(Path(hub_root)),
+                            agent=self._effective_agent(record),
+                            repo_id=(
+                                record.repo_id.strip()
+                                if isinstance(record.repo_id, str)
+                                and record.repo_id.strip()
+                                else None
+                            ),
+                            resource_kind=(
+                                record.resource_kind.strip()
+                                if isinstance(record.resource_kind, str)
+                                and record.resource_kind.strip()
+                                else None
+                            ),
+                            resource_id=(
+                                record.resource_id.strip()
+                                if isinstance(record.resource_id, str)
+                                and record.resource_id.strip()
+                                else None
+                            ),
+                            mode="pma",
+                            pma_enabled=True,
+                        )
+                    except Exception as exc:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "telegram.pma.new.managed_thread_reset_failed",
+                            topic_key=key,
+                            chat_id=message.chat_id,
+                            thread_id=message.thread_id,
+                            exc=exc,
+                        )
+                        await self._send_message(
+                            message.chat_id,
+                            "Failed to reset PMA session; check logs for details.",
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                        )
+                        return
             await self._send_message(
                 message.chat_id,
                 "PMA session reset. Send a message to start a fresh PMA turn.",

@@ -6,11 +6,46 @@ This module is platform-agnostic and depends only on normalized chat models.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from ....core.logging_utils import log_event
 from ..models import ChatInteractionEvent
 from .models import ChatContext
+
+
+@dataclass(frozen=True)
+class NormalizedApprovalRequest:
+    request_id: str
+    turn_id: str
+    backend_thread_id: Optional[str] = None
+
+
+def normalize_backend_approval_request(
+    request: dict[str, Any],
+) -> Optional[NormalizedApprovalRequest]:
+    if not isinstance(request, dict):
+        return None
+    request_id_value = request.get("id")
+    request_id = str(request_id_value).strip() if request_id_value is not None else ""
+    params = request.get("params") if isinstance(request.get("params"), dict) else {}
+    turn_id_value = params.get("turnId")
+    if turn_id_value is None:
+        turn_id_value = params.get("turn_id")
+    turn_id = str(turn_id_value).strip() if turn_id_value is not None else ""
+    backend_thread_value = params.get("threadId")
+    if backend_thread_value is None:
+        backend_thread_value = params.get("thread_id")
+    backend_thread_id = (
+        str(backend_thread_value).strip() if backend_thread_value is not None else ""
+    )
+    if not request_id or not turn_id:
+        return None
+    return NormalizedApprovalRequest(
+        request_id=request_id,
+        turn_id=turn_id,
+        backend_thread_id=backend_thread_id or None,
+    )
 
 
 class ChatApprovalHandlers:

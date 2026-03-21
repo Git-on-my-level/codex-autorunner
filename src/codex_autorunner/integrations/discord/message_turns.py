@@ -61,6 +61,7 @@ from ...core.ports.run_event import (
     ToolCall,
 )
 from ...core.utils import canonicalize_path
+from ...integrations.chat.approval_modes import resolve_approval_mode_policies
 from ...integrations.chat.collaboration_policy import CollaborationEvaluationResult
 from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
@@ -106,14 +107,6 @@ class DiscordMessageTurnResult:
     send_final_message: bool = True
 
 
-_APPROVAL_MODE_POLICY_PRESETS: dict[str, tuple[str, str]] = {
-    "yolo": ("never", "dangerFullAccess"),
-    "safe": ("on-request", "workspaceWrite"),
-    "auto": ("on-request", "workspaceWrite"),
-    "read-only": ("on-request", "readOnly"),
-    "full-access": ("never", "dangerFullAccess"),
-}
-
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
 
 
@@ -123,28 +116,27 @@ def _resolve_discord_turn_policies(
     default_approval_policy: str,
     default_sandbox_policy: str,
 ) -> tuple[str, Any]:
-    approval_policy = default_approval_policy
-    sandbox_policy: Any = default_sandbox_policy
     approval_mode = "yolo"
+    explicit_approval_policy: Optional[str] = None
+    explicit_sandbox_policy: Optional[Any] = None
     if isinstance(binding, dict):
         binding_mode = str(binding.get("approval_mode") or "").strip()
         if binding_mode:
             approval_mode = binding_mode
         binding_policy = binding.get("approval_policy")
         if isinstance(binding_policy, str) and binding_policy.strip():
-            approval_policy = binding_policy.strip()
+            explicit_approval_policy = binding_policy.strip()
         binding_sandbox = binding.get("sandbox_policy")
         if isinstance(binding_sandbox, str) and binding_sandbox.strip():
-            sandbox_policy = binding_sandbox.strip()
-    preset_policy, preset_sandbox = _APPROVAL_MODE_POLICY_PRESETS.get(
-        approval_mode.lower(),
-        (None, None),
+            explicit_sandbox_policy = binding_sandbox.strip()
+    approval_policy, sandbox_policy = resolve_approval_mode_policies(
+        approval_mode,
+        default_approval_policy=default_approval_policy,
+        default_sandbox_policy=default_sandbox_policy,
+        override_approval_policy=explicit_approval_policy,
+        override_sandbox_policy=explicit_sandbox_policy,
     )
-    if approval_policy == default_approval_policy and preset_policy is not None:
-        approval_policy = preset_policy
-    if sandbox_policy == default_sandbox_policy and preset_sandbox is not None:
-        sandbox_policy = preset_sandbox
-    return approval_policy, sandbox_policy
+    return approval_policy or default_approval_policy, sandbox_policy
 
 
 async def _apply_discord_progress_run_event(

@@ -7,6 +7,7 @@ import httpx
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
+from codex_autorunner.core.filebox import BOXES
 from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
@@ -149,7 +150,7 @@ def test_pma_upload_help():
     result = runner.invoke(pma_app, ["upload", "--help"])
     assert result.exit_code == 0
     output = result.stdout
-    assert "inbox|outbox" in output, "PMA upload should require box argument"
+    assert "|".join(BOXES) in output, "PMA upload should require box argument"
     assert "FILES" in output, "PMA upload should accept files"
     assert "--json" in output, "PMA upload should support --json output mode"
 
@@ -160,7 +161,7 @@ def test_pma_download_help():
     result = runner.invoke(pma_app, ["download", "--help"])
     assert result.exit_code == 0
     output = result.stdout
-    assert "inbox|outbox" in output, "PMA download should require box argument"
+    assert "|".join(BOXES) in output, "PMA download should require box argument"
     assert "FILENAME" in output, "PMA download should require filename"
     assert "--output" in output, "PMA download should support --output option"
 

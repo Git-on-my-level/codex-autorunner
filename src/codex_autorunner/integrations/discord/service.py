@@ -36,9 +36,12 @@ from ...core.filebox import (
     outbox_sent_dir,
 )
 from ...core.flows import (
+    FLOW_ACTION_SPECS,
+    FLOW_ACTIONS_WITH_RUN_PICKER,
     FlowRunRecord,
     FlowRunStatus,
     FlowStore,
+    flow_action_label,
     flow_run_duration_seconds,
     format_flow_duration,
     list_unseen_ticket_flow_dispatches,
@@ -118,6 +121,9 @@ from ...integrations.chat.dispatcher import (
     DispatchResult,
 )
 from ...integrations.chat.forwarding import compose_forwarded_message_text
+from ...integrations.chat.handlers.approvals import (
+    normalize_backend_approval_request,
+)
 from ...integrations.chat.media import (
     audio_content_type_for_input,
     audio_extension_for_input,
@@ -171,6 +177,7 @@ from ...tickets.files import (
 from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
+from ..chat.approval_modes import APPROVAL_MODE_USAGE, normalize_approval_mode
 from ..chat.review_commits import _parse_review_commit_log
 from ..chat.thread_summaries import (
     _coerce_thread_list,
@@ -292,15 +299,6 @@ TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
 TICKETS_SELECT_ID = "tickets_select"
 TICKETS_MODAL_PREFIX = "tickets_modal"
 TICKETS_BODY_INPUT_ID = "ticket_body"
-FLOW_ACTIONS_WITH_RUN_PICKER = {
-    "status",
-    "restart",
-    "resume",
-    "stop",
-    "archive",
-    "recover",
-    "reply",
-}
 
 
 class AppServerUnavailableError(Exception):
@@ -354,19 +352,6 @@ def _opencode_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]
     if not idle_ttl_seconds or idle_ttl_seconds <= 0:
         return None
     return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
-
-
-def _flow_action_label(action: str) -> str:
-    labels = {
-        "status": "status",
-        "restart": "restart",
-        "resume": "resume",
-        "stop": "stop",
-        "archive": "archive",
-        "recover": "recover",
-        "reply": "reply",
-    }
-    return labels.get(action, action)
 
 
 def _flow_run_matches_action(record: FlowRunRecord, action: str) -> bool:
@@ -2182,13 +2167,11 @@ class DiscordBotService:
     async def _handle_backend_approval_request(
         self, request: dict[str, Any]
     ) -> ApprovalDecision:
-        request_id = str(request.get("id") or "").strip()
-        params = (
-            request.get("params") if isinstance(request.get("params"), dict) else {}
-        )
-        turn_id = str(params.get("turnId") or params.get("turn_id") or "").strip()
-        if not request_id or not turn_id:
+        request_data = normalize_backend_approval_request(request)
+        if request_data is None:
             return "cancel"
+        request_id = request_data.request_id
+        turn_id = request_data.turn_id
         context = self._discord_turn_approval_contexts.get(turn_id)
         if context is None:
             return "cancel"
@@ -2704,12 +2687,12 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"No ticket_flow runs available for {_flow_action_label(action)}.",
+                f"No ticket_flow runs available for {flow_action_label(action)}.",
             )
             return
         run_tuples = [(record.id, record.status.value) for record in filtered]
         custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
-        prompt = f"Select a run to {_flow_action_label(action)}:"
+        prompt = f"Select a run to {flow_action_label(action)}:"
         await self._respond_with_components(
             interaction_id,
             interaction_token,
@@ -2718,7 +2701,7 @@ class DiscordBotService:
                 build_flow_runs_picker(
                     run_tuples,
                     custom_id=custom_id,
-                    placeholder=f"Select run to {_flow_action_label(action)}...",
+                    placeholder=f"Select run to {flow_action_label(action)}...",
                 )
             ],
         )
@@ -2775,7 +2758,7 @@ class DiscordBotService:
             ]
             prompt = (
                 f"Matched {len(filtered_items)} runs for `{query_text}`. "
-                f"Select a run to {_flow_action_label(action)}:"
+                f"Select a run to {flow_action_label(action)}:"
             )
             await self._respond_with_components(
                 interaction_id,
@@ -2785,7 +2768,7 @@ class DiscordBotService:
                     build_flow_runs_picker(
                         filtered_items,
                         custom_id=custom_id,
-                        placeholder=f"Select run to {_flow_action_label(action)}...",
+                        placeholder=f"Select run to {flow_action_label(action)}...",
                     )
                 ],
             )
@@ -4913,6 +4896,7 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
+        flow_usage_overrides = {"runs": "[limit]"}
         lines = [
             "**CAR Commands:**",
             "",
@@ -4948,17 +4932,10 @@ class DiscordBotService:
             "/car session logout - Log out of the Codex account",
             "",
             "**Flow Commands:**",
-            "/car flow status [run_id] - Show flow status",
-            "/car flow runs [limit] - List flow runs",
-            "/car flow issue <issue#|url> - Seed ISSUE.md from GitHub",
-            "/car flow plan <text> - Seed ISSUE.md from plan text",
-            "/car flow start [force_new] - Start flow (or reuse active/paused)",
-            "/car flow restart [run_id] - Restart flow with a fresh run",
-            "/car flow resume [run_id] - Resume a paused flow",
-            "/car flow stop [run_id] - Stop a flow",
-            "/car flow archive [run_id] - Archive a flow",
-            "/car flow recover [run_id] - Reconcile active flow run state",
-            "/car flow reply <text> [run_id] - Reply to paused flow",
+            *[
+                f"/car flow {spec.name} {flow_usage_overrides.get(spec.name, spec.usage)} - {spec.description}"
+                for spec in FLOW_ACTION_SPECS
+            ],
             "",
             "**File Commands:**",
             "/car files inbox - List inbox files",
@@ -10954,23 +10931,18 @@ class DiscordBotService:
                         f"Approval policy: {approval_policy}",
                         f"Sandbox policy: {sandbox_policy}",
                         "",
-                        "Usage: /car approvals yolo|safe|read-only|auto|full-access",
+                        f"Usage: /car approvals {APPROVAL_MODE_USAGE}",
                     ]
                 ),
             )
             return
 
-        if mode in ("yolo", "off", "disable"):
-            new_mode = "yolo"
-        elif mode in ("safe", "on", "enable"):
-            new_mode = "safe"
-        elif mode in ("read-only", "auto", "full-access"):
-            new_mode = mode
-        else:
+        new_mode = normalize_approval_mode(mode, include_command_aliases=True)
+        if new_mode is None:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"Unknown mode: {mode}. Valid options: yolo, safe, read-only, auto, full-access",
+                f"Unknown mode: {mode}. Valid options: {APPROVAL_MODE_USAGE}",
             )
             return
 

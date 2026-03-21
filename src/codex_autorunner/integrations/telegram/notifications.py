@@ -588,7 +588,6 @@ class TelegramNotificationHandlers:
                     tracker.note_output(text)
                 else:
                     tracker.note_output(text, new_segment=True)
-                tracker.end_output_segment()
         else:
             text = item.get("text") or item.get("message") or "Item completed"
             tracker.add_action("item", str(text), "done")

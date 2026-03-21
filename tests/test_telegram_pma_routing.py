@@ -1424,6 +1424,134 @@ class _ManagedThreadPMAHandler(_PMAHandler):
 
 
 @pytest.mark.anyio
+async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[object] = []
+    queued_started = object()
+    begin_calls = 0
+
+    class _Handler:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+            self._spawned_tasks: set[asyncio.Task[object]] = set()
+
+        def _spawn_task(self, coro):  # type: ignore[no-untyped-def]
+            task = asyncio.create_task(coro)
+            self._spawned_tasks.add(task)
+            task.add_done_callback(self._spawned_tasks.discard)
+            return task
+
+        async def _begin_typing_indicator(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> None:
+            events.append(("begin", chat_id, thread_id))
+
+        async def _end_typing_indicator(
+            self, chat_id: int, thread_id: Optional[int]
+        ) -> None:
+            events.append(("end", chat_id, thread_id))
+
+        async def _send_message(
+            self,
+            chat_id: int,
+            text: str,
+            *,
+            thread_id: Optional[int],
+            reply_to: Optional[int],
+        ) -> None:
+            _ = reply_to
+            events.append(("send", chat_id, thread_id, text))
+
+        async def _flush_outbox_files(
+            self,
+            record: TelegramTopicRecord,
+            *,
+            chat_id: int,
+            thread_id: Optional[int],
+            reply_to: Optional[int],
+        ) -> None:
+            _ = record, reply_to
+            events.append(("flush", chat_id, thread_id))
+
+    class _OrchestrationServiceStub:
+        def get_running_execution(self, managed_thread_id: str) -> None:
+            _ = managed_thread_id
+            return None
+
+    async def _fake_begin_next(
+        orchestration_service: object,
+        managed_thread_id: str,
+    ) -> Optional[object]:
+        nonlocal begin_calls
+        _ = orchestration_service, managed_thread_id
+        if begin_calls == 0:
+            begin_calls += 1
+            return queued_started
+        return None
+
+    async def _fake_finalize(
+        handlers: object,
+        *,
+        orchestration_service: object,
+        started: object,
+        surface_key: str,
+        chat_id: int,
+        thread_id: Optional[int],
+        public_execution_error: str,
+        timeout_error: str,
+        interrupted_error: str,
+    ) -> dict[str, object]:
+        _ = (
+            handlers,
+            orchestration_service,
+            surface_key,
+            chat_id,
+            thread_id,
+            public_execution_error,
+            timeout_error,
+            interrupted_error,
+        )
+        assert started is queued_started
+        events.append("finalize")
+        return {"status": "ok", "assistant_text": "queued telegram reply"}
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "begin_next_queued_runtime_thread_execution",
+        _fake_begin_next,
+    )
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_finalize_telegram_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    handler = _Handler()
+    execution_commands_module._ensure_telegram_managed_thread_queue_worker(
+        handler,
+        orchestration_service=_OrchestrationServiceStub(),
+        managed_thread_id="managed-thread-1",
+        surface_key="telegram:-1001:101",
+        record=TelegramTopicRecord(workspace_path=str(tmp_path), pma_enabled=True),
+        chat_id=-1001,
+        thread_id=101,
+    )
+
+    spawned = list(handler._spawned_tasks)
+    assert len(spawned) == 1
+    await asyncio.gather(*spawned)
+
+    assert events == [
+        ("begin", -1001, 101),
+        "finalize",
+        ("send", -1001, 101, "queued telegram reply"),
+        ("flush", -1001, 101),
+        ("end", -1001, 101),
+    ]
+
+
+@pytest.mark.anyio
 async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3699,6 +3827,77 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
 
 
 @pytest.mark.anyio
+async def test_reset_telegram_thread_binding_archives_after_lost_backend_recovery() -> (
+    None
+):
+    workspace = Path("/tmp/telegram-reset-workspace").resolve()
+    calls: list[tuple[str, str]] = []
+
+    class _FakeThreadService:
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            calls.append(("stop", thread_target_id))
+            return SimpleNamespace(recovered_lost_backend=True)
+
+        def archive_thread_target(self, thread_target_id: str) -> None:
+            calls.append(("archive", thread_target_id))
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            calls.append(("create", agent))
+            assert workspace_root == workspace
+            return SimpleNamespace(
+                thread_target_id="thread-2",
+                agent_id=agent,
+                workspace_root=str(workspace_root),
+            )
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            calls.append(("bind", str(kwargs["thread_target_id"])))
+
+    handlers = SimpleNamespace(_logger=logging.getLogger("test"))
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="pma"),
+            SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                workspace_root=str(workspace),
+            ),
+        ),
+    )
+    try:
+        had_previous, new_thread_id = (
+            await execution_commands_module._reset_telegram_thread_binding(
+                handlers,
+                surface_key="topic-1",
+                workspace_root=workspace,
+                agent="codex",
+                repo_id="repo-1",
+                resource_kind="repo",
+                resource_id="repo-1",
+                mode="pma",
+                pma_enabled=True,
+            )
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert had_previous is True
+    assert new_thread_id == "thread-2"
+    assert calls == [
+        ("stop", "thread-1"),
+        ("archive", "thread-1"),
+        ("create", "codex"),
+        ("bind", "thread-2"),
+    ]
+
+
+@pytest.mark.anyio
 async def test_pma_new_resets_session(tmp_path: Path) -> None:
     registry = AppServerThreadRegistry(tmp_path / "threads.json")
     registry.reset_all()
@@ -3724,6 +3923,50 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
     sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
     assert PMA_OPENCODE_KEY not in sessions
+    assert handler._sent and "PMA session reset" in handler._sent[-1]
+
+
+@pytest.mark.anyio
+async def test_pma_new_resets_managed_binding_when_runtime_threads_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = AppServerThreadRegistry(tmp_path / "threads.json")
+    registry.reset_all()
+    record = TelegramTopicRecord(pma_enabled=True, workspace_path=None, agent="codex")
+    handler = _PMAWorkspaceHandler(record, registry, hub_root=tmp_path)
+    handler._config = SimpleNamespace(require_topics=False, root=tmp_path)
+    handler._spawn_task = lambda coro: None
+    calls: list[dict[str, object]] = []
+
+    async def _fake_reset_telegram_thread_binding(
+        _handlers: Any, **kwargs: Any
+    ) -> tuple[bool, str]:
+        calls.append(kwargs)
+        return True, "thread-2"
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_reset_telegram_thread_binding",
+        _fake_reset_telegram_thread_binding,
+    )
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=-2002,
+        thread_id=333,
+        from_user_id=99,
+        text="/new",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_new(message)
+
+    assert calls
+    assert calls[-1]["surface_key"] == "-2002:333"
+    assert calls[-1]["mode"] == "pma"
+    assert calls[-1]["pma_enabled"] is True
     assert handler._sent and "PMA session reset" in handler._sent[-1]
 
 
