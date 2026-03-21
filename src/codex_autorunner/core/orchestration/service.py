@@ -475,6 +475,11 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             return None
         return thread.status
 
+    def get_thread_runtime_binding(
+        self, thread_target_id: str
+    ) -> Optional[RuntimeThreadBinding]:
+        return _resolve_thread_runtime_binding(self.thread_store, thread_target_id)
+
     def upsert_binding(
         self,
         *,

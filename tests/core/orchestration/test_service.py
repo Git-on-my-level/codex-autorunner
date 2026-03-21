@@ -212,6 +212,24 @@ def _thread_runtime_binding(
     return service.thread_store.get_thread_runtime_binding(thread_target_id)
 
 
+def test_service_exposes_thread_runtime_binding_lookup(tmp_path: Path) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+    )
+
+    binding = service.get_thread_runtime_binding(thread.thread_target_id)
+
+    assert binding is not None
+    assert binding.backend_thread_id == "backend-existing-1"
+
+
 def test_service_lists_definitions_and_resolves_thread_targets(tmp_path: Path) -> None:
     harness = _FakeHarness()
     service = _build_service(tmp_path, harness)
