@@ -61,7 +61,30 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     assert normalized_listed[0]["managed_thread_id"] == created["managed_thread_id"]
 
 
-def test_backend_thread_id_is_runtime_only_across_restart(tmp_path: Path) -> None:
+def test_backend_thread_binding_is_shared_across_store_instances(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-1",
+        metadata={"backend_runtime_instance_id": "runtime-1"},
+    )
+    managed_thread_id = created["managed_thread_id"]
+
+    restarted = PmaThreadStore(hub_root)
+    fetched = restarted.get_thread(managed_thread_id)
+    assert fetched is not None
+    assert fetched["backend_thread_id"] == "backend-1"
+    assert fetched["backend_runtime_instance_id"] == "runtime-1"
+
+
+def test_backend_thread_binding_can_be_cleared_across_restart(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()

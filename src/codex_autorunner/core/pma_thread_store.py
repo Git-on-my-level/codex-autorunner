@@ -425,8 +425,6 @@ class PmaThreadStore:
             "resource_id": resource_id,
             "workspace_root": row["workspace_root"],
             "name": row["display_name"],
-            # backend_thread_id is runtime-only. Ignore any durable column value
-            # so stale pre-refactor ids do not reappear after restart.
             "backend_thread_id": (
                 runtime_binding.backend_thread_id
                 if runtime_binding is not None
@@ -1405,6 +1403,34 @@ class PmaThreadStore:
                 (_thread_queue_lane_id(managed_thread_id),),
             ).fetchone()
         return int((row["queue_depth"] if row is not None else 0) or 0)
+
+    def list_thread_ids_with_running_executions(
+        self, *, limit: Optional[int] = 200
+    ) -> list[str]:
+        if limit is not None and limit <= 0:
+            return []
+        limit_clause = ""
+        params: list[Any] = []
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(limit)
+        with self._read_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT thread_target_id, MIN(started_at) AS earliest_started_at
+                  FROM orch_thread_executions
+                 WHERE status = 'running'
+                 GROUP BY thread_target_id
+                 ORDER BY earliest_started_at ASC, thread_target_id ASC
+                {limit_clause}
+                """,
+                params,
+            ).fetchall()
+        return [
+            str(row["thread_target_id"])
+            for row in rows
+            if isinstance(row["thread_target_id"], str) and row["thread_target_id"]
+        ]
 
     def list_thread_ids_with_pending_queue(
         self, *, limit: Optional[int] = 200

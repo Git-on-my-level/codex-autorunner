@@ -882,14 +882,9 @@ async def recover_orphaned_managed_thread_executions(app: Any) -> None:
         app,
         thread_store=thread_store,
     )
-    for thread in thread_store.list_threads(
-        status="active",
-        normalized_status="running",
+    for managed_thread_id in thread_store.list_thread_ids_with_running_executions(
         limit=None,
     ):
-        managed_thread_id = normalize_optional_text(thread.get("managed_thread_id"))
-        if managed_thread_id is None:
-            continue
         try:
             service.recover_running_execution_after_restart(managed_thread_id)
         except Exception:

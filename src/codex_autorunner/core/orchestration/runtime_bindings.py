@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Lock
 from typing import Optional
+
+from ..time_utils import now_iso
+from .sqlite import open_orchestration_sqlite
 
 
 def _normalize_optional_text(value: object) -> Optional[str]:
@@ -19,25 +21,49 @@ class RuntimeThreadBinding:
     backend_runtime_instance_id: Optional[str] = None
 
 
-_BINDINGS_LOCK = Lock()
-_RUNTIME_THREAD_BINDINGS: dict[tuple[str, str], RuntimeThreadBinding] = {}
+def _ensure_runtime_bindings_table(hub_root: Path) -> None:
+    with open_orchestration_sqlite(hub_root) as conn:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS orch_runtime_thread_bindings (
+                    thread_target_id TEXT PRIMARY KEY,
+                    backend_thread_id TEXT NOT NULL,
+                    backend_runtime_instance_id TEXT,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
 
 
-def _binding_key(hub_root: Path, thread_target_id: str) -> Optional[tuple[str, str]]:
-    normalized_thread_target_id = _normalize_optional_text(thread_target_id)
-    if normalized_thread_target_id is None:
-        return None
-    return str(hub_root.resolve()), normalized_thread_target_id
+def _normalized_thread_target_id(thread_target_id: str) -> Optional[str]:
+    return _normalize_optional_text(thread_target_id)
 
 
 def get_runtime_thread_binding(
     hub_root: Path, thread_target_id: str
 ) -> Optional[RuntimeThreadBinding]:
-    key = _binding_key(hub_root, thread_target_id)
-    if key is None:
+    normalized_thread_target_id = _normalized_thread_target_id(thread_target_id)
+    if normalized_thread_target_id is None:
         return None
-    with _BINDINGS_LOCK:
-        return _RUNTIME_THREAD_BINDINGS.get(key)
+    _ensure_runtime_bindings_table(hub_root)
+    with open_orchestration_sqlite(hub_root) as conn:
+        row = conn.execute(
+            """
+            SELECT backend_thread_id, backend_runtime_instance_id
+              FROM orch_runtime_thread_bindings
+             WHERE thread_target_id = ?
+            """,
+            (normalized_thread_target_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return RuntimeThreadBinding(
+        backend_thread_id=_normalize_optional_text(row["backend_thread_id"]),
+        backend_runtime_instance_id=_normalize_optional_text(
+            row["backend_runtime_instance_id"]
+        ),
+    )
 
 
 def set_runtime_thread_binding(
@@ -47,21 +73,45 @@ def set_runtime_thread_binding(
     backend_thread_id: Optional[str],
     backend_runtime_instance_id: Optional[str] = None,
 ) -> None:
-    key = _binding_key(hub_root, thread_target_id)
-    if key is None:
+    normalized_thread_target_id = _normalized_thread_target_id(thread_target_id)
+    if normalized_thread_target_id is None:
         return
     normalized_backend_thread_id = _normalize_optional_text(backend_thread_id)
     normalized_runtime_instance_id = _normalize_optional_text(
         backend_runtime_instance_id
     )
-    with _BINDINGS_LOCK:
-        if normalized_backend_thread_id is None:
-            _RUNTIME_THREAD_BINDINGS.pop(key, None)
-            return
-        _RUNTIME_THREAD_BINDINGS[key] = RuntimeThreadBinding(
-            backend_thread_id=normalized_backend_thread_id,
-            backend_runtime_instance_id=normalized_runtime_instance_id,
-        )
+    _ensure_runtime_bindings_table(hub_root)
+    with open_orchestration_sqlite(hub_root) as conn:
+        with conn:
+            if normalized_backend_thread_id is None:
+                conn.execute(
+                    """
+                    DELETE FROM orch_runtime_thread_bindings
+                     WHERE thread_target_id = ?
+                    """,
+                    (normalized_thread_target_id,),
+                )
+                return
+            conn.execute(
+                """
+                INSERT INTO orch_runtime_thread_bindings (
+                    thread_target_id,
+                    backend_thread_id,
+                    backend_runtime_instance_id,
+                    updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(thread_target_id) DO UPDATE SET
+                    backend_thread_id = excluded.backend_thread_id,
+                    backend_runtime_instance_id = excluded.backend_runtime_instance_id,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    normalized_thread_target_id,
+                    normalized_backend_thread_id,
+                    normalized_runtime_instance_id,
+                    now_iso(),
+                ),
+            )
 
 
 def clear_runtime_thread_binding(hub_root: Path, thread_target_id: str) -> None:
@@ -74,13 +124,10 @@ def clear_runtime_thread_binding(hub_root: Path, thread_target_id: str) -> None:
 
 
 def clear_runtime_thread_bindings_for_hub_root(hub_root: Path) -> None:
-    normalized_hub_root = str(hub_root.resolve())
-    with _BINDINGS_LOCK:
-        keys = [
-            key for key in _RUNTIME_THREAD_BINDINGS if key[0] == normalized_hub_root
-        ]
-        for key in keys:
-            _RUNTIME_THREAD_BINDINGS.pop(key, None)
+    _ensure_runtime_bindings_table(hub_root)
+    with open_orchestration_sqlite(hub_root) as conn:
+        with conn:
+            conn.execute("DELETE FROM orch_runtime_thread_bindings")
 
 
 __all__ = [

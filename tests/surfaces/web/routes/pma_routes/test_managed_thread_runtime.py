@@ -15,6 +15,7 @@ from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_bindings_for_hub_root,
 )
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.core.pma_context import format_pma_discoverability_preamble
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -82,6 +83,17 @@ async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue
     queued = store.create_turn(managed_thread_id, prompt="queued", busy_policy="queue")
     store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
     clear_runtime_thread_bindings_for_hub_root(hub_env.hub_root)
+    with open_orchestration_sqlite(hub_env.hub_root) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET runtime_status = 'idle',
+                       status_turn_id = NULL
+                 WHERE thread_target_id = ?
+                """,
+                (managed_thread_id,),
+            )
 
     await managed_thread_runtime.recover_orphaned_managed_thread_executions(app)
 
