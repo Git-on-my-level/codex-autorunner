@@ -78,7 +78,7 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
             message.get("params") if isinstance(message.get("params"), dict) else {}
         )
         turn_id = _coerce_id(params.get("turnId")) if isinstance(params, dict) else None
-        if not req_id or not turn_id:
+        if req_id is None or not turn_id:
             return "cancel"
         codex_thread_id = _extract_turn_thread_id(params)
         ctx = self._resolve_turn_context(turn_id, thread_id=codex_thread_id)

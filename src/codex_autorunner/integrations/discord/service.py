@@ -2182,7 +2182,10 @@ class DiscordBotService:
     async def _handle_backend_approval_request(
         self, request: dict[str, Any]
     ) -> ApprovalDecision:
-        request_id = str(request.get("id") or "").strip()
+        request_id_value = request.get("id")
+        request_id = (
+            str(request_id_value).strip() if request_id_value is not None else ""
+        )
         params = (
             request.get("params") if isinstance(request.get("params"), dict) else {}
         )
