@@ -9,6 +9,7 @@ import pytest
 
 from codex_autorunner.agents.opencode import harness as harness_module
 from codex_autorunner.agents.opencode.harness import OpenCodeHarness
+from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import get_registered_agents
 from codex_autorunner.core.orchestration import FreshConversationRequiredError
 from codex_autorunner.core.orchestration.runtime_thread_events import (
@@ -89,9 +90,16 @@ class _StubSupervisor:
     ) -> None:
         self._client = client
         self.session_stall_timeout_seconds = session_stall_timeout_seconds
+        self.timeout_workspace_roots: list[Path] = []
 
     async def get_client(self, _workspace_root: Path) -> _StubClient:
         return self._client
+
+    async def session_stall_timeout_seconds_for_workspace(
+        self, workspace_root: Path
+    ) -> float | None:
+        self.timeout_workspace_roots.append(workspace_root)
+        return self.session_stall_timeout_seconds
 
 
 @pytest.mark.asyncio
@@ -225,6 +233,47 @@ async def test_opencode_harness_wait_for_turn_collects_plain_text_output() -> No
     assert result.status == "ok"
     assert result.assistant_text == "hello world"
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_resolves_stall_timeout_per_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _StubClient([])
+    supervisor = _StubSupervisor(client, session_stall_timeout_seconds=17.0)
+    harness = OpenCodeHarness(supervisor)
+    captured: dict[str, object] = {}
+
+    async def _fake_collect(*args: object, **kwargs: object) -> object:
+        captured["stall_timeout_seconds"] = kwargs.get("stall_timeout_seconds")
+        return OpenCodeTurnOutput(text="done")
+
+    monkeypatch.setattr(
+        harness_module,
+        "collect_opencode_output_from_events",
+        _fake_collect,
+    )
+
+    turn = await harness.start_turn(
+        Path("/tmp/workspace"),
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    result = await harness.wait_for_turn(
+        Path("/tmp/workspace"),
+        "session-1",
+        turn.turn_id,
+    )
+
+    assert result.status == "ok"
+    assert result.assistant_text == "done"
+    assert captured["stall_timeout_seconds"] == 17.0
+    assert supervisor.timeout_workspace_roots == [Path("/tmp/workspace").resolve()]
 
 
 @pytest.mark.asyncio

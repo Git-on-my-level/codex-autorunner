@@ -148,6 +148,12 @@ class OpenCodeSupervisor:
     def session_stall_timeout_seconds(self) -> Optional[float]:
         return self._session_stall_timeout_seconds
 
+    async def session_stall_timeout_seconds_for_workspace(
+        self, workspace_root: Path
+    ) -> Optional[float]:
+        _ = workspace_root
+        return self._session_stall_timeout_seconds
+
     async def lifecycle_snapshot(self) -> OpenCodeSupervisorSnapshot:
         async with self._get_lock():
             return OpenCodeSupervisorSnapshot(

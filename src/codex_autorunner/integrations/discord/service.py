@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from ...agents.opencode.harness import OpenCodeHarness
+from ...agents.opencode.supervisor_protocol import (
+    OpenCodeHarnessSupervisorProtocol,
+)
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...bootstrap import seed_repo_files
 from ...core.chat_bindings import (
@@ -489,6 +492,17 @@ class _DiscordOpenCodeSupervisorAdapter:
             raise RuntimeError("OpenCode supervisor unavailable")
         return await supervisor.get_client(canonical_root)
 
+    async def session_stall_timeout_seconds_for_workspace(
+        self, workspace_root: Path
+    ) -> Optional[float]:
+        canonical_root = canonicalize_path(Path(workspace_root))
+        supervisor = await self._service._opencode_supervisor_for_workspace(
+            canonical_root
+        )
+        if supervisor is None:
+            return None
+        return supervisor.session_stall_timeout_seconds
+
     async def close_all(self) -> None:
         await self._service._close_all_opencode_supervisors()
 
@@ -602,7 +616,9 @@ class DiscordBotService:
         self._opencode_lock = asyncio.Lock()
         self.app_server_events = AppServerEventBuffer()
         self.app_server_supervisor = _DiscordAppServerSupervisorAdapter(self)
-        self.opencode_supervisor = _DiscordOpenCodeSupervisorAdapter(self)
+        self.opencode_supervisor: OpenCodeHarnessSupervisorProtocol = (
+            _DiscordOpenCodeSupervisorAdapter(self)
+        )
         self._opencode_prune_task: Optional[asyncio.Task[None]] = None
         self._filebox_prune_task: Optional[asyncio.Task[None]] = None
         self._app_server_state_root = resolve_global_state_root() / "workspaces"

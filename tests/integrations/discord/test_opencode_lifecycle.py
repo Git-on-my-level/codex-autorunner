@@ -8,6 +8,9 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.agents.opencode.supervisor_protocol import (
+    OpenCodeHarnessSupervisorProtocol,
+)
 from codex_autorunner.integrations.discord import service as discord_service_module
 from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
@@ -42,9 +45,16 @@ class _FakeOutboxManager:
 
 
 class _StubOpenCodeSupervisor:
-    def __init__(self, *, pruned_handles: int, handles_after_prune: int) -> None:
+    def __init__(
+        self,
+        *,
+        pruned_handles: int,
+        handles_after_prune: int,
+        session_stall_timeout_seconds: float | None = None,
+    ) -> None:
         self._pruned_handles = pruned_handles
         self._handles_after_prune = handles_after_prune
+        self.session_stall_timeout_seconds = session_stall_timeout_seconds
         self.close_all_calls = 0
 
     async def prune_idle(self) -> int:
@@ -167,5 +177,74 @@ async def test_opencode_prune_sweep_evicts_idle_supervisors_and_logs_metrics(
             "killed_processes": 1,
             "evicted_supervisors": 1,
         }
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_opencode_adapter_resolves_stall_timeout_per_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_a = tmp_path / "workspace-a"
+    workspace_b = tmp_path / "workspace-b"
+    workspace_a.mkdir()
+    workspace_b.mkdir()
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "load_repo_config",
+        lambda workspace_root, hub_path=None: SimpleNamespace(
+            opencode=SimpleNamespace(idle_ttl_seconds=120),
+        ),
+    )
+
+    supervisors: dict[str, _StubOpenCodeSupervisor] = {
+        str(workspace_a): _StubOpenCodeSupervisor(
+            pruned_handles=0,
+            handles_after_prune=1,
+            session_stall_timeout_seconds=11.0,
+        ),
+        str(workspace_b): _StubOpenCodeSupervisor(
+            pruned_handles=0,
+            handles_after_prune=1,
+            session_stall_timeout_seconds=23.0,
+        ),
+    }
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_opencode_supervisor_from_repo_config",
+        lambda repo_config, *, workspace_root, logger, base_env=None: supervisors[
+            str(workspace_root)
+        ],
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.opencode"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        assert isinstance(
+            service.opencode_supervisor, OpenCodeHarnessSupervisorProtocol
+        )
+        assert (
+            await service.opencode_supervisor.session_stall_timeout_seconds_for_workspace(
+                workspace_a
+            )
+            == 11.0
+        )
+        assert (
+            await service.opencode_supervisor.session_stall_timeout_seconds_for_workspace(
+                workspace_b
+            )
+            == 23.0
+        )
     finally:
         await store.close()

@@ -32,7 +32,7 @@ from .runtime import (
     map_approval_policy_to_permission,
     split_model_id,
 )
-from .supervisor import OpenCodeSupervisor
+from .supervisor_protocol import OpenCodeHarnessSupervisorProtocol
 
 _logger = logging.getLogger(__name__)
 _GLOB_META_RE = re.compile(r"[*?\[\]{]")
@@ -620,7 +620,7 @@ class OpenCodeHarness(AgentHarness):
 
         return _stream()
 
-    def __init__(self, supervisor: OpenCodeSupervisor) -> None:
+    def __init__(self, supervisor: OpenCodeHarnessSupervisorProtocol) -> None:
         self._supervisor = supervisor
         self._pending_turns: dict[tuple[str, str], _PendingTurnConfig] = {}
 
@@ -1051,7 +1051,9 @@ class OpenCodeHarness(AgentHarness):
                     event_stream_factory=_event_stream,
                     session_fetcher=_fetch_session,
                     provider_fetcher=_fetch_providers,
-                    stall_timeout_seconds=self._supervisor.session_stall_timeout_seconds,
+                    stall_timeout_seconds=await self._supervisor.session_stall_timeout_seconds_for_workspace(
+                        workspace_root
+                    ),
                 )
             )
             command_task = pending.command_task if pending is not None else None
@@ -1064,14 +1066,14 @@ class OpenCodeHarness(AgentHarness):
                         return_when=asyncio.FIRST_EXCEPTION,
                     )
                     if command_task in done:
-                        exc = command_task.exception()
-                        if exc is not None:
+                        command_exc = command_task.exception()
+                        if command_exc is not None:
                             collect_task.cancel()
                             try:
                                 await collect_task
                             except asyncio.CancelledError:
                                 pass
-                            raise exc
+                            raise command_exc
                     output = await collect_task
                     await command_task
                 except Exception as exc:
