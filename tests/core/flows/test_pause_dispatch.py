@@ -7,6 +7,7 @@ from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.pause_dispatch import (
     latest_dispatch_seq,
+    list_unseen_ticket_flow_dispatches,
     load_latest_paused_ticket_flow_dispatch,
 )
 from codex_autorunner.core.flows.store import FlowStore
@@ -208,6 +209,77 @@ def test_load_latest_paused_ticket_flow_dispatch_falls_back_to_reason(
     assert snapshot.dispatch_seq == "paused"
     assert snapshot.dispatch_markdown == "Reason: Need user input"
     assert snapshot.dispatch_dir is None
+
+
+def test_list_unseen_ticket_flow_dispatches_falls_back_when_only_turn_summary_exists(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_repo(tmp_path)
+    _create_paused_run(
+        repo_root,
+        run_id="run-summary-only",
+        state={"ticket_engine": {"reason": "Investigate the last stalled turn."}},
+    )
+
+    history_root = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / "run-summary-only"
+        / "dispatch_history"
+    )
+    (history_root / "0001").mkdir(parents=True)
+    (history_root / "0001" / "DISPATCH.md").write_text(
+        "---\nmode: turn_summary\n---\n\nInternal summary that should not be sent.\n",
+        encoding="utf-8",
+    )
+
+    snapshots = list_unseen_ticket_flow_dispatches(repo_root)
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot.run_id == "run-summary-only"
+    assert snapshot.dispatch_seq == "0001"
+    assert snapshot.dispatch_markdown == "Reason: Investigate the last stalled turn."
+    assert snapshot.dispatch_dir is None
+    assert snapshot.mode == "pause"
+    assert snapshot.is_handoff is True
+    assert snapshot.allow_resume_hint is True
+
+
+def test_list_unseen_ticket_flow_dispatches_does_not_repeat_after_seen_pause_then_turn_summary(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_repo(tmp_path)
+    _create_paused_run(
+        repo_root,
+        run_id="run-summary-after-pause",
+        state={"ticket_engine": {"reason": "Need confirmation before continuing."}},
+    )
+
+    history_root = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / "run-summary-after-pause"
+        / "dispatch_history"
+    )
+    (history_root / "0001").mkdir(parents=True)
+    (history_root / "0001" / "DISPATCH.md").write_text(
+        "---\nmode: pause\ntitle: Need input\n---\n\nPlease confirm the plan.\n",
+        encoding="utf-8",
+    )
+    (history_root / "0002").mkdir(parents=True)
+    (history_root / "0002" / "DISPATCH.md").write_text(
+        "---\nmode: turn_summary\n---\n\nSummary that should not trigger another notice.\n",
+        encoding="utf-8",
+    )
+
+    snapshots = list_unseen_ticket_flow_dispatches(
+        repo_root,
+        last_run_id="run-summary-after-pause",
+        last_dispatch_seq="0001",
+    )
+    assert snapshots == []
 
 
 def test_latest_dispatch_seq_ignores_non_numeric_entries(tmp_path: Path) -> None:

@@ -171,13 +171,15 @@ def list_unseen_ticket_flow_dispatches(
         ]
 
     snapshots: list[TicketFlowDispatchSnapshot] = []
+    saw_notification_worthy_history = False
     for dispatch_dir in seq_dirs:
         seq = dispatch_dir.name
-        if last_seen_seq is not None and int(seq) <= last_seen_seq:
-            continue
         dispatch_path = dispatch_dir / "DISPATCH.md"
         dispatch, errors = parse_dispatch(dispatch_path)
         if errors or dispatch is None:
+            saw_notification_worthy_history = True
+            if last_seen_seq is not None and int(seq) <= last_seen_seq:
+                continue
             snapshots.append(
                 TicketFlowDispatchSnapshot(
                     run_id=latest.id,
@@ -197,6 +199,10 @@ def list_unseen_ticket_flow_dispatches(
                 )
             )
             continue
+        if dispatch.mode != "turn_summary":
+            saw_notification_worthy_history = True
+        if last_seen_seq is not None and int(seq) <= last_seen_seq:
+            continue
         if dispatch.mode == "turn_summary":
             continue
         snapshots.append(
@@ -211,6 +217,20 @@ def list_unseen_ticket_flow_dispatches(
                 mode=dispatch.mode,
                 is_handoff=dispatch.is_handoff or run_is_paused,
                 allow_resume_hint=dispatch.is_handoff or run_is_paused,
+            )
+        )
+
+    if not snapshots and run_is_paused and not saw_notification_worthy_history:
+        fallback_seq = latest_dispatch_seq(paths.dispatch_history_dir) or "paused"
+        snapshots.append(
+            TicketFlowDispatchSnapshot(
+                run_id=latest.id,
+                dispatch_seq=fallback_seq,
+                dispatch_markdown=format_pause_reason(latest),
+                dispatch_dir=None,
+                mode="pause",
+                is_handoff=True,
+                allow_resume_hint=True,
             )
         )
 

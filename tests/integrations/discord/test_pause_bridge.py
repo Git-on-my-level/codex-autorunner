@@ -512,6 +512,80 @@ async def test_pause_bridge_keeps_reason_fallback_when_history_is_empty(
 
 
 @pytest.mark.anyio
+async def test_pause_bridge_falls_back_when_only_turn_summary_exists(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    run_id = str(uuid.uuid4())
+    db_path = workspace / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        if store.get_flow_run(run_id) is None:
+            store.create_flow_run(
+                run_id,
+                "ticket_flow",
+                input_data={},
+                state={
+                    "ticket_engine": {
+                        "reason": "Investigate the stalled recovery before resuming."
+                    }
+                },
+            )
+        store.update_flow_run_status(
+            run_id,
+            FlowRunStatus.PAUSED,
+            state={
+                "ticket_engine": {
+                    "reason": "Investigate the stalled recovery before resuming."
+                }
+            },
+        )
+
+    history_dir = (
+        workspace / ".codex-autorunner" / "runs" / run_id / "dispatch_history" / "0001"
+    )
+    history_dir.mkdir(parents=True, exist_ok=True)
+    (history_dir / "DISPATCH.md").write_text(
+        "---\nmode: turn_summary\n---\n\nSummary that should stay out of Discord.\n",
+        encoding="utf-8",
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert len(queued) == 1
+        content = str(queued[0].payload_json.get("content", ""))
+        assert f"Ticket flow paused (run {run_id}). Latest dispatch #0001:" in content
+        assert "Reason: Investigate the stalled recovery before resuming." in content
+        assert "Summary that should stay out of Discord." not in content
+        assert "Use `/car flow resume` to continue." in content
+
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert binding["last_pause_run_id"] == run_id
+        assert binding["last_pause_dispatch_seq"] == "0001"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pause_bridge_skips_when_telegram_binding_is_preferred(
     tmp_path: Path,
 ) -> None:
