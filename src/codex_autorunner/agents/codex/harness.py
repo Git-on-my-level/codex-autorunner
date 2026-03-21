@@ -126,6 +126,13 @@ class CodexHarness(AgentHarness):
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.get_client(workspace_root)
 
+    async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
+        client = await self._supervisor.get_client(workspace_root)
+        runtime_instance_id = getattr(client, "runtime_instance_id", None)
+        if not isinstance(runtime_instance_id, str) or not runtime_instance_id:
+            return None
+        return runtime_instance_id
+
     async def _model_list_with_agent_compat(self, client: Any) -> Any:
         """Prefer codex-agent compatible models, but degrade for older servers."""
         try:
@@ -287,7 +294,16 @@ class CodexHarness(AgentHarness):
     def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ) -> AsyncIterator[str]:
-        return self._events.stream(conversation_id, turn_id)
+        _ = workspace_root
+        stream = getattr(self._events, "stream", None)
+        if callable(stream):
+            return stream(conversation_id, turn_id)
+
+        async def _empty_stream() -> AsyncIterator[str]:
+            if False:
+                yield ""
+
+        return _empty_stream()
 
     async def wait_for_turn(
         self,

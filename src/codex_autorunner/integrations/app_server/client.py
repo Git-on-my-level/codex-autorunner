@@ -267,6 +267,7 @@ class CodexAppServerClient:
         self._output_policy = _normalize_output_policy(output_policy)
 
         self._process: Optional[asyncio.subprocess.Process] = None
+        self._runtime_instance_id: Optional[str] = None
         self._process_registry_key: Optional[str] = None
         self._reader_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
@@ -329,6 +330,10 @@ class CodexAppServerClient:
 
     async def start(self) -> None:
         await self._ensure_process()
+
+    @property
+    def runtime_instance_id(self) -> Optional[str]:
+        return self._runtime_instance_id
 
     async def close(self) -> None:
         self._closed = True
@@ -772,6 +777,7 @@ class CodexAppServerClient:
         self._process = await asyncio.create_subprocess_exec(
             *self._command, **popen_kwargs
         )
+        self._runtime_instance_id = uuid.uuid4().hex
         self._register_process_record()
         log_event(
             self._logger,
@@ -779,6 +785,7 @@ class CodexAppServerClient:
             "app_server.spawned",
             command=list(self._command),
             cwd=self._cwd,
+            runtime_instance_id=self._runtime_instance_id,
         )
         disconnected = self._ensure_disconnect_event()
         disconnected.clear()

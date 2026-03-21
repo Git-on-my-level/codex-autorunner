@@ -149,7 +149,11 @@ class ThreadExecutionStore(Protocol):
     ) -> Optional[ThreadTarget]: ...
 
     def set_thread_backend_id(
-        self, thread_target_id: str, backend_thread_id: Optional[str]
+        self,
+        thread_target_id: str,
+        backend_thread_id: Optional[str],
+        *,
+        backend_runtime_instance_id: Optional[str] = None,
     ) -> None: ...
 
     def create_execution(

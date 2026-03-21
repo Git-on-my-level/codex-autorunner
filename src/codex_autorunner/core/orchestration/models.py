@@ -106,6 +106,7 @@ class ThreadTarget:
     thread_target_id: str
     agent_id: str
     backend_thread_id: Optional[str] = None
+    backend_runtime_instance_id: Optional[str] = None
     repo_id: Optional[str] = None
     resource_kind: Optional[str] = None
     resource_id: Optional[str] = None
@@ -125,6 +126,9 @@ class ThreadTarget:
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> "ThreadTarget":
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
         thread_target_id = _normalize_optional_text(
             data.get("managed_thread_id") or data.get("thread_target_id")
         )
@@ -140,6 +144,10 @@ class ThreadTarget:
             thread_target_id=thread_target_id,
             agent_id=agent,
             backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
+            backend_runtime_instance_id=_normalize_optional_text(
+                data.get("backend_runtime_instance_id")
+                or metadata.get("backend_runtime_instance_id")
+            ),
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
@@ -167,20 +175,10 @@ class ThreadTarget:
             ),
             compact_seed=_normalize_optional_text(data.get("compact_seed")),
             context_profile=normalize_car_context_profile(
-                data.get("context_profile")
-                or (
-                    data.get("metadata", {}).get("context_profile")
-                    if isinstance(data.get("metadata"), dict)
-                    else None
-                )
+                data.get("context_profile") or metadata.get("context_profile")
             ),
             approval_mode=_normalize_optional_text(
-                data.get("approval_mode")
-                or (
-                    data.get("metadata", {}).get("approval_mode")
-                    if isinstance(data.get("metadata"), dict)
-                    else None
-                )
+                data.get("approval_mode") or metadata.get("approval_mode")
             ),
         )
 

@@ -22,6 +22,7 @@ from .time_utils import now_iso
 
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
 _STALE_RUNNING_RECOVERY_ERROR = "stale_running_execution_recovered"
+_BACKEND_RUNTIME_INSTANCE_ID_KEY = "backend_runtime_instance_id"
 
 
 class ManagedThreadAlreadyHasRunningTurnError(RuntimeError):
@@ -388,6 +389,11 @@ class PmaThreadStore:
 
     @staticmethod
     def _thread_row_to_record(row: Any) -> dict[str, Any]:
+        metadata = (
+            _json_loads_object(row["metadata_json"])
+            if "metadata_json" in row.keys()
+            else {}
+        )
         resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
             resource_kind=row["resource_kind"],
             resource_id=row["resource_id"],
@@ -402,6 +408,9 @@ class PmaThreadStore:
             "workspace_root": row["workspace_root"],
             "name": row["display_name"],
             "backend_thread_id": row["backend_thread_id"],
+            "backend_runtime_instance_id": _coerce_text(
+                metadata.get(_BACKEND_RUNTIME_INSTANCE_ID_KEY)
+            ),
             "status": row["lifecycle_status"] or "active",
             "normalized_status": row["runtime_status"] or "idle",
             "status_reason_code": row["status_reason"],
@@ -411,11 +420,7 @@ class PmaThreadStore:
             "last_turn_id": row["last_execution_id"],
             "last_message_preview": row["last_message_preview"],
             "compact_seed": row["compact_seed"],
-            "metadata": (
-                _json_loads_object(row["metadata_json"])
-                if "metadata_json" in row.keys()
-                else {}
-            ),
+            "metadata": metadata,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -753,18 +758,34 @@ class PmaThreadStore:
         return counts
 
     def set_thread_backend_id(
-        self, managed_thread_id: str, backend_thread_id: Optional[str]
+        self,
+        managed_thread_id: str,
+        backend_thread_id: Optional[str],
+        *,
+        backend_runtime_instance_id: Optional[str] = None,
     ) -> None:
         with self._write_conn() as conn:
+            thread = self._fetch_thread(conn, managed_thread_id)
+            metadata = dict((thread or {}).get("metadata") or {})
+            if backend_runtime_instance_id is None:
+                metadata.pop(_BACKEND_RUNTIME_INSTANCE_ID_KEY, None)
+            else:
+                metadata[_BACKEND_RUNTIME_INSTANCE_ID_KEY] = backend_runtime_instance_id
             with conn:
                 conn.execute(
                     """
                     UPDATE orch_thread_targets
                        SET backend_thread_id = ?,
+                           metadata_json = ?,
                            updated_at = ?
                      WHERE thread_target_id = ?
                     """,
-                    (backend_thread_id, now_iso(), managed_thread_id),
+                    (
+                        backend_thread_id,
+                        _json_dumps(metadata),
+                        now_iso(),
+                        managed_thread_id,
+                    ),
                 )
 
     def update_thread_after_turn(

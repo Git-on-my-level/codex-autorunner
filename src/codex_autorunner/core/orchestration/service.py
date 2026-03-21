@@ -86,6 +86,26 @@ def _is_missing_thread_error(exc: Exception) -> bool:
     return any(marker in str(exc).lower() for marker in _MISSING_THREAD_MARKERS)
 
 
+async def _resolve_harness_runtime_instance_id(
+    harness: RuntimeThreadHarness, workspace_root: Path
+) -> Optional[str]:
+    resolver = getattr(harness, "backend_runtime_instance_id", None)
+    if not callable(resolver):
+        return None
+    try:
+        runtime_instance_id = await resolver(workspace_root)
+    except Exception:
+        logger.debug(
+            "Failed to resolve backend runtime instance id",
+            exc_info=True,
+        )
+        return None
+    if not isinstance(runtime_instance_id, str):
+        return None
+    normalized = runtime_instance_id.strip()
+    return normalized or None
+
+
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
     return ExecutionRecord(
         execution_id=str(record.get("managed_turn_id") or ""),
@@ -204,9 +224,17 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         return _thread_target_from_store_row(updated)
 
     def set_thread_backend_id(
-        self, thread_target_id: str, backend_thread_id: Optional[str]
+        self,
+        thread_target_id: str,
+        backend_thread_id: Optional[str],
+        *,
+        backend_runtime_instance_id: Optional[str] = None,
     ) -> None:
-        self._store.set_thread_backend_id(thread_target_id, backend_thread_id)
+        self._store.set_thread_backend_id(
+            thread_target_id,
+            backend_thread_id,
+            backend_runtime_instance_id=backend_runtime_instance_id,
+        )
 
     def create_execution(
         self,
@@ -643,7 +671,32 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         runtime_prompt = self._resolve_runtime_prompt(request)
         try:
             await harness.ensure_ready(workspace_root)
+            runtime_instance_id = await _resolve_harness_runtime_instance_id(
+                harness, workspace_root
+            )
             conversation_id = thread.backend_thread_id
+            if (
+                conversation_id
+                and runtime_instance_id
+                and thread.backend_runtime_instance_id
+                and thread.backend_runtime_instance_id != runtime_instance_id
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "orchestration.thread.stale_backend_binding",
+                    thread_target_id=thread.thread_target_id,
+                    backend_thread_id=conversation_id,
+                    stored_runtime_instance_id=thread.backend_runtime_instance_id,
+                    current_runtime_instance_id=runtime_instance_id,
+                    action="start_new_conversation",
+                )
+                self.thread_store.set_thread_backend_id(
+                    thread.thread_target_id,
+                    None,
+                    backend_runtime_instance_id=None,
+                )
+                conversation_id = None
             if conversation_id:
                 conversation = await harness.resume_conversation(
                     workspace_root, conversation_id
@@ -656,7 +709,18 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 ):
                     conversation_id = resumed_conversation_id
                     self.thread_store.set_thread_backend_id(
-                        thread.thread_target_id, conversation_id
+                        thread.thread_target_id,
+                        conversation_id,
+                        backend_runtime_instance_id=runtime_instance_id,
+                    )
+                elif (
+                    runtime_instance_id
+                    and thread.backend_runtime_instance_id != runtime_instance_id
+                ):
+                    self.thread_store.set_thread_backend_id(
+                        thread.thread_target_id,
+                        conversation_id,
+                        backend_runtime_instance_id=runtime_instance_id,
                     )
             else:
                 conversation = await harness.new_conversation(
@@ -665,7 +729,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 )
                 conversation_id = conversation.id
                 self.thread_store.set_thread_backend_id(
-                    thread.thread_target_id, conversation_id
+                    thread.thread_target_id,
+                    conversation_id,
+                    backend_runtime_instance_id=runtime_instance_id,
                 )
 
             if request.kind == "review":
@@ -724,7 +790,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             and resolved_conversation_id != conversation_id
         ):
             self.thread_store.set_thread_backend_id(
-                thread.thread_target_id, resolved_conversation_id
+                thread.thread_target_id,
+                resolved_conversation_id,
+                backend_runtime_instance_id=runtime_instance_id,
             )
         self.thread_store.set_execution_backend_id(execution.execution_id, turn.turn_id)
         refreshed = self.get_execution(thread.thread_target_id, execution.execution_id)
@@ -904,7 +972,11 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             backend_turn_id=execution.backend_id,
             transcript_turn_id=None,
         )
-        self.thread_store.set_thread_backend_id(thread_target_id, None)
+        self.thread_store.set_thread_backend_id(
+            thread_target_id,
+            None,
+            backend_runtime_instance_id=None,
+        )
         log_event(
             logger,
             logging.INFO,
@@ -939,6 +1011,41 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 backend_thread_id=None,
                 error_message=MISSING_BACKEND_THREAD_ERROR,
                 reason="missing_backend_thread_id",
+            )
+            return ThreadStopOutcome(
+                thread_target_id=thread_target_id,
+                cancelled_queued=cancelled_queued,
+                execution=recovered,
+                recovered_lost_backend=True,
+            )
+
+        runtime_instance_id: Optional[str] = None
+        if thread.workspace_root:
+            harness = self.harness_factory(thread.agent_id)
+            runtime_instance_id = await _resolve_harness_runtime_instance_id(
+                harness, Path(thread.workspace_root)
+            )
+        if (
+            runtime_instance_id
+            and thread.backend_runtime_instance_id
+            and thread.backend_runtime_instance_id != runtime_instance_id
+        ):
+            log_event(
+                logger,
+                logging.INFO,
+                "orchestration.thread.stop_stale_backend_binding",
+                thread_target_id=thread_target_id,
+                execution_id=execution.execution_id,
+                backend_thread_id=backend_thread_id,
+                stored_runtime_instance_id=thread.backend_runtime_instance_id,
+                current_runtime_instance_id=runtime_instance_id,
+            )
+            recovered = self._recover_lost_backend_execution(
+                thread_target_id=thread_target_id,
+                execution=execution,
+                backend_thread_id=backend_thread_id,
+                error_message=LOST_BACKEND_THREAD_ERROR,
+                reason="stale_backend_runtime_instance",
             )
             return ThreadStopOutcome(
                 thread_target_id=thread_target_id,
