@@ -30,6 +30,7 @@ class _StubClient:
         self.get_session_calls: list[str] = []
         self.get_session_error: Exception | None = None
         self.prompt_error: Exception | None = None
+        self.send_command_error: Exception | None = None
 
     async def stream_events(
         self, *, directory: str | None = None, ready_event: object = None
@@ -56,6 +57,8 @@ class _StubClient:
 
     async def send_command(self, session_id: str, **kwargs: object) -> dict[str, str]:
         self.prompt_calls.append({"session_id": session_id, **kwargs})
+        if self.send_command_error is not None:
+            raise self.send_command_error
         return {}
 
     async def session_status(
@@ -158,6 +161,39 @@ async def test_opencode_harness_start_turn_requires_fresh_binding_for_invalid_se
 
     assert exc_info.value.conversation_id == "session-1"
     assert exc_info.value.operation == "start_turn"
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_start_review_requires_fresh_binding_for_invalid_session() -> (
+    None
+):
+    client = _StubClient([])
+    request = httpx.Request(
+        "POST",
+        "http://127.0.0.1:4096/session/session-1/command",
+    )
+    response = httpx.Response(400, request=request)
+    client.send_command_error = httpx.HTTPStatusError(
+        "invalid session",
+        request=request,
+        response=response,
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    with pytest.raises(FreshConversationRequiredError) as exc_info:
+        await harness.start_review(
+            Path("."),
+            "session-1",
+            prompt="review this",
+            model=None,
+            reasoning=None,
+            approval_mode=None,
+            sandbox_policy=None,
+        )
+
+    assert exc_info.value.conversation_id == "session-1"
+    assert exc_info.value.operation == "start_review"
     assert exc_info.value.status_code == 400
 
 

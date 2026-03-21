@@ -54,6 +54,7 @@ class _FakeHarness:
     next_turn_id: str = "backend-turn-1"
     ensure_ready_error: Optional[Exception] = None
     start_turn_errors: dict[str, Exception] = field(default_factory=dict)
+    start_review_errors: dict[str, Exception] = field(default_factory=dict)
     ensure_ready_calls: list[Path] = field(default_factory=list)
     new_conversation_calls: list[tuple[Path, Optional[str]]] = field(
         default_factory=list
@@ -141,6 +142,9 @@ class _FakeHarness:
                 "sandbox_policy": sandbox_policy,
             }
         )
+        error = self.start_review_errors.pop(conversation_id, None)
+        if error is not None:
+            raise error
         return _FakeTurn(turn_id=self.next_turn_id)
 
     async def interrupt(
@@ -558,6 +562,72 @@ async def test_send_message_retries_with_fresh_conversation_when_existing_bindin
         and payload.get("execution_id") == execution.execution_id
         and payload.get("backend_thread_id") == "backend-existing-1"
         and payload.get("operation") == "start_turn"
+        and payload.get("status_code") == 400
+        for payload in payloads
+    )
+
+
+async def test_send_review_retries_with_fresh_conversation_when_existing_binding_is_invalid(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _FakeHarness(
+        next_conversation_id="backend-fresh-2",
+        next_turn_id="review-turn-2",
+        start_review_errors={
+            "backend-existing-1": FreshConversationRequiredError(
+                "stale binding",
+                conversation_id="backend-existing-1",
+                operation="start_review",
+                status_code=400,
+            )
+        },
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+    )
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="codex_autorunner.core.orchestration.service",
+    ):
+        execution = await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="review this",
+                kind="review",
+            )
+        )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+    payloads = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "codex_autorunner.core.orchestration.service"
+    ]
+
+    assert execution.status == "running"
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert [call["conversation_id"] for call in harness.start_review_calls] == [
+        "backend-existing-1",
+        "backend-fresh-2",
+    ]
+    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert refreshed_thread is not None
+    assert refreshed_thread.backend_thread_id == "backend-fresh-2"
+    assert execution.backend_id == "review-turn-2"
+    assert any(
+        payload.get("event") == "orchestration.thread.refreshing_backend_binding"
+        and payload.get("thread_target_id") == thread.thread_target_id
+        and payload.get("execution_id") == execution.execution_id
+        and payload.get("backend_thread_id") == "backend-existing-1"
+        and payload.get("operation") == "start_review"
         and payload.get("status_code") == 400
         for payload in payloads
     )
