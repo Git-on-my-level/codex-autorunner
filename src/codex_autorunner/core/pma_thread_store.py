@@ -16,6 +16,11 @@ from .managed_thread_status import (
 )
 from .orchestration.migrate_legacy_state import backfill_legacy_thread_state
 from .orchestration.models import normalize_resource_owner_fields
+from .orchestration.runtime_bindings import (
+    clear_runtime_thread_binding,
+    get_runtime_thread_binding,
+    set_runtime_thread_binding,
+)
 from .orchestration.sqlite import open_orchestration_sqlite
 from .sqlite_utils import open_sqlite
 from .time_utils import now_iso
@@ -99,6 +104,12 @@ def _json_loads_object(raw: Any) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _sanitize_thread_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any]:
+    payload = dict(metadata or {})
+    payload.pop(_BACKEND_RUNTIME_INSTANCE_ID_KEY, None)
+    return payload
 
 
 def _thread_queue_lane_id(managed_thread_id: str) -> str:
@@ -358,6 +369,10 @@ class PmaThreadStore:
     def path(self) -> Path:
         return self._path
 
+    @property
+    def hub_root(self) -> Path:
+        return self._hub_root
+
     def _initialize(self) -> None:
         with pma_threads_db_lock(self._path):
             with open_orchestration_sqlite(
@@ -387,12 +402,15 @@ class PmaThreadStore:
                 yield conn
                 self._sync_legacy_mirror(conn)
 
-    @staticmethod
-    def _thread_row_to_record(row: Any) -> dict[str, Any]:
+    def _thread_row_to_record(self, row: Any) -> dict[str, Any]:
         metadata = (
             _json_loads_object(row["metadata_json"])
             if "metadata_json" in row.keys()
             else {}
+        )
+        runtime_binding = get_runtime_thread_binding(
+            self._hub_root,
+            str(row["thread_target_id"]),
         )
         resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
             resource_kind=row["resource_kind"],
@@ -407,9 +425,17 @@ class PmaThreadStore:
             "resource_id": resource_id,
             "workspace_root": row["workspace_root"],
             "name": row["display_name"],
-            "backend_thread_id": row["backend_thread_id"],
-            "backend_runtime_instance_id": _coerce_text(
-                metadata.get(_BACKEND_RUNTIME_INSTANCE_ID_KEY)
+            # backend_thread_id is runtime-only. Ignore any durable column value
+            # so stale pre-refactor ids do not reappear after restart.
+            "backend_thread_id": (
+                runtime_binding.backend_thread_id
+                if runtime_binding is not None
+                else None
+            ),
+            "backend_runtime_instance_id": (
+                runtime_binding.backend_runtime_instance_id
+                if runtime_binding is not None
+                else None
             ),
             "status": row["lifecycle_status"] or "active",
             "normalized_status": row["runtime_status"] or "idle",
@@ -611,6 +637,13 @@ class PmaThreadStore:
                 repo_id=repo_id,
             )
         )
+        normalized_backend_thread_id = _coerce_text(backend_thread_id)
+        metadata_payload = _sanitize_thread_metadata(metadata)
+        backend_runtime_instance_id = _coerce_text(
+            (metadata or {}).get(_BACKEND_RUNTIME_INSTANCE_ID_KEY)
+            if isinstance(metadata, dict)
+            else None
+        )
 
         snapshot = build_managed_thread_status_snapshot(
             reason=ManagedThreadStatusReason.THREAD_CREATED,
@@ -646,7 +679,7 @@ class PmaThreadStore:
                     (
                         managed_thread_id,
                         agent,
-                        backend_thread_id,
+                        None,
                         normalized_repo_id,
                         normalized_resource_kind,
                         normalized_resource_id,
@@ -659,12 +692,19 @@ class PmaThreadStore:
                         None,
                         None,
                         None,
-                        _json_dumps(metadata or {}),
+                        _json_dumps(metadata_payload),
                         now,
                         now,
                         snapshot.changed_at,
                         1 if snapshot.terminal else 0,
                     ),
+                )
+            if normalized_backend_thread_id is not None:
+                set_runtime_thread_binding(
+                    self._hub_root,
+                    managed_thread_id,
+                    backend_thread_id=normalized_backend_thread_id,
+                    backend_runtime_instance_id=backend_runtime_instance_id,
                 )
             created = self._fetch_thread(conn, managed_thread_id)
         if created is None:
@@ -764,29 +804,40 @@ class PmaThreadStore:
         *,
         backend_runtime_instance_id: Optional[str] = None,
     ) -> None:
+        current_binding = get_runtime_thread_binding(self._hub_root, managed_thread_id)
+        resolved_runtime_instance_id = backend_runtime_instance_id
+        if backend_thread_id is not None and resolved_runtime_instance_id is None:
+            resolved_runtime_instance_id = (
+                current_binding.backend_runtime_instance_id
+                if current_binding is not None
+                else None
+            )
         with self._write_conn() as conn:
             thread = self._fetch_thread(conn, managed_thread_id)
-            metadata = dict((thread or {}).get("metadata") or {})
-            if backend_thread_id is None:
-                metadata.pop(_BACKEND_RUNTIME_INSTANCE_ID_KEY, None)
-            elif backend_runtime_instance_id is not None:
-                metadata[_BACKEND_RUNTIME_INSTANCE_ID_KEY] = backend_runtime_instance_id
+            metadata = _sanitize_thread_metadata(
+                dict((thread or {}).get("metadata") or {})
+            )
             with conn:
                 conn.execute(
                     """
                     UPDATE orch_thread_targets
-                       SET backend_thread_id = ?,
+                       SET backend_thread_id = NULL,
                            metadata_json = ?,
                            updated_at = ?
                      WHERE thread_target_id = ?
                     """,
                     (
-                        backend_thread_id,
                         _json_dumps(metadata),
                         now_iso(),
                         managed_thread_id,
                     ),
                 )
+        set_runtime_thread_binding(
+            self._hub_root,
+            managed_thread_id,
+            backend_thread_id=backend_thread_id,
+            backend_runtime_instance_id=resolved_runtime_instance_id,
+        )
 
     def update_thread_after_turn(
         self,
@@ -842,6 +893,8 @@ class PmaThreadStore:
                     reason=ManagedThreadStatusReason.THREAD_COMPACTED,
                     changed_at=changed_at,
                 )
+        if reset_backend_id:
+            clear_runtime_thread_binding(self._hub_root, managed_thread_id)
 
     def archive_thread(self, managed_thread_id: str) -> None:
         changed_at = now_iso()
@@ -862,6 +915,7 @@ class PmaThreadStore:
                 reason=ManagedThreadStatusReason.THREAD_ARCHIVED,
                 changed_at=changed_at,
             )
+        clear_runtime_thread_binding(self._hub_root, managed_thread_id)
 
     def activate_thread(self, managed_thread_id: str) -> None:
         changed_at = now_iso()
@@ -1351,6 +1405,39 @@ class PmaThreadStore:
                 (_thread_queue_lane_id(managed_thread_id),),
             ).fetchone()
         return int((row["queue_depth"] if row is not None else 0) or 0)
+
+    def list_thread_ids_with_pending_queue(
+        self, *, limit: Optional[int] = 200
+    ) -> list[str]:
+        if limit is not None and limit <= 0:
+            return []
+        limit_clause = ""
+        params: list[Any] = []
+        if limit is not None:
+            limit_clause = " LIMIT ?"
+            params.append(limit)
+        with self._read_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    e.thread_target_id,
+                    MIN(COALESCE(q.visible_at, q.created_at)) AS first_visible_at
+                  FROM orch_queue_items AS q
+                  JOIN orch_thread_executions AS e
+                    ON e.execution_id = q.source_key
+                 WHERE q.source_kind = 'thread_execution'
+                   AND q.state IN ('pending', 'queued', 'waiting')
+                 GROUP BY e.thread_target_id
+                 ORDER BY first_visible_at ASC, e.thread_target_id ASC
+                {limit_clause}
+                """,
+                params,
+            ).fetchall()
+        return [
+            str(row["thread_target_id"])
+            for row in rows
+            if isinstance(row["thread_target_id"], str) and row["thread_target_id"]
+        ]
 
     def cancel_queued_turns(self, managed_thread_id: str) -> int:
         cancelled_at = now_iso()

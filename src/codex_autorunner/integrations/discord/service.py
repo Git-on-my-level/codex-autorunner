@@ -6238,17 +6238,17 @@ class DiscordBotService:
             backend_thread_id = str(
                 getattr(target_thread, "backend_thread_id", "") or ""
             ).strip()
-            if lifecycle_status and lifecycle_status != "active" and backend_thread_id:
+            if lifecycle_status and lifecycle_status != "active":
                 try:
-                    backend_runtime_instance_id = (
-                        await orchestration_service.resolve_backend_runtime_instance_id(
+                    backend_runtime_instance_id = None
+                    if backend_thread_id:
+                        backend_runtime_instance_id = await orchestration_service.resolve_backend_runtime_instance_id(
                             agent,
                             workspace_root,
                         )
-                    )
                     orchestration_service.resume_thread_target(
                         thread_id,
-                        backend_thread_id=backend_thread_id,
+                        backend_thread_id=backend_thread_id or None,
                         backend_runtime_instance_id=backend_runtime_instance_id,
                     )
                 except Exception:
@@ -11296,10 +11296,12 @@ class DiscordBotService:
         _orchestration_service, _binding_row, current_thread = (
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
         )
-        if (
-            current_thread is None
-            or not str(getattr(current_thread, "backend_thread_id", "") or "").strip()
-        ):
+        lifecycle_status = (
+            str(getattr(current_thread, "lifecycle_status", "") or "").strip().lower()
+            if current_thread is not None
+            else ""
+        )
+        if current_thread is None or lifecycle_status != "active":
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,

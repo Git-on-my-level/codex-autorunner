@@ -26,7 +26,7 @@ from ....core.logging_utils import safe_log
 from ....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
-from ....core.pma_thread_store import default_pma_threads_db_path
+from ....core.pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from ....integrations.app_server.threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -590,109 +590,44 @@ def build_hub_repo_routes(
         db_path = default_pma_threads_db_path(hub_root)
         if not db_path.exists():
             return []
-        conn: Optional[sqlite3.Connection] = None
         try:
-            conn = _open_sqlite_read_only(db_path)
-            columns = _table_columns(conn, "pma_managed_threads")
-            if not columns:
-                return []
-            turns_columns = _table_columns(conn, "pma_managed_turns")
-            has_turns_table = bool(turns_columns)
-
-            select_cols = [
-                "managed_thread_id",
-                "agent",
-                "repo_id",
-                "workspace_root",
-                "name",
-                "backend_thread_id",
-                "status",
-                "normalized_status",
-                "status_reason_code",
-                "status_updated_at",
-                "updated_at",
-            ]
-            select_exprs = [col for col in select_cols if col in columns]
-            if "managed_thread_id" not in select_exprs:
-                return []
-            if has_turns_table:
-                select_exprs.append(
-                    """
-                    EXISTS(
-                        SELECT 1
-                          FROM pma_managed_turns turns
-                         WHERE turns.managed_thread_id = pma_managed_threads.managed_thread_id
-                           AND turns.status = 'running'
-                         LIMIT 1
-                    ) AS has_running_turn
-                    """.strip()
-                )
-            query = (
-                "SELECT "
-                + ", ".join(select_exprs)
-                + " FROM pma_managed_threads WHERE status = 'active'"
-            )
-            if "updated_at" in columns:
-                query += " ORDER BY updated_at DESC, managed_thread_id DESC"
-            rows = conn.execute(query).fetchall()
             threads: list[dict[str, Any]] = []
-            for row in rows:
-                managed_thread_id = row["managed_thread_id"]
+            for row in PmaThreadStore(hub_root).list_threads(status="active"):
+                managed_thread_id = row.get("managed_thread_id")
                 if (
                     not isinstance(managed_thread_id, str)
                     or not managed_thread_id.strip()
                 ):
                     continue
-                workspace_raw = (
-                    row["workspace_root"] if "workspace_root" in columns else None
-                )
+                workspace_raw = row.get("workspace_root")
                 workspace_path = _canonical_workspace_path(workspace_raw)
                 repo_id = _resolve_repo_id(
-                    row["repo_id"] if "repo_id" in columns else None,
+                    row.get("repo_id"),
                     workspace_raw,
                     repo_id_by_workspace,
                 )
-                agent = _normalize_agent(row["agent"] if "agent" in columns else None)
-                backend_thread_id = (
-                    row["backend_thread_id"] if "backend_thread_id" in columns else None
-                )
-                if (
-                    not isinstance(backend_thread_id, str)
-                    or not backend_thread_id.strip()
-                ):
-                    backend_thread_id = None
-                name = row["name"] if "name" in columns else None
+                agent = _normalize_agent(row.get("agent"))
+                name = row.get("name")
                 if not isinstance(name, str) or not name.strip():
                     name = None
-                updated_at = row["updated_at"] if "updated_at" in columns else None
+                updated_at = row.get("updated_at")
                 if not isinstance(updated_at, str) or not updated_at.strip():
                     updated_at = None
-                has_running_turn = bool(
-                    row["has_running_turn"] if has_turns_table else False
-                )
-                normalized_status = (
-                    row["normalized_status"] if "normalized_status" in columns else None
-                )
+                normalized_status = row.get("normalized_status")
                 if (
                     not isinstance(normalized_status, str)
                     or not normalized_status.strip()
                 ):
-                    normalized_status = "running" if has_running_turn else "idle"
+                    normalized_status = "idle"
                 else:
                     normalized_status = normalized_status.strip()
-                status_reason_code = (
-                    row["status_reason_code"]
-                    if "status_reason_code" in columns
-                    else None
-                )
+                status_reason_code = row.get("status_reason_code")
                 if (
                     not isinstance(status_reason_code, str)
                     or not status_reason_code.strip()
                 ):
                     status_reason_code = None
-                status_updated_at = (
-                    row["status_updated_at"] if "status_updated_at" in columns else None
-                )
+                status_updated_at = row.get("status_updated_at")
                 if (
                     not isinstance(status_updated_at, str)
                     or not status_updated_at.strip()
@@ -704,10 +639,9 @@ def build_hub_repo_routes(
                         "agent": agent,
                         "repo_id": repo_id,
                         "workspace_path": workspace_path,
-                        "backend_thread_id": backend_thread_id,
                         "name": name,
                         "updated_at": updated_at,
-                        "has_running_turn": has_running_turn,
+                        "has_running_turn": normalized_status == "running",
                         "normalized_status": normalized_status,
                         "status_reason_code": status_reason_code,
                         "status_updated_at": status_updated_at,
@@ -722,12 +656,6 @@ def build_hub_repo_routes(
                 exc=exc,
             )
             return []
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
 
     def _timestamp_rank(value: Any) -> float:
         if isinstance(value, bool):

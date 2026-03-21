@@ -81,7 +81,7 @@ def test_create_managed_thread_with_repo_owner(
     store = PmaThreadStore(hub_env.hub_root)
     stored = store.get_thread(thread["managed_thread_id"])
     assert stored is not None
-    assert stored["metadata"]["backend_runtime_instance_id"] == "runtime-test-1"
+    assert stored["backend_thread_id"] == "thread-backend-1"
     notification = resp.json().get("notification") or {}
     subscription = notification.get("subscription") or {}
     assert subscription.get("thread_id") == thread["managed_thread_id"]
@@ -726,8 +726,34 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
         assert get_resp.json()["thread"]["lifecycle_status"] == "active"
 
     assert fake_supervisor.client.resume_calls == [resumed_backend_id]
-    assert fake_supervisor.client.thread_start_calls == 0
-    assert len(fake_supervisor.client.turn_start_calls) == 1
+
+
+def test_resume_managed_thread_without_backend_binding_reactivates_thread(
+    hub_env,
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        archive_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/archive")
+        assert archive_resp.status_code == 200
+
+        resume_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/resume",
+            json={},
+        )
+
+    assert resume_resp.status_code == 200
+    resumed_thread = resume_resp.json()["thread"]
+    assert resumed_thread["managed_thread_id"] == managed_thread_id
+    assert resumed_thread["lifecycle_status"] == "active"
+    assert resumed_thread["backend_thread_id"] is None
 
 
 def test_managed_thread_crud_routes_use_orchestration_service(

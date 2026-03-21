@@ -11,6 +11,9 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
+from codex_autorunner.core.orchestration.runtime_bindings import (
+    clear_runtime_thread_bindings_for_hub_root,
+)
 from codex_autorunner.core.pma_thread_store import (
     ManagedThreadNotActiveError,
     PmaThreadStore,
@@ -621,6 +624,94 @@ def test_send_message_compact_seed_used_only_before_backend_thread_exists(
     assert "second message" in second_prompt
 
 
+def test_send_message_after_restart_does_not_duplicate_compact_seed(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeTurnHandle:
+        def __init__(self, turn_id: str) -> None:
+            self.turn_id = turn_id
+
+        async def wait(self, timeout=None):
+            _ = timeout
+            return type(
+                "Result",
+                (),
+                {
+                    "agent_messages": ["assistant-output"],
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.turn_start_calls: list[dict[str, str]] = []
+            self._turn_count = 0
+
+        async def thread_resume(self, thread_id: str) -> None:
+            _ = thread_id
+
+        async def thread_start(self, root: str) -> dict:
+            _ = root
+            self._turn_count += 1
+            return {"id": f"backend-thread-{self._turn_count}"}
+
+        async def turn_start(
+            self,
+            thread_id: str,
+            prompt: str,
+            approval_policy: str,
+            sandbox_policy: str,
+            **turn_kwargs,
+        ):
+            _ = approval_policy, sandbox_policy, turn_kwargs
+            self.turn_start_calls.append({"thread_id": thread_id, "prompt": prompt})
+            return FakeTurnHandle(turn_id=f"backend-turn-{len(self.turn_start_calls)}")
+
+    class FakeSupervisor:
+        def __init__(self) -> None:
+            self.client = FakeClient()
+
+        async def get_client(self, hub_root: Path):
+            _ = hub_root
+            return self.client
+
+    fake_supervisor = FakeSupervisor()
+    app.state.app_server_supervisor = fake_supervisor
+    app.state.app_server_events = object()
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        compact_resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/compact",
+            json={"summary": "summary seed"},
+        )
+        assert compact_resp.status_code == 200
+
+        clear_runtime_thread_bindings_for_hub_root(hub_env.hub_root)
+
+        resp = client.post(
+            f"/hub/pma/threads/{managed_thread_id}/messages",
+            json={"message": "message after restart"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    prompt = fake_supervisor.client.turn_start_calls[0]["prompt"]
+    assert prompt.count("Context summary (from compaction):") == 1
+    assert "Compacted context summary:" not in prompt
+    assert "message after restart" in prompt
+
+
 def test_send_message_queues_when_running_turn_exists(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
@@ -710,13 +801,13 @@ def test_send_message_reports_interrupt_failure_without_marking_turn_failed(
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
-
-    store = PmaThreadStore(hub_env.hub_root)
-    running_turn = store.create_turn(managed_thread_id, prompt="still running")
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
-    store.set_turn_backend_turn_id(running_turn["managed_turn_id"], "backend-turn-1")
-
-    with TestClient(app) as client:
+        store = PmaThreadStore(hub_env.hub_root)
+        running_turn = store.create_turn(managed_thread_id, prompt="still running")
+        store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+        store.set_turn_backend_turn_id(
+            running_turn["managed_turn_id"],
+            "backend-turn-1",
+        )
         resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
             json={"message": "blocked", "busy_policy": "interrupt"},

@@ -753,9 +753,7 @@ def build_managed_thread_crud_routes(
         request: Request,
         payload: PmaManagedThreadResumeRequest,
     ) -> dict[str, Any]:
-        backend_thread_id = (payload.backend_thread_id or "").strip()
-        if not backend_thread_id:
-            raise HTTPException(status_code=400, detail="backend_thread_id is required")
+        backend_thread_id = normalize_optional_text(payload.backend_thread_id)
 
         service = build_managed_thread_orchestration_service(request)
         thread = service.get_thread_target(managed_thread_id)
@@ -769,12 +767,14 @@ def build_managed_thread_crud_routes(
 
         old_backend_thread_id = normalize_optional_text(thread.backend_thread_id)
         old_status = normalize_optional_text(thread.lifecycle_status)
-        backend_runtime_instance_id = await _require_backend_runtime_instance_id(
-            request,
-            service=service,
-            agent_id=thread.agent_id,
-            workspace_root=Path(thread.workspace_root),
-        )
+        backend_runtime_instance_id = None
+        if backend_thread_id is not None:
+            backend_runtime_instance_id = await _require_backend_runtime_instance_id(
+                request,
+                service=service,
+                agent_id=thread.agent_id,
+                workspace_root=Path(thread.workspace_root),
+            )
         updated = service.resume_thread_target(
             managed_thread_id,
             backend_thread_id=backend_thread_id,

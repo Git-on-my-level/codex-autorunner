@@ -1813,19 +1813,20 @@ def pma_thread_resume(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
     backend_id: str = typer.Option(
-        ..., "--backend-id", help="Backend thread/session id to bind"
+        "", "--backend-id", help="Optional backend thread/session id to bind"
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """Bind a backend thread/session id and set managed thread active."""
+    """Set a managed thread active and optionally bind a backend thread/session id."""
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
+        payload = {"backend_thread_id": backend_id} if backend_id.strip() else {}
         data = _request_json(
             "POST",
             _build_pma_url(config, f"/threads/{managed_thread_id}/resume"),
-            {"backend_thread_id": backend_id},
+            payload,
             token_env=config.server_auth_token_env,
         )
     except httpx.HTTPError as exc:

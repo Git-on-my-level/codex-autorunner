@@ -757,7 +757,7 @@ class PmaManagedThreadCompactRequest(Payload):
 
 
 class PmaManagedThreadResumeRequest(Payload):
-    backend_thread_id: str
+    backend_thread_id: Optional[str] = None
 
 
 class PmaAutomationSubscriptionCreateRequest(Payload):

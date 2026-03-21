@@ -6,6 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration.runtime_bindings import (
+    clear_runtime_thread_binding,
+)
 from codex_autorunner.core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -13,6 +16,7 @@ from codex_autorunner.core.pma_thread_store import (
     default_pma_threads_db_path,
     pma_threads_db_lock_path,
 )
+from codex_autorunner.core.sqlite_utils import open_sqlite
 
 
 def test_create_list_get_thread(tmp_path: Path) -> None:
@@ -55,6 +59,47 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     )
     assert len(normalized_listed) == 1
     assert normalized_listed[0]["managed_thread_id"] == created["managed_thread_id"]
+
+
+def test_backend_thread_id_is_runtime_only_across_restart(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-1",
+        metadata={"backend_runtime_instance_id": "runtime-1"},
+    )
+    managed_thread_id = created["managed_thread_id"]
+
+    clear_runtime_thread_binding(hub_root, managed_thread_id)
+
+    restarted = PmaThreadStore(hub_root)
+    fetched = restarted.get_thread(managed_thread_id)
+    assert fetched is not None
+    assert fetched["backend_thread_id"] is None
+    assert fetched["backend_runtime_instance_id"] is None
+
+    listed = restarted.list_threads(agent="codex", status="active")
+    assert len(listed) == 1
+    assert listed[0]["managed_thread_id"] == managed_thread_id
+    assert listed[0]["backend_thread_id"] is None
+    assert listed[0]["backend_runtime_instance_id"] is None
+
+    with open_sqlite(restarted.path) as conn:
+        row = conn.execute(
+            """
+            SELECT backend_thread_id
+              FROM pma_managed_threads
+             WHERE managed_thread_id = ?
+            """,
+            (managed_thread_id,),
+        ).fetchone()
+    assert row is not None
+    assert row["backend_thread_id"] is None
 
 
 def test_create_finish_turn_and_query(tmp_path: Path) -> None:

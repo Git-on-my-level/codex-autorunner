@@ -11,6 +11,9 @@ from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration.runtime_bindings import (
+    clear_runtime_thread_bindings_for_hub_root,
+)
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
 from codex_autorunner.core.orchestration.turn_timeline import list_turn_timeline
 from codex_autorunner.core.pma_context import format_pma_discoverability_preamble
@@ -26,6 +29,74 @@ def _enable_pma(hub_root: Path) -> None:
     cfg.setdefault("pma", {})
     cfg["pma"]["enabled"] = True
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+
+@pytest.mark.anyio
+async def test_restart_managed_thread_queue_workers_restores_pending_threads(
+    hub_env,
+    monkeypatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    store.create_turn(managed_thread_id, prompt="running")
+    store.create_turn(managed_thread_id, prompt="queued", busy_policy="queue")
+
+    restored: list[str] = []
+
+    def _fake_ensure(app_obj: Any, thread_target_id: str) -> None:
+        assert app_obj is app
+        restored.append(thread_target_id)
+
+    monkeypatch.setattr(
+        managed_thread_runtime,
+        "ensure_managed_thread_queue_worker",
+        _fake_ensure,
+    )
+
+    await managed_thread_runtime.restart_managed_thread_queue_workers(app)
+
+    assert restored == [managed_thread_id]
+
+
+@pytest.mark.anyio
+async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    running = store.create_turn(managed_thread_id, prompt="running")
+    queued = store.create_turn(managed_thread_id, prompt="queued", busy_policy="queue")
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    clear_runtime_thread_bindings_for_hub_root(hub_env.hub_root)
+
+    await managed_thread_runtime.recover_orphaned_managed_thread_executions(app)
+
+    updated_running = store.get_turn(managed_thread_id, running["managed_turn_id"])
+    updated_queued = store.get_turn(managed_thread_id, queued["managed_turn_id"])
+    assert updated_running is not None
+    assert updated_running["status"] == "error"
+    assert updated_running["error"] == "Backend thread missing from orchestration state"
+    assert updated_queued is not None
+    assert updated_queued["status"] == "queued"
+
+    claimed = store.claim_next_queued_turn(managed_thread_id)
+    assert claimed is not None
+    claimed_turn, _queue_payload = claimed
+    assert claimed_turn["managed_turn_id"] == queued["managed_turn_id"]
 
 
 def test_managed_thread_message_route_uses_orchestration_service_seam(

@@ -583,19 +583,19 @@ class TelegramCommandHandlers(
                     or stop_outcome.cancelled_queued
                 ):
                     parts = []
-                    if stop_outcome.interrupted_active:
-                        parts.append(
-                            "Interrupted active PMA turn."
-                            if pma_mode
-                            else "Interrupted active turn."
-                        )
-                    elif stop_outcome.recovered_lost_backend:
+                    if stop_outcome.recovered_lost_backend:
                         parts.append(
                             (
                                 "Recovered stale PMA session after backend thread was lost."
                                 if pma_mode
                                 else "Recovered stale session after backend thread was lost."
                             )
+                        )
+                    elif stop_outcome.interrupted_active:
+                        parts.append(
+                            "Interrupted active PMA turn."
+                            if pma_mode
+                            else "Interrupted active turn."
                         )
                     if stop_outcome.cancelled_queued:
                         parts.append(

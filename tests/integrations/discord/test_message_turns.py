@@ -6451,10 +6451,7 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         workspace.resolve(),
         display_name="discord:channel-1",
     )
-    orchestration_service.resume_thread_target(
-        current_thread.thread_target_id,
-        backend_thread_id="backend-thread-1",
-    )
+    assert current_thread.backend_thread_id is None
     service._attach_discord_thread_binding(
         channel_id="channel-1",
         thread_target_id=current_thread.thread_target_id,
@@ -6537,6 +6534,64 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
 
 
 @pytest.mark.anyio
+async def test_resolve_discord_thread_target_reuses_archived_managed_thread(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        orchestration_service = service._discord_thread_service()
+        current_thread = orchestration_service.create_thread_target(
+            "codex",
+            workspace.resolve(),
+            display_name="discord:channel-1",
+        )
+        service._attach_discord_thread_binding(
+            channel_id="channel-1",
+            thread_target_id=current_thread.thread_target_id,
+            agent="codex",
+            repo_id=None,
+            pma_enabled=False,
+        )
+        orchestration_service.archive_thread_target(current_thread.thread_target_id)
+
+        _service, resolved = discord_message_turns_module.resolve_discord_thread_target(
+            service,
+            channel_id="channel-1",
+            workspace_root=workspace.resolve(),
+            agent="codex",
+            repo_id=None,
+            resource_kind=None,
+            resource_id=None,
+            mode="repo",
+            pma_enabled=False,
+        )
+
+        assert resolved.thread_target_id == current_thread.thread_target_id
+        assert resolved.lifecycle_status == "active"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_session_compact_places_continue_button_on_last_chunk_without_preview(
     tmp_path: Path,
 ) -> None:
@@ -6567,10 +6622,7 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         workspace.resolve(),
         display_name="discord:channel-1",
     )
-    orchestration_service.resume_thread_target(
-        current_thread.thread_target_id,
-        backend_thread_id="backend-thread-1",
-    )
+    assert current_thread.backend_thread_id is None
     service._attach_discord_thread_binding(
         channel_id="channel-1",
         thread_target_id=current_thread.thread_target_id,

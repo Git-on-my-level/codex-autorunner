@@ -16,6 +16,9 @@ from ...core.filebox_retention import (
 )
 from ...core.logging_utils import safe_log
 from ...core.managed_processes import reap_managed_processes
+from ...core.orchestration.runtime_bindings import (
+    clear_runtime_thread_bindings_for_hub_root,
+)
 from ...housekeeping import reap_managed_docker_containers, run_housekeeping_once
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
@@ -32,6 +35,10 @@ from .routes.filebox import build_hub_filebox_routes
 from .routes.hub_messages import build_hub_messages_routes
 from .routes.hub_repos import HubMountManager, build_hub_repo_routes
 from .routes.pma import build_pma_routes
+from .routes.pma_routes.managed_thread_runtime import (
+    recover_orphaned_managed_thread_executions,
+    restart_managed_thread_queue_workers,
+)
 from .routes.system import build_system_routes
 from .static_assets import (
     index_response_headers,
@@ -99,6 +106,17 @@ def create_hub_app(
         registered_pma_lane_starter = False
         pma_lane_starter_register = None
         app.state.hub_started = True
+        clear_runtime_thread_bindings_for_hub_root(context.config.root)
+        try:
+            await recover_orphaned_managed_thread_executions(app)
+            await restart_managed_thread_queue_workers(app)
+        except Exception as exc:
+            safe_log(
+                app.state.logger,
+                logging.WARNING,
+                "Managed-thread queue worker restore failed at hub startup",
+                exc,
+            )
         try:
             cleanup = reap_managed_processes(context.config.root)
             if cleanup.killed or cleanup.signaled or cleanup.removed:

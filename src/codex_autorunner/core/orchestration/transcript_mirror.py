@@ -259,6 +259,36 @@ class TranscriptMirrorStore:
                 entries.append(parsed.as_history_entry())
         return entries
 
+    def list_target_history(
+        self,
+        *,
+        target_kind: str,
+        target_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        if limit <= 0:
+            return []
+        with open_orchestration_sqlite(self._hub_root) as conn:
+            rows = conn.execute(
+                """
+                SELECT transcript_mirror_id, metadata_json, text_content, text_preview
+                  FROM orch_transcript_mirrors
+                 WHERE target_kind = ?
+                   AND target_id = ?
+                 ORDER BY created_at DESC, transcript_mirror_id DESC
+                 LIMIT ?
+                """,
+                (target_kind, target_id, int(limit)),
+            ).fetchall()
+        entries: list[dict[str, Any]] = []
+        for row in rows:
+            parsed = self._row_to_record(row)
+            if parsed is not None:
+                entry = parsed.as_history_entry()
+                entry["content"] = parsed.content
+                entries.append(entry)
+        return entries
+
     @staticmethod
     def _row_to_record(row: Any) -> TranscriptMirrorRow | None:
         if row is None:

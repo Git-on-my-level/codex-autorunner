@@ -2383,6 +2383,70 @@ async def test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_re
 
 
 @pytest.mark.anyio
+async def test_resolve_telegram_managed_thread_reuses_archived_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+        agent="codex",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=frozenset({"durable_threads"}),
+                make_harness=lambda _ctx: object(),
+            )
+        },
+    )
+
+    orchestration_service = (
+        execution_commands_module._build_telegram_thread_orchestration_service(handler)
+    )
+    current_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace.resolve(),
+        repo_id="repo-1",
+        display_name="telegram:test-topic",
+    )
+    orchestration_service.upsert_binding(
+        surface_kind="telegram",
+        surface_key="telegram:-1001:101",
+        thread_target_id=current_thread.thread_target_id,
+        agent_id="codex",
+        repo_id="repo-1",
+        mode="pma",
+    )
+    orchestration_service.archive_thread_target(current_thread.thread_target_id)
+
+    _service, resolved = (
+        await execution_commands_module._resolve_telegram_managed_thread(
+            handler,
+            surface_key="telegram:-1001:101",
+            workspace_root=workspace.resolve(),
+            agent="codex",
+            repo_id="repo-1",
+            mode="pma",
+            pma_enabled=True,
+            allow_new_thread=False,
+        )
+    )
+
+    assert resolved is not None
+    assert resolved.thread_target_id == current_thread.thread_target_id
+    assert resolved.lifecycle_status == "active"
+
+
+@pytest.mark.anyio
 async def test_pma_native_input_items_route_through_managed_thread_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2924,8 +2988,8 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
         threads = thread_store.list_threads(limit=10)
         assert len(threads) == 1
         turns = thread_store.list_turns(threads[0]["managed_thread_id"], limit=10)
-        assert turns[0]["status"] == "error"
-        assert turns[0]["error"] == "Backend thread lost after restart"
+        assert turns[0]["status"] == "interrupted"
+        assert turns[0]["error"] is None
     finally:
         release_first.set()
         if not first_task.done():

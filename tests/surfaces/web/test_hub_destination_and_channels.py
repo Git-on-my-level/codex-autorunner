@@ -22,7 +22,10 @@ from codex_autorunner.core.flows import FlowEventType, FlowRunStatus, FlowStore
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
-from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.pma_thread_store import (
+    PmaThreadStore,
+    default_pma_threads_db_path,
+)
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.integrations.agents.backend_orchestrator import (
     build_backend_orchestrator,
@@ -1080,6 +1083,102 @@ def test_hub_channel_directory_route_enriches_entries_best_effort(
     assert telegram_clean["status_label"] == "clean"
 
 
+def test_hub_channel_directory_route_uses_managed_thread_id_for_pma_usage(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("work")
+
+    store = ChannelDirectoryStore(hub_root)
+    store.record_seen("discord", "chan-pma", None, "PMA / #ops", {})
+    _write_discord_binding_rows(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-pma",
+                "guild_id": None,
+                "workspace_path": str(repo.path),
+                "repo_id": "work",
+                "pma_enabled": 1,
+                "agent": "opencode",
+                "updated_at": "2026-01-01T00:00:02Z",
+            }
+        ],
+    )
+
+    pma_store = PmaThreadStore(hub_root)
+    created = pma_store.create_thread(
+        "opencode",
+        repo.path,
+        repo_id="work",
+        name="discord:chan-pma",
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    legacy_backend_thread_id = "legacy-backend-thread"
+
+    conn = sqlite3.connect(default_pma_threads_db_path(hub_root))
+    try:
+        with conn:
+            conn.execute(
+                """
+                UPDATE pma_managed_threads
+                   SET backend_thread_id = ?
+                 WHERE managed_thread_id = ?
+                """,
+                (legacy_backend_thread_id, managed_thread_id),
+            )
+    finally:
+        conn.close()
+
+    _write_usage_rows(
+        repo.path / ".codex-autorunner" / "usage" / "opencode_turn_usage.jsonl",
+        rows=[
+            {
+                "timestamp": "2026-01-01T00:00:00Z",
+                "session_id": managed_thread_id,
+                "turn_id": "managed-turn",
+                "usage": {
+                    "input_tokens": 2,
+                    "cached_input_tokens": 3,
+                    "output_tokens": 5,
+                    "reasoning_output_tokens": 7,
+                    "total_tokens": 17,
+                },
+            },
+            {
+                "timestamp": "2026-01-01T00:00:10Z",
+                "session_id": legacy_backend_thread_id,
+                "turn_id": "legacy-turn",
+                "usage": {
+                    "input_tokens": 11,
+                    "cached_input_tokens": 13,
+                    "output_tokens": 17,
+                    "reasoning_output_tokens": 19,
+                    "total_tokens": 60,
+                },
+            },
+        ],
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/chat/channels")
+    assert response.status_code == 200
+    rows = {entry["key"]: entry for entry in response.json()["entries"]}
+
+    standalone_key = f"pma_thread:{managed_thread_id}"
+    assert standalone_key in rows
+    assert rows[standalone_key]["token_usage"] == {
+        "total_tokens": 17,
+        "input_tokens": 2,
+        "cached_input_tokens": 3,
+        "output_tokens": 5,
+        "reasoning_output_tokens": 7,
+        "turn_id": "managed-turn",
+        "timestamp": "2026-01-01T00:00:00Z",
+    }
+
+
 def test_hub_channel_directory_route_surfaces_agent_workspace_binding_metadata(
     tmp_path: Path,
 ) -> None:
@@ -1224,6 +1323,28 @@ def test_hub_channel_directory_route_ignores_repo_mode_binding_for_pma_rows(
         repo_id="work",
         name="discord:chan-pma",
     )
+    db_path = default_pma_threads_db_path(hub_root)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                """
+                UPDATE pma_managed_threads
+                   SET updated_at = ?
+                 WHERE managed_thread_id = ?
+                """,
+                ("2026-01-01T00:00:01Z", stale_repo_thread["managed_thread_id"]),
+            )
+            conn.execute(
+                """
+                UPDATE pma_managed_threads
+                   SET updated_at = ?
+                 WHERE managed_thread_id = ?
+                """,
+                ("2026-01-01T00:00:05Z", live_pma_thread["managed_thread_id"]),
+            )
+    finally:
+        conn.close()
     OrchestrationBindingStore(hub_root).upsert_binding(
         surface_kind="discord",
         surface_key="chan-pma",

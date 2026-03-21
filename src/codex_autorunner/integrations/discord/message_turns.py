@@ -1008,20 +1008,23 @@ def resolve_discord_thread_target(
         else None
     )
     canonical_workspace = str(workspace_root.resolve())
+    reusable_thread = (
+        thread is not None
+        and thread.agent_id == agent
+        and str(thread.workspace_root or "").strip() == canonical_workspace
+    )
+    owner_kind, owner_id, normalized_repo_id = service._resource_owner_for_workspace(
+        workspace_root,
+        repo_id=repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+    )
     if (
-        thread is None
-        or thread.agent_id != agent
-        or str(thread.workspace_root or "").strip() != canonical_workspace
-        or str(thread.lifecycle_status or "").strip().lower() != "active"
+        reusable_thread
+        and str(thread.lifecycle_status or "").strip().lower() != "active"
     ):
-        owner_kind, owner_id, normalized_repo_id = (
-            service._resource_owner_for_workspace(
-                workspace_root,
-                repo_id=repo_id,
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-            )
-        )
+        thread = orchestration_service.resume_thread_target(thread.thread_target_id)
+    elif not reusable_thread:
         thread = orchestration_service.create_thread_target(
             agent,
             workspace_root,
@@ -1029,15 +1032,6 @@ def resolve_discord_thread_target(
             resource_kind=owner_kind,
             resource_id=owner_id,
             display_name=f"discord:{channel_id}",
-        )
-    else:
-        owner_kind, owner_id, normalized_repo_id = (
-            service._resource_owner_for_workspace(
-                workspace_root,
-                repo_id=repo_id,
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-            )
         )
     orchestration_service.upsert_binding(
         surface_kind="discord",

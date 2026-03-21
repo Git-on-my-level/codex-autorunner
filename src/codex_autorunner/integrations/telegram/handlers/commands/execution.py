@@ -348,12 +348,21 @@ async def _resolve_telegram_managed_thread(
             backend_thread_id=normalized_backend_thread_id,
             backend_runtime_instance_id=backend_runtime_instance_id,
         )
+    reusable_thread = (
+        thread is not None
+        and thread.agent_id == agent
+        and str(thread.workspace_root or "").strip() == canonical_workspace
+    )
     if (
-        thread is None
-        or thread.agent_id != agent
-        or str(thread.workspace_root or "").strip() != canonical_workspace
-        or str(thread.lifecycle_status or "").strip().lower() != "active"
+        reusable_thread
+        and str(thread.lifecycle_status or "").strip().lower() != "active"
     ):
+        thread = orchestration_service.resume_thread_target(
+            thread.thread_target_id,
+            backend_thread_id=normalized_backend_thread_id,
+            backend_runtime_instance_id=backend_runtime_instance_id,
+        )
+    elif not reusable_thread:
         if not allow_new_thread and not normalized_backend_thread_id:
             return orchestration_service, None
         thread = orchestration_service.create_thread_target(

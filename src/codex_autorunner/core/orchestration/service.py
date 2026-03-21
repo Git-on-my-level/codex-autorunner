@@ -34,14 +34,18 @@ from .models import (
     ThreadTarget,
 )
 from .threads import SurfaceThreadMessageRequest, ThreadControlRequest
+from .transcript_mirror import TranscriptMirrorStore
 
 MessagePreviewLimit = 120
 LOST_BACKEND_THREAD_ERROR = "Backend thread lost after restart"
 MISSING_BACKEND_THREAD_ERROR = "Backend thread missing from orchestration state"
 _MISSING_THREAD_MARKERS = (
+    "missing thread",
     "thread not found",
     "no rollout found for thread id",
 )
+_REHYDRATION_TRANSCRIPT_LIMIT = 3
+_REHYDRATION_TEXT_LIMIT = 4_000
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +73,15 @@ def _truncate_text(value: str, limit: int = MessagePreviewLimit) -> str:
     if limit <= 3:
         return value[:limit]
     return value[: limit - 3] + "..."
+
+
+def _truncate_rehydration_text(value: str, limit: int = _REHYDRATION_TEXT_LIMIT) -> str:
+    stripped = value.strip()
+    if len(stripped) <= limit:
+        return stripped
+    if limit <= 3:
+        return stripped[:limit]
+    return stripped[: limit - 3] + "..."
 
 
 def _thread_target_from_store_row(record: Mapping[str, Any]) -> ThreadTarget:
@@ -141,6 +154,10 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
     def __init__(self, store: PmaThreadStore) -> None:
         self._store = store
 
+    @property
+    def hub_root(self) -> Path:
+        return self._store.hub_root
+
     def create_thread_target(
         self,
         agent_id: str,
@@ -204,17 +221,18 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         self,
         thread_target_id: str,
         *,
-        backend_thread_id: str,
+        backend_thread_id: Optional[str] = None,
         backend_runtime_instance_id: Optional[str] = None,
     ) -> Optional[ThreadTarget]:
         record = self._store.get_thread(thread_target_id)
         if record is None:
             return None
-        self._store.set_thread_backend_id(
-            thread_target_id,
-            backend_thread_id,
-            backend_runtime_instance_id=backend_runtime_instance_id,
-        )
+        if backend_thread_id is not None:
+            self._store.set_thread_backend_id(
+                thread_target_id,
+                backend_thread_id,
+                backend_runtime_instance_id=backend_runtime_instance_id,
+            )
         self._store.activate_thread(thread_target_id)
         updated = self._store.get_thread(thread_target_id)
         if updated is None:
@@ -581,7 +599,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         self,
         thread_target_id: str,
         *,
-        backend_thread_id: str,
+        backend_thread_id: Optional[str] = None,
         backend_runtime_instance_id: Optional[str] = None,
     ) -> ThreadTarget:
         thread = self.thread_store.resume_thread_target(
@@ -679,6 +697,51 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             runtime_prompt = raw_runtime_prompt
         return runtime_prompt
 
+    def _build_rehydration_prefix(
+        self, thread: ThreadTarget, *, include_compact_seed: bool
+    ) -> Optional[str]:
+        sections: list[str] = []
+        compact_seed = _truncate_rehydration_text(thread.compact_seed or "")
+        if include_compact_seed and compact_seed:
+            sections.append(f"Compacted context summary:\n{compact_seed}")
+
+        hub_root = getattr(self.thread_store, "hub_root", None)
+        if isinstance(hub_root, Path):
+            transcript_store = TranscriptMirrorStore(hub_root)
+            transcript_entries = transcript_store.list_target_history(
+                target_kind="thread_target",
+                target_id=thread.thread_target_id,
+                limit=_REHYDRATION_TRANSCRIPT_LIMIT,
+            )
+            transcript_sections: list[str] = []
+            for index, entry in enumerate(reversed(transcript_entries), start=1):
+                content = _truncate_rehydration_text(str(entry.get("content") or ""))
+                if not content:
+                    continue
+                transcript_sections.append(f"Recent transcript {index}:\n{content}")
+            if transcript_sections:
+                sections.append("\n\n".join(transcript_sections))
+
+        if not sections:
+            return None
+        return (
+            "Recovered durable conversation state for this managed thread. "
+            "A fresh backend conversation was started because no live backend "
+            "binding was available.\n\n" + "\n\n".join(sections)
+        )
+
+    def _rehydrated_runtime_prompt(
+        self, thread: ThreadTarget, runtime_prompt: str
+    ) -> str:
+        prefix = self._build_rehydration_prefix(
+            thread,
+            include_compact_seed="Context summary (from compaction):"
+            not in runtime_prompt,
+        )
+        if not prefix:
+            return runtime_prompt
+        return f"{prefix}\n\n{runtime_prompt}"
+
     async def _start_execution(
         self,
         thread: ThreadTarget,
@@ -719,31 +782,52 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 )
                 conversation_id = None
             if conversation_id:
-                conversation = await harness.resume_conversation(
-                    workspace_root, conversation_id
-                )
-                resumed_conversation_id = getattr(conversation, "id", None)
-                if (
-                    isinstance(resumed_conversation_id, str)
-                    and resumed_conversation_id
-                    and resumed_conversation_id != conversation_id
-                ):
-                    conversation_id = resumed_conversation_id
+                try:
+                    conversation = await harness.resume_conversation(
+                        workspace_root, conversation_id
+                    )
+                except Exception as exc:
+                    if not _is_missing_thread_error(exc):
+                        raise
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "orchestration.thread.resume_missing_backend",
+                        exc=exc,
+                        thread_target_id=thread.thread_target_id,
+                        backend_thread_id=conversation_id,
+                        action="start_new_conversation",
+                    )
                     self.thread_store.set_thread_backend_id(
                         thread.thread_target_id,
-                        conversation_id,
-                        backend_runtime_instance_id=runtime_instance_id,
+                        None,
+                        backend_runtime_instance_id=None,
                     )
-                elif (
-                    runtime_instance_id
-                    and thread.backend_runtime_instance_id != runtime_instance_id
-                ):
-                    self.thread_store.set_thread_backend_id(
-                        thread.thread_target_id,
-                        conversation_id,
-                        backend_runtime_instance_id=runtime_instance_id,
-                    )
-            else:
+                    conversation_id = None
+                else:
+                    resumed_conversation_id = getattr(conversation, "id", None)
+                    if (
+                        isinstance(resumed_conversation_id, str)
+                        and resumed_conversation_id
+                        and resumed_conversation_id != conversation_id
+                    ):
+                        conversation_id = resumed_conversation_id
+                        self.thread_store.set_thread_backend_id(
+                            thread.thread_target_id,
+                            conversation_id,
+                            backend_runtime_instance_id=runtime_instance_id,
+                        )
+                    elif (
+                        runtime_instance_id
+                        and thread.backend_runtime_instance_id != runtime_instance_id
+                    ):
+                        self.thread_store.set_thread_backend_id(
+                            thread.thread_target_id,
+                            conversation_id,
+                            backend_runtime_instance_id=runtime_instance_id,
+                        )
+            if not conversation_id:
+                runtime_prompt = self._rehydrated_runtime_prompt(thread, runtime_prompt)
                 conversation = await harness.new_conversation(
                     workspace_root,
                     title=thread.display_name,
@@ -965,13 +1049,15 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
         if not thread.workspace_root:
             raise RuntimeError("Thread target is missing workspace_root")
-        if not thread.backend_thread_id:
-            raise RuntimeError("Thread target has no backend thread id to interrupt")
 
         execution = self.get_running_execution(thread_target_id)
         if execution is None:
             raise KeyError(
                 f"Thread target '{thread_target_id}' has no running execution"
+            )
+        if not thread.backend_thread_id:
+            return self.thread_store.record_execution_interrupted(
+                thread_target_id, execution.execution_id
             )
 
         harness = self.harness_factory(thread.agent_id)
@@ -1022,6 +1108,35 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
         return recovered
 
+    def _interrupt_lost_backend_execution(
+        self,
+        *,
+        thread_target_id: str,
+        execution: ExecutionRecord,
+        backend_thread_id: Optional[str],
+        reason: str,
+    ) -> ExecutionRecord:
+        interrupted = self.thread_store.record_execution_interrupted(
+            thread_target_id, execution.execution_id
+        )
+        self.thread_store.set_thread_backend_id(
+            thread_target_id,
+            None,
+            backend_runtime_instance_id=None,
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "orchestration.thread.recovered_lost_backend",
+            thread_target_id=thread_target_id,
+            execution_id=execution.execution_id,
+            backend_thread_id=backend_thread_id,
+            backend_turn_id=execution.backend_id,
+            reason=reason,
+            error=None,
+        )
+        return interrupted
+
     async def stop_thread(self, thread_target_id: str) -> ThreadStopOutcome:
         thread = self.get_thread_target(thread_target_id)
         if thread is None:
@@ -1037,17 +1152,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         backend_thread_id = thread.backend_thread_id
         if not backend_thread_id:
-            recovered = self._recover_lost_backend_execution(
+            interrupted = self._interrupt_lost_backend_execution(
                 thread_target_id=thread_target_id,
                 execution=execution,
                 backend_thread_id=None,
-                error_message=MISSING_BACKEND_THREAD_ERROR,
                 reason="missing_backend_thread_id",
             )
             return ThreadStopOutcome(
                 thread_target_id=thread_target_id,
                 cancelled_queued=cancelled_queued,
-                execution=recovered,
+                execution=interrupted,
+                interrupted_active=True,
                 recovered_lost_backend=True,
             )
 
@@ -1072,17 +1187,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 stored_runtime_instance_id=thread.backend_runtime_instance_id,
                 current_runtime_instance_id=runtime_instance_id,
             )
-            recovered = self._recover_lost_backend_execution(
+            interrupted = self._interrupt_lost_backend_execution(
                 thread_target_id=thread_target_id,
                 execution=execution,
                 backend_thread_id=backend_thread_id,
-                error_message=LOST_BACKEND_THREAD_ERROR,
                 reason="stale_backend_runtime_instance",
             )
             return ThreadStopOutcome(
                 thread_target_id=thread_target_id,
                 cancelled_queued=cancelled_queued,
-                execution=recovered,
+                execution=interrupted,
+                interrupted_active=True,
                 recovered_lost_backend=True,
             )
 
@@ -1101,17 +1216,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 backend_turn_id=execution.backend_id,
                 exc=exc,
             )
-            recovered = self._recover_lost_backend_execution(
+            interrupted = self._interrupt_lost_backend_execution(
                 thread_target_id=thread_target_id,
                 execution=execution,
                 backend_thread_id=backend_thread_id,
-                error_message=LOST_BACKEND_THREAD_ERROR,
                 reason="interrupt_thread_not_found",
             )
             return ThreadStopOutcome(
                 thread_target_id=thread_target_id,
                 cancelled_queued=cancelled_queued,
-                execution=recovered,
+                execution=interrupted,
+                interrupted_active=True,
                 recovered_lost_backend=True,
             )
 
@@ -1120,6 +1235,34 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             cancelled_queued=cancelled_queued,
             execution=interrupted,
             interrupted_active=True,
+        )
+
+    def recover_running_execution_after_restart(
+        self, thread_target_id: str
+    ) -> Optional[ExecutionRecord]:
+        thread = self.get_thread_target(thread_target_id)
+        if thread is None:
+            raise KeyError(f"Unknown thread target '{thread_target_id}'")
+
+        execution = self.get_running_execution(thread_target_id)
+        if execution is None:
+            return None
+
+        backend_thread_id = thread.backend_thread_id
+        return self._recover_lost_backend_execution(
+            thread_target_id=thread_target_id,
+            execution=execution,
+            backend_thread_id=backend_thread_id,
+            error_message=(
+                LOST_BACKEND_THREAD_ERROR
+                if backend_thread_id
+                else MISSING_BACKEND_THREAD_ERROR
+            ),
+            reason=(
+                "startup_lost_backend_binding"
+                if backend_thread_id
+                else "startup_missing_backend_thread_id"
+            ),
         )
 
     def get_execution(
