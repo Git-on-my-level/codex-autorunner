@@ -1,8 +1,13 @@
 import { api, confirmModal, escapeHtml, flash, resolvePath } from "./utils.js";
+import {
+  DEFAULT_FILEBOX_BOX,
+  FILEBOX_BOXES,
+  type FileBoxBox,
+} from "./fileboxCatalog.js";
 
 export type FileBoxEntry = {
   name: string;
-  box: "inbox" | "outbox";
+  box: FileBoxBox;
   size?: number | null;
   modified_at?: string | null;
   source?: string | null;
@@ -10,8 +15,7 @@ export type FileBoxEntry = {
 };
 
 export type FileBoxListing = {
-  inbox: FileBoxEntry[];
-  outbox: FileBoxEntry[];
+  [K in FileBoxBox]: FileBoxEntry[];
 };
 
 export type FileBoxScope = "repo" | "hub" | "pma";
@@ -28,7 +32,7 @@ type FileBoxWidgetOpts = FileBoxConfig & {
   uploadInput?: HTMLInputElement | null;
   uploadBtn?: HTMLButtonElement | null;
   refreshBtn?: HTMLButtonElement | null;
-  uploadBox?: "inbox" | "outbox";
+  uploadBox?: FileBoxBox;
   emptyMessage?: string;
   onChange?(listing: FileBoxListing): void;
   onUpload?(names: string[]): void;
@@ -48,6 +52,13 @@ function formatBytes(size?: number | null): string {
   return `${formatted}${units[idx]}`;
 }
 
+function createEmptyFileBoxListing(): FileBoxListing {
+  return FILEBOX_BOXES.reduce((listing, box) => {
+    listing[box] = [];
+    return listing;
+  }, {} as FileBoxListing);
+}
+
 function pathPrefix(config: FileBoxConfig): string {
   if (config.scope === "repo") {
     return config.basePath || "/api/filebox";
@@ -65,15 +76,16 @@ function pathPrefix(config: FileBoxConfig): string {
 async function listFileBox(config: FileBoxConfig): Promise<FileBoxListing> {
   const prefix = pathPrefix(config);
   const res = (await api(prefix)) as Partial<FileBoxListing> | null;
-  return {
-    inbox: Array.isArray(res?.inbox) ? (res!.inbox as FileBoxEntry[]) : [],
-    outbox: Array.isArray(res?.outbox) ? (res!.outbox as FileBoxEntry[]) : [],
-  };
+  const listing = createEmptyFileBoxListing();
+  for (const box of FILEBOX_BOXES) {
+    listing[box] = Array.isArray(res?.[box]) ? (res?.[box] as FileBoxEntry[]) : [];
+  }
+  return listing;
 }
 
 async function uploadFiles(
   config: FileBoxConfig,
-  box: "inbox" | "outbox",
+  box: FileBoxBox,
   files: FileList | File[]
 ): Promise<string[]> {
   const prefix = pathPrefix(config);
@@ -90,16 +102,17 @@ async function uploadFiles(
   return names;
 }
 
-async function deleteFile(config: FileBoxConfig, box: "inbox" | "outbox", name: string): Promise<void> {
+async function deleteFile(config: FileBoxConfig, box: FileBoxBox, name: string): Promise<void> {
   const prefix = pathPrefix(config);
   await api(`${prefix}/${box}/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
 export function createFileBoxWidget(opts: FileBoxWidgetOpts) {
-  const uploadBox = opts.uploadBox || "inbox";
-  let listing: FileBoxListing = { inbox: [], outbox: [] };
+  const uploadBox = opts.uploadBox || DEFAULT_FILEBOX_BOX;
+  const [inboxBox, outboxBox] = FILEBOX_BOXES;
+  let listing: FileBoxListing = createEmptyFileBoxListing();
 
-  const renderList = (box: "inbox" | "outbox", el: HTMLElement | null) => {
+  const renderList = (box: FileBoxBox, el: HTMLElement | null) => {
     if (!el) return;
     const files = listing[box] || [];
     if (!files.length) {
@@ -132,7 +145,7 @@ export function createFileBoxWidget(opts: FileBoxWidgetOpts) {
     el.querySelectorAll(".filebox-delete").forEach((btn) => {
       btn.addEventListener("click", async (evt) => {
         const target = evt.currentTarget as HTMLElement;
-        const boxName = (target.dataset.box || "") as "inbox" | "outbox";
+        const boxName = (target.dataset.box || "") as FileBoxBox;
         const file = target.dataset.file || "";
         if (!boxName || !file) return;
         const confirmed = await confirmModal(`Delete ${file}?`);
@@ -150,8 +163,8 @@ export function createFileBoxWidget(opts: FileBoxWidgetOpts) {
   };
 
   const render = () => {
-    renderList("inbox", opts.inboxEl);
-    renderList("outbox", opts.outboxEl);
+    renderList(inboxBox, opts.inboxEl);
+    renderList(outboxBox, opts.outboxEl);
   };
 
   async function refresh(): Promise<FileBoxListing> {
@@ -195,10 +208,10 @@ export function createFileBoxWidget(opts: FileBoxWidgetOpts) {
   return {
     refresh,
     snapshot(): FileBoxListing {
-      return {
-        inbox: [...listing.inbox],
-        outbox: [...listing.outbox],
-      };
+      return FILEBOX_BOXES.reduce((snapshot, box) => {
+        snapshot[box] = [...listing[box]];
+        return snapshot;
+      }, createEmptyFileBoxListing());
     },
   };
 }

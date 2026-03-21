@@ -15,7 +15,7 @@ from ..tickets.models import Dispatch
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..tickets.replies import resolve_reply_paths
 from .config import load_hub_config, load_repo_config
-from .filebox import list_filebox
+from .filebox import BOXES, empty_listing, list_filebox
 from .flows.failure_diagnostics import format_failure_summary, get_failure_payload
 from .flows.models import (
     FlowRunRecord,
@@ -550,11 +550,11 @@ def _load_template_scan_summary(
 def _snapshot_pma_files(
     hub_root: Path,
 ) -> tuple[dict[str, list[str]], dict[str, list[dict[str, Any]]]]:
-    pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
-    pma_files_detail: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
+    pma_files: dict[str, list[str]] = {box: [] for box in BOXES}
+    pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
     try:
         filebox = list_filebox(hub_root)
-        for box in ("inbox", "outbox"):
+        for box in BOXES:
             entries = filebox.get(box) or []
             names = sorted([e.name for e in entries])
             pma_files[box] = names
@@ -2739,7 +2739,7 @@ async def build_hub_snapshot(
             "action_queue": [],
             "templates": {"enabled": False, "repos": []},
             "lifecycle_events": [],
-            "pma_files_detail": {"inbox": [], "outbox": []},
+            "pma_files_detail": empty_listing(),
             "pma_threads": [],
             "automation": {
                 "subscriptions": {"active_count": 0, "sample": []},
@@ -2758,7 +2758,7 @@ async def build_hub_snapshot(
                 inbox=[],
                 action_queue=[],
                 pma_threads=[],
-                pma_files_detail={"inbox": [], "outbox": []},
+                pma_files_detail=empty_listing(),
             ),
         }
 
@@ -2867,8 +2867,8 @@ async def build_hub_snapshot(
 
     templates = _build_templates_snapshot(supervisor, hub_root=hub_root)
 
-    pma_files: dict[str, list[str]] = {"inbox": [], "outbox": []}
-    pma_files_detail: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
+    pma_files: dict[str, list[str]] = {box: [] for box in BOXES}
+    pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
     pma_threads: list[dict[str, Any]] = []
     automation = await asyncio.to_thread(_snapshot_pma_automation, supervisor)
     if hub_root:
@@ -2880,7 +2880,7 @@ async def build_hub_snapshot(
                 stale_threshold_seconds=stale_threshold_seconds,
                 candidates=[("thread_updated_at", thread.get("updated_at"))],
             )
-        for box in ("inbox", "outbox"):
+        for box in BOXES:
             for entry in pma_files_detail.get(box) or []:
                 entry["freshness"] = build_freshness_payload(
                     generated_at=generated_at,

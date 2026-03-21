@@ -1,11 +1,17 @@
 import { api } from "./utils.js";
 
-export type ContextspaceKind = "active_context" | "decisions" | "spec";
+export interface ContextspaceDocKindInfo {
+  kind: string;
+  path: string;
+  label: string;
+  description: string;
+}
 
 export interface ContextspaceResponse {
   active_context: string;
   decisions: string;
   spec: string;
+  kinds?: ContextspaceDocKindInfo[];
 }
 
 export interface SpecIngestTicketsResponse {
@@ -18,7 +24,7 @@ export async function fetchContextspace(): Promise<ContextspaceResponse> {
   return (await api("/api/contextspace")) as ContextspaceResponse;
 }
 
-export async function writeContextspace(kind: ContextspaceKind, content: string): Promise<ContextspaceResponse> {
+export async function writeContextspace(kind: string, content: string): Promise<ContextspaceResponse> {
   return (await api(`/api/contextspace/${kind}`, {
     method: "PUT",
     body: { content },

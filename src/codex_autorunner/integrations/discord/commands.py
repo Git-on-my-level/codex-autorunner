@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ...core.flows import FLOW_ACTION_SPECS
 from ...core.update_targets import update_target_command_choices
 from ..chat.agents import chat_agent_command_choices, chat_agent_description
 from ..chat.model_selection import (
@@ -15,6 +16,135 @@ SUB_COMMAND_GROUP = 2
 STRING = 3
 INTEGER = 4
 BOOLEAN = 5
+
+
+def _build_flow_subcommand_options() -> list[dict[str, Any]]:
+    options: list[dict[str, Any]] = []
+    for spec in FLOW_ACTION_SPECS:
+        if spec.name == "status":
+            options.append(
+                {
+                    "type": SUB_COMMAND,
+                    "name": spec.name,
+                    "description": spec.description,
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "run_id",
+                            "description": "Flow run id",
+                            "required": False,
+                            "autocomplete": True,
+                        }
+                    ],
+                }
+            )
+        elif spec.name == "runs":
+            options.append(
+                {
+                    "type": SUB_COMMAND,
+                    "name": spec.name,
+                    "description": spec.description,
+                    "options": [
+                        {
+                            "type": INTEGER,
+                            "name": "limit",
+                            "description": "Max runs (default 5)",
+                            "required": False,
+                        }
+                    ],
+                }
+            )
+        elif spec.name == "issue":
+            options.append(
+                {
+                    "type": SUB_COMMAND,
+                    "name": spec.name,
+                    "description": spec.description,
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "issue_ref",
+                            "description": "Issue number or URL",
+                            "required": True,
+                        }
+                    ],
+                }
+            )
+        elif spec.name == "plan":
+            options.append(
+                {
+                    "type": SUB_COMMAND,
+                    "name": spec.name,
+                    "description": spec.description,
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "text",
+                            "description": "Plan text",
+                            "required": True,
+                        }
+                    ],
+                }
+            )
+        elif spec.name == "start":
+            options.append(
+                {
+                    "type": SUB_COMMAND,
+                    "name": spec.name,
+                    "description": spec.description,
+                    "options": [
+                        {
+                            "type": BOOLEAN,
+                            "name": "force_new",
+                            "description": "Start a new run even if one is active/paused",
+                            "required": False,
+                        }
+                    ],
+                }
+            )
+        elif spec.name in {"restart", "resume", "stop", "archive", "recover"}:
+            options.append(
+                {
+                    "type": SUB_COMMAND,
+                    "name": spec.name,
+                    "description": spec.description,
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "run_id",
+                            "description": "Flow run id",
+                            "required": False,
+                            "autocomplete": True,
+                        }
+                    ],
+                }
+            )
+        elif spec.name == "reply":
+            options.append(
+                {
+                    "type": SUB_COMMAND,
+                    "name": spec.name,
+                    "description": spec.description,
+                    "options": [
+                        {
+                            "type": STRING,
+                            "name": "text",
+                            "description": "Reply text",
+                            "required": True,
+                        },
+                        {
+                            "type": STRING,
+                            "name": "run_id",
+                            "description": "Flow run id",
+                            "required": False,
+                            "autocomplete": True,
+                        },
+                    ],
+                }
+            )
+        else:
+            raise AssertionError(f"Unhandled flow action spec: {spec.name}")
+    return options
 
 
 def build_application_commands() -> list[dict[str, Any]]:
@@ -345,164 +475,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                     "type": SUB_COMMAND_GROUP,
                     "name": "flow",
                     "description": "Manage flow runs",
-                    "options": [
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "status",
-                            "description": "Show flow status",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "run_id",
-                                    "description": "Flow run id",
-                                    "required": False,
-                                    "autocomplete": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "runs",
-                            "description": "List flow runs",
-                            "options": [
-                                {
-                                    "type": INTEGER,
-                                    "name": "limit",
-                                    "description": "Max runs (default 5)",
-                                    "required": False,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "issue",
-                            "description": "Seed ISSUE.md from a GitHub issue",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "issue_ref",
-                                    "description": "Issue number or URL",
-                                    "required": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "plan",
-                            "description": "Seed ISSUE.md from plan text",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "text",
-                                    "description": "Plan text",
-                                    "required": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "start",
-                            "description": "Start a flow (reuses active/paused run)",
-                            "options": [
-                                {
-                                    "type": BOOLEAN,
-                                    "name": "force_new",
-                                    "description": "Start a new run even if one is active/paused",
-                                    "required": False,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "restart",
-                            "description": "Restart a flow from a fresh run",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "run_id",
-                                    "description": "Flow run id (optional)",
-                                    "required": False,
-                                    "autocomplete": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "resume",
-                            "description": "Resume a flow",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "run_id",
-                                    "description": "Flow run id",
-                                    "required": False,
-                                    "autocomplete": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "stop",
-                            "description": "Stop a flow",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "run_id",
-                                    "description": "Flow run id",
-                                    "required": False,
-                                    "autocomplete": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "archive",
-                            "description": "Archive a flow",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "run_id",
-                                    "description": "Flow run id",
-                                    "required": False,
-                                    "autocomplete": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "recover",
-                            "description": "Recover a flow",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "run_id",
-                                    "description": "Flow run id",
-                                    "required": False,
-                                    "autocomplete": True,
-                                }
-                            ],
-                        },
-                        {
-                            "type": SUB_COMMAND,
-                            "name": "reply",
-                            "description": "Reply to paused flow",
-                            "options": [
-                                {
-                                    "type": STRING,
-                                    "name": "text",
-                                    "description": "Reply text",
-                                    "required": True,
-                                },
-                                {
-                                    "type": STRING,
-                                    "name": "run_id",
-                                    "description": "Flow run id",
-                                    "required": False,
-                                    "autocomplete": True,
-                                },
-                            ],
-                        },
-                    ],
+                    "options": _build_flow_subcommand_options(),
                 },
             ],
         },

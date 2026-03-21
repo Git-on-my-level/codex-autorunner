@@ -1,5 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, confirmModal, escapeHtml, flash, resolvePath } from "./utils.js";
+import { DEFAULT_FILEBOX_BOX, FILEBOX_BOXES, } from "./fileboxCatalog.js";
 function formatBytes(size) {
     if (!size && size !== 0)
         return "";
@@ -12,6 +13,12 @@ function formatBytes(size) {
     }
     const formatted = idx === 0 ? String(val) : val.toFixed(1).replace(/\.0$/, "");
     return `${formatted}${units[idx]}`;
+}
+function createEmptyFileBoxListing() {
+    return FILEBOX_BOXES.reduce((listing, box) => {
+        listing[box] = [];
+        return listing;
+    }, {});
 }
 function pathPrefix(config) {
     if (config.scope === "repo") {
@@ -29,10 +36,11 @@ function pathPrefix(config) {
 async function listFileBox(config) {
     const prefix = pathPrefix(config);
     const res = (await api(prefix));
-    return {
-        inbox: Array.isArray(res?.inbox) ? res.inbox : [],
-        outbox: Array.isArray(res?.outbox) ? res.outbox : [],
-    };
+    const listing = createEmptyFileBoxListing();
+    for (const box of FILEBOX_BOXES) {
+        listing[box] = Array.isArray(res?.[box]) ? res?.[box] : [];
+    }
+    return listing;
 }
 async function uploadFiles(config, box, files) {
     const prefix = pathPrefix(config);
@@ -53,8 +61,9 @@ async function deleteFile(config, box, name) {
     await api(`${prefix}/${box}/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 export function createFileBoxWidget(opts) {
-    const uploadBox = opts.uploadBox || "inbox";
-    let listing = { inbox: [], outbox: [] };
+    const uploadBox = opts.uploadBox || DEFAULT_FILEBOX_BOX;
+    const [inboxBox, outboxBox] = FILEBOX_BOXES;
+    let listing = createEmptyFileBoxListing();
     const renderList = (box, el) => {
         if (!el)
             return;
@@ -105,8 +114,8 @@ export function createFileBoxWidget(opts) {
         });
     };
     const render = () => {
-        renderList("inbox", opts.inboxEl);
-        renderList("outbox", opts.outboxEl);
+        renderList(inboxBox, opts.inboxEl);
+        renderList(outboxBox, opts.outboxEl);
     };
     async function refresh() {
         try {
@@ -150,10 +159,10 @@ export function createFileBoxWidget(opts) {
     return {
         refresh,
         snapshot() {
-            return {
-                inbox: [...listing.inbox],
-                outbox: [...listing.outbox],
-            };
+            return FILEBOX_BOXES.reduce((snapshot, box) => {
+                snapshot[box] = [...listing[box]];
+                return snapshot;
+            }, createEmptyFileBoxListing());
         },
     };
 }

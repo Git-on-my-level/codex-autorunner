@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
+from ....core.filebox import BOXES, empty_listing
 from ....core.flows.workspace_root import resolve_ticket_flow_workspace_root
 from ....core.freshness import (
     build_freshness_payload,
@@ -153,7 +154,7 @@ def gather_hub_messages(context: HubAppContext, *, limit: int = 100) -> list[dic
     )
 
     hub_root = getattr(getattr(context, "config", None), "root", None)
-    pma_files_detail: dict[str, list[dict[str, Any]]] = {"inbox": [], "outbox": []}
+    pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
     pma_threads: list[dict[str, Any]] = []
     automation = _snapshot_pma_automation(context.supervisor)
     if isinstance(hub_root, Path):
@@ -165,7 +166,7 @@ def gather_hub_messages(context: HubAppContext, *, limit: int = 100) -> list[dic
                 stale_threshold_seconds=stale_threshold_seconds,
                 candidates=[("thread_updated_at", thread.get("updated_at"))],
             )
-        for box in ("inbox", "outbox"):
+        for box in BOXES:
             for entry in pma_files_detail.get(box) or []:
                 entry["freshness"] = build_freshness_payload(
                     generated_at=generated_at,
