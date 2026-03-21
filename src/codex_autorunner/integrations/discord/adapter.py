@@ -23,6 +23,7 @@ from ..chat.models import (
     ChatInteractionRef,
     ChatMessageEvent,
     ChatMessageRef,
+    ChatReplyInfo,
     ChatThreadRef,
 )
 from ..chat.renderer import RenderedText, TextRenderer
@@ -234,6 +235,7 @@ class DiscordChatAdapter(ChatAdapter):
             )
 
         reply_to: Optional[ChatMessageRef] = None
+        reply_context: Optional[ChatReplyInfo] = None
         message_reference = payload.get("message_reference")
         if isinstance(
             message_reference, dict
@@ -241,11 +243,15 @@ class DiscordChatAdapter(ChatAdapter):
             ref_message_id = message_reference.get("message_id")
             ref_channel_id = message_reference.get("channel_id")
             if ref_message_id and ref_channel_id:
-                reply_to = ChatMessageRef(
+                reply_message = ChatMessageRef(
                     thread=ChatThreadRef(
                         platform="discord", chat_id=str(ref_channel_id), thread_id=None
                     ),
                     message_id=str(ref_message_id),
+                )
+                reply_to = reply_message
+                reply_context = self._parse_reply_context(
+                    payload, message=reply_message
                 )
 
         return ChatMessageEvent(
@@ -256,8 +262,39 @@ class DiscordChatAdapter(ChatAdapter):
             text=content if content else None,
             is_edited=False,
             reply_to=reply_to,
+            reply_context=reply_context,
             attachments=attachments,
             forwarded_from=forwarded_from,
+        )
+
+    def _parse_reply_context(
+        self,
+        payload: dict[str, Any],
+        *,
+        message: ChatMessageRef,
+    ) -> Optional[ChatReplyInfo]:
+        referenced_message = payload.get("referenced_message")
+        if not isinstance(referenced_message, dict):
+            return None
+        text = None
+        content = referenced_message.get("content")
+        if isinstance(content, str) and content.strip():
+            text = content.strip()
+        author_label = None
+        author = referenced_message.get("author")
+        if isinstance(author, dict):
+            for key in ("global_name", "username"):
+                value = author.get(key)
+                if isinstance(value, str) and value.strip():
+                    author_label = value.strip()
+                    break
+        return ChatReplyInfo(
+            message=message,
+            text=text,
+            author_label=author_label,
+            is_bot=(
+                bool(author.get("bot", False)) if isinstance(author, dict) else False
+            ),
         )
 
     def _parse_discord_attachments(

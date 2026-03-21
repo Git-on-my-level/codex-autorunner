@@ -16,6 +16,7 @@ from .models import (
     ChatInteractionRef,
     ChatMessageEvent,
     ChatMessageRef,
+    ChatReplyInfo,
     ChatThreadRef,
 )
 from .renderer import RenderedText, TextRenderer
@@ -74,6 +75,9 @@ def deserialize_chat_event(payload: dict[str, object]) -> ChatEvent:
             text=_string_or_none(payload.get("text")),
             is_edited=bool(payload.get("is_edited", False)),
             reply_to=_deserialize_optional_message_ref(payload.get("reply_to")),
+            reply_context=_deserialize_optional_reply_info(
+                payload.get("reply_context")
+            ),
             attachments=tuple(
                 _deserialize_attachment(item)
                 for item in _coerce_list(payload.get("attachments"))
@@ -175,6 +179,7 @@ class FakeChatAdapter(ChatAdapter):
         text: Optional[str],
         is_edited: bool = False,
         reply_to: Optional[ChatMessageRef] = None,
+        reply_context: Optional[ChatReplyInfo] = None,
         attachments: Sequence[ChatAttachment] = (),
         forwarded_from: Optional[ChatForwardInfo] = None,
     ) -> ChatMessageEvent:
@@ -186,6 +191,7 @@ class FakeChatAdapter(ChatAdapter):
             text=text,
             is_edited=is_edited,
             reply_to=reply_to,
+            reply_context=reply_context,
             attachments=tuple(attachments),
             forwarded_from=forwarded_from,
         )
@@ -273,6 +279,19 @@ def _deserialize_optional_message_ref(value: object) -> Optional[ChatMessageRef]
     if value is None:
         return None
     return _deserialize_message_ref(value)
+
+
+def _deserialize_optional_reply_info(value: object) -> Optional[ChatReplyInfo]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise TypeError("reply_context must be a dict")
+    return ChatReplyInfo(
+        message=_deserialize_message_ref(value["message"]),
+        text=_string_or_none(value.get("text")),
+        author_label=_string_or_none(value.get("author_label")),
+        is_bot=bool(value.get("is_bot", False)),
+    )
 
 
 def _deserialize_optional_forward_info(value: object) -> Optional[ChatForwardInfo]:

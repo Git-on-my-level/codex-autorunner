@@ -256,6 +256,47 @@ def test_adapter_parses_forwarded_snapshot_without_reply_reference() -> None:
     assert event.attachments[0].file_id == "att-forward-1"
 
 
+def test_adapter_parses_referenced_message_reply_context() -> None:
+    adapter = DiscordChatAdapter(
+        rest_client=_UnusedRestClient(),  # type: ignore[arg-type]
+        application_id="app-1",
+    )
+
+    event = adapter.parse_message_event(
+        {
+            "id": "m-reply",
+            "channel_id": "channel-1",
+            "guild_id": "guild-1",
+            "content": "follow-up",
+            "author": {"id": "user-1", "bot": False},
+            "attachments": [],
+            "message_reference": {
+                "channel_id": "channel-1",
+                "message_id": "origin-1",
+            },
+            "referenced_message": {
+                "id": "origin-1",
+                "content": "original message body",
+                "author": {
+                    "id": "bot-1",
+                    "bot": True,
+                    "username": "codexautorunner",
+                    "global_name": "Codex",
+                },
+            },
+        }
+    )
+
+    assert isinstance(event, ChatMessageEvent)
+    assert event.reply_to is not None
+    assert event.reply_to.message_id == "origin-1"
+    assert event.reply_context is not None
+    assert event.reply_context.message.message_id == "origin-1"
+    assert event.reply_context.text == "original message body"
+    assert event.reply_context.author_label == "Codex"
+    assert event.reply_context.is_bot is True
+
+
 def test_discord_text_renderer_split_text_has_no_part_prefix() -> None:
     renderer = DiscordTextRenderer()
     rendered = RenderedText(text=("alpha " * 500), parse_mode=None)

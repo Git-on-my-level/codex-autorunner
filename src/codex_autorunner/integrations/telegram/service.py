@@ -623,8 +623,16 @@ class TelegramBotService(
                     bot_username=self._bot_username,
                     reply_to_is_bot=message.reply_to_is_bot,
                     reply_to_username=message.reply_to_username,
-                    reply_to_message_id=message.reply_to_message_id,
-                    thread_id=message.thread_id,
+                    reply_to_message_id=(
+                        str(message.reply_to_message_id)
+                        if message.reply_to_message_id is not None
+                        else None
+                    ),
+                    thread_id=(
+                        str(message.thread_id)
+                        if message.thread_id is not None
+                        else None
+                    ),
                 ),
             ),
         )

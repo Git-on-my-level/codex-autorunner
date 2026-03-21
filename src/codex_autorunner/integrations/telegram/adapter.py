@@ -157,6 +157,8 @@ class TelegramMessage:
     reply_to_message_id: Optional[int] = None
     reply_to_is_bot: bool = False
     reply_to_username: Optional[str] = None
+    reply_to_text: Optional[str] = None
+    reply_to_author_label: Optional[str] = None
     chat_title: Optional[str] = None
     thread_title: Optional[str] = None
 
@@ -357,10 +359,19 @@ def _parse_message(
     reply_to_message_id: Optional[int] = None
     reply_to_is_bot = False
     reply_to_username: Optional[str] = None
+    reply_to_text: Optional[str] = None
+    reply_to_author_label: Optional[str] = None
     if isinstance(schema.reply_to_message, dict):
         rmid = schema.reply_to_message.get("message_id")
         if isinstance(rmid, int):
             reply_to_message_id = rmid
+        reply_text = schema.reply_to_message.get("text")
+        if isinstance(reply_text, str) and reply_text.strip():
+            reply_to_text = reply_text.strip()
+        if reply_to_text is None:
+            reply_caption = schema.reply_to_message.get("caption")
+            if isinstance(reply_caption, str) and reply_caption.strip():
+                reply_to_text = reply_caption.strip()
         reply_from = schema.reply_to_message.get("from")
         if isinstance(reply_from, dict):
             is_bot = reply_from.get("is_bot")
@@ -369,6 +380,11 @@ def _parse_message(
             username = reply_from.get("username")
             if isinstance(username, str):
                 reply_to_username = username
+            for key in ("username", "first_name", "last_name"):
+                value = reply_from.get(key)
+                if isinstance(value, str) and value.strip():
+                    reply_to_author_label = value.strip()
+                    break
 
     from_user_id = (
         schema.from_user.get("id") if isinstance(schema.from_user, dict) else None
@@ -410,6 +426,8 @@ def _parse_message(
         reply_to_message_id=reply_to_message_id,
         reply_to_is_bot=reply_to_is_bot,
         reply_to_username=reply_to_username,
+        reply_to_text=reply_to_text,
+        reply_to_author_label=reply_to_author_label,
         chat_title=chat_title,
         thread_title=thread_title,
     )

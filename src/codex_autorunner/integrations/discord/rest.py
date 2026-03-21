@@ -306,6 +306,18 @@ class DiscordRestClient:
         )
         return response if isinstance(response, dict) else {}
 
+    async def get_channel_message(
+        self,
+        *,
+        channel_id: str,
+        message_id: str,
+    ) -> dict[str, Any]:
+        response = await self._request(
+            "GET",
+            f"/channels/{channel_id}/messages/{message_id}",
+        )
+        return response if isinstance(response, dict) else {}
+
     async def create_channel_message_with_attachment(
         self,
         *,

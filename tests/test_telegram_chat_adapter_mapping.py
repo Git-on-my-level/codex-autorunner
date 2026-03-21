@@ -112,6 +112,44 @@ async def test_poll_events_maps_message_with_media_metadata() -> None:
 
 
 @pytest.mark.anyio
+async def test_poll_events_maps_reply_context_metadata() -> None:
+    message = TelegramMessage(
+        update_id=15,
+        message_id=25,
+        chat_id=123456,
+        thread_id=42,
+        from_user_id=999,
+        text="follow-up",
+        date=1700000200,
+        is_topic_message=True,
+        reply_to_message_id=24,
+        reply_to_is_bot=True,
+        reply_to_username="codexautorunner",
+        reply_to_text="original telegram message",
+        reply_to_author_label="Codex Runner",
+    )
+    adapter = TelegramChatAdapter(
+        bot=object(),  # type: ignore[arg-type]
+        poller=_DummyPoller(
+            updates=[TelegramUpdate(update_id=15, message=message, callback=None)]
+        ),
+    )
+
+    events = await adapter.poll_events()
+
+    assert len(events) == 1
+    event = events[0]
+    assert isinstance(event, ChatMessageEvent)
+    assert event.reply_to is not None
+    assert event.reply_to.message_id == "24"
+    assert event.reply_context is not None
+    assert event.reply_context.message.message_id == "24"
+    assert event.reply_context.text == "original telegram message"
+    assert event.reply_context.author_label == "Codex Runner"
+    assert event.reply_context.is_bot is True
+
+
+@pytest.mark.anyio
 async def test_poll_events_maps_forwarded_message_metadata() -> None:
     message = TelegramMessage(
         update_id=14,
