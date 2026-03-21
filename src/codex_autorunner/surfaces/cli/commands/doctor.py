@@ -8,8 +8,6 @@ from typing import Any, Optional
 
 import typer
 
-logger = logging.getLogger(__name__)
-
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
 from ....core.diagnostics.process_snapshot import (
     collect_processes,
@@ -36,6 +34,8 @@ from ....integrations.chat.doctor import chat_doctor_checks
 from ....integrations.discord.doctor import discord_doctor_checks
 from ....integrations.telegram.doctor import telegram_doctor_checks
 from .utils import get_car_version, raise_exit
+
+logger = logging.getLogger(__name__)
 
 
 def _build_process_registry_payload(

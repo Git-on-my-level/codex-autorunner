@@ -90,7 +90,7 @@ from .models import (
     ChatMessageRef,
     ChatThreadRef,
 )
-from .parity_checker import ParityCheckResult, run_parity_checks
+from .parity_checker import run_parity_checks
 from .renderer import RenderedText, TextRenderer
 from .runtime import iter_exception_chain
 from .service import ChatBotServiceCore

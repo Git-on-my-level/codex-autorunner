@@ -8,8 +8,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
 from ..config import load_hub_config, load_repo_config
 from ..optional_dependencies import missing_optional_dependencies
 from ..state_roots import resolve_hub_templates_root
@@ -21,6 +19,8 @@ from .contract import (
     SCHEMA_VERSION,
     default_runtime_schema_path,
 )
+
+logger = logging.getLogger(__name__)
 
 SECRET_PATTERNS = [
     r"sk-[a-zA-Z0-9]{20,}",
