@@ -62,7 +62,7 @@ from .errors import (
     ChatAdapterTimeoutError,
     ChatAdapterTransientError,
 )
-from .forwarding import compose_forwarded_message_text
+from .forwarding import compose_forwarded_message_text, compose_inbound_message_text
 from .handlers import (
     ChatApprovalHandlers,
     ChatContext,
@@ -88,6 +88,7 @@ from .models import (
     ChatInteractionRef,
     ChatMessageEvent,
     ChatMessageRef,
+    ChatReplyInfo,
     ChatThreadRef,
 )
 from .parity_checker import run_parity_checks
@@ -150,6 +151,7 @@ __all__ = [
     "ChatOutboxRecord",
     "ChatPendingApprovalRecord",
     "ChatQuestionHandlers",
+    "ChatReplyInfo",
     "ChatSelectionHandlers",
     "ChatStateStore",
     "ChatThreadRef",
@@ -177,6 +179,7 @@ __all__ = [
     "chat_agent_supports_effort",
     "chat_doctor_checks",
     "chunk_text",
+    "compose_inbound_message_text",
     "compose_forwarded_message_text",
     "conversation_id_for",
     "decode_logical_callback",

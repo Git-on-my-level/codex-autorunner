@@ -10,7 +10,7 @@ import sqlite3
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
@@ -147,6 +147,7 @@ from ...integrations.chat.models import (
     ChatEvent,
     ChatInteractionEvent,
     ChatMessageEvent,
+    ChatReplyInfo,
 )
 from ...integrations.chat.pause_notifications import (
     format_pause_notification_source,
@@ -761,6 +762,16 @@ class DiscordBotService:
                 plain_text=self._build_plain_text_turn_context(
                     text=text,
                     guild_id=event.thread.thread_id,
+                    reply_to_is_bot=(
+                        event.reply_context.is_bot
+                        if event.reply_context is not None
+                        else False
+                    ),
+                    reply_to_message_id=(
+                        event.reply_context.message.message_id
+                        if event.reply_context is not None
+                        else None
+                    ),
                 ),
             ),
             plain_text_turn_fn=should_trigger_plain_text_turn,
@@ -771,6 +782,8 @@ class DiscordBotService:
         *,
         text: str,
         guild_id: Optional[str],
+        reply_to_is_bot: bool = False,
+        reply_to_message_id: Optional[str] = None,
     ) -> PlainTextTurnContext:
         application_id = str(self._config.application_id or "").strip()
         normalized_text = text
@@ -788,6 +801,8 @@ class DiscordBotService:
             text=normalized_text,
             chat_type="private" if guild_id is None else "group",
             bot_username=bot_username,
+            reply_to_is_bot=reply_to_is_bot,
+            reply_to_message_id=reply_to_message_id,
         )
 
     def _evaluate_plain_text_collaboration_policy(
@@ -1280,6 +1295,7 @@ class DiscordBotService:
         event: ChatMessageEvent,
         context: DispatchContext,
     ) -> None:
+        event = await self._maybe_hydrate_reply_context(event)
         channel_id = context.chat_id
         text = (event.text or "").strip()
         has_attachments = bool(event.attachments)
@@ -1371,6 +1387,52 @@ class DiscordBotService:
             log_event_fn=log_event,
             build_ticket_flow_controller_fn=build_ticket_flow_controller,
             ensure_worker_fn=ensure_worker,
+        )
+
+    async def _maybe_hydrate_reply_context(
+        self,
+        event: ChatMessageEvent,
+    ) -> ChatMessageEvent:
+        if event.reply_to is None or event.reply_context is not None:
+            return event
+        try:
+            payload = await self._rest.get_channel_message(
+                channel_id=event.reply_to.thread.chat_id,
+                message_id=event.reply_to.message_id,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.reply_context.fetch_failed",
+                channel_id=event.thread.chat_id,
+                reply_channel_id=event.reply_to.thread.chat_id,
+                reply_message_id=event.reply_to.message_id,
+                exc=exc,
+            )
+            return event
+        if not isinstance(payload, dict):
+            return event
+        content = payload.get("content")
+        text = content.strip() if isinstance(content, str) and content.strip() else None
+        author = payload.get("author")
+        author_label = None
+        is_bot = False
+        if isinstance(author, dict):
+            for key in ("global_name", "username"):
+                value = author.get(key)
+                if isinstance(value, str) and value.strip():
+                    author_label = value.strip()
+                    break
+            is_bot = bool(author.get("bot", False))
+        return replace(
+            event,
+            reply_context=ChatReplyInfo(
+                message=event.reply_to,
+                text=text,
+                author_label=author_label,
+                is_bot=is_bot,
+            ),
         )
 
     def _voice_service_for_workspace(

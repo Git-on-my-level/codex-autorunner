@@ -58,6 +58,16 @@ class ChatForwardInfo:
 
 
 @dataclass(frozen=True)
+class ChatReplyInfo:
+    """Normalized replied-to message context for an inbound message."""
+
+    message: ChatMessageRef
+    text: Optional[str] = None
+    author_label: Optional[str] = None
+    is_bot: bool = False
+
+
+@dataclass(frozen=True)
 class ChatAction:
     """Adapter-neutral action button descriptor for outbound messages."""
 
@@ -77,6 +87,7 @@ class ChatMessageEvent:
     text: Optional[str]
     is_edited: bool = False
     reply_to: Optional[ChatMessageRef] = None
+    reply_context: Optional[ChatReplyInfo] = None
     attachments: tuple[ChatAttachment, ...] = field(default_factory=tuple)
     forwarded_from: Optional[ChatForwardInfo] = None
 

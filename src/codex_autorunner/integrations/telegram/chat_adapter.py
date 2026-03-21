@@ -34,6 +34,7 @@ from .adapter import (
 )
 from .chat_callbacks import TelegramCallbackCodec
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
+from .forwarding import message_reply_info
 from .rendering import _format_telegram_html, _format_telegram_markdown
 
 _TELEGRAM_PARSE_MODES = ("HTML", "Markdown", "MarkdownV2")
@@ -227,6 +228,7 @@ class TelegramChatAdapter(ChatAdapter):
             text=content,
             is_edited=message.is_edited,
             reply_to=reply_to,
+            reply_context=message_reply_info(message),
             attachments=attachments,
             forwarded_from=self._map_forward_origin(message),
         )
