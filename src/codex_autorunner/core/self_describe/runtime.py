@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import importlib.metadata
+import logging
 import re
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from ..config import load_hub_config, load_repo_config
 from ..optional_dependencies import missing_optional_dependencies
@@ -167,8 +170,8 @@ def _collect_template_info(
         try:
             templates = index_templates(hub_config, hub_config.root)
             template_count = len(templates)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to index templates: %s", e)
 
     return {
         "enabled": True,

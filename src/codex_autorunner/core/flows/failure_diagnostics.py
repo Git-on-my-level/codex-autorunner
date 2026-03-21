@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 from ..coercion import coerce_int
 from .models import FailureReasonCode, FlowEventType, FlowRunRecord
 from .store import FlowStore, now_iso
+
+logger = logging.getLogger(__name__)
 
 _MAX_STDERR_LINES = 5
 _MAX_STDERR_CHARS = 320
@@ -355,8 +358,10 @@ def build_failure_payload(
     if store is not None:
         try:
             last_event_seq, last_event_at = store.get_last_event_meta(record.id)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(
+                "Failed to get last event meta for record %s: %s", record.id, e
+            )
     payload = {
         "failed_at": failed_at or now_iso(),
         "ticket_id": ticket_id,

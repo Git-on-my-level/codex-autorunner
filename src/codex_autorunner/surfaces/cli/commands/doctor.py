@@ -1,4 +1,5 @@
 import json
+import logging
 import site
 import sys
 from datetime import datetime, timezone
@@ -6,6 +7,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 import typer
+
+logger = logging.getLogger(__name__)
 
 from ....core.config import ConfigError, RepoConfig, derive_repo_config, load_hub_config
 from ....core.diagnostics.process_snapshot import (
@@ -44,15 +47,16 @@ def _build_process_registry_payload(
     records: list[dict[str, Any]] = []
     try:
         process_records = list_process_records(repo_root)
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to list process records: %s", e)
         process_records = []
 
     for record in process_records:
         record_key = "unknown"
         try:
             record_key = record.record_key()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to get record key: %s", e)
         records.append(
             {
                 "kind": record.kind,
@@ -195,14 +199,14 @@ def _doctor_versions_payload(start_path: Path) -> dict[str, Any]:
         for item in site.getsitepackages():
             if isinstance(item, str) and item not in site_packages:
                 site_packages.append(item)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to get site packages: %s", e)
     try:
         user_site = site.getusersitepackages()
         if isinstance(user_site, str) and user_site not in site_packages:
             site_packages.append(user_site)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to get user site packages: %s", e)
 
     hub_server = None
     if hub_config is not None:
