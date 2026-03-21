@@ -8,7 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+import httpx
+
 from ...core.logging_utils import log_event
+from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.sse import format_sse, parse_sse_lines
 from ..base import AgentHarness
 from ..types import (
@@ -126,6 +129,57 @@ def _progress_event_shape_hint(payload: Any) -> Optional[str]:
         if item_keys:
             hints.append(f"item={','.join(item_keys[:6])}")
     return " ".join(hints) or None
+
+
+def _fresh_conversation_error(
+    exc: Exception,
+    *,
+    conversation_id: str,
+    operation: str,
+) -> Optional[FreshConversationRequiredError]:
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    response = exc.response
+    request = exc.request
+    status_code = response.status_code if response is not None else None
+    if status_code not in {400, 404}:
+        return None
+    path = request.url.path if request is not None else None
+    if not isinstance(path, str) or "/session/" not in path:
+        return None
+    return FreshConversationRequiredError(
+        (
+            f"OpenCode session '{conversation_id}' rejected {operation}; "
+            "refresh the conversation binding"
+        ),
+        conversation_id=conversation_id,
+        operation=operation,
+        status_code=status_code,
+    )
+
+
+def _raise_fresh_conversation_error(
+    exc: Exception,
+    *,
+    conversation_id: str,
+    operation: str,
+) -> None:
+    refresh_error = _fresh_conversation_error(
+        exc,
+        conversation_id=conversation_id,
+        operation=operation,
+    )
+    if refresh_error is None:
+        raise exc
+    log_event(
+        _logger,
+        logging.INFO,
+        "opencode.conversation.invalidated",
+        conversation_id=conversation_id,
+        operation=refresh_error.operation,
+        status_code=refresh_error.status_code,
+    )
+    raise refresh_error from exc
 
 
 def _workspace_permission_decision(
@@ -663,8 +717,12 @@ class OpenCodeHarness(AgentHarness):
         client = await self._supervisor.get_client(workspace_root)
         try:
             result = await client.get_session(conversation_id)
-        except Exception:
-            result = {}
+        except Exception as exc:
+            _raise_fresh_conversation_error(
+                exc,
+                conversation_id=conversation_id,
+                operation="resume_conversation",
+            )
         session_id = extract_session_id(result) or conversation_id
         return ConversationRef(agent=AgentId("opencode"), id=session_id)
 
@@ -686,12 +744,19 @@ class OpenCodeHarness(AgentHarness):
             model = DEFAULT_TICKET_MODEL
         model_payload = split_model_id(model)
         turn_id = build_turn_id(conversation_id)
-        await client.prompt_async(
-            conversation_id,
-            message=prompt,
-            model=model_payload,
-            variant=reasoning,
-        )
+        try:
+            await client.prompt_async(
+                conversation_id,
+                message=prompt,
+                model=model_payload,
+                variant=reasoning,
+            )
+        except Exception as exc:
+            _raise_fresh_conversation_error(
+                exc,
+                conversation_id=conversation_id,
+                operation="start_turn",
+            )
         self._pending_turns[(conversation_id, turn_id)] = _PendingTurnConfig(
             model_payload=model_payload,
             approval_mode=approval_mode,
@@ -723,17 +788,22 @@ class OpenCodeHarness(AgentHarness):
             model = DEFAULT_TICKET_MODEL
         arguments = prompt if prompt else ""
         turn_id = build_turn_id(conversation_id)
-
-        async def _send_review() -> None:
+        try:
             result = await client.send_command(
                 conversation_id,
                 command="review",
                 arguments=arguments,
                 model=model,
             )
-            started_turn_id = extract_turn_id(conversation_id, result)
-            if started_turn_id:
-                _logger.debug("OpenCode review started: %s", started_turn_id)
+        except Exception as exc:
+            _raise_fresh_conversation_error(
+                exc,
+                conversation_id=conversation_id,
+                operation="start_review",
+            )
+        started_turn_id = extract_turn_id(conversation_id, result)
+        if started_turn_id:
+            _logger.debug("OpenCode review started: %s", started_turn_id)
 
         self._pending_turns[(conversation_id, turn_id)] = _PendingTurnConfig(
             model_payload=split_model_id(model),
@@ -744,7 +814,6 @@ class OpenCodeHarness(AgentHarness):
                 if approval_mode is not None or sandbox_policy is not None
                 else "ignore"
             ),
-            command_task=asyncio.create_task(_send_review()),
         )
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
