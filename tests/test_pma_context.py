@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -63,7 +64,13 @@ def _seed_completed_run(repo_root: Path, run_id: str) -> None:
         store.update_flow_run_status(run_id, FlowRunStatus.COMPLETED)
 
 
-def _seed_failed_run(repo_root: Path, run_id: str) -> None:
+def _seed_failed_run(
+    repo_root: Path,
+    run_id: str,
+    *,
+    state: Optional[dict] = None,
+    error_message: Optional[str] = None,
+) -> None:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with FlowStore(db_path) as store:
@@ -75,10 +82,33 @@ def _seed_failed_run(repo_root: Path, run_id: str) -> None:
                 "workspace_root": str(repo_root),
                 "runs_dir": ".codex-autorunner/runs",
             },
-            state={},
+            state=state or {},
             metadata={},
         )
-        store.update_flow_run_status(run_id, FlowRunStatus.FAILED)
+        store.update_flow_run_status(
+            run_id,
+            FlowRunStatus.FAILED,
+            state=state or {},
+            error_message=error_message,
+        )
+
+
+def _seed_failed_worker_dead_run(repo_root: Path, run_id: str) -> None:
+    _seed_failed_run(
+        repo_root,
+        run_id,
+        state={
+            "failure": {
+                "failed_at": "2026-03-21T00:00:00Z",
+                "failure_reason_code": "worker_dead",
+                "failure_class": "worker_dead",
+            }
+        },
+        error_message=(
+            "Worker died (status=dead, pid=38621, reason: worker PID not running, "
+            "exit_code=-15)"
+        ),
+    )
 
 
 def _write_dispatch_history(
@@ -776,6 +806,34 @@ def test_build_hub_snapshot_demotes_stale_paused_dispatch_when_no_tickets_remain
     run_state = item.get("run_state") or {}
     assert run_state.get("state") == "blocked"
     assert run_state.get("recommended_action", "").endswith("--force")
+
+
+def test_build_hub_snapshot_suppresses_stale_failed_worker_dead_run_when_no_tickets_remain(
+    hub_env,
+) -> None:
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    for ticket in ticket_dir.glob("TICKET-*.md"):
+        ticket.unlink()
+
+    run_id = "68686868-6868-6868-6868-686868686868"
+    _seed_failed_worker_dead_run(hub_env.repo_root, run_id)
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    assert (snapshot.get("inbox") or []) == []
+    assert (snapshot.get("action_queue") or []) == []
+    repos = snapshot.get("repos") or []
+    repo_entry = next(repo for repo in repos if repo.get("id") == hub_env.repo_id)
+    canonical = repo_entry.get("canonical_state_v1") or {}
+    assert canonical.get("latest_run_id") == run_id
+    assert canonical.get("latest_run_status") == "failed"
 
 
 def test_build_hub_snapshot_repo_entries_include_canonical_state_v1(hub_env) -> None:

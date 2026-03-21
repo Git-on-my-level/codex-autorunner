@@ -34,7 +34,13 @@ def _seed_paused_run(repo_root: Path, run_id: str) -> None:
         store.update_flow_run_status(run_id, FlowRunStatus.PAUSED)
 
 
-def _seed_failed_run(repo_root: Path, run_id: str) -> None:
+def _seed_failed_run(
+    repo_root: Path,
+    run_id: str,
+    *,
+    state: dict | None = None,
+    error_message: str | None = None,
+) -> None:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     with FlowStore(db_path) as store:
@@ -46,10 +52,33 @@ def _seed_failed_run(repo_root: Path, run_id: str) -> None:
                 "workspace_root": str(repo_root),
                 "runs_dir": ".codex-autorunner/runs",
             },
-            state={},
+            state=state or {},
             metadata={},
         )
-        store.update_flow_run_status(run_id, FlowRunStatus.FAILED)
+        store.update_flow_run_status(
+            run_id,
+            FlowRunStatus.FAILED,
+            state=state or {},
+            error_message=error_message,
+        )
+
+
+def _seed_failed_worker_dead_run(repo_root: Path, run_id: str) -> None:
+    _seed_failed_run(
+        repo_root,
+        run_id,
+        state={
+            "failure": {
+                "failed_at": "2026-03-21T00:00:00Z",
+                "failure_reason_code": "worker_dead",
+                "failure_class": "worker_dead",
+            }
+        },
+        error_message=(
+            "Worker died (status=dead, pid=38621, reason: worker PID not running, "
+            "exit_code=-15)"
+        ),
+    )
 
 
 def _seed_completed_run(repo_root: Path, run_id: str) -> None:
@@ -114,6 +143,15 @@ def _write_reply_history(repo_root: Path, run_id: str, seq: int) -> None:
     )
     entry_dir.mkdir(parents=True, exist_ok=True)
     (entry_dir / "USER_REPLY.md").write_text("Reply\n", encoding="utf-8")
+
+
+def _write_ticket(repo_root: Path, ticket_name: str) -> None:
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / ticket_name).write_text(
+        ("---\n" f"title: {ticket_name}\n" "done: false\n" "---\n\n" "Body\n"),
+        encoding="utf-8",
+    )
 
 
 def _write_dead_worker_artifacts(repo_root: Path, run_id: str) -> None:
@@ -462,6 +500,44 @@ def test_hub_messages_failed_run_appears_in_inbox(hub_env, monkeypatch) -> None:
         assert "available_actions" in item
         assert item.get("resolution_state") == "terminal_attention"
         assert "dismiss" in (item.get("resolvable_actions") or [])
+
+
+def test_hub_messages_suppress_stale_failed_worker_dead_run_when_no_tickets_remain(
+    hub_env, monkeypatch
+) -> None:
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    for ticket in ticket_dir.glob("TICKET-*.md"):
+        ticket.unlink()
+
+    run_id = "6a6a6a6a-6a6a-6a6a-6a6a-6a6a6a6a6a6a"
+    _seed_failed_worker_dead_run(hub_env.repo_root, run_id)
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        assert res.json()["items"] == []
+
+
+def test_hub_messages_keep_failed_worker_dead_run_when_tickets_remain(
+    hub_env, monkeypatch
+) -> None:
+    _write_ticket(hub_env.repo_root, "TICKET-001.md")
+
+    run_id = "6b6b6b6b-6b6b-6b6b-6b6b-6b6b6b6b6b6b"
+    _seed_failed_worker_dead_run(hub_env.repo_root, run_id)
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages")
+        assert res.status_code == 200
+        items = res.json()["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["run_id"] == run_id
+        assert item["item_type"] == "run_failed"
+        assert item["next_action"] == "diagnose_or_restart"
 
 
 def test_hub_messages_multi_run_items_keep_canonical_run_identity(

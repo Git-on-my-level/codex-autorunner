@@ -2034,6 +2034,62 @@ def _paused_dispatch_resume_invalid_reason(repo_root: Path) -> Optional[str]:
     )
 
 
+def _ticket_flow_has_tickets(repo_root: Path) -> Optional[bool]:
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    try:
+        return bool(list_ticket_paths(ticket_dir))
+    except Exception as exc:
+        _logger.warning("Could not inspect ticket dir for stale run guard: %s", exc)
+        return None
+
+
+def _terminal_ticket_flow_failure_is_worker_dead(record: FlowRunRecord) -> bool:
+    failure_payload = get_failure_payload(record)
+    if isinstance(failure_payload, Mapping):
+        failure_reason_code = str(
+            failure_payload.get("failure_reason_code") or ""
+        ).strip()
+        failure_class = str(failure_payload.get("failure_class") or "").strip()
+        if failure_reason_code.lower() == "worker_dead":
+            return True
+        if failure_class.lower() == "worker_dead":
+            return True
+
+    state_payload = record.state if isinstance(record.state, Mapping) else {}
+    ticket_engine = state_payload.get("ticket_engine")
+    if isinstance(ticket_engine, Mapping):
+        reason_code = str(ticket_engine.get("reason_code") or "").strip().lower()
+        if reason_code == "worker_dead":
+            return True
+
+    error_message = (
+        record.error_message.strip().lower()
+        if isinstance(record.error_message, str)
+        else ""
+    )
+    return any(
+        needle in error_message
+        for needle in ("worker died", "worker-dead", "worker_dead")
+    )
+
+
+def _stale_terminal_ticket_flow_run_reason(
+    repo_root: Path, record: FlowRunRecord
+) -> Optional[str]:
+    if record.status not in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED):
+        return None
+    if not _terminal_ticket_flow_failure_is_worker_dead(record):
+        return None
+    has_tickets = _ticket_flow_has_tickets(repo_root)
+    if has_tickets is None or has_tickets:
+        return None
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    return (
+        "Latest failed run is stale; worker died and no tickets remain in "
+        f"{safe_relpath(ticket_dir, repo_root)}"
+    )
+
+
 def _resolve_paused_dispatch_state(
     *,
     repo_root: Path,
@@ -2468,6 +2524,17 @@ def _gather_inbox(
                         and active_run_id
                         and active_run_id != record_id
                     ):
+                        continue
+                    stale_terminal_reason = _stale_terminal_ticket_flow_run_reason(
+                        repo_root, record
+                    )
+                    if stale_terminal_reason:
+                        _logger.info(
+                            "Suppressing stale ticket_flow inbox item for repo %s run %s: %s",
+                            snap.id,
+                            record_id,
+                            stale_terminal_reason,
+                        )
                         continue
                     if (
                         not run_state.get("attention_required")
