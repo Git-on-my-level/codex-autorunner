@@ -886,6 +886,70 @@ async def test_wait_for_turn_reconciles_completion_gap_without_idle_stall(
 
 
 @pytest.mark.anyio
+async def test_live_progress_refreshes_completion_gap_window(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=10.0,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+        turn_completion_gap_timeout_seconds=0.05,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.status = "running"
+        state.item_completed_count = 3
+        state.completion_gap_started_at = time.monotonic() - 1.0
+        stale_started_at = state.completion_gap_started_at
+        resume_calls = 0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            nonlocal resume_calls
+            _ = thread_id, kwargs
+            resume_calls += 1
+            return {}
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        client._mark_notification_event(state=state, method="item/agentMessage/delta")
+        assert state.completion_gap_started_at is not None
+        assert state.completion_gap_started_at > stale_started_at
+
+        await client._maybe_reconcile_turn_completion_gap(
+            state,
+            turn_id="turn-1",
+            thread_id="thread-1",
+        )
+
+        assert resume_calls == 0
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_merge_turn_state_keeps_latest_completion_gap_timestamp(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+    )
+    try:
+        target = client._ensure_turn_state("turn-1", "thread-1")
+        source = client._ensure_pending_turn_state("turn-1")
+        target.completion_gap_started_at = time.monotonic() - 5.0
+        source.completion_gap_started_at = time.monotonic() - 1.0
+
+        client._merge_turn_state(target, source)
+
+        assert target.completion_gap_started_at == source.completion_gap_started_at
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_disconnect_with_autorestart_preserves_active_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

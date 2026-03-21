@@ -1491,8 +1491,16 @@ class CodexAppServerClient:
         return None
 
     def _mark_notification_event(self, *, state: _TurnState, method: str) -> None:
-        state.last_event_at = time.monotonic()
+        now = time.monotonic()
+        state.last_event_at = now
         state.last_method = method
+        if (
+            not state.turn_completed_seen
+            and state.item_completed_count > 0
+            and method
+            not in {"item/completed", "turn/completed", "error", "turn/error"}
+        ):
+            state.completion_gap_started_at = now
 
     async def _handle_notification_agent_message_delta(
         self, message: Dict[str, Any], params: dict[str, Any], decoded: Any = None
@@ -1711,7 +1719,7 @@ class CodexAppServerClient:
         if target.completion_gap_started_at is None:
             target.completion_gap_started_at = source.completion_gap_started_at
         elif source.completion_gap_started_at is not None:
-            target.completion_gap_started_at = min(
+            target.completion_gap_started_at = max(
                 target.completion_gap_started_at,
                 source.completion_gap_started_at,
             )
@@ -1822,7 +1830,7 @@ class CodexAppServerClient:
         if review_text and review_text != text:
             _append_agent_message(state.agent_messages, review_text)
         state.item_completed_count += 1
-        if not state.turn_completed_seen and state.completion_gap_started_at is None:
+        if not state.turn_completed_seen:
             state.completion_gap_started_at = state.last_event_at
         item_type = item.get("type") if isinstance(item, dict) else None
         log_event(
