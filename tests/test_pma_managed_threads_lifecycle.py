@@ -48,6 +48,10 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
             self.resume_calls: list[str] = []
             self.thread_start_calls = 0
             self.turn_start_calls: list[dict[str, str]] = []
+            self.runtime_instance_id = "runtime-test-1"
+
+        async def start(self) -> None:
+            return None
 
         async def thread_resume(self, thread_id: str) -> None:
             self.resume_calls.append(thread_id)

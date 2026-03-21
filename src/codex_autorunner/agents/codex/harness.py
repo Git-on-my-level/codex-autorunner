@@ -128,6 +128,7 @@ class CodexHarness(AgentHarness):
 
     async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
         client = await self._supervisor.get_client(workspace_root)
+        await client.start()
         runtime_instance_id = getattr(client, "runtime_instance_id", None)
         if not isinstance(runtime_instance_id, str) or not runtime_instance_id:
             return None

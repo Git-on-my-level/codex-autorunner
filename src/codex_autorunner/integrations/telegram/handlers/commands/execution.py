@@ -301,7 +301,7 @@ def _get_telegram_thread_binding(
     return orchestration_service, binding, thread
 
 
-def _resolve_telegram_managed_thread(
+async def _resolve_telegram_managed_thread(
     handlers: Any,
     *,
     surface_key: str,
@@ -326,6 +326,18 @@ def _resolve_telegram_managed_thread(
         if isinstance(backend_thread_id, str) and backend_thread_id.strip()
         else None
     )
+    backend_runtime_instance_id: Optional[str] = None
+    if normalized_backend_thread_id:
+        backend_runtime_instance_id = (
+            await orchestration_service.resolve_backend_runtime_instance_id(
+                agent,
+                workspace_root,
+            )
+        )
+        if backend_runtime_instance_id is None:
+            raise RuntimeError(
+                "Agent runtime unavailable for backend_thread_id binding"
+            )
     if (
         thread is not None
         and normalized_backend_thread_id
@@ -334,6 +346,7 @@ def _resolve_telegram_managed_thread(
         thread = orchestration_service.resume_thread_target(
             thread.thread_target_id,
             backend_thread_id=normalized_backend_thread_id,
+            backend_runtime_instance_id=backend_runtime_instance_id,
         )
     if (
         thread is None
@@ -351,6 +364,13 @@ def _resolve_telegram_managed_thread(
             resource_id=resource_id,
             display_name=f"telegram:{surface_key}",
             backend_thread_id=normalized_backend_thread_id,
+            metadata=(
+                {
+                    "backend_runtime_instance_id": backend_runtime_instance_id,
+                }
+                if backend_runtime_instance_id is not None
+                else None
+            ),
         )
     orchestration_service.upsert_binding(
         surface_kind="telegram",
@@ -450,6 +470,14 @@ async def _sync_telegram_thread_binding(
     )
     canonical_workspace = str(workspace_root.resolve())
     normalized_repo_id = repo_id.strip() if isinstance(repo_id, str) else None
+    backend_runtime_instance_id = (
+        await orchestration_service.resolve_backend_runtime_instance_id(
+            agent,
+            workspace_root,
+        )
+    )
+    if backend_runtime_instance_id is None:
+        raise RuntimeError("Agent runtime unavailable for backend_thread_id binding")
     if replace_existing and current_thread is not None:
         stop_outcome = await orchestration_service.stop_thread(
             current_thread.thread_target_id
@@ -473,6 +501,7 @@ async def _sync_telegram_thread_binding(
         current_thread = orchestration_service.resume_thread_target(
             current_thread.thread_target_id,
             backend_thread_id=backend_thread_id,
+            backend_runtime_instance_id=backend_runtime_instance_id,
         )
     else:
         current_thread = orchestration_service.create_thread_target(
@@ -483,6 +512,7 @@ async def _sync_telegram_thread_binding(
             resource_id=resource_id,
             display_name=f"telegram:{surface_key}",
             backend_thread_id=backend_thread_id,
+            metadata={"backend_runtime_instance_id": backend_runtime_instance_id},
         )
     orchestration_service.upsert_binding(
         surface_kind="telegram",
@@ -1045,7 +1075,7 @@ async def _run_telegram_managed_thread_turn(
             )
             if updated_record is not None:
                 record = updated_record
-    orchestration_service, thread = _resolve_telegram_managed_thread(
+    orchestration_service, thread = await _resolve_telegram_managed_thread(
         handlers,
         surface_key=topic_key,
         workspace_root=workspace_root,

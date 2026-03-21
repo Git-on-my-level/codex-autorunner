@@ -1716,6 +1716,12 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
 
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
+
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
 
@@ -1879,6 +1885,12 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
 
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
+
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
 
@@ -2039,6 +2051,12 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
 
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
+
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
 
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
@@ -2221,6 +2239,12 @@ async def test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_re
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
 
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
+
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
 
@@ -2387,6 +2411,12 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
 
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
+
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
 
@@ -2539,6 +2569,12 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
 
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
+
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
 
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
@@ -2739,6 +2775,12 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
 
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
+
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
 
@@ -2928,6 +2970,12 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
         async def ensure_ready(self, workspace_root: Path) -> None:
             assert workspace_root == tmp_path
 
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            assert workspace_root == tmp_path
+            return "runtime-test-1"
+
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
 
@@ -3085,6 +3133,12 @@ async def test_repo_media_turns_preserve_input_items_via_orchestration(
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
 
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
+
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
 
@@ -3230,6 +3284,12 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
 
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
+
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
 
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
@@ -3457,6 +3517,12 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
 
         async def ensure_ready(self, workspace_root: Path) -> None:
             _ = workspace_root
+
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
 
         def supports(self, capability: str) -> bool:
             return capability in self.capabilities
@@ -3711,8 +3777,29 @@ class _NewtRouterStub:
 
 
 class _NewtClientStub:
+    runtime_instance_id = "runtime-test-1"
+
+    async def start(self) -> None:
+        return None
+
     async def thread_start(self, workspace_path: str, *, agent: str) -> dict[str, str]:
+        _ = agent
         return {"thread_id": "new-thread-id", "workspace_path": workspace_path}
+
+
+class _NewtSupervisorStub:
+    def __init__(self) -> None:
+        self.client = _NewtClientStub()
+
+    async def get_client(self, _workspace_root: Path) -> _NewtClientStub:
+        return self.client
+
+
+class _NewtEventsStub:
+    async def stream(self, conversation_id: str, turn_id: str):
+        _ = conversation_id, turn_id
+        if False:
+            yield ""
 
 
 class _NewtHandler(WorkspaceCommands):
@@ -3722,6 +3809,8 @@ class _NewtHandler(WorkspaceCommands):
         self._router = _NewtRouterStub(record)
         self._hub_root = hub_root
         self._sent: list[str] = []
+        self.app_server_supervisor = _NewtSupervisorStub()
+        self.app_server_events = _NewtEventsStub()
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return f"{chat_id}:{thread_id}"
@@ -3903,6 +3992,13 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
             calls.append(("stop", thread_target_id))
             return SimpleNamespace(recovered_lost_backend=True)
 
+        async def resolve_backend_runtime_instance_id(
+            self, agent_id: str, workspace_root: Path
+        ) -> Optional[str]:
+            calls.append(("resolve", agent_id))
+            assert workspace_root == workspace
+            return "runtime-test-1"
+
         def archive_thread_target(self, thread_target_id: str) -> None:
             calls.append(("archive", thread_target_id))
 
@@ -3957,6 +4053,7 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
 
     assert thread.thread_target_id == "thread-2"
     assert calls == [
+        ("resolve", "codex"),
         ("stop", "thread-1"),
         ("archive", "thread-1"),
         ("create", "codex"),
@@ -3975,6 +4072,13 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
         async def stop_thread(self, thread_target_id: str) -> Any:
             calls.append(("stop", thread_target_id))
             return SimpleNamespace(recovered_lost_backend=True)
+
+        async def resolve_backend_runtime_instance_id(
+            self, agent_id: str, workspace_root: Path
+        ) -> Optional[str]:
+            calls.append(("resolve", agent_id))
+            assert workspace_root == workspace
+            return "runtime-test-1"
 
         def archive_thread_target(self, thread_target_id: str) -> None:
             calls.append(("archive", thread_target_id))

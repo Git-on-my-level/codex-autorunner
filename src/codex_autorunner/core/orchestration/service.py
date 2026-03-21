@@ -201,12 +201,20 @@ class PmaThreadExecutionStore(ThreadExecutionStore):
         ]
 
     def resume_thread_target(
-        self, thread_target_id: str, *, backend_thread_id: str
+        self,
+        thread_target_id: str,
+        *,
+        backend_thread_id: str,
+        backend_runtime_instance_id: Optional[str] = None,
     ) -> Optional[ThreadTarget]:
         record = self._store.get_thread(thread_target_id)
         if record is None:
             return None
-        self._store.set_thread_backend_id(thread_target_id, backend_thread_id)
+        self._store.set_thread_backend_id(
+            thread_target_id,
+            backend_thread_id,
+            backend_runtime_instance_id=backend_runtime_instance_id,
+        )
         self._store.activate_thread(thread_target_id)
         updated = self._store.get_thread(thread_target_id)
         if updated is None:
@@ -570,14 +578,27 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
 
     def resume_thread_target(
-        self, thread_target_id: str, *, backend_thread_id: str
+        self,
+        thread_target_id: str,
+        *,
+        backend_thread_id: str,
+        backend_runtime_instance_id: Optional[str] = None,
     ) -> ThreadTarget:
         thread = self.thread_store.resume_thread_target(
-            thread_target_id, backend_thread_id=backend_thread_id
+            thread_target_id,
+            backend_thread_id=backend_thread_id,
+            backend_runtime_instance_id=backend_runtime_instance_id,
         )
         if thread is None:
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
         return thread
+
+    async def resolve_backend_runtime_instance_id(
+        self, agent_id: str, workspace_root: Path
+    ) -> Optional[str]:
+        harness = self.harness_factory(agent_id)
+        await harness.ensure_ready(workspace_root)
+        return await _resolve_harness_runtime_instance_id(harness, workspace_root)
 
     def archive_thread_target(self, thread_target_id: str) -> ThreadTarget:
         thread = self.thread_store.archive_thread_target(thread_target_id)

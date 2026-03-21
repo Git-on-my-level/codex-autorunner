@@ -68,8 +68,13 @@ class _FakeStore:
         return [self.thread]
 
     def resume_thread_target(
-        self, thread_target_id: str, *, backend_thread_id: str
+        self,
+        thread_target_id: str,
+        *,
+        backend_thread_id: str,
+        backend_runtime_instance_id: Optional[str] = None,
     ) -> Optional[ThreadTarget]:
+        _ = backend_runtime_instance_id
         return self.thread
 
     def archive_thread_target(self, thread_target_id: str) -> Optional[ThreadTarget]:
@@ -183,6 +188,10 @@ class _FakeHarness:
     interrupted: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
 
     async def ensure_ready(self, workspace_root: Path) -> None:
+        return None
+
+    async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
+        _ = workspace_root
         return None
 
     def supports(self, capability: str) -> bool:
@@ -310,15 +319,26 @@ class _FakeService:
         )
 
     def resume_thread_target(
-        self, thread_target_id: str, *, backend_thread_id: str
+        self,
+        thread_target_id: str,
+        *,
+        backend_thread_id: str,
+        backend_runtime_instance_id: Optional[str] = None,
     ) -> ThreadTarget:
         return (
             self.store.resume_thread_target(
                 thread_target_id,
                 backend_thread_id=backend_thread_id,
+                backend_runtime_instance_id=backend_runtime_instance_id,
             )
             or self.store.thread
         )
+
+    async def resolve_backend_runtime_instance_id(
+        self, agent_id: str, workspace_root: Path
+    ) -> Optional[str]:
+        _ = agent_id, workspace_root
+        return None
 
     def archive_thread_target(self, thread_target_id: str) -> ThreadTarget:
         return self.store.archive_thread_target(thread_target_id) or self.store.thread

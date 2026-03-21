@@ -6133,9 +6133,16 @@ class DiscordBotService:
             ).strip()
             if lifecycle_status and lifecycle_status != "active" and backend_thread_id:
                 try:
+                    backend_runtime_instance_id = (
+                        await orchestration_service.resolve_backend_runtime_instance_id(
+                            agent,
+                            workspace_root,
+                        )
+                    )
                     orchestration_service.resume_thread_target(
                         thread_id,
                         backend_thread_id=backend_thread_id,
+                        backend_runtime_instance_id=backend_runtime_instance_id,
                     )
                 except Exception:
                     pass

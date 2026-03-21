@@ -767,9 +767,9 @@ class PmaThreadStore:
         with self._write_conn() as conn:
             thread = self._fetch_thread(conn, managed_thread_id)
             metadata = dict((thread or {}).get("metadata") or {})
-            if backend_runtime_instance_id is None:
+            if backend_thread_id is None:
                 metadata.pop(_BACKEND_RUNTIME_INSTANCE_ID_KEY, None)
-            else:
+            elif backend_runtime_instance_id is not None:
                 metadata[_BACKEND_RUNTIME_INSTANCE_ID_KEY] = backend_runtime_instance_id
             with conn:
                 conn.execute(

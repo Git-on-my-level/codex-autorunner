@@ -34,7 +34,19 @@ def _repo_owner(hub_env) -> dict[str, str]:
     return {"resource_kind": "repo", "resource_id": hub_env.repo_id}
 
 
-def test_create_managed_thread_with_repo_owner(hub_env) -> None:
+async def _fake_backend_runtime_instance_id(*args, **kwargs) -> str:
+    _ = args, kwargs
+    return "runtime-test-1"
+
+
+def test_create_managed_thread_with_repo_owner(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        managed_threads,
+        "_require_backend_runtime_instance_id",
+        _fake_backend_runtime_instance_id,
+    )
     app = create_hub_app(hub_env.hub_root)
 
     with TestClient(app) as client:
@@ -66,6 +78,10 @@ def test_create_managed_thread_with_repo_owner(hub_env) -> None:
     assert thread["context_profile"] == "car_ambient"
     assert thread["approval_mode"] == "yolo"
     assert thread["managed_thread_id"]
+    store = PmaThreadStore(hub_env.hub_root)
+    stored = store.get_thread(thread["managed_thread_id"])
+    assert stored is not None
+    assert stored["metadata"]["backend_runtime_instance_id"] == "runtime-test-1"
     notification = resp.json().get("notification") or {}
     subscription = notification.get("subscription") or {}
     assert subscription.get("thread_id") == thread["managed_thread_id"]
@@ -625,6 +641,10 @@ def test_resume_managed_thread_allows_send_without_new_backend_thread(hub_env) -
             self.resume_calls: list[str] = []
             self.thread_start_calls = 0
             self.turn_start_calls: list[dict[str, str]] = []
+            self.runtime_instance_id = "runtime-test-1"
+
+        async def start(self) -> None:
+            return None
 
         async def thread_resume(self, thread_id: str) -> None:
             self.resume_calls.append(thread_id)
@@ -807,13 +827,20 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 return None
             return self.thread
 
-        def resume_thread_target(self, thread_target_id, *, backend_thread_id):
+        def resume_thread_target(
+            self,
+            thread_target_id,
+            *,
+            backend_thread_id,
+            backend_runtime_instance_id=None,
+        ):
             self.calls.append(
                 (
                     "resume",
                     {
                         "thread_target_id": thread_target_id,
                         "backend_thread_id": backend_thread_id,
+                        "backend_runtime_instance_id": backend_runtime_instance_id,
                     },
                 )
             )
@@ -828,6 +855,18 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 }
             )
             return self.thread
+
+        async def resolve_backend_runtime_instance_id(self, agent_id, workspace_root):
+            self.calls.append(
+                (
+                    "resolve_backend_runtime_instance_id",
+                    {
+                        "agent_id": agent_id,
+                        "workspace_root": str(workspace_root),
+                    },
+                )
+            )
+            return "runtime-test-1"
 
         def archive_thread_target(self, thread_target_id):
             self.calls.append(("archive", {"thread_target_id": thread_target_id}))
@@ -897,6 +936,13 @@ def test_managed_thread_crud_routes_use_orchestration_service(
 
     assert fake_service.calls == [
         (
+            "resolve_backend_runtime_instance_id",
+            {
+                "agent_id": "codex",
+                "workspace_root": str(hub_env.repo_root.resolve()),
+            },
+        ),
+        (
             "create",
             {
                 "agent_id": "codex",
@@ -907,6 +953,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
                 "display_name": "Orchestrated thread",
                 "backend_thread_id": "backend-thread-1",
                 "metadata": {
+                    "backend_runtime_instance_id": "runtime-test-1",
                     "context_profile": "car_ambient",
                     "approval_mode": "yolo",
                 },
@@ -927,10 +974,18 @@ def test_managed_thread_crud_routes_use_orchestration_service(
         ("get", {"thread_target_id": "thread-orch-1"}),
         ("get", {"thread_target_id": "thread-orch-1"}),
         (
+            "resolve_backend_runtime_instance_id",
+            {
+                "agent_id": "codex",
+                "workspace_root": str(hub_env.repo_root.resolve()),
+            },
+        ),
+        (
             "resume",
             {
                 "thread_target_id": "thread-orch-1",
                 "backend_thread_id": "backend-thread-2",
+                "backend_runtime_instance_id": "runtime-test-1",
             },
         ),
         ("get", {"thread_target_id": "thread-orch-1"}),

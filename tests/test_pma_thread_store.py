@@ -102,6 +102,25 @@ def test_create_finish_turn_and_query(tmp_path: Path) -> None:
     assert thread_after["status_terminal"] is True
 
 
+def test_set_thread_backend_id_preserves_runtime_tag_when_omitted(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread(
+        "codex",
+        tmp_path / "workspace",
+        backend_thread_id="backend-1",
+        metadata={"backend_runtime_instance_id": "runtime-1"},
+    )
+
+    store.set_thread_backend_id(thread["managed_thread_id"], "backend-2")
+
+    updated = store.get_thread(thread["managed_thread_id"])
+    assert updated is not None
+    assert updated["backend_thread_id"] == "backend-2"
+    assert updated["backend_runtime_instance_id"] == "runtime-1"
+
+
 def test_create_turn_rejects_when_running_turn_exists(tmp_path: Path) -> None:
     store = PmaThreadStore(tmp_path / "hub")
     thread = store.create_thread("codex", tmp_path / "workspace")

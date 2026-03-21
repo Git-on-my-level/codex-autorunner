@@ -173,6 +173,26 @@ def _build_operator_status_fields(
     }
 
 
+async def _require_backend_runtime_instance_id(
+    request: Request,
+    *,
+    service: Any,
+    agent_id: str,
+    workspace_root: Path,
+) -> str:
+    _ = request
+    runtime_instance_id = await service.resolve_backend_runtime_instance_id(
+        agent_id,
+        workspace_root,
+    )
+    if runtime_instance_id is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Agent runtime unavailable for backend_thread_id binding",
+        )
+    return runtime_instance_id
+
+
 def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
     payload = dict(thread)
     lifecycle_status = normalize_optional_text(
@@ -582,6 +602,16 @@ def build_managed_thread_crud_routes(
         }
 
         service = build_managed_thread_orchestration_service(request)
+        backend_thread_id = normalize_optional_text(payload.backend_thread_id)
+        if backend_thread_id:
+            metadata["backend_runtime_instance_id"] = (
+                await _require_backend_runtime_instance_id(
+                    request,
+                    service=service,
+                    agent_id=agent_id,
+                    workspace_root=resolved_workspace,
+                )
+            )
         try:
             thread = service.create_thread_target(
                 agent_id,
@@ -590,7 +620,7 @@ def build_managed_thread_crud_routes(
                 resource_kind=resource_kind,
                 resource_id=resource_id,
                 display_name=normalize_optional_text(payload.name),
-                backend_thread_id=normalize_optional_text(payload.backend_thread_id),
+                backend_thread_id=backend_thread_id,
                 metadata=metadata,
             )
         except ValueError as exc:
@@ -718,7 +748,7 @@ def build_managed_thread_crud_routes(
         return {"thread": _serialize_managed_thread(updated)}
 
     @router.post("/threads/{managed_thread_id}/resume")
-    def resume_managed_thread(
+    async def resume_managed_thread(
         managed_thread_id: str,
         request: Request,
         payload: PmaManagedThreadResumeRequest,
@@ -731,12 +761,24 @@ def build_managed_thread_crud_routes(
         thread = service.get_thread_target(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
+        if not thread.workspace_root:
+            raise HTTPException(
+                status_code=500,
+                detail="Managed thread is missing workspace_root",
+            )
 
         old_backend_thread_id = normalize_optional_text(thread.backend_thread_id)
         old_status = normalize_optional_text(thread.lifecycle_status)
+        backend_runtime_instance_id = await _require_backend_runtime_instance_id(
+            request,
+            service=service,
+            agent_id=thread.agent_id,
+            workspace_root=Path(thread.workspace_root),
+        )
         updated = service.resume_thread_target(
             managed_thread_id,
             backend_thread_id=backend_thread_id,
+            backend_runtime_instance_id=backend_runtime_instance_id,
         )
         store = PmaThreadStore(request.app.state.config.root)
         store.append_action(
