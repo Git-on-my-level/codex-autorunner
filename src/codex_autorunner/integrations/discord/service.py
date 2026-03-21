@@ -1160,6 +1160,7 @@ class DiscordBotService:
                 values=payload_data.get("values"),
                 guild_id=payload_data.get("guild_id"),
                 user_id=event.from_user_id,
+                message_id=context.message_id,
             )
             return
 
@@ -1913,10 +1914,50 @@ class DiscordBotService:
         )
         had_previous = current_thread is not None
         if current_thread is not None:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.thread.reset.stop_requested",
+                channel_id=channel_id,
+                mode=mode,
+                thread_target_id=current_thread.thread_target_id,
+            )
             stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
             )
-            if stop_outcome.recovered_lost_backend:
+            interrupted_active = bool(
+                getattr(stop_outcome, "interrupted_active", False)
+            )
+            recovered_lost_backend = bool(
+                getattr(stop_outcome, "recovered_lost_backend", False)
+            )
+            cancelled_queued = int(getattr(stop_outcome, "cancelled_queued", 0) or 0)
+            execution_record = getattr(stop_outcome, "execution", None)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.thread.reset.stop_completed",
+                channel_id=channel_id,
+                mode=mode,
+                thread_target_id=current_thread.thread_target_id,
+                interrupted_active=interrupted_active,
+                recovered_lost_backend=recovered_lost_backend,
+                cancelled_queued=cancelled_queued,
+                execution_id=(
+                    execution_record.execution_id
+                    if execution_record is not None
+                    else None
+                ),
+                execution_status=(
+                    execution_record.status if execution_record is not None else None
+                ),
+                execution_backend_turn_id=(
+                    execution_record.backend_id
+                    if execution_record is not None
+                    else None
+                ),
+            )
+            if recovered_lost_backend:
                 log_event(
                     self._logger,
                     logging.INFO,
@@ -9583,6 +9624,13 @@ class DiscordBotService:
             )
             return
 
+        interaction_message_id: Optional[str] = None
+        interaction_message = interaction_payload.get("message")
+        if isinstance(interaction_message, dict):
+            message_id_raw = interaction_message.get("id")
+            if isinstance(message_id_raw, str) and message_id_raw.strip():
+                interaction_message_id = message_id_raw.strip()
+
         try:
             if custom_id == TICKETS_FILTER_SELECT_ID:
                 values = extract_component_values(interaction_payload)
@@ -9899,6 +9947,9 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                    user_id=user_id,
+                    message_id=interaction_message_id,
+                    custom_id=custom_id,
                 )
                 return
 
@@ -9942,6 +9993,7 @@ class DiscordBotService:
         values: Optional[list[str]] = None,
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        message_id: Optional[str] = None,
     ) -> None:
         try:
             if custom_id == TICKETS_FILTER_SELECT_ID:
@@ -10248,6 +10300,9 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    custom_id=custom_id,
                 )
                 return
 
@@ -11688,7 +11743,24 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        source: str = "unknown",
+        source_custom_id: Optional[str] = None,
+        source_message_id: Optional[str] = None,
+        source_command: Optional[str] = None,
+        source_user_id: Optional[str] = None,
     ) -> None:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.interrupt.requested",
+            channel_id=channel_id,
+            interaction_id=interaction_id,
+            source=source,
+            source_user_id=source_user_id,
+            source_command=source_command,
+            source_custom_id=source_custom_id,
+            source_message_id=source_message_id,
+        )
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             text = format_discord_message(
@@ -11726,6 +11798,18 @@ class DiscordBotService:
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
         )
         if current_thread is None:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.interrupt.no_active_turn",
+                channel_id=channel_id,
+                interaction_id=interaction_id,
+                source=source,
+                source_user_id=source_user_id,
+                source_command=source_command,
+                source_custom_id=source_custom_id,
+                source_message_id=source_message_id,
+            )
             text = format_discord_message("No active turn to interrupt.")
             await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
@@ -11737,10 +11821,47 @@ class DiscordBotService:
             stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
             )
+            interrupted_active = bool(
+                getattr(stop_outcome, "interrupted_active", False)
+            )
+            recovered_lost_backend = bool(
+                getattr(stop_outcome, "recovered_lost_backend", False)
+            )
+            cancelled_queued = int(getattr(stop_outcome, "cancelled_queued", 0) or 0)
+            execution_record = getattr(stop_outcome, "execution", None)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.interrupt.completed",
+                channel_id=channel_id,
+                interaction_id=interaction_id,
+                source=source,
+                source_user_id=source_user_id,
+                source_command=source_command,
+                source_custom_id=source_custom_id,
+                source_message_id=source_message_id,
+                thread_target_id=current_thread.thread_target_id,
+                interrupted_active=interrupted_active,
+                recovered_lost_backend=recovered_lost_backend,
+                cancelled_queued=cancelled_queued,
+                execution_id=(
+                    execution_record.execution_id
+                    if execution_record is not None
+                    else None
+                ),
+                execution_status=(
+                    execution_record.status if execution_record is not None else None
+                ),
+                execution_backend_turn_id=(
+                    execution_record.backend_id
+                    if execution_record is not None
+                    else None
+                ),
+            )
             if (
-                not stop_outcome.interrupted_active
-                and not stop_outcome.recovered_lost_backend
-                and not stop_outcome.cancelled_queued
+                not interrupted_active
+                and not recovered_lost_backend
+                and not cancelled_queued
             ):
                 text = format_discord_message("No active turn to interrupt.")
                 await self._send_or_respond_ephemeral(
@@ -11751,17 +11872,15 @@ class DiscordBotService:
                 )
                 return
             parts = []
-            if stop_outcome.interrupted_active:
+            if interrupted_active:
                 parts.append("Stopping current turn...")
-            elif stop_outcome.recovered_lost_backend:
+            elif recovered_lost_backend:
                 parts.append("Recovered stale session after backend thread was lost.")
-            if stop_outcome.cancelled_queued:
-                parts.append(
-                    f"Cancelled {stop_outcome.cancelled_queued} queued turn(s)."
-                )
+            if cancelled_queued:
+                parts.append(f"Cancelled {cancelled_queued} queued turn(s).")
             text = format_discord_message(
                 "Recovered stale session after backend thread was lost."
-                if stop_outcome.recovered_lost_backend
+                if recovered_lost_backend
                 else "Stopping current turn..."
             )
             if parts:
@@ -11778,6 +11897,12 @@ class DiscordBotService:
                 logging.WARNING,
                 "discord.interrupt.failed",
                 channel_id=channel_id,
+                interaction_id=interaction_id,
+                source=source,
+                source_user_id=source_user_id,
+                source_command=source_command,
+                source_custom_id=source_custom_id,
+                source_message_id=source_message_id,
                 workspace_root=str(workspace_root),
                 thread_target_id=current_thread.thread_target_id,
                 exc=exc,
@@ -11796,11 +11921,18 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        user_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        custom_id: str = "cancel_turn",
     ) -> None:
         await self._handle_car_interrupt(
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            source="component",
+            source_custom_id=custom_id,
+            source_message_id=message_id,
+            source_user_id=user_id,
         )
 
     async def _handle_continue_turn_button(
