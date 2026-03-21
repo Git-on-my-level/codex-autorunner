@@ -1469,8 +1469,7 @@ class CodexAppServerClient:
             turn_id_hint, thread_id=thread_id_hint
         )
         if state is not None:
-            state.last_event_at = time.monotonic()
-            state.last_method = method
+            self._mark_notification_event(state=state, method=method)
 
     async def _resolve_notification_turn_state(
         self,

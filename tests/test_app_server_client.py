@@ -929,6 +929,52 @@ async def test_live_progress_refreshes_completion_gap_window(
 
 
 @pytest.mark.anyio
+async def test_turn_hint_progress_refreshes_completion_gap_window(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=10.0,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+        turn_completion_gap_timeout_seconds=0.05,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.status = "running"
+        state.item_completed_count = 3
+        state.completion_gap_started_at = time.monotonic() - 1.0
+        stale_started_at = state.completion_gap_started_at
+        resume_calls = 0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            nonlocal resume_calls
+            _ = thread_id, kwargs
+            resume_calls += 1
+            return {}
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        await client._mark_notification_turn_hint(
+            method="item/commandExecution/outputDelta",
+            params={"turnId": "turn-1", "threadId": "thread-1"},
+        )
+        assert state.completion_gap_started_at is not None
+        assert state.completion_gap_started_at > stale_started_at
+
+        await client._maybe_reconcile_turn_completion_gap(
+            state,
+            turn_id="turn-1",
+            thread_id="thread-1",
+        )
+
+        assert resume_calls == 0
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_merge_turn_state_keeps_latest_completion_gap_timestamp(
     tmp_path: Path,
 ) -> None:
