@@ -109,7 +109,12 @@ class TelegramBotDefaults:
     yolo_sandbox_policy: str
 
     def policies_for_mode(self, mode: str) -> tuple[Optional[str], Optional[str]]:
-        approval_policy, sandbox_policy = resolve_approval_mode_policies(mode)
+        normalized = normalize_approval_mode(mode, default=APPROVAL_MODE_YOLO)
+        if normalized == APPROVAL_MODE_YOLO:
+            return self.yolo_approval_policy, self.yolo_sandbox_policy
+        if normalized == "safe":
+            return self.approval_policy, self.sandbox_policy
+        approval_policy, sandbox_policy = resolve_approval_mode_policies(normalized)
         return approval_policy, sandbox_policy
 
 

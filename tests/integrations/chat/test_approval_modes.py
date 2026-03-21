@@ -14,6 +14,7 @@ from codex_autorunner.integrations.discord.message_turns import (
 )
 from codex_autorunner.integrations.discord.service import DiscordBotService
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage
+from codex_autorunner.integrations.telegram.config import TelegramBotDefaults
 from codex_autorunner.integrations.telegram.handlers.commands.approvals import (
     ApprovalsCommands,
 )
@@ -24,6 +25,22 @@ from codex_autorunner.integrations.telegram.state import (
     TelegramTopicRecord,
     normalize_approval_mode,
 )
+
+
+def _telegram_defaults(
+    *,
+    approval_policy: str | None = "on-request",
+    sandbox_policy: str | None = "workspaceWrite",
+    yolo_approval_policy: str = "never",
+    yolo_sandbox_policy: str = "dangerFullAccess",
+) -> TelegramBotDefaults:
+    return TelegramBotDefaults(
+        approval_mode="yolo",
+        approval_policy=approval_policy,
+        sandbox_policy=sandbox_policy,
+        yolo_approval_policy=yolo_approval_policy,
+        yolo_sandbox_policy=yolo_sandbox_policy,
+    )
 
 
 @pytest.mark.parametrize("mode", APPROVAL_MODE_VALUES)
@@ -40,7 +57,7 @@ def test_discord_and_telegram_share_approval_policy_contract(mode: str) -> None:
     )
     assert (
         WorkspaceCommands._effective_policies(
-            SimpleNamespace(),
+            SimpleNamespace(_config=SimpleNamespace(defaults=_telegram_defaults())),
             TelegramTopicRecord(approval_mode=mode),
         )
         == expected
@@ -101,6 +118,7 @@ class _TelegramRouterStub:
 class _TelegramApprovalsStub(ApprovalsCommands):
     def __init__(self, record: TelegramTopicRecord) -> None:
         self.__dict__["_router"] = _TelegramRouterStub(record)
+        self._config = SimpleNamespace(defaults=_telegram_defaults())
         self.messages: list[str] = []
 
     @property
@@ -122,7 +140,38 @@ class _TelegramApprovalsStub(ApprovalsCommands):
     def _effective_policies(
         self, record: TelegramTopicRecord
     ) -> tuple[str | None, object | None]:
-        return WorkspaceCommands._effective_policies(SimpleNamespace(), record)
+        return WorkspaceCommands._effective_policies(
+            SimpleNamespace(_config=SimpleNamespace(defaults=_telegram_defaults())),
+            record,
+        )
+
+
+def test_telegram_effective_policies_honor_configured_safe_defaults() -> None:
+    assert WorkspaceCommands._effective_policies(
+        SimpleNamespace(
+            _config=SimpleNamespace(
+                defaults=_telegram_defaults(
+                    approval_policy="on-request",
+                    sandbox_policy="readOnly",
+                )
+            )
+        ),
+        TelegramTopicRecord(approval_mode="safe"),
+    ) == ("on-request", "readOnly")
+
+
+def test_telegram_effective_policies_honor_configured_yolo_defaults() -> None:
+    assert WorkspaceCommands._effective_policies(
+        SimpleNamespace(
+            _config=SimpleNamespace(
+                defaults=_telegram_defaults(
+                    yolo_approval_policy="never",
+                    yolo_sandbox_policy="workspaceWrite",
+                )
+            )
+        ),
+        TelegramTopicRecord(approval_mode="yolo"),
+    ) == ("never", "workspaceWrite")
 
 
 def _telegram_message() -> TelegramMessage:

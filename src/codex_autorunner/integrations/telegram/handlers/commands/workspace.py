@@ -24,7 +24,6 @@ from ....chat.agents import (
     chat_agent_supports_effort,
     normalize_chat_agent,
 )
-from ....chat.approval_modes import resolve_approval_mode_policies
 from ...adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
@@ -172,11 +171,13 @@ class WorkspaceCommands(SharedHelpers):
     def _effective_policies(
         self, record: "TelegramTopicRecord"
     ) -> tuple[Optional[str], Optional[Any]]:
-        approval_policy, sandbox_policy = resolve_approval_mode_policies(
-            record.approval_mode,
-            override_approval_policy=record.approval_policy,
-            override_sandbox_policy=record.sandbox_policy,
+        approval_policy, sandbox_policy = self._config.defaults.policies_for_mode(
+            record.approval_mode
         )
+        if record.approval_policy is not None:
+            approval_policy = record.approval_policy
+        if record.sandbox_policy is not None:
+            sandbox_policy = record.sandbox_policy
         return approval_policy, sandbox_policy
 
     def _effective_agent(self, record: Optional["TelegramTopicRecord"]) -> str:

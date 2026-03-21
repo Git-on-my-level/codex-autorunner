@@ -69,7 +69,6 @@ from .....integrations.app_server.threads import (
     pma_base_key,
     pma_topic_scoped_key,
 )
-from .....integrations.chat.approval_modes import resolve_approval_mode_policies
 from .....integrations.chat.compaction import match_pending_compact_seed
 from .....integrations.chat.runtime_thread_errors import (
     resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
@@ -1449,11 +1448,13 @@ class ExecutionCommands(SharedHelpers):
     def _effective_policies(
         self, record: "TelegramTopicRecord"
     ) -> tuple[Optional[str], Optional[Any]]:
-        approval_policy, sandbox_policy = resolve_approval_mode_policies(
-            record.approval_mode,
-            override_approval_policy=record.approval_policy,
-            override_sandbox_policy=record.sandbox_policy,
+        approval_policy, sandbox_policy = self._config.defaults.policies_for_mode(
+            record.approval_mode
         )
+        if record.approval_policy is not None:
+            approval_policy = record.approval_policy
+        if record.sandbox_policy is not None:
+            sandbox_policy = record.sandbox_policy
         return approval_policy, sandbox_policy
 
     async def _handle_bang_shell(
