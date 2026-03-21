@@ -269,7 +269,6 @@ class PmaManagedThreadCreateRequest(Payload):
     )
     workspace_root: Optional[str] = None
     name: Optional[str] = None
-    backend_thread_id: Optional[str] = None
     notify_on: Optional[Literal["terminal"]] = Field(
         default=None, validation_alias=AliasChoices("notify_on", "notifyOn")
     )
@@ -759,7 +758,7 @@ class PmaManagedThreadCompactRequest(Payload):
 
 
 class PmaManagedThreadResumeRequest(Payload):
-    backend_thread_id: Optional[str] = None
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class PmaAutomationSubscriptionCreateRequest(Payload):

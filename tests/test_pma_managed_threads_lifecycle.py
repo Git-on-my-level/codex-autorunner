@@ -118,7 +118,7 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         store = PmaThreadStore(hub_env.hub_root)
         compacted_thread = store.get_thread(managed_thread_id)
         assert compacted_thread is not None
-        assert compacted_thread["backend_thread_id"] is None
+        assert compacted_thread.get("backend_thread_id") is None
         assert compacted_thread["compact_seed"] == compact_summary
 
         second_message = "second user message"
@@ -151,10 +151,8 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         )
         assert blocked.status_code == 409
 
-        resume_backend_id = "backend-thread-manual"
         resume_resp = client.post(
-            f"/hub/pma/threads/{managed_thread_id}/resume",
-            json={"backend_thread_id": resume_backend_id},
+            f"/hub/pma/threads/{managed_thread_id}/resume", json={}
         )
         assert resume_resp.status_code == 200
 
@@ -163,15 +161,15 @@ def test_managed_thread_compact_archive_resume_lifecycle(hub_env) -> None:
         assert resumed_thread["status"] == "active"
         assert resumed_thread["normalized_status"] == "idle"
         assert resumed_thread["status_reason"] == "thread_resumed"
-        assert resumed_thread["backend_thread_id"] == resume_backend_id
+        assert resumed_thread.get("backend_thread_id") is None
 
         resumed_msg = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
             json={"message": "message after resume"},
         )
         assert resumed_msg.status_code == 200
-        assert resumed_msg.json()["backend_thread_id"] == resume_backend_id
-        assert fake_supervisor.client.resume_calls[-1] == resume_backend_id
+        assert resumed_msg.json()["backend_thread_id"] == "backend-thread-3"
+        assert fake_supervisor.client.resume_calls == []
         third_prompt = fake_supervisor.client.turn_start_calls[2]["prompt"]
         assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." in third_prompt
         assert "<user_message>" in third_prompt
@@ -244,23 +242,9 @@ def test_compact_rejects_oversize_summary(hub_env) -> None:
 
 
 @pytest.mark.slow
-def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:
+def test_interrupt_managed_thread_requires_running_turn(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-
-    class FakeClient:
-        async def turn_interrupt(
-            self, turn_id: str, *, thread_id: str | None = None
-        ) -> None:
-            _ = turn_id, thread_id
-            raise RuntimeError("sensitive-interrupt-error")
-
-    class FakeSupervisor:
-        async def get_client(self, hub_root: Path):
-            _ = hub_root
-            return FakeClient()
-
-    app.state.app_server_supervisor = FakeSupervisor()
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -273,25 +257,7 @@ def test_interrupt_managed_thread_sanitizes_backend_exception(hub_env) -> None:
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
+        interrupt_resp = client.post(f"/hub/pma/threads/{managed_thread_id}/interrupt")
 
-    store = PmaThreadStore(hub_env.hub_root)
-    turn = store.create_turn(managed_thread_id, prompt="running")
-    managed_turn_id = turn["managed_turn_id"]
-    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
-    store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
-
-    with TestClient(app) as client:
-        interrupt_resp = client.post(
-            f"/hub/pma/threads/{managed_thread_id}/interrupt",
-        )
-
-    assert interrupt_resp.status_code == 200
-    payload = interrupt_resp.json()
-    assert payload["status"] == "error"
-    assert payload["interrupt_state"] == "failed"
-    assert payload["backend_error"] == "Failed to interrupt backend turn"
-    assert "sensitive-interrupt-error" not in (payload.get("backend_error") or "")
-    updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
-    assert updated_turn is not None
-    assert updated_turn["status"] == "running"
-    assert updated_turn["finished_at"] is None
+    assert interrupt_resp.status_code == 409
+    assert interrupt_resp.json()["detail"] == "Managed thread has no running turn"

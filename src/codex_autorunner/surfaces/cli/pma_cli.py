@@ -1116,9 +1116,6 @@ def pma_thread_spawn(
         None, "--workspace-root", help="Absolute or hub-relative workspace path"
     ),
     name: Optional[str] = typer.Option(None, "--name", help="Optional thread label"),
-    backend_id: Optional[str] = typer.Option(
-        None, "--backend-id", help="Optional existing backend thread/session id"
-    ),
     context_profile: Optional[str] = typer.Option(
         None,
         "--context-profile",
@@ -1226,7 +1223,6 @@ def pma_thread_spawn(
                 "resource_id": normalized_resource_id,
                 "workspace_root": normalized_workspace_root,
                 "name": name,
-                "backend_thread_id": backend_id,
                 "context_profile": normalized_context_profile,
                 "notify_on": normalized_notify_on,
                 "terminal_followup": terminal_followup,
@@ -1812,21 +1808,17 @@ def pma_thread_resume(
     managed_thread_id: str = typer.Option(
         ..., "--id", help="Managed PMA thread id", show_default=False
     ),
-    backend_id: str = typer.Option(
-        "", "--backend-id", help="Optional backend thread/session id to bind"
-    ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """Set a managed thread active and optionally bind a backend thread/session id."""
+    """Set a managed thread active."""
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-        payload = {"backend_thread_id": backend_id} if backend_id.strip() else {}
         data = _request_json(
             "POST",
             _build_pma_url(config, f"/threads/{managed_thread_id}/resume"),
-            payload,
+            {},
             token_env=config.server_auth_token_env,
         )
     except httpx.HTTPError as exc:

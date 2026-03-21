@@ -806,7 +806,6 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             return {
                 "thread": {
                     "managed_thread_id": "thread-1",
-                    "backend_thread_id": "backend-thread-2",
                 }
             }
         if url.endswith("/archive"):
@@ -832,8 +831,6 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             "repo-1",
             "--name",
             "CLI thread",
-            "--backend-id",
-            "backend-thread-1",
             "--path",
             str(tmp_path),
         ],
@@ -845,8 +842,6 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             "resume",
             "--id",
             "thread-1",
-            "--backend-id",
-            "backend-thread-2",
             "--path",
             str(tmp_path),
         ],
@@ -873,7 +868,6 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
                 "resource_id": "repo-1",
                 "workspace_root": None,
                 "name": "CLI thread",
-                "backend_thread_id": "backend-thread-1",
                 "context_profile": "car_ambient",
                 "notify_on": None,
                 "terminal_followup": None,
@@ -884,7 +878,7 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
         (
             "POST",
             "http://127.0.0.1:4321/hub/pma/threads/thread-1/resume",
-            {"backend_thread_id": "backend-thread-2"},
+            {},
         ),
         (
             "POST",
@@ -892,6 +886,24 @@ def test_pma_cli_thread_control_commands_use_orchestration_routes(
             None,
         ),
     ]
+
+
+def test_pma_cli_thread_create_rejects_backend_id_option(tmp_path: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "create",
+            "--backend-id",
+            "backend-thread-1",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--backend-id" in result.output
 
 
 def test_pma_cli_thread_archive_reports_unreachable_host_port(
@@ -1120,7 +1132,6 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
                 "resource_id": "zc-main",
                 "workspace_root": None,
                 "name": "ZeroClaw Main",
-                "backend_thread_id": None,
                 "context_profile": "none",
                 "notify_on": None,
                 "terminal_followup": None,
