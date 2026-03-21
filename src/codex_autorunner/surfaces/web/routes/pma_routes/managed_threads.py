@@ -18,6 +18,7 @@ from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.models import ThreadTarget
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_thread_store import PmaThreadStore
+from .....integrations.chat.approval_modes import normalize_approval_mode
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,
@@ -201,6 +202,10 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
             resource_kind=payload["resource_kind"]
         ),
     )
+    payload["approval_mode"] = normalize_approval_mode(
+        metadata.get("approval_mode"),
+        default="yolo",
+    )
     payload.update(
         _build_operator_status_fields(
             normalized_status=payload["normalized_status"],
@@ -236,6 +241,7 @@ def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
                 resource_kind=thread.resource_kind
             ),
         ),
+        "approval_mode": normalize_approval_mode(thread.approval_mode, default="yolo"),
         "accepts_messages": thread.lifecycle_status == "active",
     }
     payload.update(
@@ -569,6 +575,11 @@ def build_managed_thread_crud_routes(
         )
         if context_profile is None:
             raise HTTPException(status_code=400, detail="context_profile is invalid")
+        approval_mode = normalize_approval_mode(payload.approval_mode, default="yolo")
+        metadata = {
+            "context_profile": context_profile,
+            "approval_mode": approval_mode,
+        }
 
         service = build_managed_thread_orchestration_service(request)
         try:
@@ -580,7 +591,7 @@ def build_managed_thread_crud_routes(
                 resource_id=resource_id,
                 display_name=normalize_optional_text(payload.name),
                 backend_thread_id=normalize_optional_text(payload.backend_thread_id),
-                metadata={"context_profile": context_profile},
+                metadata=metadata,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

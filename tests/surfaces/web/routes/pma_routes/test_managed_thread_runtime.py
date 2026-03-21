@@ -270,14 +270,6 @@ def test_managed_thread_message_route_honors_explicit_approval_override(
 ) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
-    store = PmaThreadStore(hub_env.hub_root)
-    created = store.create_thread(
-        "codex",
-        hub_env.repo_root.resolve(),
-        repo_id=hub_env.repo_id,
-        metadata={"approval_mode": "read-only"},
-    )
-    managed_thread_id = str(created["managed_thread_id"])
     captured: dict[str, Any] = {}
 
     class FakeService:
@@ -357,11 +349,23 @@ def test_managed_thread_message_route_honors_explicit_approval_override(
     )
 
     with TestClient(app) as client:
+        create_response = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+                "approval_mode": "read-only",
+            },
+        )
+        assert create_response.status_code == 200
+        managed_thread_id = create_response.json()["thread"]["managed_thread_id"]
         response = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
             json={"message": "hello from route"},
         )
 
+    assert create_response.json()["thread"]["approval_mode"] == "read-only"
     assert response.status_code == 200
     assert captured["request"].approval_mode == "on-request"
     assert captured["sandbox_policy"] == "readOnly"
