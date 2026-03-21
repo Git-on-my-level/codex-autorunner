@@ -456,8 +456,8 @@ def test_cross_surface_shared_chat_primitive_behavior_characterization() -> None
             token_usage=token_usage,
             elapsed_seconds=None,
         )
-        == "done · agent codex · gpt-5.3-codex · 6m 19s · step 7228 · ctx 20%\n"
-        "Token usage: total 80 input 60 output 20 ctx 20%"
+        == "agent codex · gpt-5.3-codex · 6m 19s · step 7228 · ctx 20%\n"
+        "Token usage: total 80 input 60 output 20"
     )
     assert (
         compose_turn_response_with_footer(
@@ -467,8 +467,8 @@ def test_cross_surface_shared_chat_primitive_behavior_characterization() -> None
             elapsed_seconds=None,
         )
         == "Addressed and pushed.\n\n"
-        "done · agent codex · gpt-5.3-codex · 6m 19s · step 7228 · ctx 20%\n"
-        "Token usage: total 80 input 60 output 20 ctx 20%"
+        "agent codex · gpt-5.3-codex · 6m 19s · step 7228 · ctx 20%\n"
+        "Token usage: total 80 input 60 output 20"
     )
     assert (
         format_turn_footer(
@@ -476,7 +476,7 @@ def test_cross_surface_shared_chat_primitive_behavior_characterization() -> None
             token_usage=None,
             elapsed_seconds=None,
         )
-        == "done · agent codex · gpt-4.1-mini · 6m 19s · step 7"
+        == "agent codex · gpt-4.1-mini · 6m 19s · step 7"
     )
 
     assert _parse_review_commit_log("abc1234\x1fFix routing\x1e9876543\x1f") == [

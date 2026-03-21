@@ -2943,7 +2943,7 @@ async def test_message_create_opencode_turn_sends_summary_before_final(
             str(msg["payload"].get("content", "")) for msg in rest.channel_messages
         ]
         assert any(
-            "final output\n\ndone · agent opencode · model-x · 1s · step 3" in content
+            "final output\n\nagent opencode · model-x · 1s · step 3" in content
             for content in contents
         )
         assert not any(content.strip() == "---" for content in contents)
@@ -2978,12 +2978,12 @@ async def test_message_create_opencode_turn_does_not_duplicate_summary_with_metr
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    summary = "done · agent opencode · model-x · 1s · step 3"
+    rendered_summary = "agent opencode · model-x · 1s · step 3"
 
     async def _fake_run_turn(**_kwargs: Any) -> DiscordMessageTurnResult:
         return DiscordMessageTurnResult(
             final_message="",
-            intermediate_message=summary,
+            intermediate_message="done · agent opencode · model-x · 1s · step 3",
             preview_message_id="preview-1",
             elapsed_seconds=1.0,
         )
@@ -2996,7 +2996,8 @@ async def test_message_create_opencode_turn_does_not_duplicate_summary_with_metr
             str(msg["payload"].get("content", "")) for msg in rest.channel_messages
         ]
         combined = "\n".join(contents)
-        assert combined.count(summary) == 1
+        assert combined.count(rendered_summary) == 1
+        assert "done · agent opencode · model-x · 1s · step 3" not in combined
         assert "(No response text returned.)" in combined
     finally:
         await store.close()
@@ -3487,7 +3488,8 @@ async def test_message_create_streaming_turn_appends_final_metrics(
         assert final_content
         assert "agent codex" in final_content
         assert "ctx 65%" in final_content
-        assert "Token usage: total 71173 input 400 output 245 ctx 65%" in final_content
+        assert "Token usage: total 71173 input 400 output 245" in final_content
+        assert final_content.count("ctx 65%") == 1
     finally:
         await store.close()
 
@@ -3551,7 +3553,7 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
             content = str(message.get("payload", {}).get("content", ""))
             if (
                 streamed_text in content
-                and "Token usage: total 71173 input 400 output 245 ctx 65%" in content
+                and "Token usage: total 71173 input 400 output 245" in content
             ):
                 final_content = content
                 break
@@ -3559,7 +3561,8 @@ async def test_message_create_streaming_turn_uses_assistant_stream_when_final_em
         assert streamed_text in final_content
         assert "agent codex" in final_content
         assert "ctx 65%" in final_content
-        assert "Token usage: total 71173 input 400 output 245 ctx 65%" in final_content
+        assert "Token usage: total 71173 input 400 output 245" in final_content
+        assert final_content.count("ctx 65%") == 1
         assert "(No response text returned.)" not in final_content
     finally:
         await store.close()
@@ -3615,13 +3618,14 @@ async def test_message_create_streaming_turn_empty_final_includes_text_fallback_
         final_content = ""
         for message in final_candidates:
             content = str(message.get("payload", {}).get("content", ""))
-            if "Token usage: total 71173 input 400 output 245 ctx 65%" in content:
+            if "Token usage: total 71173 input 400 output 245" in content:
                 final_content = content
                 break
         assert final_content
         assert "(No response text returned.)" in final_content
         assert "agent codex" in final_content
         assert "ctx 65%" in final_content
+        assert final_content.count("ctx 65%") == 1
     finally:
         await store.close()
 

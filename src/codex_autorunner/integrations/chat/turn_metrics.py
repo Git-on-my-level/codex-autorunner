@@ -65,7 +65,11 @@ def _extract_context_usage_percent(
     return min(percent_remaining, 100)
 
 
-def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[str]:
+def _format_tui_token_usage(
+    token_usage: Optional[dict[str, Any]],
+    *,
+    include_context: bool = True,
+) -> Optional[str]:
     if not isinstance(token_usage, dict):
         return None
     usage = _select_context_usage_bucket(token_usage)
@@ -82,7 +86,7 @@ def _format_tui_token_usage(token_usage: Optional[dict[str, Any]]) -> Optional[s
     if isinstance(output_tokens, int):
         parts.append(f"output {output_tokens}")
     percent = _extract_context_usage_percent(token_usage)
-    if percent is not None:
+    if include_context and percent is not None:
         parts.append(f"ctx {percent}%")
     return " ".join(parts)
 
@@ -182,8 +186,6 @@ def format_turn_footer(
         elapsed_label = format_elapsed(elapsed_seconds)
 
     header_parts: list[str] = []
-    if parsed.status:
-        header_parts.append(parsed.status)
     resolved_agent = agent or parsed.agent
     if resolved_agent:
         header_parts.append(f"agent {resolved_agent}")
@@ -198,9 +200,13 @@ def format_turn_footer(
         header_parts.append(f"ctx {context_remaining_percent}%")
 
     lines: list[str] = []
-    if header_parts and _has_turn_footer_metadata(parsed):
+    rendered_header = bool(header_parts and _has_turn_footer_metadata(parsed))
+    if rendered_header:
         lines.append(" · ".join(header_parts))
-    token_line = _format_tui_token_usage(token_usage)
+    token_line = _format_tui_token_usage(
+        token_usage,
+        include_context=not (rendered_header and context_remaining_percent is not None),
+    )
     if token_line:
         lines.append(token_line)
     if not lines:

@@ -652,7 +652,7 @@ async def test_normal_opencode_turn_appends_summary_footer_after_final_response(
     assert handler._outbox_calls == []
     assert (
         handler._deliver_calls[-1]["response"]
-        == "final output\n\ndone · agent opencode · model-x · 1s · step 3"
+        == "final output\n\nagent opencode · model-x · 1s · step 3"
     )
     assert handler._deliver_calls[-1]["intermediate_response"] is None
 
@@ -702,7 +702,7 @@ async def test_normal_opencode_turn_drops_no_response_sentinel_when_summary_pres
 
     assert (
         handler._deliver_calls[-1]["response"] == "(No response text returned.)\n\n"
-        "done · agent opencode · model-x · 1s · step 3"
+        "agent opencode · model-x · 1s · step 3"
     )
     assert handler._deliver_calls[-1]["intermediate_response"] is None
 
