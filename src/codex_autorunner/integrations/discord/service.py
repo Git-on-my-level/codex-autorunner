@@ -2452,38 +2452,79 @@ class DiscordBotService:
 
     async def _run_filebox_prune_loop(self) -> None:
         while True:
-            interval_seconds = 3600
+            await asyncio.sleep(await self._run_filebox_prune_cycle())
+
+    async def _filebox_prune_roots(self) -> list[Path]:
+        roots: set[Path] = {self._config.root.resolve()}
+        try:
+            bindings = await self._store.list_bindings()
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.filebox.bindings_load_failed",
+                repo_root=str(self._config.root),
+                exc=exc,
+            )
+            return sorted(roots)
+        for binding in bindings:
+            workspace_raw = binding.get("workspace_path")
+            if not isinstance(workspace_raw, str) or not workspace_raw.strip():
+                continue
+            workspace_root = canonicalize_path(Path(workspace_raw))
+            if workspace_root.exists() and workspace_root.is_dir():
+                roots.add(workspace_root)
+        return sorted(roots)
+
+    async def _run_filebox_prune_cycle(self) -> float:
+        interval_seconds = 3600.0
+        roots = await self._filebox_prune_roots()
+        for root in roots:
             try:
                 repo_config = load_repo_config(
-                    self._config.root,
+                    root,
                     hub_path=self._hub_config_path,
                 )
-                interval_seconds = max(repo_config.housekeeping.interval_seconds, 1)
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.filebox.config_load_failed",
+                    repo_root=str(root),
+                    exc=exc,
+                )
+                continue
+            interval_seconds = min(
+                interval_seconds,
+                float(max(repo_config.housekeeping.interval_seconds, 1)),
+            )
+            try:
                 summary = await asyncio.to_thread(
                     prune_filebox_root,
-                    self._config.root,
+                    root,
                     policy=resolve_filebox_retention_policy(repo_config.pma),
                 )
-                if summary.inbox_pruned or summary.outbox_pruned:
-                    log_event(
-                        self._logger,
-                        logging.INFO,
-                        "discord.filebox.cleanup",
-                        repo_root=str(self._config.root),
-                        inbox_pruned=summary.inbox_pruned,
-                        outbox_pruned=summary.outbox_pruned,
-                        bytes_before=summary.bytes_before,
-                        bytes_after=summary.bytes_after,
-                    )
             except Exception as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
                     "discord.filebox.cleanup_failed",
-                    repo_root=str(self._config.root),
+                    repo_root=str(root),
                     exc=exc,
                 )
-            await asyncio.sleep(interval_seconds)
+                continue
+            if summary.inbox_pruned or summary.outbox_pruned:
+                log_event(
+                    self._logger,
+                    logging.INFO,
+                    "discord.filebox.cleanup",
+                    repo_root=str(root),
+                    inbox_pruned=summary.inbox_pruned,
+                    outbox_pruned=summary.outbox_pruned,
+                    bytes_before=summary.bytes_before,
+                    bytes_after=summary.bytes_after,
+                )
+        return interval_seconds
 
     async def _prune_opencode_supervisors(self) -> None:
         async with self._opencode_lock:

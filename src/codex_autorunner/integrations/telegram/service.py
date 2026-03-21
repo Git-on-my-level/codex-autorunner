@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
+from ...core.config import load_repo_config
 from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -209,6 +210,15 @@ class TelegramBotService(
         self._manifest_path = manifest_path
         self._hub_supervisor = None
         self._hub_thread_registry = None
+        self._hub_config_path: Optional[Path] = None
+        config_root = hub_root or self._config.root
+        generated_hub_config = config_root / ".codex-autorunner" / "config.yml"
+        if generated_hub_config.exists():
+            self._hub_config_path = generated_hub_config
+        else:
+            root_hub_config = config_root / "codex-autorunner.yml"
+            if root_hub_config.exists():
+                self._hub_config_path = root_hub_config
         if self._hub_root:
             try:
                 self._hub_supervisor = HubSupervisor.from_path(self._hub_root)
@@ -536,43 +546,7 @@ class TelegramBotService(
         interval = max(config.interval_seconds, 1)
         while True:
             try:
-                roots = await self._housekeeping_roots()
-                if roots:
-                    try:
-                        policy = resolve_filebox_retention_policy(self._hub_config.pma)
-                        for root in roots:
-                            summary = await asyncio.to_thread(
-                                prune_filebox_root,
-                                root,
-                                policy=policy,
-                            )
-                            if summary.inbox_pruned or summary.outbox_pruned:
-                                log_event(
-                                    self._logger,
-                                    logging.INFO,
-                                    "telegram.filebox.cleanup",
-                                    root=str(root),
-                                    inbox_pruned=summary.inbox_pruned,
-                                    outbox_pruned=summary.outbox_pruned,
-                                    bytes_before=summary.bytes_before,
-                                    bytes_after=summary.bytes_after,
-                                )
-                    except Exception as exc:
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "telegram.filebox.cleanup_failed",
-                            exc=exc,
-                        )
-                    await asyncio.to_thread(
-                        run_housekeeping_for_roots,
-                        config,
-                        roots,
-                        self._logger,
-                    )
-                await self._app_server_supervisor.prune_idle()
-                if self._opencode_supervisor is not None:
-                    await self._opencode_supervisor.prune_idle()
+                await self._run_housekeeping_cycle(config)
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -581,6 +555,46 @@ class TelegramBotService(
                     exc=exc,
                 )
             await asyncio.sleep(interval)
+
+    async def _run_housekeeping_cycle(self, config: HousekeepingConfig) -> None:
+        roots = await self._housekeeping_roots()
+        if roots:
+            for root in roots:
+                try:
+                    repo_config = load_repo_config(root, hub_path=self._hub_config_path)
+                    summary = await asyncio.to_thread(
+                        prune_filebox_root,
+                        root,
+                        policy=resolve_filebox_retention_policy(repo_config.pma),
+                    )
+                    if summary.inbox_pruned or summary.outbox_pruned:
+                        log_event(
+                            self._logger,
+                            logging.INFO,
+                            "telegram.filebox.cleanup",
+                            root=str(root),
+                            inbox_pruned=summary.inbox_pruned,
+                            outbox_pruned=summary.outbox_pruned,
+                            bytes_before=summary.bytes_before,
+                            bytes_after=summary.bytes_after,
+                        )
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.filebox.cleanup_failed",
+                        root=str(root),
+                        exc=exc,
+                    )
+            await asyncio.to_thread(
+                run_housekeeping_for_roots,
+                config,
+                roots,
+                self._logger,
+            )
+        await self._app_server_supervisor.prune_idle()
+        if self._opencode_supervisor is not None:
+            await self._opencode_supervisor.prune_idle()
 
     def _evaluate_collaboration_message_policy(
         self,
