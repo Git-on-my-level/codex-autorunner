@@ -22,7 +22,6 @@ from ..chat.models import (
     ChatInteractionRef,
     ChatMessageEvent,
     ChatMessageRef,
-    ChatReplyInfo,
     ChatThreadRef,
 )
 from ..chat.renderer import RenderedText, TextRenderer
@@ -35,6 +34,7 @@ from .adapter import (
 )
 from .chat_callbacks import TelegramCallbackCodec
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
+from .forwarding import message_reply_info
 from .rendering import _format_telegram_html, _format_telegram_markdown
 
 _TELEGRAM_PARSE_MODES = ("HTML", "Markdown", "MarkdownV2")
@@ -215,16 +215,9 @@ class TelegramChatAdapter(ChatAdapter):
         thread = self._thread_ref(message.chat_id, message.thread_id)
         content = message.text if message.text is not None else message.caption
         reply_to = None
-        reply_context = None
         if message.reply_to_message_id is not None:
             reply_to = ChatMessageRef(
                 thread=thread, message_id=str(message.reply_to_message_id)
-            )
-            reply_context = ChatReplyInfo(
-                message=reply_to,
-                text=message.reply_to_text,
-                author_label=message.reply_to_author_label or message.reply_to_username,
-                is_bot=message.reply_to_is_bot,
             )
         attachments = self._message_attachments(message)
         return ChatMessageEvent(
@@ -235,7 +228,7 @@ class TelegramChatAdapter(ChatAdapter):
             text=content,
             is_edited=message.is_edited,
             reply_to=reply_to,
-            reply_context=reply_context,
+            reply_context=message_reply_info(message),
             attachments=attachments,
             forwarded_from=self._map_forward_origin(message),
         )

@@ -41,6 +41,11 @@ def message_forward_info(
 def message_reply_info(message: TelegramMessage) -> Optional[ChatReplyInfo]:
     if message.reply_to_message_id is None:
         return None
+    if (
+        message.thread_id is not None
+        and message.reply_to_message_id == message.thread_id
+    ):
+        return None
     thread = ChatThreadRef(
         platform="telegram",
         chat_id=str(message.chat_id),

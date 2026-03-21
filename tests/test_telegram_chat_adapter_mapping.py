@@ -150,6 +150,40 @@ async def test_poll_events_maps_reply_context_metadata() -> None:
 
 
 @pytest.mark.anyio
+async def test_poll_events_skips_implicit_topic_root_reply_context() -> None:
+    message = TelegramMessage(
+        update_id=16,
+        message_id=26,
+        chat_id=123456,
+        thread_id=77,
+        from_user_id=999,
+        text="normal topic message",
+        date=1700000300,
+        is_topic_message=True,
+        reply_to_message_id=77,
+        reply_to_is_bot=True,
+        reply_to_username="codexautorunner",
+        reply_to_text="topic root text",
+        reply_to_author_label="Codex Runner",
+    )
+    adapter = TelegramChatAdapter(
+        bot=object(),  # type: ignore[arg-type]
+        poller=_DummyPoller(
+            updates=[TelegramUpdate(update_id=16, message=message, callback=None)]
+        ),
+    )
+
+    events = await adapter.poll_events()
+
+    assert len(events) == 1
+    event = events[0]
+    assert isinstance(event, ChatMessageEvent)
+    assert event.reply_to is not None
+    assert event.reply_to.message_id == "77"
+    assert event.reply_context is None
+
+
+@pytest.mark.anyio
 async def test_poll_events_maps_forwarded_message_metadata() -> None:
     message = TelegramMessage(
         update_id=14,
