@@ -71,6 +71,7 @@ _TURN_STALL_TIMEOUT_SECONDS = 60.0
 _TURN_STALL_POLL_INTERVAL_SECONDS = 2.0
 _TURN_STALL_RECOVERY_MIN_INTERVAL_SECONDS = 10.0
 _TURN_STALL_MAX_RECOVERY_ATTEMPTS = 8
+_TURN_COMPLETION_GAP_TIMEOUT_SECONDS = 15.0
 _TURN_COMPLETION_SETTLE_SECONDS = 0.25
 _MAX_TURN_RAW_EVENTS = 200
 _INVALID_JSON_PREVIEW_BYTES = 200
@@ -174,6 +175,10 @@ class _TurnState:
     agent_message_deltas: Dict[str, str] = field(default_factory=dict)
     turn_completed_seen: bool = False
     completion_settle_task: Optional[asyncio.Task[None]] = None
+    item_completed_count: int = 0
+    completion_gap_started_at: Optional[float] = None
+    completion_gap_recovery_attempts: int = 0
+    last_completion_gap_recovery_at: float = 0.0
 
 
 @dataclass
@@ -201,6 +206,9 @@ class CodexAppServerClient:
         turn_stall_max_recovery_attempts: Optional[
             int
         ] = _TURN_STALL_MAX_RECOVERY_ATTEMPTS,
+        turn_completion_gap_timeout_seconds: Optional[
+            float
+        ] = _TURN_COMPLETION_GAP_TIMEOUT_SECONDS,
         max_message_bytes: Optional[int] = None,
         oversize_preview_bytes: Optional[int] = None,
         max_oversize_drain_bytes: Optional[int] = None,
@@ -326,6 +334,14 @@ class CodexAppServerClient:
             self._turn_stall_max_recovery_attempts = int(
                 turn_stall_max_recovery_attempts
             )
+        self._turn_completion_gap_timeout_seconds: Optional[float] = (
+            turn_completion_gap_timeout_seconds
+        )
+        if (
+            self._turn_completion_gap_timeout_seconds is not None
+            and self._turn_completion_gap_timeout_seconds <= 0
+        ):
+            self._turn_completion_gap_timeout_seconds = None
         _CLIENT_INSTANCES.add(self)
 
     async def start(self) -> None:
@@ -532,6 +548,11 @@ class CodexAppServerClient:
                 if key is not None:
                     self._turns.pop(key, None)
                 return loop_result
+            await self._maybe_reconcile_turn_completion_gap(
+                state,
+                turn_id=turn_id,
+                thread_id=thread_id or state.thread_id,
+            )
             await self._maybe_recover_stalled_turn(
                 state,
                 turn_id=turn_id,
@@ -591,6 +612,100 @@ class CodexAppServerClient:
                 thread_id=thread_id,
                 idle_seconds=idle_seconds,
             )
+
+    async def _maybe_reconcile_turn_completion_gap(
+        self,
+        state: _TurnState,
+        *,
+        turn_id: str,
+        thread_id: Optional[str],
+    ) -> None:
+        if state.future.done() or state.turn_completed_seen:
+            return
+        completion_gap_timeout = self._turn_completion_gap_timeout_seconds
+        if completion_gap_timeout is None or thread_id is None:
+            return
+        completion_gap_started_at = state.completion_gap_started_at
+        if completion_gap_started_at is None:
+            return
+        now = time.monotonic()
+        completion_gap_seconds = now - completion_gap_started_at
+        if completion_gap_seconds < completion_gap_timeout:
+            return
+        min_interval = self._turn_stall_recovery_min_interval_seconds
+        if (
+            min_interval is not None
+            and state.last_completion_gap_recovery_at
+            and now - state.last_completion_gap_recovery_at < min_interval
+        ):
+            return
+
+        state.last_completion_gap_recovery_at = now
+        state.completion_gap_recovery_attempts += 1
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "app_server.turn_completion_gap",
+            turn_id=turn_id,
+            thread_id=thread_id,
+            completion_gap_seconds=round(completion_gap_seconds, 2),
+            item_completed_count=state.item_completed_count,
+            last_method=state.last_method,
+            recovery_attempts=state.completion_gap_recovery_attempts,
+        )
+        try:
+            resume_result = await self.thread_resume(thread_id)
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.turn_completion_gap_recovery.failed",
+                turn_id=turn_id,
+                thread_id=thread_id,
+                completion_gap_seconds=round(completion_gap_seconds, 2),
+                item_completed_count=state.item_completed_count,
+                exc=exc,
+            )
+            return
+
+        snapshot = extract_resume_snapshot(resume_result, turn_id)
+        if snapshot is None:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.turn_completion_gap_recovery.missing_snapshot",
+                turn_id=turn_id,
+                thread_id=thread_id,
+                completion_gap_seconds=round(completion_gap_seconds, 2),
+                item_completed_count=state.item_completed_count,
+            )
+            return
+
+        status = self._apply_resume_snapshot(state, snapshot)
+        if status and _status_is_terminal(status) and not state.future.done():
+            log_event(
+                self._logger,
+                logging.INFO,
+                "app_server.turn_completion_gap_recovery.completed",
+                turn_id=turn_id,
+                thread_id=thread_id,
+                status=status,
+                item_completed_count=state.item_completed_count,
+                recovery_attempts=state.completion_gap_recovery_attempts,
+            )
+            self._set_turn_result_if_pending(state)
+            return
+
+        log_event(
+            self._logger,
+            logging.INFO,
+            "app_server.turn_completion_gap_recovery.pending",
+            turn_id=turn_id,
+            thread_id=thread_id,
+            status=state.status,
+            item_completed_count=state.item_completed_count,
+            recovery_attempts=state.completion_gap_recovery_attempts,
+        )
 
     async def _recover_stalled_turn(
         self,
@@ -660,20 +775,7 @@ class CodexAppServerClient:
             state.last_event_at = now
             return
 
-        status, agent_messages, commentary_messages, final_answer_messages, errors = (
-            snapshot
-        )
-        if agent_messages:
-            state.agent_messages = agent_messages
-            state.commentary_messages = commentary_messages
-            state.final_answer_messages = final_answer_messages
-            # Resume snapshots include full message bodies, so older streaming
-            # deltas from before recovery are stale once we adopt them.
-            state.agent_message_deltas.clear()
-        if errors:
-            state.errors.extend(errors)
-        if status:
-            state.status = status
+        status = self._apply_resume_snapshot(state, snapshot)
 
         if status and _status_is_terminal(status) and not state.future.done():
             self._set_turn_result_if_pending(state)
@@ -688,6 +790,27 @@ class CodexAppServerClient:
             recovery_status=state.status,
         )
         state.last_event_at = now
+
+    def _apply_resume_snapshot(
+        self,
+        state: _TurnState,
+        snapshot: tuple[Optional[str], list[str], list[str], list[str], list[str]],
+    ) -> Optional[str]:
+        status, agent_messages, commentary_messages, final_answer_messages, errors = (
+            snapshot
+        )
+        if agent_messages:
+            state.agent_messages = agent_messages
+            state.commentary_messages = commentary_messages
+            state.final_answer_messages = final_answer_messages
+            # Resume snapshots include full message bodies, so older streaming
+            # deltas from before recovery are stale once we adopt them.
+            state.agent_message_deltas.clear()
+        if errors:
+            state.errors.extend(errors)
+        if status:
+            state.status = status
+        return status
 
     def _maybe_fail_stalled_turn(
         self,
@@ -1582,6 +1705,24 @@ class CodexAppServerClient:
         target.turn_completed_seen = (
             target.turn_completed_seen or source.turn_completed_seen
         )
+        target.item_completed_count = max(
+            target.item_completed_count, source.item_completed_count
+        )
+        if target.completion_gap_started_at is None:
+            target.completion_gap_started_at = source.completion_gap_started_at
+        elif source.completion_gap_started_at is not None:
+            target.completion_gap_started_at = min(
+                target.completion_gap_started_at,
+                source.completion_gap_started_at,
+            )
+        target.completion_gap_recovery_attempts = max(
+            target.completion_gap_recovery_attempts,
+            source.completion_gap_recovery_attempts,
+        )
+        target.last_completion_gap_recovery_at = max(
+            target.last_completion_gap_recovery_at,
+            source.last_completion_gap_recovery_at,
+        )
         if target.status is None and source.status is not None:
             target.status = source.status
         if source.future.done() and not target.future.done():
@@ -1680,13 +1821,18 @@ class CodexAppServerClient:
         review_text = _extract_review_text(item)
         if review_text and review_text != text:
             _append_agent_message(state.agent_messages, review_text)
+        state.item_completed_count += 1
+        if not state.turn_completed_seen and state.completion_gap_started_at is None:
+            state.completion_gap_started_at = state.last_event_at
         item_type = item.get("type") if isinstance(item, dict) else None
         log_event(
             self._logger,
             logging.INFO,
             "app_server.item.completed",
             turn_id=state.turn_id,
+            thread_id=state.thread_id,
             item_type=item_type,
+            item_completed_count=state.item_completed_count,
         )
         _record_raw_event(state, message)
 
@@ -1746,9 +1892,11 @@ class CodexAppServerClient:
             logging.INFO,
             "app_server.turn.completed",
             turn_id=state.turn_id,
+            thread_id=state.thread_id,
             status=state.status,
         )
         state.turn_completed_seen = True
+        state.completion_gap_started_at = None
         if _status_prefers_completion_settle(state.status) or not _status_is_terminal(
             state.status
         ):

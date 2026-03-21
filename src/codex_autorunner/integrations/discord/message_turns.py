@@ -65,7 +65,10 @@ from ...integrations.chat.approval_modes import resolve_approval_mode_policies
 from ...integrations.chat.collaboration_policy import CollaborationEvaluationResult
 from ...integrations.chat.compaction import match_pending_compact_seed
 from ...integrations.chat.dispatcher import DispatchContext
-from ...integrations.chat.forwarding import compose_forwarded_message_text
+from ...integrations.chat.forwarding import (
+    compose_forwarded_message_text,
+    compose_inbound_message_text,
+)
 from ...integrations.chat.models import ChatMessageEvent
 from ...integrations.chat.runtime_thread_errors import (
     resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
@@ -209,7 +212,12 @@ async def handle_message_event(
     build_ticket_flow_controller_fn: Any,
     ensure_worker_fn: Any,
 ) -> None:
-    turn_text = compose_forwarded_message_text(text, event.forwarded_from)
+    turn_text = compose_inbound_message_text(
+        text,
+        forwarded_from=event.forwarded_from,
+        reply_context=event.reply_context,
+    )
+    flow_reply_text = compose_forwarded_message_text(text, event.forwarded_from)
     binding, workspace_root = await resolve_bound_workspace_root(
         service,
         channel_id=channel_id,
@@ -311,7 +319,7 @@ async def handle_message_event(
         paused_record = paused_records.get(flow_target.run_id)
         if paused_record is None:
             return
-        reply_text = turn_text
+        reply_text = flow_reply_text
         if has_attachments:
             (
                 reply_text,
@@ -320,7 +328,7 @@ async def handle_message_event(
                 transcript_message,
                 _native_input_items,
             ) = await service._with_attachment_context(
-                prompt_text=turn_text,
+                prompt_text=flow_reply_text,
                 workspace_root=workspace_root,
                 attachments=event.attachments,
                 channel_id=channel_id,

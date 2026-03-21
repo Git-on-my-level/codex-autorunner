@@ -18,6 +18,7 @@ from .flows import (
 )
 from .interfaces import (
     AgentDefinitionCatalog,
+    FreshConversationRequiredError,
     OrchestrationFlowService,
     OrchestrationThreadService,
     RuntimeThreadHarness,
@@ -753,6 +754,8 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         sandbox_policy: Optional[Any],
     ) -> ExecutionRecord:
         runtime_prompt = self._resolve_runtime_prompt(request)
+        fresh_conversation_retry_attempted = False
+        rehydrated_runtime_prompt = False
         try:
             await harness.ensure_ready(workspace_root)
             runtime_instance_id = await _resolve_harness_runtime_instance_id(
@@ -781,22 +784,114 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                     backend_runtime_instance_id=None,
                 )
                 conversation_id = None
-            if conversation_id:
+            while True:
+                used_existing_conversation = conversation_id is not None
                 try:
-                    conversation = await harness.resume_conversation(
-                        workspace_root, conversation_id
-                    )
-                except Exception as exc:
-                    if not _is_missing_thread_error(exc):
+                    if conversation_id:
+                        try:
+                            conversation = await harness.resume_conversation(
+                                workspace_root, conversation_id
+                            )
+                        except Exception as exc:
+                            if not _is_missing_thread_error(exc):
+                                raise
+                            log_event(
+                                logger,
+                                logging.INFO,
+                                "orchestration.thread.resume_missing_backend",
+                                exc=exc,
+                                thread_target_id=thread.thread_target_id,
+                                backend_thread_id=conversation_id,
+                                action="start_new_conversation",
+                            )
+                            self.thread_store.set_thread_backend_id(
+                                thread.thread_target_id,
+                                None,
+                                backend_runtime_instance_id=None,
+                            )
+                            conversation_id = None
+                            continue
+                        resumed_conversation_id = getattr(conversation, "id", None)
+                        if (
+                            isinstance(resumed_conversation_id, str)
+                            and resumed_conversation_id
+                            and resumed_conversation_id != conversation_id
+                        ):
+                            conversation_id = resumed_conversation_id
+                            self.thread_store.set_thread_backend_id(
+                                thread.thread_target_id,
+                                conversation_id,
+                                backend_runtime_instance_id=runtime_instance_id,
+                            )
+                        elif (
+                            runtime_instance_id
+                            and thread.backend_runtime_instance_id
+                            != runtime_instance_id
+                        ):
+                            self.thread_store.set_thread_backend_id(
+                                thread.thread_target_id,
+                                conversation_id,
+                                backend_runtime_instance_id=runtime_instance_id,
+                            )
+                    else:
+                        if not rehydrated_runtime_prompt:
+                            runtime_prompt = self._rehydrated_runtime_prompt(
+                                thread, runtime_prompt
+                            )
+                            rehydrated_runtime_prompt = True
+                        conversation = await harness.new_conversation(
+                            workspace_root,
+                            title=thread.display_name,
+                        )
+                        conversation_id = conversation.id
+                        self.thread_store.set_thread_backend_id(
+                            thread.thread_target_id,
+                            conversation_id,
+                            backend_runtime_instance_id=runtime_instance_id,
+                        )
+                    if request.kind == "review":
+                        if not harness.supports("review"):
+                            raise RuntimeError(
+                                f"Agent '{thread.agent_id}' does not support review mode"
+                            )
+                        turn = await harness.start_review(
+                            workspace_root,
+                            conversation_id,
+                            runtime_prompt,
+                            request.model,
+                            request.reasoning,
+                            approval_mode=request.approval_mode,
+                            sandbox_policy=sandbox_policy,
+                        )
+                    else:
+                        turn = await harness.start_turn(
+                            workspace_root,
+                            conversation_id,
+                            runtime_prompt,
+                            request.model,
+                            request.reasoning,
+                            approval_mode=request.approval_mode,
+                            sandbox_policy=sandbox_policy,
+                            input_items=request.input_items,
+                        )
+                    break
+                except FreshConversationRequiredError as exc:
+                    if (
+                        not used_existing_conversation
+                        or fresh_conversation_retry_attempted
+                    ):
                         raise
+                    fresh_conversation_retry_attempted = True
                     log_event(
                         logger,
                         logging.INFO,
-                        "orchestration.thread.resume_missing_backend",
-                        exc=exc,
+                        "orchestration.thread.refreshing_backend_binding",
                         thread_target_id=thread.thread_target_id,
+                        execution_id=execution.execution_id,
                         backend_thread_id=conversation_id,
-                        action="start_new_conversation",
+                        operation=exc.operation,
+                        status_code=exc.status_code,
+                        reason=str(exc),
                     )
                     self.thread_store.set_thread_backend_id(
                         thread.thread_target_id,
@@ -804,66 +899,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                         backend_runtime_instance_id=None,
                     )
                     conversation_id = None
-                else:
-                    resumed_conversation_id = getattr(conversation, "id", None)
-                    if (
-                        isinstance(resumed_conversation_id, str)
-                        and resumed_conversation_id
-                        and resumed_conversation_id != conversation_id
-                    ):
-                        conversation_id = resumed_conversation_id
-                        self.thread_store.set_thread_backend_id(
-                            thread.thread_target_id,
-                            conversation_id,
-                            backend_runtime_instance_id=runtime_instance_id,
-                        )
-                    elif (
-                        runtime_instance_id
-                        and thread.backend_runtime_instance_id != runtime_instance_id
-                    ):
-                        self.thread_store.set_thread_backend_id(
-                            thread.thread_target_id,
-                            conversation_id,
-                            backend_runtime_instance_id=runtime_instance_id,
-                        )
-            if not conversation_id:
-                runtime_prompt = self._rehydrated_runtime_prompt(thread, runtime_prompt)
-                conversation = await harness.new_conversation(
-                    workspace_root,
-                    title=thread.display_name,
-                )
-                conversation_id = conversation.id
-                self.thread_store.set_thread_backend_id(
-                    thread.thread_target_id,
-                    conversation_id,
-                    backend_runtime_instance_id=runtime_instance_id,
-                )
-
-            if request.kind == "review":
-                if not harness.supports("review"):
-                    raise RuntimeError(
-                        f"Agent '{thread.agent_id}' does not support review mode"
-                    )
-                turn = await harness.start_review(
-                    workspace_root,
-                    conversation_id,
-                    runtime_prompt,
-                    request.model,
-                    request.reasoning,
-                    approval_mode=request.approval_mode,
-                    sandbox_policy=sandbox_policy,
-                )
-            else:
-                turn = await harness.start_turn(
-                    workspace_root,
-                    conversation_id,
-                    runtime_prompt,
-                    request.model,
-                    request.reasoning,
-                    approval_mode=request.approval_mode,
-                    sandbox_policy=sandbox_policy,
-                    input_items=request.input_items,
-                )
+                    continue
         except Exception as exc:
             detail = (
                 str(request.metadata.get("execution_error_message") or "").strip()
@@ -879,6 +915,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 execution_id=execution.execution_id,
                 backend_thread_id=thread.backend_thread_id,
                 request_kind=request.kind,
+                fresh_conversation_retry_attempted=fresh_conversation_retry_attempted,
                 reported_error=detail,
             )
             try:
@@ -1063,14 +1100,45 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         harness = self.harness_factory(thread.agent_id)
         if not harness.supports("interrupt"):
             raise RuntimeError(f"Agent '{thread.agent_id}' does not support interrupt")
+        log_event(
+            logger,
+            logging.INFO,
+            "orchestration.thread.interrupt_requested",
+            thread_target_id=thread_target_id,
+            execution_id=execution.execution_id,
+            backend_thread_id=thread.backend_thread_id,
+            backend_turn_id=execution.backend_id,
+            agent_id=thread.agent_id,
+        )
         await harness.interrupt(
             Path(thread.workspace_root),
             thread.backend_thread_id,
             execution.backend_id,
         )
-        return self.thread_store.record_execution_interrupted(
+        log_event(
+            logger,
+            logging.INFO,
+            "orchestration.thread.interrupt_acknowledged",
+            thread_target_id=thread_target_id,
+            execution_id=execution.execution_id,
+            backend_thread_id=thread.backend_thread_id,
+            backend_turn_id=execution.backend_id,
+            agent_id=thread.agent_id,
+        )
+        interrupted = self.thread_store.record_execution_interrupted(
             thread_target_id, execution.execution_id
         )
+        log_event(
+            logger,
+            logging.INFO,
+            "orchestration.thread.interrupt_recorded",
+            thread_target_id=thread_target_id,
+            execution_id=interrupted.execution_id,
+            backend_thread_id=thread.backend_thread_id,
+            backend_turn_id=interrupted.backend_id,
+            status=interrupted.status,
+        )
+        return interrupted
 
     def _recover_lost_backend_execution(
         self,

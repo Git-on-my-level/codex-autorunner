@@ -15,8 +15,8 @@ class PlainTextTurnContext:
     bot_username: Optional[str] = None
     reply_to_is_bot: bool = False
     reply_to_username: Optional[str] = None
-    reply_to_message_id: Optional[int] = None
-    thread_id: Optional[int] = None
+    reply_to_message_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 
 def should_trigger_plain_text_turn(

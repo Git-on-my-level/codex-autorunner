@@ -17,6 +17,7 @@ from ....core.orchestration import (
     build_surface_orchestration_ingress,
 )
 from ....core.utils import canonicalize_path
+from ...chat.forwarding import compose_forwarded_message_text
 from ...chat.handlers.messages import message_text_candidate
 from ...chat.media import audio_content_type_for_input, is_image_mime_or_path
 from ..adapter import (
@@ -31,6 +32,7 @@ from ..constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ..forwarding import (
     format_forwarded_telegram_message_text,
     is_forwarded_telegram_message,
+    message_forward_info,
 )
 from ..trigger_mode import should_trigger_run
 from .questions import handle_custom_text_input
@@ -445,6 +447,10 @@ async def handle_message_inner(
     actor_id = str(message.from_user_id) if message.from_user_id is not None else None
     is_forwarded = is_forwarded_telegram_message(message)
     turn_text = format_forwarded_telegram_message_text(message, text)
+    flow_reply_text = compose_forwarded_message_text(
+        text,
+        message_forward_info(message, text),
+    )
 
     command_policy_result = _evaluate_message_policy(
         handlers,
@@ -700,7 +706,7 @@ async def handle_message_inner(
             run_id,
             run_record,
             message,
-            turn_text,
+            flow_reply_text,
         )
         await handlers._send_message(
             message.chat_id,
@@ -1292,7 +1298,10 @@ async def handle_media_message(
             run_id,
             run_record,
             message,
-            format_forwarded_telegram_message_text(message, reply_text),
+            compose_forwarded_message_text(
+                reply_text,
+                message_forward_info(message, reply_text),
+            ),
             files,
         )
         await handlers._send_message(

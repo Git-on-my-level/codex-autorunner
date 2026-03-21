@@ -476,6 +476,7 @@ class TemplateApplyResponse(ResponseModel):
 
 class SystemUpdateRequest(Payload):
     target: Optional[str] = None
+    force: bool = False
 
 
 class SystemUpdateTargetOption(ResponseModel):
@@ -628,6 +629,7 @@ class SystemUpdateResponse(ResponseModel):
     status: str
     message: str
     target: str
+    requires_confirmation: bool = False
 
 
 class SystemUpdateStatusResponse(ResponseModel):

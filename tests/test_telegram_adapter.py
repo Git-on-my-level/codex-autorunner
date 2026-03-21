@@ -1089,6 +1089,39 @@ def test_api_schema_parse_message_forward_origin() -> None:
     assert schema.is_automatic_forward is True
 
 
+def test_parse_update_preserves_reply_text_metadata() -> None:
+    update = {
+        "update_id": 101,
+        "message": {
+            "message_id": 201,
+            "chat": {"id": 999, "type": "private"},
+            "from": {"id": 888, "is_bot": False, "username": "test"},
+            "text": "follow-up",
+            "date": 1234567890,
+            "reply_to_message": {
+                "message_id": 200,
+                "from": {
+                    "id": 777,
+                    "is_bot": True,
+                    "username": "codexautorunner",
+                    "first_name": "Codex",
+                },
+                "text": "original prompt",
+            },
+        },
+    }
+
+    parsed = parse_update(update)
+
+    assert parsed is not None
+    assert parsed.message is not None
+    assert parsed.message.reply_to_message_id == 200
+    assert parsed.message.reply_to_is_bot is True
+    assert parsed.message.reply_to_username == "codexautorunner"
+    assert parsed.message.reply_to_text == "original prompt"
+    assert parsed.message.reply_to_author_label == "codexautorunner"
+
+
 def test_api_schema_invalid_payload_returns_none() -> None:
     assert parse_message_payload(None) is None
     assert parse_message_payload("invalid") is None

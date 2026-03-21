@@ -91,46 +91,62 @@ def build_turn_id(session_id: str) -> str:
     return f"{session_id}:{int(time.time() * 1000)}"
 
 
+def _direct_session_id(
+    payload: dict[str, Any], *, allow_fallback_id: bool
+) -> Optional[str]:
+    for key in ("sessionID", "sessionId", "session_id"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            return value
+    if allow_fallback_id:
+        value = payload.get("id")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _nested_session_id(
+    payload: Any, *, allow_fallback_id: bool = False
+) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    session_id = _direct_session_id(payload, allow_fallback_id=allow_fallback_id)
+    if session_id:
+        return session_id
+    session = payload.get("session")
+    if isinstance(session, dict):
+        return _nested_session_id(session, allow_fallback_id=True)
+    return None
+
+
 def extract_session_id(
     payload: Any, *, allow_fallback_id: bool = False
 ) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
-    for key in ("sessionID", "sessionId", "session_id"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
+    session_id = _direct_session_id(payload, allow_fallback_id=allow_fallback_id)
+    if session_id:
+        return session_id
     info = payload.get("info")
-    if isinstance(info, dict):
-        for key in ("sessionID", "sessionId", "session_id"):
-            value = info.get(key)
-            if isinstance(value, str) and value:
-                return value
-    if allow_fallback_id:
-        value = payload.get("id")
-        if isinstance(value, str) and value:
-            return value
+    session_id = _nested_session_id(info)
+    if session_id:
+        return session_id
     properties = payload.get("properties")
     if isinstance(properties, dict):
-        for key in ("sessionID", "sessionId", "session_id"):
-            value = properties.get(key)
-            if isinstance(value, str) and value:
-                return value
-        info = properties.get("info")
-        if isinstance(info, dict):
-            for key in ("sessionID", "sessionId", "session_id"):
-                value = info.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        part = properties.get("part")
-        if isinstance(part, dict):
-            for key in ("sessionID", "sessionId", "session_id"):
-                value = part.get(key)
-                if isinstance(value, str) and value:
-                    return value
+        session_id = _direct_session_id(properties, allow_fallback_id=False)
+        if session_id:
+            return session_id
+        for key in ("info", "part", "item"):
+            session_id = _nested_session_id(properties.get(key))
+            if session_id:
+                return session_id
     session = payload.get("session")
     if isinstance(session, dict):
-        return extract_session_id(session, allow_fallback_id=True)
+        return _nested_session_id(session, allow_fallback_id=True)
+    item = payload.get("item")
+    session_id = _nested_session_id(item)
+    if session_id:
+        return session_id
     return None
 
 

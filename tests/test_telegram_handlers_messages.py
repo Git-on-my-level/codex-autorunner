@@ -1421,6 +1421,99 @@ async def test_handle_message_inner_paused_flow_accepts_free_text_without_reply_
 
 
 @pytest.mark.anyio
+async def test_handle_message_inner_paused_flow_archives_raw_reply_without_context() -> (
+    None
+):
+    message = _message(
+        text="yes, continue",
+        reply_to_message_id=444,
+        reply_to_is_bot=True,
+        reply_to_username="codexautorunner",
+        reply_to_text="previous assistant prompt",
+    )
+    sent: list[str] = []
+    reply_calls: list[dict[str, object]] = []
+    run_id = "00000000-0000-0000-0000-000000000124"
+
+    runtime = object()
+
+    class _RouterStub:
+        def runtime_for(self, _key: str) -> object:
+            return runtime
+
+        async def get_topic(self, _key: str) -> object:
+            return types.SimpleNamespace(pma_enabled=False, workspace_path=".")
+
+    async def _write_user_reply(
+        _workspace_root,
+        _run_id: str,
+        _run_record,
+        _message: TelegramMessage,
+        text: str,
+        _files=None,
+    ) -> tuple[bool, str]:
+        reply_calls.append({"run_id": _run_id, "text": text})
+        return True, "Reply archived (seq 0001)."
+
+    class _TicketFlowBridgeStub:
+        async def auto_resume_run(self, *_args, **_kwargs) -> None:
+            return
+
+    async def _resolve_topic_key(*_args, **_kwargs) -> str:
+        return "topic-key"
+
+    async def _noop_async(*_args, **_kwargs):
+        return None
+
+    async def _false_async(*_args, **_kwargs) -> bool:
+        return False
+
+    handlers = types.SimpleNamespace(
+        _bot_username="CodexBot",
+        _router=_RouterStub(),
+        _config=types.SimpleNamespace(trigger_mode="mentions"),
+        _resume_options={},
+        _bind_options={},
+        _flow_run_options={},
+        _agent_options={},
+        _model_options={},
+        _model_pending={},
+        _review_commit_options={},
+        _review_commit_subjects={},
+        _pending_review_custom={},
+        _ticket_flow_pause_targets={},
+        _ticket_flow_bridge=_TicketFlowBridgeStub(),
+        _handle_pending_resume=lambda *_args, **_kwargs: False,
+        _handle_pending_bind=lambda *_args, **_kwargs: False,
+        _resolve_topic_key=_resolve_topic_key,
+        _handle_interrupt=_noop_async,
+        _handle_pending_review_commit=_false_async,
+        _handle_pending_review_custom=_false_async,
+        _dismiss_review_custom_prompt=_noop_async,
+        _command_specs={},
+        _get_paused_ticket_flow=lambda *_args, **_kwargs: (
+            run_id,
+            types.SimpleNamespace(id=run_id, input_data={}),
+        ),
+        _write_user_reply_from_telegram=_write_user_reply,
+        _delete_message=_noop_async,
+    )
+
+    async def _send_message(
+        _chat_id: int, text: str, *, thread_id=None, reply_to=None
+    ) -> None:
+        _ = (thread_id, reply_to)
+        sent.append(text)
+
+    handlers._send_message = _send_message
+
+    await handle_message_inner(handlers, message)
+
+    assert reply_calls == [{"run_id": run_id, "text": "yes, continue"}]
+    assert sent == ["Reply archived (seq 0001)."]
+
+
+@pytest.mark.anyio
 async def test_handle_message_inner_paused_flow_with_media_uses_media_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1567,6 +1660,10 @@ async def test_handle_media_message_paused_flow_archives_non_reply_media_and_res
 ):
     message = _message(
         text="caption here",
+        reply_to_message_id=555,
+        reply_to_is_bot=True,
+        reply_to_username="codexautorunner",
+        reply_to_text="previous assistant prompt",
         document=TelegramDocument(
             file_id="doc-1",
             file_unique_id=None,

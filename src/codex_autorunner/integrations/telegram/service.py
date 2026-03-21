@@ -371,7 +371,7 @@ class TelegramBotService(
         self._bind_options: dict[str, SelectionState] = {}
         self._flow_run_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
-        self._update_confirm_options: dict[str, bool] = {}
+        self._update_confirm_options: dict[str, dict[str, Any]] = {}
         self._review_commit_options: dict[str, ReviewCommitSelectionState] = {}
         self._review_commit_subjects: dict[str, dict[str, str]] = {}
         self._pending_review_custom: dict[str, dict[str, Any]] = {}
@@ -623,8 +623,16 @@ class TelegramBotService(
                     bot_username=self._bot_username,
                     reply_to_is_bot=message.reply_to_is_bot,
                     reply_to_username=message.reply_to_username,
-                    reply_to_message_id=message.reply_to_message_id,
-                    thread_id=message.thread_id,
+                    reply_to_message_id=(
+                        str(message.reply_to_message_id)
+                        if message.reply_to_message_id is not None
+                        else None
+                    ),
+                    thread_id=(
+                        str(message.thread_id)
+                        if message.thread_id is not None
+                        else None
+                    ),
                 ),
             ),
         )

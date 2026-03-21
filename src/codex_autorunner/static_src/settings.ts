@@ -185,6 +185,7 @@ interface UpdateCheckResponse {
 
 interface UpdateResponse {
   message?: string;
+  requires_confirmation?: boolean;
 }
 
 async function loadUpdateTargetOptions(selectId: string | null): Promise<void> {
@@ -258,10 +259,25 @@ async function handleSystemUpdate(btnId: string, targetSelectId: string | null):
   btn.textContent = "Updating...";
 
   try {
-    const res = await api("/system/update", {
+    let res = await api("/system/update", {
       method: "POST",
       body: { target: updateTarget },
     }) as UpdateResponse;
+    if (res.requires_confirmation) {
+      const forceConfirmed = await confirmModal(
+        res.message || "Active sessions are still running. Update anyway?",
+        { confirmText: "Update anyway", cancelText: "Cancel", danger: true }
+      );
+      if (!forceConfirmed) {
+        btn.disabled = false;
+        btn.textContent = originalText;
+        return;
+      }
+      res = await api("/system/update", {
+        method: "POST",
+        body: { target: updateTarget, force: true },
+      }) as UpdateResponse;
+    }
     flash(res.message || `Update started (${targetLabel}).`, "success");
     if (!includesWebUpdateTarget(updateTarget)) {
       btn.disabled = false;

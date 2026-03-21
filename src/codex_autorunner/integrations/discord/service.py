@@ -10,7 +10,7 @@ import sqlite3
 import subprocess
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
@@ -77,10 +77,12 @@ from ...core.ticket_flow_summary import build_ticket_flow_display
 from ...core.update import (
     UpdateInProgressError,
     _available_update_target_definitions,
+    _format_update_confirmation_warning,
     _normalize_update_ref,
     _normalize_update_target,
     _read_update_status,
     _spawn_update_process,
+    _update_target_restarts_surface,
 )
 from ...core.update_paths import resolve_update_paths
 from ...core.update_targets import get_update_target_label
@@ -147,6 +149,7 @@ from ...integrations.chat.models import (
     ChatEvent,
     ChatInteractionEvent,
     ChatMessageEvent,
+    ChatReplyInfo,
 )
 from ...integrations.chat.pause_notifications import (
     format_pause_notification_source,
@@ -295,6 +298,8 @@ MODEL_SEARCH_FETCH_LIMIT = 200
 SESSION_RESUME_SELECT_ID = "session_resume_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 UPDATE_TARGET_SELECT_ID = "update_target_select"
+UPDATE_CONFIRM_PREFIX = "update_confirm"
+UPDATE_CANCEL_PREFIX = "update_cancel"
 REVIEW_COMMIT_SELECT_ID = "review_commit_select"
 MODEL_EFFORT_SELECT_ID = "model_effort_select"
 BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
@@ -761,6 +766,16 @@ class DiscordBotService:
                 plain_text=self._build_plain_text_turn_context(
                     text=text,
                     guild_id=event.thread.thread_id,
+                    reply_to_is_bot=(
+                        event.reply_context.is_bot
+                        if event.reply_context is not None
+                        else False
+                    ),
+                    reply_to_message_id=(
+                        event.reply_context.message.message_id
+                        if event.reply_context is not None
+                        else None
+                    ),
                 ),
             ),
             plain_text_turn_fn=should_trigger_plain_text_turn,
@@ -771,6 +786,8 @@ class DiscordBotService:
         *,
         text: str,
         guild_id: Optional[str],
+        reply_to_is_bot: bool = False,
+        reply_to_message_id: Optional[str] = None,
     ) -> PlainTextTurnContext:
         application_id = str(self._config.application_id or "").strip()
         normalized_text = text
@@ -788,6 +805,8 @@ class DiscordBotService:
             text=normalized_text,
             chat_type="private" if guild_id is None else "group",
             bot_username=bot_username,
+            reply_to_is_bot=reply_to_is_bot,
+            reply_to_message_id=reply_to_message_id,
         )
 
     def _evaluate_plain_text_collaboration_policy(
@@ -1160,6 +1179,7 @@ class DiscordBotService:
                 values=payload_data.get("values"),
                 guild_id=payload_data.get("guild_id"),
                 user_id=event.from_user_id,
+                message_id=context.message_id,
             )
             return
 
@@ -1280,6 +1300,7 @@ class DiscordBotService:
         event: ChatMessageEvent,
         context: DispatchContext,
     ) -> None:
+        event = await self._maybe_hydrate_reply_context(event)
         channel_id = context.chat_id
         text = (event.text or "").strip()
         has_attachments = bool(event.attachments)
@@ -1371,6 +1392,52 @@ class DiscordBotService:
             log_event_fn=log_event,
             build_ticket_flow_controller_fn=build_ticket_flow_controller,
             ensure_worker_fn=ensure_worker,
+        )
+
+    async def _maybe_hydrate_reply_context(
+        self,
+        event: ChatMessageEvent,
+    ) -> ChatMessageEvent:
+        if event.reply_to is None or event.reply_context is not None:
+            return event
+        try:
+            payload = await self._rest.get_channel_message(
+                channel_id=event.reply_to.thread.chat_id,
+                message_id=event.reply_to.message_id,
+            )
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.DEBUG,
+                "discord.reply_context.fetch_failed",
+                channel_id=event.thread.chat_id,
+                reply_channel_id=event.reply_to.thread.chat_id,
+                reply_message_id=event.reply_to.message_id,
+                exc=exc,
+            )
+            return event
+        if not isinstance(payload, dict):
+            return event
+        content = payload.get("content")
+        text = content.strip() if isinstance(content, str) and content.strip() else None
+        author = payload.get("author")
+        author_label = None
+        is_bot = False
+        if isinstance(author, dict):
+            for key in ("global_name", "username"):
+                value = author.get(key)
+                if isinstance(value, str) and value.strip():
+                    author_label = value.strip()
+                    break
+            is_bot = bool(author.get("bot", False))
+        return replace(
+            event,
+            reply_context=ChatReplyInfo(
+                message=event.reply_to,
+                text=text,
+                author_label=author_label,
+                is_bot=is_bot,
+            ),
         )
 
     def _voice_service_for_workspace(
@@ -1913,10 +1980,50 @@ class DiscordBotService:
         )
         had_previous = current_thread is not None
         if current_thread is not None:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.thread.reset.stop_requested",
+                channel_id=channel_id,
+                mode=mode,
+                thread_target_id=current_thread.thread_target_id,
+            )
             stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
             )
-            if stop_outcome.recovered_lost_backend:
+            interrupted_active = bool(
+                getattr(stop_outcome, "interrupted_active", False)
+            )
+            recovered_lost_backend = bool(
+                getattr(stop_outcome, "recovered_lost_backend", False)
+            )
+            cancelled_queued = int(getattr(stop_outcome, "cancelled_queued", 0) or 0)
+            execution_record = getattr(stop_outcome, "execution", None)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.thread.reset.stop_completed",
+                channel_id=channel_id,
+                mode=mode,
+                thread_target_id=current_thread.thread_target_id,
+                interrupted_active=interrupted_active,
+                recovered_lost_backend=recovered_lost_backend,
+                cancelled_queued=cancelled_queued,
+                execution_id=(
+                    execution_record.execution_id
+                    if execution_record is not None
+                    else None
+                ),
+                execution_status=(
+                    execution_record.status if execution_record is not None else None
+                ),
+                execution_backend_turn_id=(
+                    execution_record.backend_id
+                    if execution_record is not None
+                    else None
+                ),
+            )
+            if recovered_lost_backend:
                 log_event(
                     self._logger,
                     logging.INFO,
@@ -6324,6 +6431,7 @@ class DiscordBotService:
         options: dict[str, Any],
     ) -> None:
         raw_target = options.get("target")
+        confirmed = bool(options.get("confirmed"))
         if not isinstance(raw_target, str) or not raw_target.strip():
             await self._respond_with_components(
                 interaction_id,
@@ -6361,6 +6469,23 @@ class DiscordBotService:
                 ],
             )
             return
+        if not confirmed and _update_target_restarts_surface(
+            update_target, surface="discord"
+        ):
+            warning = _format_update_confirmation_warning(
+                active_count=self._active_update_session_count(),
+                singular_label="Codex session",
+            )
+            if warning:
+                await self._respond_with_components(
+                    interaction_id,
+                    interaction_token,
+                    format_discord_message(warning),
+                    self._build_update_confirmation_components(
+                        update_target=update_target
+                    ),
+                )
+                return
 
         repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
         if not repo_url:
@@ -6440,6 +6565,37 @@ class DiscordBotService:
             text,
         )
         self._update_status_notifier.schedule_watch({"chat_id": channel_id})
+
+    def _active_update_session_count(self) -> int:
+        try:
+            threads = self._discord_thread_service().list_thread_targets(
+                lifecycle_status="active"
+            )
+        except Exception:
+            return 0
+        return sum(
+            1
+            for thread in threads
+            if str(getattr(thread, "status", "") or "").strip().lower() == "running"
+        )
+
+    def _build_update_confirmation_components(
+        self,
+        *,
+        update_target: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            build_action_row(
+                [
+                    build_button(
+                        "Update anyway",
+                        f"{UPDATE_CONFIRM_PREFIX}:{update_target}",
+                        style=DISCORD_BUTTON_STYLE_DANGER,
+                    ),
+                    build_button("Cancel", f"{UPDATE_CANCEL_PREFIX}:{update_target}"),
+                ]
+            )
+        ]
 
     def _update_status_path(self) -> Path:
         return resolve_update_paths().status_path
@@ -9583,6 +9739,13 @@ class DiscordBotService:
             )
             return
 
+        interaction_message_id: Optional[str] = None
+        interaction_message = interaction_payload.get("message")
+        if isinstance(interaction_message, dict):
+            message_id_raw = interaction_message.get("id")
+            if isinstance(message_id_raw, str) and message_id_raw.strip():
+                interaction_message_id = message_id_raw.strip()
+
         try:
             if custom_id == TICKETS_FILTER_SELECT_ID:
                 values = extract_component_values(interaction_payload)
@@ -9899,6 +10062,9 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                    user_id=user_id,
+                    message_id=interaction_message_id,
+                    custom_id=custom_id,
                 )
                 return
 
@@ -9942,6 +10108,7 @@ class DiscordBotService:
         values: Optional[list[str]] = None,
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        message_id: Optional[str] = None,
     ) -> None:
         try:
             if custom_id == TICKETS_FILTER_SELECT_ID:
@@ -10089,6 +10256,31 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     options={"target": values[0]},
+                )
+                return
+
+            if custom_id.startswith(f"{UPDATE_CONFIRM_PREFIX}:"):
+                raw_target = custom_id.split(":", 1)[1].strip()
+                if not raw_target:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select an update target and try again.",
+                    )
+                    return
+                await self._handle_car_update(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"target": raw_target, "confirmed": True},
+                )
+                return
+
+            if custom_id.startswith(f"{UPDATE_CANCEL_PREFIX}:"):
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Update cancelled.",
                 )
                 return
 
@@ -10248,6 +10440,9 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     channel_id=channel_id,
+                    user_id=user_id,
+                    message_id=message_id,
+                    custom_id=custom_id,
                 )
                 return
 
@@ -11690,7 +11885,24 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        source: str = "unknown",
+        source_custom_id: Optional[str] = None,
+        source_message_id: Optional[str] = None,
+        source_command: Optional[str] = None,
+        source_user_id: Optional[str] = None,
     ) -> None:
+        log_event(
+            self._logger,
+            logging.INFO,
+            "discord.interrupt.requested",
+            channel_id=channel_id,
+            interaction_id=interaction_id,
+            source=source,
+            source_user_id=source_user_id,
+            source_command=source_command,
+            source_custom_id=source_custom_id,
+            source_message_id=source_message_id,
+        )
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             text = format_discord_message(
@@ -11728,6 +11940,18 @@ class DiscordBotService:
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
         )
         if current_thread is None:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.interrupt.no_active_turn",
+                channel_id=channel_id,
+                interaction_id=interaction_id,
+                source=source,
+                source_user_id=source_user_id,
+                source_command=source_command,
+                source_custom_id=source_custom_id,
+                source_message_id=source_message_id,
+            )
             text = format_discord_message("No active turn to interrupt.")
             await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
@@ -11739,10 +11963,47 @@ class DiscordBotService:
             stop_outcome = await orchestration_service.stop_thread(
                 current_thread.thread_target_id
             )
+            interrupted_active = bool(
+                getattr(stop_outcome, "interrupted_active", False)
+            )
+            recovered_lost_backend = bool(
+                getattr(stop_outcome, "recovered_lost_backend", False)
+            )
+            cancelled_queued = int(getattr(stop_outcome, "cancelled_queued", 0) or 0)
+            execution_record = getattr(stop_outcome, "execution", None)
+            log_event(
+                self._logger,
+                logging.INFO,
+                "discord.interrupt.completed",
+                channel_id=channel_id,
+                interaction_id=interaction_id,
+                source=source,
+                source_user_id=source_user_id,
+                source_command=source_command,
+                source_custom_id=source_custom_id,
+                source_message_id=source_message_id,
+                thread_target_id=current_thread.thread_target_id,
+                interrupted_active=interrupted_active,
+                recovered_lost_backend=recovered_lost_backend,
+                cancelled_queued=cancelled_queued,
+                execution_id=(
+                    execution_record.execution_id
+                    if execution_record is not None
+                    else None
+                ),
+                execution_status=(
+                    execution_record.status if execution_record is not None else None
+                ),
+                execution_backend_turn_id=(
+                    execution_record.backend_id
+                    if execution_record is not None
+                    else None
+                ),
+            )
             if (
-                not stop_outcome.interrupted_active
-                and not stop_outcome.recovered_lost_backend
-                and not stop_outcome.cancelled_queued
+                not interrupted_active
+                and not recovered_lost_backend
+                and not cancelled_queued
             ):
                 text = format_discord_message("No active turn to interrupt.")
                 await self._send_or_respond_ephemeral(
@@ -11753,17 +12014,15 @@ class DiscordBotService:
                 )
                 return
             parts = []
-            if stop_outcome.interrupted_active:
+            if interrupted_active:
                 parts.append("Stopping current turn...")
-            elif stop_outcome.recovered_lost_backend:
+            elif recovered_lost_backend:
                 parts.append("Recovered stale session after backend thread was lost.")
-            if stop_outcome.cancelled_queued:
-                parts.append(
-                    f"Cancelled {stop_outcome.cancelled_queued} queued turn(s)."
-                )
+            if cancelled_queued:
+                parts.append(f"Cancelled {cancelled_queued} queued turn(s).")
             text = format_discord_message(
                 "Recovered stale session after backend thread was lost."
-                if stop_outcome.recovered_lost_backend
+                if recovered_lost_backend
                 else "Stopping current turn..."
             )
             if parts:
@@ -11780,6 +12039,12 @@ class DiscordBotService:
                 logging.WARNING,
                 "discord.interrupt.failed",
                 channel_id=channel_id,
+                interaction_id=interaction_id,
+                source=source,
+                source_user_id=source_user_id,
+                source_command=source_command,
+                source_custom_id=source_custom_id,
+                source_message_id=source_message_id,
                 workspace_root=str(workspace_root),
                 thread_target_id=current_thread.thread_target_id,
                 exc=exc,
@@ -11798,11 +12063,18 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        user_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        custom_id: str = "cancel_turn",
     ) -> None:
         await self._handle_car_interrupt(
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            source="component",
+            source_custom_id=custom_id,
+            source_message_id=message_id,
+            source_user_id=user_id,
         )
 
     async def _handle_continue_turn_button(

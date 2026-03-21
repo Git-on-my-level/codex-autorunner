@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable, Optional, cast
 
-from ....core.update import _normalize_update_target
+from ....core.update import _normalize_update_target, _update_target_restarts_surface
 from ...chat.handlers.models import ChatContext
 from ...chat.handlers.selections import ChatSelectionHandlers
 from ...chat.models import ChatThreadRef
@@ -371,6 +371,24 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             await self._finalize_selection(key, callback, "Update target invalid.")
             return
         chat_id, thread_id = _split_topic_key(key)
+        if self._has_active_turns() and _update_target_restarts_surface(
+            update_target, surface="telegram"
+        ):
+            message = getattr(callback, "message", None)
+            if message is None:
+                await self._answer_callback(callback, "Active session detected")
+                await self._finalize_selection(
+                    key,
+                    callback,
+                    "Update confirmation expired. Run /update again.",
+                )
+                return
+            await self._answer_callback(callback, "Confirm update")
+            await self._prompt_update_confirmation(
+                message,
+                update_target=update_target,
+            )
+            return
         await self._start_update(
             chat_id=chat_id,
             thread_id=thread_id,
@@ -385,13 +403,25 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         callback: TelegramCallbackQuery,
         parsed: UpdateConfirmCallback,
     ) -> None:
-        if not self._update_confirm_options.get(key):
+        state = self._update_confirm_options.get(key)
+        if not state:
             await self._answer_callback(callback, "Selection expired")
             return
         self._update_confirm_options.pop(key, None)
         if parsed.decision != "yes":
             await self._answer_callback(callback, "Cancelled")
             await self._finalize_selection(key, callback, "Update cancelled.")
+            return
+        target = state.get("target") if isinstance(state, dict) else None
+        if isinstance(target, str) and target.strip():
+            chat_id, thread_id = _split_topic_key(key)
+            await self._start_update(
+                chat_id=chat_id,
+                thread_id=thread_id,
+                update_target=target.strip(),
+                callback=callback,
+                selection_key=key,
+            )
             return
         await self._prompt_update_selection_from_callback(key, callback)
         await self._answer_callback(callback, "Select update target")

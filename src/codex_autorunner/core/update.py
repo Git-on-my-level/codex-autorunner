@@ -285,6 +285,44 @@ def _normalize_update_ref(raw: Optional[str]) -> str:
     return value or "main"
 
 
+def _format_update_confirmation_warning(
+    *,
+    active_count: int,
+    singular_label: str = "session",
+    plural_label: Optional[str] = None,
+) -> Optional[str]:
+    try:
+        count = int(active_count)
+    except (TypeError, ValueError):
+        count = 0
+    if count <= 0:
+        return None
+    singular = str(singular_label or "session").strip() or "session"
+    plural = str(plural_label or f"{singular}s").strip() or f"{singular}s"
+    label = singular if count == 1 else plural
+    verb = "is" if count == 1 else "are"
+    return (
+        f"{count} active {label} {verb} still running. "
+        "Updating will restart the service. Continue?"
+    )
+
+
+def _update_target_restarts_surface(
+    raw_target: Optional[str],
+    *,
+    surface: str,
+) -> bool:
+    definition = _get_update_target_definition(raw_target)
+    normalized_surface = str(surface or "").strip().lower()
+    if normalized_surface == "web":
+        return bool(definition.includes_web)
+    if normalized_surface == "telegram":
+        return definition.value in {"both", "chat", "telegram"}
+    if normalized_surface == "discord":
+        return definition.value in {"both", "chat", "discord"}
+    raise ValueError(f"Unsupported update surface: {surface}")
+
+
 def _update_status_path() -> Path:
     return resolve_update_paths().status_path
 

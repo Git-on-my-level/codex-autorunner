@@ -18,8 +18,10 @@ from ....core.logging_utils import log_event
 from ....core.state import now_iso
 from ....core.update import (
     _available_update_target_options,
+    _format_update_confirmation_warning,
     _normalize_update_target,
     _spawn_update_process,
+    _update_target_restarts_surface,
 )
 from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
@@ -2758,13 +2760,28 @@ Summary applied.""",
     def _has_active_turns(self) -> bool:
         return bool(self._turn_contexts)
 
-    async def _prompt_update_confirmation(self, message: TelegramMessage) -> None:
+    def _active_update_session_count(self) -> int:
+        return len(self._turn_contexts)
+
+    async def _prompt_update_confirmation(
+        self,
+        message: TelegramMessage,
+        *,
+        update_target: Optional[str] = None,
+    ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        self._update_confirm_options[key] = True
+        self._update_confirm_options[key] = {"target": update_target}
         self._touch_cache_timestamp("update_confirm_options", key)
+        prompt = (
+            _format_update_confirmation_warning(
+                active_count=self._active_update_session_count(),
+                singular_label="Codex session",
+            )
+            or "Updating will restart the service. Continue?"
+        )
         await self._send_message(
             message.chat_id,
-            "An active Codex turn is running. Updating will restart the service. Continue?",
+            prompt,
             thread_id=message.thread_id,
             reply_to=message.message_id,
             reply_markup=build_update_confirm_keyboard(),
@@ -2976,6 +2993,14 @@ Summary applied.""",
             return
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         self._update_options.pop(key, None)
+        if self._has_active_turns() and _update_target_restarts_surface(
+            update_target, surface="telegram"
+        ):
+            await self._prompt_update_confirmation(
+                message,
+                update_target=update_target,
+            )
+            return
         await self._start_update(
             chat_id=message.chat_id,
             thread_id=message.thread_id,

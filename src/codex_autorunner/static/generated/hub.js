@@ -659,10 +659,22 @@ async function handleSystemUpdate(btnId, targetSelectId) {
     }
     btn.textContent = "Updating...";
     try {
-        const res = await api("/system/update", {
+        let res = await api("/system/update", {
             method: "POST",
             body: { target: updateTarget },
         });
+        if (res.requires_confirmation) {
+            const forceConfirmed = await confirmModal(res.message || "Active sessions are still running. Update anyway?", { confirmText: "Update anyway", cancelText: "Cancel", danger: true });
+            if (!forceConfirmed) {
+                btn.disabled = false;
+                btn.textContent = originalText;
+                return;
+            }
+            res = await api("/system/update", {
+                method: "POST",
+                body: { target: updateTarget, force: true },
+            });
+        }
         flash(res.message || `Update started (${targetLabel}).`, "success");
         if (!includesWebUpdateTarget(updateTarget)) {
             btn.disabled = false;

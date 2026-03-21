@@ -22,6 +22,7 @@ from codex_autorunner.integrations.chat.models import (
     ChatInteractionRef,
     ChatMessageEvent,
     ChatMessageRef,
+    ChatReplyInfo,
     ChatThreadRef,
 )
 from codex_autorunner.integrations.discord import message_turns as discord_message_turns
@@ -57,6 +58,7 @@ class _FakeRest:
         self.deleted_channel_messages: list[dict[str, Any]] = []
         self.typing_calls: list[str] = []
         self.command_sync_calls: list[dict[str, Any]] = []
+        self.fetched_channel_messages: dict[tuple[str, str], dict[str, Any]] = {}
 
     async def create_interaction_response(
         self,
@@ -85,6 +87,11 @@ class _FakeRest:
             }
         )
         return {"id": message_id, "channel_id": channel_id, "payload": payload}
+
+    async def get_channel_message(
+        self, *, channel_id: str, message_id: str
+    ) -> dict[str, Any]:
+        return dict(self.fetched_channel_messages.get((channel_id, message_id), {}))
 
     async def edit_channel_message(
         self, *, channel_id: str, message_id: str, payload: dict[str, Any]
@@ -247,6 +254,161 @@ async def test_discord_message_turns_route_through_orchestration_ingress(
         "submit_flow_reply",
         "submit_thread_message",
     }
+
+
+@pytest.mark.anyio
+async def test_discord_message_turns_include_reply_context_in_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    captured: dict[str, object] = {}
+
+    class _StoreStub:
+        async def get_binding(self, *, channel_id: str) -> dict[str, object] | None:
+            assert channel_id == "channel-1"
+            return {
+                "workspace_path": str(workspace),
+                "agent": "codex",
+                "pma_enabled": False,
+                "model_override": None,
+                "reasoning_effort": None,
+            }
+
+    class _ServiceStub:
+        def __init__(self) -> None:
+            self._store = _StoreStub()
+            self._logger = logging.getLogger("test")
+
+        def _normalize_agent(self, value: object) -> str:
+            return str(value or "codex")
+
+        def _build_message_session_key(self, **_kwargs: object) -> str:
+            return "session-key"
+
+    class _IngressStub:
+        async def submit_message(self, request, **kwargs):  # type: ignore[no-untyped-def]
+            captured["request"] = request
+            _ = kwargs
+            return SimpleNamespace(route="flow", thread_result=None)
+
+    monkeypatch.setattr(
+        discord_message_turns,
+        "build_surface_orchestration_ingress",
+        lambda **_: _IngressStub(),
+    )
+
+    thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
+    reply_message = ChatMessageRef(thread=thread, message_id="msg-0")
+    event = ChatMessageEvent(
+        update_id="update-2",
+        thread=thread,
+        message=ChatMessageRef(thread=thread, message_id="msg-2"),
+        from_user_id="user-1",
+        text="hello",
+        reply_to=reply_message,
+        reply_context=ChatReplyInfo(
+            message=reply_message,
+            text="prior bot output",
+            author_label="Codex",
+            is_bot=True,
+        ),
+    )
+    context = build_dispatch_context(event)
+
+    await discord_message_turns.handle_message_event(
+        _ServiceStub(),
+        event,
+        context,
+        channel_id="channel-1",
+        text="hello",
+        has_attachments=False,
+        policy_result=None,
+        log_event_fn=lambda *args, **kwargs: None,
+        build_ticket_flow_controller_fn=lambda *_args, **_kwargs: None,
+        ensure_worker_fn=lambda *_args, **_kwargs: None,
+    )
+
+    request = captured.get("request")
+    assert request is not None
+    assert "hello" in request.prompt_text
+    assert "Replying to message from Codex [message msg-0]:" in request.prompt_text
+    assert "prior bot output" in request.prompt_text
+
+
+@pytest.mark.anyio
+async def test_discord_service_fetches_missing_reply_context_from_rest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    rest.fetched_channel_messages[("channel-1", "reply-1")] = {
+        "id": "reply-1",
+        "content": "fetched bot reply",
+        "author": {
+            "id": "bot-1",
+            "bot": True,
+            "global_name": "Codex",
+            "username": "codexautorunner",
+        },
+    }
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    captured: dict[str, Any] = {}
+
+    async def _fake_handle_message_event(*args, **kwargs) -> None:  # type: ignore[no-untyped-def]
+        captured["event"] = args[1]
+        _ = kwargs
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "handle_discord_message_event",
+        _fake_handle_message_event,
+    )
+    monkeypatch.setattr(
+        service,
+        "_evaluate_message_collaboration_policy",
+        lambda event, **_kwargs: SimpleNamespace(
+            should_start_turn=True,
+            command_allowed=True,
+            log_fields=lambda: {},
+        ),
+    )
+
+    event = ChatMessageEvent(
+        update_id="update-3",
+        thread=ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None),
+        message=ChatMessageRef(
+            thread=ChatThreadRef(
+                platform="discord", chat_id="channel-1", thread_id=None
+            ),
+            message_id="msg-3",
+        ),
+        from_user_id="user-1",
+        text="follow up",
+        reply_to=ChatMessageRef(
+            thread=ChatThreadRef(
+                platform="discord", chat_id="channel-1", thread_id=None
+            ),
+            message_id="reply-1",
+        ),
+    )
+
+    await service._handle_message_event(event, build_dispatch_context(event))
+
+    hydrated = captured.get("event")
+    assert hydrated is not None
+    assert hydrated.reply_context is not None
+    assert hydrated.reply_context.text == "fetched bot reply"
+    assert hydrated.reply_context.author_label == "Codex"
+    assert hydrated.reply_context.is_bot is True
 
 
 @pytest.mark.asyncio
@@ -4755,6 +4917,132 @@ async def test_car_update_starts_worker_with_explicit_target(
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "update started (all)" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_prompts_for_confirmation_when_sessions_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "both"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    service._active_update_session_count = lambda: 1  # type: ignore[method-assign]
+    spawned = False
+
+    def _fake_spawn_update_process(**_kwargs: Any) -> None:
+        nonlocal spawned
+        spawned = True
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    try:
+        await service.run_forever()
+        assert spawned is False
+        assert len(rest.interaction_responses) == 1
+        data = rest.interaction_responses[0]["payload"]["data"]
+        assert "active codex session" in data["content"].lower()
+        components = data.get("components") or []
+        assert components
+        buttons = components[0]["components"]
+        assert buttons[0]["custom_id"] == "update_confirm:both"
+        assert buttons[1]["custom_id"] == "update_cancel:both"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_interaction_update_cancel_reports_cancelled(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_component_interaction(custom_id="update_cancel:both", values=["both"])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "update cancelled" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_web_target_skips_confirmation_when_sessions_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "web"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _fake_spawn_update_process(**kwargs: Any) -> None:
+        observed.update(kwargs)
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+    service._active_update_session_count = lambda: 1  # type: ignore[method-assign]
+
+    try:
+        await service.run_forever()
+        assert observed["update_target"] == "web"
+        assert len(rest.interaction_responses) == 1
+        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert "update started (web only)" in content
     finally:
         await store.close()
 

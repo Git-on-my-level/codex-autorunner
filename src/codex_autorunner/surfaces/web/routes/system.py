@@ -11,11 +11,13 @@ from ....core.config import HubConfig
 from ....core.self_describe import collect_describe_data
 from ....core.update import (
     UpdateInProgressError,
+    _format_update_confirmation_warning,
     _normalize_update_ref,
     _normalize_update_target,
     _read_update_status,
     _spawn_update_process,
     _system_update_check,
+    _update_target_restarts_surface,
 )
 from ....core.update_paths import resolve_update_paths
 from ....core.utils import find_repo_root
@@ -46,6 +48,21 @@ _get_update_target_definition = update_core._get_update_target_definition
 shutil = update_core.shutil
 subprocess = update_core.subprocess
 sys = update_core.sys
+
+
+def _count_active_terminal_sessions(request: Request) -> int:
+    terminal_sessions = getattr(
+        getattr(request.app, "state", None), "terminal_sessions", {}
+    )
+    if not isinstance(terminal_sessions, dict):
+        return 0
+    count = 0
+    for session in terminal_sessions.values():
+        pty = getattr(session, "pty", None)
+        isalive = getattr(pty, "isalive", None)
+        if callable(isalive) and isalive():
+            count += 1
+    return count
 
 
 def build_system_routes() -> APIRouter:
@@ -185,8 +202,15 @@ def build_system_routes() -> APIRouter:
 
         try:
             target_raw = payload.target if payload else None
+            force_update = bool(payload.force) if payload else False
             if target_raw is None:
                 target_raw = request.query_params.get("target")
+            if not force_update:
+                force_update = request.query_params.get("force") in {
+                    "1",
+                    "true",
+                    "yes",
+                }
             if target_raw is None:
                 target_raw = _default_update_target(
                     raw_config=(config.raw if hasattr(config, "raw") else None),
@@ -196,6 +220,20 @@ def build_system_routes() -> APIRouter:
                     ),
                 )
             update_target = _normalize_update_target(target_raw)
+            if not force_update and _update_target_restarts_surface(
+                update_target, surface="web"
+            ):
+                warning = _format_update_confirmation_warning(
+                    active_count=_count_active_terminal_sessions(request),
+                    singular_label="terminal session",
+                )
+                if warning:
+                    return {
+                        "status": "warning",
+                        "message": warning,
+                        "target": update_target,
+                        "requires_confirmation": True,
+                    }
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger is None:
                 logger = logging.getLogger("codex_autorunner.system_update")
@@ -229,6 +267,7 @@ def build_system_routes() -> APIRouter:
                 "status": "ok",
                 "message": f"Update started ({target_info.label}). Service will restart shortly.",
                 "target": update_target,
+                "requires_confirmation": False,
             }
         except UpdateInProgressError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -3,9 +3,37 @@ from __future__ import annotations
 from codex_autorunner.core.flows.failure_diagnostics import (
     _derive_failure_reason_code,
     build_failure_payload,
+    get_terminal_failure_reason_code,
 )
-from codex_autorunner.core.flows.models import FailureReasonCode, FlowEventType
+from codex_autorunner.core.flows.models import (
+    FailureReasonCode,
+    FlowEventType,
+    FlowRunRecord,
+    FlowRunStatus,
+)
 from codex_autorunner.core.flows.store import FlowStore
+
+
+def _build_record(
+    *,
+    state: dict | None = None,
+    error_message: str | None = None,
+    status: FlowRunStatus = FlowRunStatus.FAILED,
+) -> FlowRunRecord:
+    return FlowRunRecord(
+        id="run-1",
+        flow_type="ticket_flow",
+        status=status,
+        input_data={},
+        state=state or {},
+        current_step=None,
+        stop_requested=False,
+        created_at="2026-03-21T00:00:00Z",
+        started_at="2026-03-21T00:00:00Z",
+        finished_at="2026-03-21T00:00:10Z",
+        error_message=error_message,
+        metadata={},
+    )
 
 
 def test_build_failure_payload_uses_newest_app_server_events(tmp_path) -> None:
@@ -119,6 +147,17 @@ def test_derive_failure_reason_code_worker_dead() -> None:
     )
 
 
+def test_derive_failure_reason_code_worker_dead_from_error_message() -> None:
+    assert (
+        _derive_failure_reason_code(
+            state={},
+            error_message="Worker died (status=dead, pid=123, reason: lost worker)",
+            note=None,
+        )
+        == FailureReasonCode.WORKER_DEAD
+    )
+
+
 def test_derive_failure_reason_code_agent_crash() -> None:
     assert (
         _derive_failure_reason_code(
@@ -145,3 +184,64 @@ def test_derive_failure_reason_code_note_takes_precedence() -> None:
         )
         == FailureReasonCode.WORKER_DEAD
     )
+
+
+def test_get_terminal_failure_reason_code_prefers_canonical_failure_payload() -> None:
+    record = _build_record(
+        state={
+            "failure": {
+                "failure_reason_code": "worker_dead",
+                "failure_class": "error",
+            },
+            "ticket_engine": {"reason_code": "timeout"},
+        },
+        error_message="Operation timed out",
+    )
+
+    assert get_terminal_failure_reason_code(record) == FailureReasonCode.WORKER_DEAD
+
+
+def test_get_terminal_failure_reason_code_characterizes_terminal_paths() -> None:
+    cases = [
+        (
+            _build_record(
+                error_message="Worker died (status=dead, pid=123, reason: lost worker)"
+            ),
+            FailureReasonCode.WORKER_DEAD,
+        ),
+        (
+            _build_record(error_message="Operation timed out after 30s"),
+            FailureReasonCode.TIMEOUT,
+        ),
+        (
+            _build_record(error_message="Preflight check failed"),
+            FailureReasonCode.PREFLIGHT_ERROR,
+        ),
+        (
+            _build_record(error_message="Connection error to backend"),
+            FailureReasonCode.NETWORK_ERROR,
+        ),
+        (
+            _build_record(
+                state={"ticket_engine": {"reason_code": "user_stop"}},
+                status=FlowRunStatus.STOPPED,
+            ),
+            FailureReasonCode.USER_STOP,
+        ),
+        (
+            _build_record(error_message="Unhandled exception: failure"),
+            FailureReasonCode.UNCAUGHT_EXCEPTION,
+        ),
+    ]
+
+    for record, expected in cases:
+        assert get_terminal_failure_reason_code(record) == expected
+
+
+def test_get_terminal_failure_reason_code_uses_legacy_failure_class_mapping() -> None:
+    record = _build_record(
+        state={"failure": {"failure_class": "network"}},
+        error_message=None,
+    )
+
+    assert get_terminal_failure_reason_code(record) == FailureReasonCode.NETWORK_ERROR

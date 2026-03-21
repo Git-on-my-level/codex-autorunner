@@ -273,6 +273,9 @@ async def handle_car_command(
                 interaction_id,
                 interaction_token,
                 channel_id=channel_id,
+                source="slash_command",
+                source_command="car session interrupt",
+                source_user_id=user_id,
             )
             return
         if command_path == ("car", "session", "logout"):

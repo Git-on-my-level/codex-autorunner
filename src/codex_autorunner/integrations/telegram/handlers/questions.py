@@ -19,6 +19,7 @@ from ...chat.models import (
     ChatInteractionRef,
     ChatMessageEvent,
     ChatMessageRef,
+    ChatReplyInfo,
     ChatThreadRef,
 )
 from ..adapter import (
@@ -396,6 +397,18 @@ def _chat_message_event_from_telegram(message: TelegramMessage) -> ChatMessageEv
         ),
         text=message.text,
         is_edited=message.is_edited,
+        reply_context=(
+            ChatReplyInfo(
+                message=ChatMessageRef(
+                    thread=thread, message_id=str(message.reply_to_message_id)
+                ),
+                text=message.reply_to_text,
+                author_label=message.reply_to_author_label or message.reply_to_username,
+                is_bot=message.reply_to_is_bot,
+            )
+            if message.reply_to_message_id is not None
+            else None
+        ),
         forwarded_from=(
             ChatForwardInfo(
                 source_label=message.forward_origin.source_label,
