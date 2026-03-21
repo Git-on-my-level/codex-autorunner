@@ -15,10 +15,10 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from ...agents.opencode.harness import OpenCodeHarness
+from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.opencode.supervisor_protocol import (
     OpenCodeHarnessSupervisorProtocol,
 )
-from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...bootstrap import seed_repo_files
 from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
