@@ -23,6 +23,7 @@ from .flows import (
 )
 from .interfaces import (
     AgentDefinitionCatalog,
+    FreshConversationRequiredError,
     OrchestrationFlowService,
     OrchestrationThreadService,
     RuntimeConversationHandle,
@@ -102,6 +103,7 @@ __all__ = [
     "FlowBackedOrchestrationService",
     "FlowRunTarget",
     "FlowTarget",
+    "FreshConversationRequiredError",
     "HarnessBackedOrchestrationService",
     "MappingAgentDefinitionCatalog",
     "MessageRequest",

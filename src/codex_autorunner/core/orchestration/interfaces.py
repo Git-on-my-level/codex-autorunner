@@ -17,6 +17,23 @@ from .models import (
 )
 
 
+class FreshConversationRequiredError(RuntimeError):
+    """Runtime signaled that the stored conversation binding must be replaced."""
+
+    def __init__(
+        self,
+        message: str = "Stored conversation binding is invalid",
+        *,
+        conversation_id: Optional[str] = None,
+        operation: Optional[str] = None,
+        status_code: Optional[int] = None,
+    ) -> None:
+        super().__init__(message)
+        self.conversation_id = conversation_id
+        self.operation = operation
+        self.status_code = status_code
+
+
 @runtime_checkable
 class AgentDefinitionCatalog(Protocol):
     """Lookup surface for orchestration-visible agent definitions and capabilities."""
@@ -382,6 +399,7 @@ class OrchestrationFlowService(Protocol):
 
 __all__ = [
     "AgentDefinitionCatalog",
+    "FreshConversationRequiredError",
     "OrchestrationFlowService",
     "OrchestrationThreadService",
     "RuntimeConversationHandle",

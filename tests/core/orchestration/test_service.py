@@ -11,6 +11,7 @@ import pytest
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.agents.types import TerminalTurnResult
 from codex_autorunner.core.orchestration import (
+    FreshConversationRequiredError,
     HarnessBackedOrchestrationService,
     MappingAgentDefinitionCatalog,
     MessageRequest,
@@ -52,6 +53,7 @@ class _FakeHarness:
     backend_runtime_instance_id_value: Optional[str] = None
     next_turn_id: str = "backend-turn-1"
     ensure_ready_error: Optional[Exception] = None
+    start_turn_errors: dict[str, Exception] = field(default_factory=dict)
     ensure_ready_calls: list[Path] = field(default_factory=list)
     new_conversation_calls: list[tuple[Path, Optional[str]]] = field(
         default_factory=list
@@ -112,6 +114,9 @@ class _FakeHarness:
                 "input_items": input_items,
             }
         )
+        error = self.start_turn_errors.pop(conversation_id, None)
+        if error is not None:
+            raise error
         return _FakeTurn(turn_id=self.next_turn_id)
 
     async def start_review(
@@ -495,6 +500,69 @@ async def test_send_message_starts_fresh_when_backend_runtime_instance_is_stale(
     assert refreshed_thread.backend_runtime_instance_id == "runtime-new"
 
 
+async def test_send_message_retries_with_fresh_conversation_when_existing_binding_is_invalid(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = _FakeHarness(
+        next_conversation_id="backend-fresh-2",
+        start_turn_errors={
+            "backend-existing-1": FreshConversationRequiredError(
+                "stale binding",
+                conversation_id="backend-existing-1",
+                operation="start_turn",
+                status_code=400,
+            )
+        },
+    )
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        backend_thread_id="backend-existing-1",
+    )
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="codex_autorunner.core.orchestration.service",
+    ):
+        execution = await service.send_message(
+            MessageRequest(
+                target_id=thread.thread_target_id,
+                target_kind="thread",
+                message_text="hello again",
+            )
+        )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+    payloads = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "codex_autorunner.core.orchestration.service"
+    ]
+
+    assert execution.status == "running"
+    assert harness.resume_conversation_calls == [(workspace_root, "backend-existing-1")]
+    assert [call["conversation_id"] for call in harness.start_turn_calls] == [
+        "backend-existing-1",
+        "backend-fresh-2",
+    ]
+    assert harness.new_conversation_calls == [(workspace_root, None)]
+    assert refreshed_thread is not None
+    assert refreshed_thread.backend_thread_id == "backend-fresh-2"
+    assert any(
+        payload.get("event") == "orchestration.thread.refreshing_backend_binding"
+        and payload.get("thread_target_id") == thread.thread_target_id
+        and payload.get("execution_id") == execution.execution_id
+        and payload.get("backend_thread_id") == "backend-existing-1"
+        and payload.get("operation") == "start_turn"
+        and payload.get("status_code") == 400
+        for payload in payloads
+    )
+
+
 async def test_send_message_queues_when_thread_is_busy_by_default(
     tmp_path: Path,
 ) -> None:
@@ -659,6 +727,7 @@ async def test_send_message_interrupts_busy_thread_when_requested(
 
 async def test_interrupt_thread_uses_harness_and_marks_execution(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     harness = _FakeHarness()
     service = _build_service(tmp_path, harness)
@@ -673,12 +742,31 @@ async def test_interrupt_thread_uses_harness_and_marks_execution(
         )
     )
 
-    interrupted = await service.interrupt_thread(thread.thread_target_id)
+    with caplog.at_level(
+        logging.INFO,
+        logger="codex_autorunner.core.orchestration.service",
+    ):
+        interrupted = await service.interrupt_thread(thread.thread_target_id)
+
+    payloads = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "codex_autorunner.core.orchestration.service"
+    ]
 
     assert harness.interrupt_calls == [
         (workspace_root, "backend-conversation-1", "backend-turn-1")
     ]
     assert interrupted.status == "interrupted"
+    assert [
+        payload["event"]
+        for payload in payloads
+        if payload.get("event", "").startswith("orchestration.thread.interrupt_")
+    ] == [
+        "orchestration.thread.interrupt_requested",
+        "orchestration.thread.interrupt_acknowledged",
+        "orchestration.thread.interrupt_recorded",
+    ]
 
 
 async def test_stop_thread_recovers_missing_backend_thread_error(
