@@ -4961,7 +4961,7 @@ async def test_car_update_starts_worker_with_explicit_target(
         [
             _interaction(
                 name="update",
-                options=[{"type": 3, "name": "target", "value": "both"}],
+                options=[{"type": 3, "name": "target", "value": "all"}],
             )
         ]
     )
@@ -5010,7 +5010,7 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
         [
             _interaction(
                 name="update",
-                options=[{"type": 3, "name": "target", "value": "both"}],
+                options=[{"type": 3, "name": "target", "value": "all"}],
             )
         ]
     )

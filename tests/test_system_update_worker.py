@@ -155,7 +155,7 @@ def test_update_target_helpers_share_the_same_core_definitions() -> None:
         ("discord", "Discord only"),
     )
     assert update_target_command_choices(include_status=True) == (
-        {"name": "All", "value": "both"},
+        {"name": "All", "value": "all"},
         {"name": "Web only", "value": "web"},
         {"name": "Chat apps (Telegram + Discord)", "value": "chat"},
         {"name": "Telegram only", "value": "telegram"},

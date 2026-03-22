@@ -128,7 +128,10 @@ def update_target_command_choices(
     *, include_status: bool = False
 ) -> tuple[dict[str, str], ...]:
     choices = tuple(
-        {"name": definition.label, "value": definition.value}
+        {
+            "name": definition.label,
+            "value": "all" if definition.value == "both" else definition.value,
+        }
         for definition in all_update_target_definitions()
     )
     if not include_status:
