@@ -366,20 +366,20 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
             except Exception:
                 continue
             if candidate.is_dir():
-                node_type: Literal["file", "folder"] = "folder"
-                size_bytes: Optional[int] = None
+                root_node_type: Literal["file", "folder"] = "folder"
+                root_size_bytes: Optional[int] = None
             else:
-                node_type = "file"
+                root_node_type = "file"
                 try:
-                    size_bytes = candidate.stat().st_size
+                    root_size_bytes = candidate.stat().st_size
                 except OSError:
-                    size_bytes = None
+                    root_size_bytes = None
             nodes.append(
                 ArchiveTreeNode(
                     path=candidate.name,
                     name=candidate.name,
-                    type=node_type,
-                    size_bytes=size_bytes,
+                    type=root_node_type,
+                    size_bytes=root_size_bytes,
                     mtime=_safe_mtime(candidate),
                 )
             )
@@ -400,14 +400,14 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
             continue
 
         if child.is_dir():
-            node_type: Literal["file", "folder"] = "folder"
-            size_bytes: Optional[int] = None
+            child_node_type: Literal["file", "folder"] = "folder"
+            child_size_bytes: Optional[int] = None
         else:
-            node_type = "file"
+            child_node_type = "file"
             try:
-                size_bytes = child.stat().st_size
+                child_size_bytes = child.stat().st_size
             except OSError:
-                size_bytes = None
+                child_size_bytes = None
 
         try:
             node_path = resolved.relative_to(root_real).as_posix()
@@ -418,8 +418,8 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
             ArchiveTreeNode(
                 path=node_path,
                 name=child.name,
-                type=node_type,
-                size_bytes=size_bytes,
+                type=child_node_type,
+                size_bytes=child_size_bytes,
                 mtime=_safe_mtime(child),
             )
         )

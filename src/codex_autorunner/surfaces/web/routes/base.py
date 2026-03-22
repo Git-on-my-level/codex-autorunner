@@ -383,7 +383,9 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                                 )
                             )
                         break
-                    await ws.send_bytes(data)
+                    if not isinstance(data, (bytes, bytearray)):
+                        continue
+                    await ws.send_bytes(bytes(data))
                     if session_id:
                         _touch_session(session_id)
             except Exception:

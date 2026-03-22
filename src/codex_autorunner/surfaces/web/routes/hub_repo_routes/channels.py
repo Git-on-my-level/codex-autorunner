@@ -1273,7 +1273,7 @@ class HubChannelService:
                 display_name = f"PMA {agent} · {short_id}"
             else:
                 display_name = display_name.strip()
-            row: dict[str, Any] = {
+            thread_row: dict[str, Any] = {
                 "key": key,
                 "display": display_name,
                 "seen_at": thread.get("updated_at"),
@@ -1345,7 +1345,7 @@ class HubChannelService:
                             "turn_id": usage_payload.get("turn_id"),
                             "timestamp": usage_payload.get("timestamp"),
                         }
-            rows.append(row)
+            rows.append(thread_row)
         query_text = (query or "").strip().lower()
         if query_text:
             rows = [

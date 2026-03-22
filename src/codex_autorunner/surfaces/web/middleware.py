@@ -574,19 +574,26 @@ class RequestIdMiddleware:
             raise
         else:
             duration_ms = (time.monotonic() - start) * 1000
-            fields = {
-                "method": method,
-                "path": path,
-                "status": status_code or 200,
-                "duration_ms": round(duration_ms, 2),
-            }
             if should_log_size:
-                fields["response_size"] = response_size
-            log_event(
-                logger,
-                logging.INFO,
-                "http.response",
-                **fields,
-            )
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "http.response",
+                    method=method,
+                    path=path,
+                    status=status_code or 200,
+                    duration_ms=round(duration_ms, 2),
+                    response_size=response_size,
+                )
+            else:
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "http.response",
+                    method=method,
+                    path=path,
+                    status=status_code or 200,
+                    duration_ms=round(duration_ms, 2),
+                )
         finally:
             reset_request_id(token)

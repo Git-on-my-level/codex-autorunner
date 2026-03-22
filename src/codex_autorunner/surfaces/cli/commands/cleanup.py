@@ -62,18 +62,18 @@ def register_cleanup_commands(
     ) -> None:
         """Reap stale CAR-managed subprocesses and clean up registry records."""
         engine = require_repo_config(repo, hub)
-        reap_kwargs = {
-            "dry_run": dry_run,
-            "force": force,
-        }
         force_attestation_payload: Optional[dict[str, str]] = None
         if force:
             force_attestation_payload = _build_force_attestation(
                 force_attestation,
                 target_scope=f"cleanup.processes:{engine.repo_root}",
             )
-            reap_kwargs["force_attestation"] = force_attestation_payload
-        summary = reap_managed_processes(engine.repo_root, **reap_kwargs)
+        summary = reap_managed_processes(
+            engine.repo_root,
+            dry_run=dry_run,
+            force=force,
+            force_attestation=force_attestation_payload,
+        )
         prefix = "Dry run: " if dry_run else ""
         typer.echo(
             f"{prefix}killed {summary.killed}, signaled {summary.signaled}, removed {summary.removed} records, skipped {summary.skipped}"

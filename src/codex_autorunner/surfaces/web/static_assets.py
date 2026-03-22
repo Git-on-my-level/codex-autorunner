@@ -9,7 +9,7 @@ import time
 from contextlib import ExitStack
 from importlib import resources
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 from uuid import uuid4
 
 from ...core.logging_utils import safe_log
@@ -18,19 +18,20 @@ _ASSET_VERSION_TOKEN = "__CAR_ASSET_VERSION__"
 _ASSET_MANIFEST = "assets.json"
 
 
-def _load_asset_manifest(static_dir: Path) -> Optional[dict]:
+def _load_asset_manifest(static_dir: Path) -> Optional[dict[str, Any]]:
     manifest_path = static_dir / _ASSET_MANIFEST
     try:
         if manifest_path.exists():
             with manifest_path.open("r", encoding="utf-8") as f:
-                return json.load(f)
+                payload = json.load(f)
+                return payload if isinstance(payload, dict) else None
     except (json.JSONDecodeError, OSError):
         pass
     return None
 
 
-def _get_assets_from_manifest(manifest: dict) -> set:
-    assets = set()
+def _get_assets_from_manifest(manifest: dict[str, Any]) -> set[str]:
+    assets: set[str] = set()
     for entry in manifest.get("generated", []):
         assets.add(entry["path"])
     for entry in manifest.get("manual", []):
@@ -55,11 +56,11 @@ def missing_static_assets(static_dir: Path) -> list[str]:
     manifest = _load_asset_manifest(static_dir)
     if manifest:
         assets = _get_assets_from_manifest(manifest)
-        missing = []
+        missing_assets: list[str] = []
         for asset in assets:
             if not (static_dir / asset).exists():
-                missing.append(asset)
-        return missing
+                missing_assets.append(asset)
+        return missing_assets
 
     missing: list[str] = []
     for rel_path in _REQUIRED_STATIC_ASSETS:

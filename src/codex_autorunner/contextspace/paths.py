@@ -53,7 +53,9 @@ def read_contextspace_doc(repo_root: Path, kind: str) -> str:
 
 def read_contextspace_docs(repo_root: Path) -> dict[ContextspaceDocKind, str]:
     return {
-        entry.kind: read_contextspace_doc(repo_root, entry.kind)
+        cast(ContextspaceDocKind, entry.kind): read_contextspace_doc(
+            repo_root, entry.kind
+        )
         for entry in CONTEXTSPACE_DOC_CATALOG
     }
 

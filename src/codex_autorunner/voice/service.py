@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import uuid
-from typing import Callable, Optional
+from typing import Mapping, Optional, Protocol, cast, overload
 
 from ..core.circuit_breaker import CircuitBreaker
 from ..core.exceptions import CodexError, PermanentError, TransientError
@@ -38,6 +38,31 @@ class VoicePermanentError(VoiceServiceError, PermanentError):
     pass
 
 
+class ProviderResolver(Protocol):
+    @overload
+    def __call__(self, config: VoiceConfig) -> object: ...
+
+    @overload
+    def __call__(
+        self,
+        config: VoiceConfig,
+        *,
+        logger: Optional[logging.Logger],
+    ) -> object: ...
+
+    @overload
+    def __call__(
+        self,
+        config: VoiceConfig,
+        *,
+        logger: Optional[logging.Logger],
+        env: Optional[Mapping[str, str]],
+    ) -> object: ...
+
+
+DEFAULT_PROVIDER_RESOLVER = cast(ProviderResolver, resolve_speech_provider)
+
+
 class VoiceService:
     """
     Thin wrapper that wires the shared PushToTalkCapture into HTTP handlers.
@@ -48,7 +73,7 @@ class VoiceService:
         self,
         config: VoiceConfig,
         logger: Optional[logging.Logger] = None,
-        provider_resolver: Callable[[VoiceConfig], object] = resolve_speech_provider,
+        provider_resolver: ProviderResolver = DEFAULT_PROVIDER_RESOLVER,
         provider: Optional[object] = None,
         env: Optional[dict] = None,
     ) -> None:

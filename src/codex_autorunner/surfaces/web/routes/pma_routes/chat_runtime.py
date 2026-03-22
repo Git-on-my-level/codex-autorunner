@@ -5,7 +5,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -779,7 +779,7 @@ async def _execute_opencode(
 async def _execute_queue_item(
     runtime: PmaRuntimeState,
     item: Any,
-    request: Request,
+    request: Any,
 ) -> dict[str, Any]:
     hub_root = request.app.state.config.root
     payload = item.payload
@@ -873,7 +873,13 @@ async def _execute_queue_item(
     from .....agents.registry import validate_agent_id
 
     agents, available_default = _available_agents(request)
-    available_ids = {entry.get("id") for entry in agents if isinstance(entry, dict)}
+    available_ids = {
+        agent_id
+        for entry in agents
+        if isinstance(entry, dict)
+        for agent_id in [entry.get("id")]
+        if isinstance(agent_id, str)
+    }
 
     try:
         agent_id = validate_agent_id(agent or "")
@@ -1384,7 +1390,7 @@ def build_chat_runtime_router(
         runtime = get_runtime_state()
         queue = runtime.get_pma_queue(request.app.state.config.root)
         summary = await queue.get_queue_summary()
-        return summary
+        return cast(dict[str, Any], summary)
 
     @router.get("/queue/{lane_id:path}")
     async def pma_lane_queue_status(request: Request, lane_id: str) -> dict[str, Any]:

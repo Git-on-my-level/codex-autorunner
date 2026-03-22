@@ -2,23 +2,49 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 if TYPE_CHECKING:
-    from ....core.flows import FlowController, FlowDefinition
+    from ....core.flows import FlowController, FlowDefinition, FlowRunRecord
     from . import FlowRoutesState
 
 _logger = logging.getLogger(__name__)
 
 
+def _flow_run_record_payload(record: "FlowRunRecord") -> dict[str, Any]:
+    return {
+        "id": record.id,
+        "flow_type": record.flow_type,
+        "status": (
+            record.status.value
+            if hasattr(record.status, "value")
+            else str(record.status)
+        ),
+        "input_data": dict(record.input_data or {}),
+        "state": dict(record.state or {}),
+        "current_step": record.current_step,
+        "stop_requested": record.stop_requested,
+        "created_at": record.created_at,
+        "started_at": record.started_at,
+        "finished_at": record.finished_at,
+        "error_message": record.error_message,
+        "metadata": dict(record.metadata or {}),
+    }
+
+
 def build_flow_definition(
     repo_root: Path, flow_type: str, state: "FlowRoutesState"
 ) -> FlowDefinition:
+    from ....core.flows import FlowDefinition
+
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
     with state.lock:
-        if key in state.definition_cache:
-            return state.definition_cache[key]
+        cached_definition = cast(
+            Optional[FlowDefinition], state.definition_cache.get(key)
+        )
+        if cached_definition is not None:
+            return cached_definition
 
     from ....core.config import load_repo_config
     from ....core.runtime import RuntimeContext
@@ -52,11 +78,14 @@ def build_flow_definition(
 def get_flow_controller(
     repo_root: Path, flow_type: str, state: "FlowRoutesState"
 ) -> FlowController:
+    from ....core.flows import FlowController
+    from ...services import flow_store as flow_store_service
+
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
     with state.lock:
-        if key in state.controller_cache:
-            controller = state.controller_cache[key]
+        controller = cast(Optional[FlowController], state.controller_cache.get(key))
+        if controller is not None:
             try:
                 controller.initialize()
             except Exception:
@@ -64,7 +93,13 @@ def get_flow_controller(
             return controller
 
     definition = build_flow_definition(repo_root, flow_type, state)
-    controller = definition.build_controller(repo_root)
+    db_path, artifacts_root = flow_store_service.flow_paths(repo_root)
+    controller = FlowController(
+        definition=definition,
+        db_path=db_path,
+        artifacts_root=artifacts_root,
+    )
+    controller.initialize()
     with state.lock:
         state.controller_cache[key] = controller
     return controller
@@ -80,32 +115,10 @@ def get_flow_record(
         store = flow_store_service.require_flow_store(repo_root, logger=_logger)
         if store is None:
             return None
-        record = store.get_run(run_id)
+        record = store.get_flow_run(run_id)
         if record is None:
             return None
-        return {
-            "id": record.id,
-            "flow_type": record.flow_type,
-            "status": (
-                record.status.value
-                if hasattr(record.status, "value")
-                else str(record.status)
-            ),
-            "current_ticket_index": record.current_ticket_index,
-            "current_ticket_path": (
-                str(record.current_ticket_path) if record.current_ticket_path else None
-            ),
-            "created_at": (
-                record.created_at.isoformat()
-                if hasattr(record.created_at, "isoformat")
-                else str(record.created_at)
-            ),
-            "updated_at": (
-                record.updated_at.isoformat()
-                if hasattr(record.updated_at, "isoformat")
-                else str(record.updated_at)
-            ),
-        }
+        return _flow_run_record_payload(record)
     except Exception as exc:
         recovered = recover_flow_store_if_possible(repo_root, "ticket_flow", state, exc)
         if not recovered:
@@ -114,33 +127,9 @@ def get_flow_record(
             store = flow_store_service.require_flow_store(repo_root, logger=_logger)
             if store is None:
                 return None
-            record = store.get_run(run_id)
+            record = store.get_flow_run(run_id)
             if record is None:
                 return None
-            return {
-                "id": record.id,
-                "flow_type": record.flow_type,
-                "status": (
-                    record.status.value
-                    if hasattr(record.status, "value")
-                    else str(record.status)
-                ),
-                "current_ticket_index": record.current_ticket_index,
-                "current_ticket_path": (
-                    str(record.current_ticket_path)
-                    if record.current_ticket_path
-                    else None
-                ),
-                "created_at": (
-                    record.created_at.isoformat()
-                    if hasattr(record.created_at, "isoformat")
-                    else str(record.created_at)
-                ),
-                "updated_at": (
-                    record.updated_at.isoformat()
-                    if hasattr(record.updated_at, "isoformat")
-                    else str(record.updated_at)
-                ),
-            }
+            return _flow_run_record_payload(record)
         except Exception:
             return None

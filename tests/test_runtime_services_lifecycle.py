@@ -9,6 +9,8 @@ import pytest
 from fastapi import FastAPI
 
 from codex_autorunner.core.runtime_services import RuntimeServices
+from codex_autorunner.surfaces.web import app as hub_app_module
+from codex_autorunner.surfaces.web import app_builders as app_builders_module
 from codex_autorunner.surfaces.web.app_builders import _app_lifespan
 
 
@@ -34,6 +36,14 @@ class _FakeSupervisor:
 
     async def close_all(self) -> None:
         self.closed += 1
+
+
+class _FakePruneSupervisor:
+    def __init__(self) -> None:
+        self.pruned = 0
+
+    async def prune_idle(self) -> None:
+        self.pruned += 1
 
 
 def test_runtime_services_close_closes_owned_resources(tmp_path: Path) -> None:
@@ -141,3 +151,53 @@ async def test_repo_app_lifespan_closes_runtime_services(
         pass
 
     assert runtime_services.closed == 1
+
+
+@pytest.mark.asyncio
+async def test_repo_prune_loop_uses_explicit_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = _FakePruneSupervisor()
+    sleep_calls = 0
+
+    async def _fake_sleep(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(app_builders_module.asyncio, "sleep", _fake_sleep)
+
+    await app_builders_module._run_prune_loop(
+        interval_seconds=1.0,
+        supervisor=supervisor,
+        logger=logging.getLogger("test.repo.prune"),
+        failure_message="repo prune failed",
+    )
+
+    assert supervisor.pruned == 1
+
+
+@pytest.mark.asyncio
+async def test_hub_prune_loop_uses_explicit_supervisor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = _FakePruneSupervisor()
+    sleep_calls = 0
+
+    async def _fake_sleep(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(hub_app_module.asyncio, "sleep", _fake_sleep)
+
+    await hub_app_module._run_prune_loop(
+        interval_seconds=1.0,
+        supervisor=supervisor,
+        logger=logging.getLogger("test.hub.prune"),
+        failure_message="hub prune failed",
+    )
+
+    assert supervisor.pruned == 1

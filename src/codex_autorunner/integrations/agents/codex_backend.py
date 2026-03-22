@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import inspect
 import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, Optional, Union
@@ -514,9 +513,7 @@ class CodexAppServerBackend(AgentBackend):
         )
 
         if self._approval_handler is not None:
-            external_decision = self._approval_handler(request)
-            if inspect.isawaitable(external_decision):
-                external_decision = await external_decision
+            external_decision = await self._approval_handler(request)
             if isinstance(external_decision, dict):
                 return external_decision
             if isinstance(external_decision, str) and external_decision.strip():

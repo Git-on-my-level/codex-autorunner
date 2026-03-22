@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from .....core.flows import FlowStore
 from .....core.flows.models import FlowRunRecord, FlowRunStatus
@@ -22,6 +23,7 @@ _logger = logging.getLogger(__name__)
 
 _FLOW_DB_CORRUPT_SUFFIX = ".corrupt"
 _FLOW_DB_NOTICE_SUFFIX = ".corrupt.json"
+_WorkerHandle = tuple[Optional[subprocess.Popen[Any]], Any, Any]
 
 
 def flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -245,18 +247,18 @@ def evict_cached_controller(
 ) -> None:
     key = (repo_root.resolve(), flow_type)
     with state.lock:
-        controller = state.controller_cache.pop(key, None)
+        controller = cast(Optional[object], state.controller_cache.pop(key, None))
     if not controller:
         return
     try:
-        controller.shutdown()
+        cast(Any, controller).shutdown()
     except Exception:
         pass
 
 
 def cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
     with state.lock:
-        handle = state.active_workers.pop(run_id, None)
+        handle = cast(Optional[_WorkerHandle], state.active_workers.pop(run_id, None))
     if not handle:
         return
 

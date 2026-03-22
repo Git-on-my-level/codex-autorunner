@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, cast
 
 import typer
 
@@ -135,14 +135,16 @@ def _archive_flow_run_artifacts(
     if force:
         validate_force_attestation(force_attestation)
     if not dry_run:
-        archive_kwargs = {
-            "run_id": record.id,
-            "force": force,
-            "delete_run": delete_run,
-        }
-        if force:
-            archive_kwargs["force_attestation"] = force_attestation
-        return _archive_flow_run_artifacts_core(repo_root, **archive_kwargs)
+        return cast(
+            dict[str, Any],
+            _archive_flow_run_artifacts_core(
+                repo_root,
+                run_id=record.id,
+                force=force,
+                delete_run=delete_run,
+                force_attestation=force_attestation if force else None,
+            ),
+        )
 
     status = record.status
     terminal = status.is_terminal()
@@ -310,20 +312,16 @@ def register_hub_runs_commands(
                         if ts is None or ts > cutoff:
                             continue
                     try:
-                        archive_kwargs = {
-                            "repo_root": repo_root,
-                            "store": store,
-                            "record": record,
-                            "force": force,
-                            "delete_run": parsed_delete_run,
-                            "dry_run": dry_run,
-                        }
-                        if force:
-                            archive_kwargs["force_attestation"] = (
-                                force_attestation_payload
-                            )
                         summary = _archive_flow_run_artifacts(
-                            **archive_kwargs,
+                            repo_root=repo_root,
+                            store=store,
+                            record=record,
+                            force=force,
+                            delete_run=parsed_delete_run,
+                            dry_run=dry_run,
+                            force_attestation=(
+                                force_attestation_payload if force else None
+                            ),
                         )
                         summary["repo_id"] = entry.id
                         results.append(summary)
