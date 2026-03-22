@@ -660,6 +660,17 @@ def _event_received_at_iso(event: dict[str, Any]) -> Optional[str]:
     return iso_from_event_ms(received_at_ms)
 
 
+def _record_serialized_tail_event(
+    snapshot: dict[str, Any], serialized_event: dict[str, Any]
+) -> int:
+    event_id = int(serialized_event.get("event_id") or 0)
+    snapshot_events = snapshot.get("events")
+    if isinstance(snapshot_events, list):
+        snapshot_events.append(serialized_event)
+    snapshot["last_event_at"] = serialized_event.get("received_at")
+    return event_id
+
+
 async def _build_managed_thread_tail_snapshot(
     *,
     request: Request,
@@ -1187,17 +1198,13 @@ def build_managed_thread_tail_routes(
                     snapshot["last_activity_at"] = activity_at
                 if serialized_entry is None:
                     continue
-                event_id = int(serialized_entry.get("event_id") or 0)
+                event_id = _record_serialized_tail_event(snapshot, serialized_entry)
                 if event_id > 0:
                     last_event_id = event_id
-                snapshot_events = snapshot.get("events")
-                if isinstance(snapshot_events, list):
-                    snapshot_events.append(serialized_entry)
-                snapshot["last_event_at"] = serialized.get("received_at")
                 yield (
                     "event: tail\n"
                     f"id: {event_id}\n"
-                    f"data: {json.dumps(serialized, ensure_ascii=True)}\n\n"
+                    f"data: {json.dumps(serialized_entry, ensure_ascii=True)}\n\n"
                 )
 
         return StreamingResponse(

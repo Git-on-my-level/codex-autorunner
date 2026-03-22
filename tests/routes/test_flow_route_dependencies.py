@@ -89,3 +89,28 @@ def test_safe_list_flow_runs_dependency_adapter_uses_flow_store_service(
     assert logger.name == (
         "codex_autorunner.surfaces.web.routes.flow_routes.dependencies"
     )
+
+
+def test_get_flow_controller_dependency_adapter_imports_core_controller(
+    tmp_path: Path, monkeypatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    state = object()
+    observed: dict[str, object] = {}
+    sentinel = object()
+
+    def _fake_get_flow_controller(
+        repo_root_arg: Path, flow_type: str, state_arg: object
+    ) -> object:
+        observed["call"] = (repo_root_arg, flow_type, state_arg)
+        return sentinel
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.flow_routes.definitions.get_flow_controller",
+        _fake_get_flow_controller,
+    )
+
+    deps = build_default_flow_route_dependencies()
+
+    assert deps.get_flow_controller(repo_root, "ticket_flow", state) is sentinel
+    assert observed["call"] == (repo_root, "ticket_flow", state)

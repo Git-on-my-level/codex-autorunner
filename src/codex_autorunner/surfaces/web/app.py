@@ -52,6 +52,24 @@ class _IdlePrunable(Protocol):
     async def prune_idle(self) -> None: ...
 
 
+async def _run_prune_loop(
+    *,
+    interval_seconds: float,
+    supervisor: _IdlePrunable,
+    logger: logging.Logger,
+    failure_message: str,
+) -> None:
+    try:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await supervisor.prune_idle()
+            except Exception as exc:
+                safe_log(logger, logging.WARNING, failure_message, exc)
+    except asyncio.CancelledError:
+        return
+
+
 def create_hub_app(
     hub_root: Optional[Path] = None, base_path: Optional[str] = None
 ) -> ASGIApp:
@@ -215,23 +233,17 @@ def create_hub_app(
         if app_server_supervisor is not None and isinstance(
             app_server_prune_interval_raw, (int, float)
         ):
-            prune_supervisor = app_server_supervisor
             app_server_prune_interval = float(app_server_prune_interval_raw)
-
-            async def _app_server_prune_loop():
-                while True:
-                    await asyncio.sleep(app_server_prune_interval)
-                    try:
-                        await prune_supervisor.prune_idle()
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "Hub app-server prune task failed",
-                            exc,
-                        )
-
-            tasks.append(asyncio.create_task(_app_server_prune_loop()))
+            tasks.append(
+                asyncio.create_task(
+                    _run_prune_loop(
+                        interval_seconds=app_server_prune_interval,
+                        supervisor=app_server_supervisor,
+                        logger=app.state.logger,
+                        failure_message="Hub app-server prune task failed",
+                    )
+                )
+            )
         opencode_supervisor = cast(
             Optional[_IdlePrunable],
             getattr(app.state, "opencode_supervisor", None),
@@ -242,23 +254,17 @@ def create_hub_app(
         if opencode_supervisor is not None and isinstance(
             opencode_prune_interval_raw, (int, float)
         ):
-            prune_supervisor = opencode_supervisor
             opencode_prune_interval = float(opencode_prune_interval_raw)
-
-            async def _opencode_prune_loop():
-                while True:
-                    await asyncio.sleep(opencode_prune_interval)
-                    try:
-                        await prune_supervisor.prune_idle()
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "Hub opencode prune task failed",
-                            exc,
-                        )
-
-            tasks.append(asyncio.create_task(_opencode_prune_loop()))
+            tasks.append(
+                asyncio.create_task(
+                    _run_prune_loop(
+                        interval_seconds=opencode_prune_interval,
+                        supervisor=opencode_supervisor,
+                        logger=app.state.logger,
+                        failure_message="Hub opencode prune task failed",
+                    )
+                )
+            )
         pma_cfg = getattr(app.state.config, "pma", None)
         if pma_cfg is not None and pma_cfg.enabled:
             starter = getattr(app.state, "pma_lane_worker_start", None)

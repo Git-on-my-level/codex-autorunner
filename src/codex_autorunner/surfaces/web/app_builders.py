@@ -37,6 +37,24 @@ class _IdlePrunable(Protocol):
     async def prune_idle(self) -> None: ...
 
 
+async def _run_prune_loop(
+    *,
+    interval_seconds: float,
+    supervisor: _IdlePrunable,
+    logger: logging.Logger,
+    failure_message: str,
+) -> None:
+    try:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await supervisor.prune_idle()
+            except Exception as exc:
+                safe_log(logger, logging.WARNING, failure_message, exc)
+    except asyncio.CancelledError:
+        return
+
+
 def _app_lifespan(context: AppContext):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -145,26 +163,17 @@ def _app_lifespan(context: AppContext):
         if app_server_supervisor is not None and isinstance(
             app_server_prune_interval_raw, (int, float)
         ):
-            prune_supervisor = app_server_supervisor
             app_server_prune_interval = float(app_server_prune_interval_raw)
-
-            async def _app_server_prune_loop():
-                try:
-                    while True:
-                        await asyncio.sleep(app_server_prune_interval)
-                        try:
-                            await prune_supervisor.prune_idle()
-                        except Exception as exc:
-                            safe_log(
-                                app.state.logger,
-                                logging.WARNING,
-                                "App-server prune task failed",
-                                exc,
-                            )
-                except asyncio.CancelledError:
-                    return
-
-            tasks.append(asyncio.create_task(_app_server_prune_loop()))
+            tasks.append(
+                asyncio.create_task(
+                    _run_prune_loop(
+                        interval_seconds=app_server_prune_interval,
+                        supervisor=app_server_supervisor,
+                        logger=app.state.logger,
+                        failure_message="App-server prune task failed",
+                    )
+                )
+            )
 
         opencode_supervisor = cast(
             Optional[_IdlePrunable],
@@ -176,26 +185,17 @@ def _app_lifespan(context: AppContext):
         if opencode_supervisor is not None and isinstance(
             opencode_prune_interval_raw, (int, float)
         ):
-            prune_supervisor = opencode_supervisor
             opencode_prune_interval = float(opencode_prune_interval_raw)
-
-            async def _opencode_prune_loop():
-                try:
-                    while True:
-                        await asyncio.sleep(opencode_prune_interval)
-                        try:
-                            await prune_supervisor.prune_idle()
-                        except Exception as exc:
-                            safe_log(
-                                app.state.logger,
-                                logging.WARNING,
-                                "OpenCode prune task failed",
-                                exc,
-                            )
-                except asyncio.CancelledError:
-                    return
-
-            tasks.append(asyncio.create_task(_opencode_prune_loop()))
+            tasks.append(
+                asyncio.create_task(
+                    _run_prune_loop(
+                        interval_seconds=opencode_prune_interval,
+                        supervisor=opencode_supervisor,
+                        logger=app.state.logger,
+                        failure_message="OpenCode prune task failed",
+                    )
+                )
+            )
 
         if (
             context.tui_idle_seconds is not None
