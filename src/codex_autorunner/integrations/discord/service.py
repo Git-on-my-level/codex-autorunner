@@ -6600,16 +6600,39 @@ class DiscordBotService:
 
     def _active_update_session_count(self) -> int:
         try:
-            threads = self._discord_thread_service().list_thread_targets(
+            orchestration_service = self._discord_thread_service()
+            threads = orchestration_service.list_thread_targets(
                 lifecycle_status="active"
             )
         except Exception:
             return 0
-        return sum(
-            1
-            for thread in threads
-            if str(getattr(thread, "status", "") or "").strip().lower() == "running"
+        get_running_execution = getattr(
+            orchestration_service, "get_running_execution", None
         )
+        if not callable(get_running_execution):
+            return sum(
+                1
+                for thread in threads
+                if str(getattr(thread, "status", "") or "").strip().lower() == "running"
+            )
+
+        active_count = 0
+        for thread in threads:
+            thread_target_id = str(
+                getattr(thread, "thread_target_id", "") or ""
+            ).strip()
+            if not thread_target_id:
+                continue
+            try:
+                if get_running_execution(thread_target_id) is not None:
+                    active_count += 1
+            except Exception:
+                if (
+                    str(getattr(thread, "status", "") or "").strip().lower()
+                    == "running"
+                ):
+                    active_count += 1
+        return active_count
 
     def _build_update_confirmation_components(
         self,
