@@ -526,7 +526,12 @@ async def test_pause_bridge_falls_back_when_only_turn_summary_exists(
                 input_data={},
                 state={
                     "ticket_engine": {
-                        "reason": "Investigate the stalled recovery before resuming."
+                        "reason": "Agent turn failed. Fix the issue and resume.",
+                        "reason_details": (
+                            "Error: Turn stalled and recovery exhausted: attempts=8, "
+                            "max_attempts=8, reason=resume_non_terminal, "
+                            "last_method=turn/diff/updated, status=inProgress."
+                        ),
                     }
                 },
             )
@@ -535,7 +540,12 @@ async def test_pause_bridge_falls_back_when_only_turn_summary_exists(
             FlowRunStatus.PAUSED,
             state={
                 "ticket_engine": {
-                    "reason": "Investigate the stalled recovery before resuming."
+                    "reason": "Agent turn failed. Fix the issue and resume.",
+                    "reason_details": (
+                        "Error: Turn stalled and recovery exhausted: attempts=8, "
+                        "max_attempts=8, reason=resume_non_terminal, "
+                        "last_method=turn/diff/updated, status=inProgress."
+                    ),
                 }
             },
         )
@@ -573,7 +583,12 @@ async def test_pause_bridge_falls_back_when_only_turn_summary_exists(
         assert len(queued) == 1
         content = str(queued[0].payload_json.get("content", ""))
         assert f"Ticket flow paused (run {run_id}). Latest dispatch #0001:" in content
-        assert "Reason: Investigate the stalled recovery before resuming." in content
+        assert "Reason: Agent turn failed. Fix the issue and resume." in content
+        assert (
+            "Details: Error: Turn stalled and recovery exhausted: attempts=8, "
+            "max_attempts=8, reason=resume_non_terminal, "
+            "last_method=turn/diff/updated, status=inProgress."
+        ) in content
         assert "Summary that should stay out of Discord." not in content
         assert "Use `/car flow resume` to continue." in content
 
@@ -581,6 +596,10 @@ async def test_pause_bridge_falls_back_when_only_turn_summary_exists(
         assert binding is not None
         assert binding["last_pause_run_id"] == run_id
         assert binding["last_pause_dispatch_seq"] == "0001"
+
+        await service._scan_and_enqueue_pause_notifications()
+        queued = await store.list_outbox()
+        assert len(queued) == 1
     finally:
         await store.close()
 

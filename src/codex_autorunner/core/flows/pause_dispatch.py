@@ -82,6 +82,10 @@ def format_pause_reason(record: FlowRunRecord) -> str:
         if reason_raw
         else "Paused without details."
     )
+    reason_details_raw = engine.get("reason_details")
+    if isinstance(reason_details_raw, str) and reason_details_raw.strip():
+        details = _format_public_error(reason_details_raw, limit=500)
+        return f"Reason: {reason}\n\nDetails: {details}"
     return f"Reason: {reason}"
 
 
@@ -170,16 +174,20 @@ def list_unseen_ticket_flow_dispatches(
             )
         ]
 
+    unseen_seq_dirs = [
+        dispatch_dir
+        for dispatch_dir in seq_dirs
+        if last_seen_seq is None or int(dispatch_dir.name) > last_seen_seq
+    ]
+
     snapshots: list[TicketFlowDispatchSnapshot] = []
-    saw_notification_worthy_history = False
-    for dispatch_dir in seq_dirs:
+    saw_notification_worthy_unseen_history = False
+    for dispatch_dir in unseen_seq_dirs:
         seq = dispatch_dir.name
         dispatch_path = dispatch_dir / "DISPATCH.md"
         dispatch, errors = parse_dispatch(dispatch_path)
         if errors or dispatch is None:
-            saw_notification_worthy_history = True
-            if last_seen_seq is not None and int(seq) <= last_seen_seq:
-                continue
+            saw_notification_worthy_unseen_history = True
             snapshots.append(
                 TicketFlowDispatchSnapshot(
                     run_id=latest.id,
@@ -200,9 +208,7 @@ def list_unseen_ticket_flow_dispatches(
             )
             continue
         if dispatch.mode != "turn_summary":
-            saw_notification_worthy_history = True
-        if last_seen_seq is not None and int(seq) <= last_seen_seq:
-            continue
+            saw_notification_worthy_unseen_history = True
         if dispatch.mode == "turn_summary":
             continue
         snapshots.append(
@@ -220,8 +226,14 @@ def list_unseen_ticket_flow_dispatches(
             )
         )
 
-    if not snapshots and run_is_paused and not saw_notification_worthy_history:
-        fallback_seq = latest_dispatch_seq(paths.dispatch_history_dir) or "paused"
+    if (
+        not snapshots
+        and run_is_paused
+        and last_seen_seq is None
+        and unseen_seq_dirs
+        and not saw_notification_worthy_unseen_history
+    ):
+        fallback_seq = unseen_seq_dirs[-1].name
         snapshots.append(
             TicketFlowDispatchSnapshot(
                 run_id=latest.id,

@@ -282,6 +282,66 @@ def test_list_unseen_ticket_flow_dispatches_does_not_repeat_after_seen_pause_the
     assert snapshots == []
 
 
+def test_list_unseen_ticket_flow_dispatches_respects_seen_summary_only_fallback(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_repo(tmp_path)
+    _create_paused_run(
+        repo_root,
+        run_id="run-seen-summary-only",
+        state={"ticket_engine": {"reason": "Investigate the stalled turn."}},
+    )
+
+    history_root = (
+        repo_root
+        / ".codex-autorunner"
+        / "runs"
+        / "run-seen-summary-only"
+        / "dispatch_history"
+    )
+    (history_root / "0001").mkdir(parents=True)
+    (history_root / "0001" / "DISPATCH.md").write_text(
+        "---\nmode: turn_summary\n---\n\nSummary that should not repeat the fallback.\n",
+        encoding="utf-8",
+    )
+
+    snapshots = list_unseen_ticket_flow_dispatches(
+        repo_root,
+        last_run_id="run-seen-summary-only",
+        last_dispatch_seq="0001",
+    )
+    assert snapshots == []
+
+
+def test_load_latest_paused_ticket_flow_dispatch_includes_reason_details(
+    tmp_path: Path,
+) -> None:
+    repo_root = _init_repo(tmp_path)
+    _create_paused_run(
+        repo_root,
+        run_id="run-error-details",
+        state={
+            "ticket_engine": {
+                "reason": "Agent turn failed. Fix the issue and resume.",
+                "reason_details": (
+                    "Error: Turn stalled and recovery exhausted: attempts=8, "
+                    "max_attempts=8, reason=resume_non_terminal, "
+                    "last_method=turn/diff/updated, status=inProgress."
+                ),
+            }
+        },
+    )
+
+    snapshot = load_latest_paused_ticket_flow_dispatch(repo_root)
+    assert snapshot is not None
+    assert snapshot.dispatch_markdown == (
+        "Reason: Agent turn failed. Fix the issue and resume.\n\n"
+        "Details: Error: Turn stalled and recovery exhausted: attempts=8, "
+        "max_attempts=8, reason=resume_non_terminal, "
+        "last_method=turn/diff/updated, status=inProgress."
+    )
+
+
 def test_latest_dispatch_seq_ignores_non_numeric_entries(tmp_path: Path) -> None:
     history = tmp_path / "dispatch_history"
     history.mkdir()
