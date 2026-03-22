@@ -2061,20 +2061,12 @@ def _stale_terminal_ticket_flow_run_reason(
 ) -> Optional[str]:
     if record.status not in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED):
         return None
-    has_tickets = _ticket_flow_has_tickets(repo_root)
-    if has_tickets is None:
-        return None
-    if has_tickets:
-        return None
-    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    if record.status == FlowRunStatus.STOPPED:
-        return (
-            "Latest stopped run is stale; ticket flow status/resume preflight would "
-            "fail because no tickets remain in "
-            f"{safe_relpath(ticket_dir, repo_root)}"
-        )
     if not _terminal_ticket_flow_failure_is_worker_dead(record):
         return None
+    has_tickets = _ticket_flow_has_tickets(repo_root)
+    if has_tickets is None or has_tickets:
+        return None
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
     return (
         "Latest failed run is stale; worker died and no tickets remain in "
         f"{safe_relpath(ticket_dir, repo_root)}"

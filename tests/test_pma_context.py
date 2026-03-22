@@ -916,7 +916,7 @@ def test_build_hub_snapshot_filters_dismissed_stopped_run_from_inbox_and_queue(
     assert (snapshot.get("action_queue") or []) == []
 
 
-def test_build_hub_snapshot_suppresses_stale_stopped_run_when_no_tickets_remain(
+def test_build_hub_snapshot_keeps_stopped_run_visible_when_no_tickets_remain(
     hub_env,
 ) -> None:
     ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
@@ -935,13 +935,16 @@ def test_build_hub_snapshot_suppresses_stale_stopped_run_when_no_tickets_remain(
     finally:
         supervisor.shutdown()
 
-    assert (snapshot.get("inbox") or []) == []
-    assert (snapshot.get("action_queue") or []) == []
-    repos = snapshot.get("repos") or []
-    repo_entry = next(repo for repo in repos if repo.get("id") == hub_env.repo_id)
-    canonical = repo_entry.get("canonical_state_v1") or {}
-    assert canonical.get("latest_run_id") == run_id
-    assert canonical.get("latest_run_status") == "stopped"
+    inbox = snapshot.get("inbox") or []
+    assert len(inbox) == 1
+    assert inbox[0]["run_id"] == run_id
+    assert inbox[0]["item_type"] == "run_stopped"
+    assert inbox[0]["next_action"] == "diagnose_or_restart"
+
+    queue = snapshot.get("action_queue") or []
+    assert len(queue) == 1
+    assert queue[0]["run_id"] == run_id
+    assert queue[0]["queue_source"] == "ticket_flow_inbox"
 
 
 def test_build_hub_snapshot_repo_entries_include_canonical_state_v1(hub_env) -> None:
