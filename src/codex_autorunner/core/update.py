@@ -261,8 +261,8 @@ def _default_update_target(
             linux_service_names=linux_service_names,
         )
     }
-    if "both" in values:
-        return "both"
+    if "all" in values:
+        return "all"
     return "web"
 
 
@@ -317,9 +317,9 @@ def _update_target_restarts_surface(
     if normalized_surface == "web":
         return bool(definition.includes_web)
     if normalized_surface == "telegram":
-        return definition.value in {"both", "chat", "telegram"}
+        return definition.value in {"all", "chat", "telegram"}
     if normalized_surface == "discord":
-        return definition.value in {"both", "chat", "discord"}
+        return definition.value in {"all", "chat", "discord"}
     raise ValueError(f"Unsupported update surface: {surface}")
 
 
@@ -653,7 +653,7 @@ def _system_update_worker(
     repo_ref: str,
     update_dir: Path,
     logger: logging.Logger,
-    update_target: str = "both",
+    update_target: str = "all",
     update_backend: str = "auto",
     skip_checks: bool = False,
     linux_hub_service_name: Optional[str] = None,
@@ -837,7 +837,7 @@ def _spawn_update_process(
     repo_ref: str,
     update_dir: Path,
     logger: logging.Logger,
-    update_target: str = "both",
+    update_target: str = "all",
     update_backend: str = "auto",
     skip_checks: bool = False,
     notify_chat_id: Optional[int] = None,
