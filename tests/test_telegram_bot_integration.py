@@ -1377,7 +1377,7 @@ async def test_update_with_explicit_target_prompts_for_confirmation_when_turn_ac
     finally:
         await service._app_server_supervisor.close_all()
 
-    assert captured == {"message_id": 20, "update_target": "both"}
+    assert captured == {"message_id": 20, "update_target": "all"}
 
 
 @pytest.mark.anyio

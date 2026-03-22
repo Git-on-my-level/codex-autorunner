@@ -11,7 +11,7 @@ set -euo pipefail
 # Overrides:
 #   PACKAGE_SRC                  Path to this repo (default: scripts/..)
 #   UPDATE_STATUS_PATH           JSON status path maintained by update worker
-#   UPDATE_TARGET                both|web|chat|telegram|discord (default: both)
+#   UPDATE_TARGET                all|web|chat|telegram|discord (default: all)
 #   UPDATE_HUB_SERVICE_NAME      systemd user service for hub (default: car-hub)
 #   UPDATE_TELEGRAM_SERVICE_NAME systemd user service for telegram (default: car-telegram)
 #   UPDATE_DISCORD_SERVICE_NAME  systemd user service for discord (default: car-discord)
@@ -24,7 +24,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
 UPDATE_STATUS_PATH="${UPDATE_STATUS_PATH:-}"
-UPDATE_TARGET="${UPDATE_TARGET:-both}"
+UPDATE_TARGET="${UPDATE_TARGET:-all}"
 UPDATE_HUB_SERVICE_NAME="${UPDATE_HUB_SERVICE_NAME:-car-hub}"
 UPDATE_TELEGRAM_SERVICE_NAME="${UPDATE_TELEGRAM_SERVICE_NAME:-car-telegram}"
 UPDATE_DISCORD_SERVICE_NAME="${UPDATE_DISCORD_SERVICE_NAME:-car-discord}"
@@ -111,8 +111,8 @@ normalize_update_target() {
   local raw
   raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
   case "${raw}" in
-    ""|both|all)
-      echo "both"
+    ""|all|both)
+      echo "all"
       ;;
     web|hub|server|ui)
       echo "web"
@@ -127,7 +127,7 @@ normalize_update_target() {
       echo "discord"
       ;;
     *)
-      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, chat, telegram, or discord."
+      fail "Unsupported UPDATE_TARGET '${raw}'. Use all, web, chat, telegram, or discord."
       ;;
   esac
 }
@@ -243,7 +243,7 @@ restart_web=false
 restart_telegram=false
 restart_discord=false
 
-if [[ "${target}" == "both" || "${target}" == "web" ]]; then
+if [[ "${target}" == "all" || "${target}" == "web" ]]; then
   if ! service_exists "${UPDATE_HUB_SERVICE_NAME}"; then
     fail "Hub service not found: ${UPDATE_HUB_SERVICE_NAME}"
   fi
@@ -252,7 +252,7 @@ if [[ "${target}" == "both" || "${target}" == "web" ]]; then
   restart_web=true
 fi
 
-if [[ "${target}" == "both" || "${target}" == "chat" || "${target}" == "telegram" ]]; then
+if [[ "${target}" == "all" || "${target}" == "chat" || "${target}" == "telegram" ]]; then
   if service_exists "${UPDATE_TELEGRAM_SERVICE_NAME}"; then
     echo "Restarting telegram service ${UPDATE_TELEGRAM_SERVICE_NAME}..."
     systemctl --user restart "${UPDATE_TELEGRAM_SERVICE_NAME}"
@@ -264,7 +264,7 @@ if [[ "${target}" == "both" || "${target}" == "chat" || "${target}" == "telegram
   fi
 fi
 
-if [[ "${target}" == "both" || "${target}" == "chat" || "${target}" == "discord" ]]; then
+if [[ "${target}" == "all" || "${target}" == "chat" || "${target}" == "discord" ]]; then
   if service_exists "${UPDATE_DISCORD_SERVICE_NAME}"; then
     echo "Restarting discord service ${UPDATE_DISCORD_SERVICE_NAME}..."
     systemctl --user restart "${UPDATE_DISCORD_SERVICE_NAME}"

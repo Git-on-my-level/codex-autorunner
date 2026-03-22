@@ -52,7 +52,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - `/approvals yolo|safe`: toggle approval mode.
 - `/ids`: show chat/user/thread IDs plus copy-paste collaboration snippets.
 - `/status`: show current workspace/runtime state plus the effective collaboration mode for the current destination.
-- `/update [both|web|chat|telegram|discord]`: update CAR and restart selected services.
+- `/update [all|web|chat|telegram|discord]`: update CAR and restart selected services.
 - `!<cmd>`: run a bash command in the bound workspace (controlled by `telegram_bot.shell.enabled`).
 
 ## Media Support

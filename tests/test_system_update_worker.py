@@ -18,9 +18,10 @@ from codex_autorunner.core.update_targets import (
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        (None, "both"),
-        ("", "both"),
-        ("ALL", "both"),
+        (None, "all"),
+        ("", "all"),
+        ("ALL", "all"),
+        ("both", "all"),
         ("web", "web"),
         ("ui", "web"),
         ("chat", "chat"),
@@ -86,7 +87,7 @@ def test_available_update_target_options_include_telegram_when_enableable(
         linux_service_names={"hub": "car-hub"},
     )
     assert options == (
-        ("both", "All"),
+        ("all", "All"),
         ("web", "Web only"),
         ("telegram", "Telegram only"),
     )
@@ -122,7 +123,7 @@ def test_available_update_target_options_include_discord_when_active(
         linux_service_names={"hub": "car-hub", "discord": "car-discord"},
     )
     assert options == (
-        ("both", "All"),
+        ("all", "All"),
         ("web", "Web only"),
         ("discord", "Discord only"),
     )
@@ -140,7 +141,7 @@ def test_available_update_target_options_include_discord_when_active(
 
 def test_update_target_helpers_share_the_same_core_definitions() -> None:
     assert update_target_values(include_status=True) == (
-        "both",
+        "all",
         "web",
         "chat",
         "telegram",
@@ -148,7 +149,7 @@ def test_update_target_helpers_share_the_same_core_definitions() -> None:
         "status",
     )
     assert update_target_label_pairs() == (
-        ("both", "All"),
+        ("all", "All"),
         ("web", "Web only"),
         ("chat", "Chat apps (Telegram + Discord)"),
         ("telegram", "Telegram only"),

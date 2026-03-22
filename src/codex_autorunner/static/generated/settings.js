@@ -169,7 +169,7 @@ async function loadUpdateTargetOptions(selectId) {
     const { options, defaultTarget } = updateTargetOptionsFromResponse(payload);
     if (!options.length)
         return;
-    const previous = normalizeUpdateTarget(select.value || "both");
+    const previous = normalizeUpdateTarget(select.value || "all");
     const hasPrevious = options.some((item) => item.value === previous);
     const fallback = options.some((item) => item.value === defaultTarget)
         ? defaultTarget

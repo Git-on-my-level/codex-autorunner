@@ -735,7 +735,7 @@ def test_build_keyboards() -> None:
     bind_keyboard = build_bind_keyboard([("repo_a", "1) repo-a")])
     assert bind_keyboard["inline_keyboard"][0][0]["callback_data"].startswith("bind:")
     update_keyboard = build_update_keyboard(
-        [("both", "Both"), ("web", "Web only")],
+        [("all", "All"), ("web", "Web only")],
         include_cancel=True,
     )
     assert update_keyboard["inline_keyboard"][0][0]["callback_data"].startswith(

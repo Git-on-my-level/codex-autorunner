@@ -1,8 +1,8 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
-const DEFAULT_UPDATE_TARGET = "both";
+const DEFAULT_UPDATE_TARGET = "all";
 const UPDATE_TARGET_ALIASES = new Map([
-    ["all", "both"],
-    ["both", "both"],
+    ["all", "all"],
+    ["both", "all"],
     ["web", "web"],
     ["hub", "web"],
     ["server", "web"],
@@ -30,7 +30,7 @@ function fallbackTargetOption(value) {
         value: normalized,
         label: titleCaseTarget(normalized),
         description: titleCaseTarget(normalized),
-        includesWeb: normalized === "both" || normalized === "web",
+        includesWeb: normalized === "all" || normalized === "web",
         restartNotice: "The selected services will restart.",
     };
 }

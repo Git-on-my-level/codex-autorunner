@@ -22,7 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-ref", default="main")
     parser.add_argument("--update-dir", required=True)
     parser.add_argument("--log-path", required=True)
-    parser.add_argument("--target", default="both")
+    parser.add_argument("--target", default="all")
     parser.add_argument("--backend", default="auto")
     parser.add_argument("--hub-service-name")
     parser.add_argument("--telegram-service-name")

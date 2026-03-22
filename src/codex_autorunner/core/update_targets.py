@@ -13,11 +13,11 @@ class UpdateTargetDefinition:
     includes_web: bool
 
 
-_DEFAULT_UPDATE_TARGET = "both"
-_UPDATE_TARGET_ORDER = ("both", "web", "chat", "telegram", "discord")
+_DEFAULT_UPDATE_TARGET = "all"
+_UPDATE_TARGET_ORDER = ("all", "web", "chat", "telegram", "discord")
 _UPDATE_TARGET_DEFINITIONS = {
-    "both": UpdateTargetDefinition(
-        value="both",
+    "all": UpdateTargetDefinition(
+        value="all",
         label="All",
         description="Web + Telegram + Discord",
         restart_notice="The web UI, Telegram, and Discord will restart.",
@@ -54,8 +54,8 @@ _UPDATE_TARGET_DEFINITIONS = {
 }
 _UPDATE_TARGET_ALIASES = {
     "": _DEFAULT_UPDATE_TARGET,
-    "all": "both",
-    "both": "both",
+    "all": "all",
+    "both": "all",
     "web": "web",
     "hub": "web",
     "server": "web",
@@ -98,7 +98,7 @@ def _all_target_definition(
         services.append("Discord")
         restart_services.append("Discord")
     return UpdateTargetDefinition(
-        value="both",
+        value="all",
         label="All",
         description=" + ".join(services),
         restart_notice=f"The {_format_service_list(tuple(restart_services))} will restart.",
@@ -128,10 +128,7 @@ def update_target_command_choices(
     *, include_status: bool = False
 ) -> tuple[dict[str, str], ...]:
     choices = tuple(
-        {
-            "name": definition.label,
-            "value": "all" if definition.value == "both" else definition.value,
-        }
+        {"name": definition.label, "value": definition.value}
         for definition in all_update_target_definitions()
     )
     if not include_status:
