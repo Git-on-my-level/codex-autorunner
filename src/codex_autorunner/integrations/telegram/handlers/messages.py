@@ -205,7 +205,6 @@ def _activated_record_allows_plain_text_turn(
     message: TelegramMessage,
     *,
     text: str,
-    has_media: bool,
     record: Any,
     policy_result: Any,
 ) -> bool:
@@ -222,8 +221,6 @@ def _activated_record_allows_plain_text_turn(
         return False
     if getattr(policy_result, "reason", None) != "plain_text_disabled":
         return False
-    if has_media:
-        return True
 
     default_trigger = getattr(
         getattr(handlers, "_collaboration_policy", None),
@@ -691,7 +688,6 @@ async def handle_message_inner(
             handlers,
             message,
             text=text,
-            has_media=has_media,
             record=record,
             policy_result=policy_result,
         ):
