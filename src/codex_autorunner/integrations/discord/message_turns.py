@@ -773,6 +773,7 @@ class _LegacyOrchestratorRuntimeHarness:
         return await self._service._orchestrator_for_workspace(
             workspace_root,
             channel_id=f"discord-orchestration:{self._agent_id}",
+            agent_id=self._agent_id,
         )
 
     async def new_conversation(

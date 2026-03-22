@@ -2200,7 +2200,11 @@ class DiscordBotService:
         return items
 
     async def _orchestrator_for_workspace(
-        self, workspace_root: Path, *, channel_id: str
+        self,
+        workspace_root: Path,
+        *,
+        channel_id: str,
+        agent_id: Optional[str] = None,
     ) -> BackendOrchestrator:
         key = f"{channel_id}:{workspace_root}"
         async with self._backend_lock:
@@ -2214,6 +2218,14 @@ class DiscordBotService:
                     workspace_root,
                     hub_path=self._hub_config_path,
                 )
+                shared_opencode_supervisor = None
+                if agent_id == "opencode":
+                    # Share the Discord service's workspace supervisor with the
+                    # backend orchestrator so idle pruning sees the same
+                    # active-turn bookkeeping as the running managed turn.
+                    shared_opencode_supervisor = (
+                        await self._opencode_supervisor_for_workspace(workspace_root)
+                    )
                 orchestrator = BackendOrchestrator(
                     repo_root=workspace_root,
                     config=repo_config,
@@ -2222,6 +2234,7 @@ class DiscordBotService:
                         approval_handler=self._handle_backend_approval_request,
                     ),
                     logger=self._logger,
+                    shared_opencode_supervisor=shared_opencode_supervisor,
                 )
             self._backend_orchestrators[key] = orchestrator
             return orchestrator

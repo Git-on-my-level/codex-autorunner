@@ -312,6 +312,40 @@ def test_agent_backend_factory_reuses_and_closes_cached_supervisors(
     assert factory._opencode_supervisor is None
 
 
+def test_agent_backend_factory_reuses_shared_opencode_supervisor_without_owning_it(
+    monkeypatch, tmp_path: Path
+) -> None:
+    hub_root, repo_root = _make_repo_config(tmp_path)
+    config = load_repo_config(repo_root, hub_path=hub_root)
+
+    class _SharedSupervisor:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def close_all(self) -> None:
+            self.close_calls += 1
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.agents.wiring.build_opencode_supervisor_from_repo_config",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("should not build a new supervisor")
+        ),
+    )
+
+    shared = _SharedSupervisor()
+    factory = AgentBackendFactory(
+        repo_root,
+        config,
+        shared_opencode_supervisor=shared,
+    )
+
+    assert factory._ensure_opencode_supervisor() is shared
+    asyncio.run(factory.close_all())
+
+    assert shared.close_calls == 0
+    assert factory._opencode_supervisor is None
+
+
 def test_derive_repo_config_sets_effective_destination_from_manifest(
     tmp_path: Path,
 ) -> None:

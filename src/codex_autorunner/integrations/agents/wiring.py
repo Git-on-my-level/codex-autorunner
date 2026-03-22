@@ -25,7 +25,13 @@ NotificationHandler = Callable[[Mapping[str, object]], Awaitable[None]]
 
 
 class AgentBackendFactory:
-    def __init__(self, repo_root: Path, config: RepoConfig) -> None:
+    def __init__(
+        self,
+        repo_root: Path,
+        config: RepoConfig,
+        *,
+        shared_opencode_supervisor: Optional[Any] = None,
+    ) -> None:
         self._repo_root = repo_root
         self._config = config
         self._logger = logging.getLogger("codex_autorunner.app_server")
@@ -33,7 +39,8 @@ class AgentBackendFactory:
             getattr(config, "effective_destination", {"kind": "local"})
         )
         self._backend_cache: dict[str, AgentBackend] = {}
-        self._opencode_supervisor: Optional[Any] = None
+        self._opencode_supervisor: Optional[Any] = shared_opencode_supervisor
+        self._owns_opencode_supervisor = shared_opencode_supervisor is None
         self._codex_supervisor: Optional[WorkspaceAppServerSupervisor] = None
 
     def __call__(
@@ -218,12 +225,13 @@ class AgentBackendFactory:
             if inspect.isawaitable(result):
                 await result
         if self._opencode_supervisor is not None:
-            try:
-                await self._opencode_supervisor.close_all()
-            except Exception:
-                self._logger.warning(
-                    "Failed closing opencode supervisor", exc_info=True
-                )
+            if self._owns_opencode_supervisor:
+                try:
+                    await self._opencode_supervisor.close_all()
+                except Exception:
+                    self._logger.warning(
+                        "Failed closing opencode supervisor", exc_info=True
+                    )
             self._opencode_supervisor = None
         if self._codex_supervisor is not None:
             try:
@@ -286,8 +294,17 @@ class AgentBackendFactory:
         return self._codex_supervisor
 
 
-def build_agent_backend_factory(repo_root: Path, config: RepoConfig) -> BackendFactory:
-    return AgentBackendFactory(repo_root, config)
+def build_agent_backend_factory(
+    repo_root: Path,
+    config: RepoConfig,
+    *,
+    shared_opencode_supervisor: Optional[Any] = None,
+) -> BackendFactory:
+    return AgentBackendFactory(
+        repo_root,
+        config,
+        shared_opencode_supervisor=shared_opencode_supervisor,
+    )
 
 
 def build_app_server_supervisor_factory(

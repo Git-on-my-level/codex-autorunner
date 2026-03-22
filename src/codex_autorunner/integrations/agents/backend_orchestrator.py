@@ -63,6 +63,7 @@ class BackendOrchestrator:
         *,
         notification_handler: Optional[NotificationHandler] = None,
         logger: Optional[logging.Logger] = None,
+        shared_opencode_supervisor: Optional[Any] = None,
     ):
         from .wiring import build_agent_backend_factory
 
@@ -73,7 +74,9 @@ class BackendOrchestrator:
 
         # Backend factory manages creation and caching of backends
         self._backend_factory: BackendFactory = build_agent_backend_factory(
-            repo_root, config
+            repo_root,
+            config,
+            shared_opencode_supervisor=shared_opencode_supervisor,
         )
 
         # Active backend for current run

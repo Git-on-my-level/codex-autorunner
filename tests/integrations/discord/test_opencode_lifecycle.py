@@ -248,3 +248,55 @@ async def test_discord_opencode_adapter_resolves_stall_timeout_per_workspace(
         )
     finally:
         await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_orchestrator_shares_workspace_opencode_supervisor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "load_repo_config",
+        lambda workspace_root, hub_path=None: SimpleNamespace(
+            opencode=SimpleNamespace(idle_ttl_seconds=120),
+        ),
+    )
+
+    shared_supervisor = _StubOpenCodeSupervisor(
+        pruned_handles=0,
+        handles_after_prune=1,
+        session_stall_timeout_seconds=17.0,
+    )
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_opencode_supervisor_from_repo_config",
+        lambda repo_config, *, workspace_root, logger, base_env=None: shared_supervisor,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.opencode"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        orchestrator = await service._orchestrator_for_workspace(
+            workspace,
+            channel_id="discord-orchestration:opencode",
+            agent_id="opencode",
+        )
+
+        backend_factory = orchestrator._backend_factory
+        assert backend_factory._ensure_opencode_supervisor() is shared_supervisor
+        assert backend_factory._owns_opencode_supervisor is False
+    finally:
+        await store.close()
