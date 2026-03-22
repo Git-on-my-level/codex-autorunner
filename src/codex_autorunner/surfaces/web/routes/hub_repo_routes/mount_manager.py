@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Iterable
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from fastapi import FastAPI
 from starlette.routing import Mount
@@ -31,7 +32,7 @@ class HubMountManager:
         self._mounted_repos: set[str] = set()
         self._mount_errors: dict[str, str] = {}
         self._repo_apps: dict[str, ASGIApp] = {}
-        self._repo_lifespans: dict[str, object] = {}
+        self._repo_lifespans: dict[str, AbstractAsyncContextManager[Any]] = {}
         self._mount_order: list[str] = []
         self._mount_lock: Optional[asyncio.Lock] = None
 
@@ -57,7 +58,11 @@ class HubMountManager:
         if fastapi_app is None:
             return
         try:
-            ctx = fastapi_app.router.lifespan_context(fastapi_app)
+            lifespan_context = cast(
+                Callable[[FastAPI], AbstractAsyncContextManager[Any]],
+                fastapi_app.router.lifespan_context,
+            )
+            ctx = lifespan_context(fastapi_app)
             await ctx.__aenter__()
             self._repo_lifespans[prefix] = ctx
             safe_log(
@@ -85,7 +90,7 @@ class HubMountManager:
         if ctx is None:
             return
         try:
-            await ctx.__aexit__(None, None, None)  # type: ignore[attr-defined]
+            await ctx.__aexit__(None, None, None)
             safe_log(
                 self.app.state.logger,
                 logging.INFO,
