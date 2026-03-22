@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from fastapi import APIRouter, HTTPException
 
@@ -52,7 +52,7 @@ class HubAgentWorkspaceService:
             *manifest.issues_for_repo(workspace.id),
             *list(resolution.issues or ()),
         ]
-        return payload
+        return cast(dict[str, Any], payload)
 
     def _normalize_destination_payload(
         self, payload: HubDestinationSetRequest
@@ -152,7 +152,7 @@ class HubAgentWorkspaceService:
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return snapshot.to_dict(self._context.config.root)
+        return cast(dict[str, Any], snapshot.to_dict(self._context.config.root))
 
     async def create_agent_workspace_job(
         self, payload: HubCreateAgentWorkspaceRequest

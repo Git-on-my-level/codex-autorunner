@@ -610,7 +610,9 @@ async def _run_managed_thread_execution(
         outcome.raw_events,
     )
     if merged_raw_events:
-        timeline_events = await _timeline_from_runtime_raw_events(merged_raw_events)
+        timeline_events = await _timeline_from_runtime_raw_events(
+            tuple(merged_raw_events)
+        )
 
     finalized_thread = service.get_thread_target(managed_thread_id)
     resolved_backend_thread_id = (
@@ -1017,7 +1019,7 @@ async def deliver_bound_chat_assistant_output(
                 if await telegram_store.get_outbox(record_id) is not None:
                     continue
                 outbox_key = f"managed-thread:{managed_turn_id}:{chat_id}:{thread_id or 'root'}:send"
-                record = TelegramOutboxRecord(
+                telegram_record = TelegramOutboxRecord(
                     record_id=record_id,
                     chat_id=chat_id,
                     thread_id=thread_id,
@@ -1029,9 +1031,11 @@ async def deliver_bound_chat_assistant_output(
                     message_id=None,
                     outbox_key=outbox_key,
                 )
-                store = telegram_store
+                telegram_delivery_store = telegram_store
                 await enqueue_with_retry(
-                    lambda record=record, store=store: store.enqueue_outbox(record)
+                    lambda record=telegram_record, store=telegram_delivery_store: store.enqueue_outbox(
+                        record
+                    )
                 )
             except Exception:
                 logger.exception(

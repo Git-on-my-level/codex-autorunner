@@ -7,7 +7,7 @@ import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
@@ -35,14 +35,15 @@ from ....core.flows.start_policy import (
     evaluate_ticket_start_policy,
 )
 from ....core.flows.ux_helpers import (
-    bootstrap_check as ux_bootstrap_check,
-)
-from ....core.flows.ux_helpers import (
+    GitHubServiceProtocol,
     build_flow_status_snapshot,
     ensure_worker,
     issue_md_path,
     seed_issue_from_github,
     seed_issue_from_text,
+)
+from ....core.flows.ux_helpers import (
+    bootstrap_check as ux_bootstrap_check,
 )
 from ....core.flows.worker_process import (
     FlowWorkerHealth,
@@ -94,6 +95,7 @@ _logger = logging.getLogger(__name__)
 _supported_flow_types = ("ticket_flow",)
 _FLOW_DB_CORRUPT_SUFFIX = ".corrupt"
 _FLOW_DB_NOTICE_SUFFIX = ".corrupt.json"
+_WorkerHandle = tuple[Optional[subprocess.Popen[Any]], Any, Any]
 
 
 def _utc_stamp() -> str:
@@ -154,7 +156,9 @@ def _evict_cached_controller(
 ) -> None:
     key = (repo_root.resolve(), flow_type)
     with state.lock:
-        controller = state.controller_cache.pop(key, None)
+        controller = cast(
+            Optional[FlowController], state.controller_cache.pop(key, None)
+        )
     if not controller:
         return
     try:
@@ -298,8 +302,11 @@ def _build_flow_definition(
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
     with state.lock:
-        if key in state.definition_cache:
-            return state.definition_cache[key]
+        cached_definition = cast(
+            Optional[FlowDefinition], state.definition_cache.get(key)
+        )
+        if cached_definition is not None:
+            return cached_definition
 
     if flow_type == "ticket_flow":
         config = load_repo_config(repo_root)
@@ -330,7 +337,7 @@ def _get_flow_controller(
     repo_root = repo_root.resolve()
     key = (repo_root, flow_type)
     with state.lock:
-        cached = state.controller_cache.get(key)
+        cached = cast(Optional[FlowController], state.controller_cache.get(key))
     if cached is not None:
         try:
             cached.initialize()
@@ -448,7 +455,7 @@ def _lint_after_ticket_update(ticket_dir: Path) -> list[str]:
 
 def _cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
     with state.lock:
-        handle = state.active_workers.pop(run_id, None)
+        handle = cast(Optional[_WorkerHandle], state.active_workers.pop(run_id, None))
     if not handle:
         return
 
@@ -480,7 +487,7 @@ def _cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
 
 def _reap_dead_worker(run_id: str, state: FlowRoutesState) -> None:
     with state.lock:
-        handle = state.active_workers.get(run_id)
+        handle = cast(Optional[_WorkerHandle], state.active_workers.get(run_id))
     if not handle:
         return
     proc, *_ = handle
@@ -679,7 +686,9 @@ def _start_flow_worker(
 def _stop_worker(run_id: str, state: FlowRoutesState, timeout: float = 10.0) -> None:
     normalized_run_id = _normalize_run_id(run_id)
     with state.lock:
-        handle = state.active_workers.get(normalized_run_id)
+        handle = cast(
+            Optional[_WorkerHandle], state.active_workers.get(normalized_run_id)
+        )
     if not handle:
         health = check_worker_health(find_repo_root(), normalized_run_id)
         if health.is_alive and health.pid:
@@ -896,7 +905,12 @@ def build_flow_routes() -> APIRouter:
         for fetching an issue before bootstrapping the ticket flow.
         """
         repo_root = find_repo_root()
-        result = ux_bootstrap_check(repo_root, github_service_factory=GitHubService)
+        result = ux_bootstrap_check(
+            repo_root,
+            github_service_factory=lambda root: cast(
+                GitHubServiceProtocol, GitHubService(root)
+            ),
+        )
         if result.status == "ready":
             return BootstrapCheckResponse(status="ready")
         return BootstrapCheckResponse(

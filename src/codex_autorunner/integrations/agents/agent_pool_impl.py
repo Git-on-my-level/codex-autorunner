@@ -790,10 +790,9 @@ class DefaultAgentPool:
             raise RuntimeError("Delegated runtime execution did not finalize cleanly")
 
         thread_row = self._thread_store.get_thread(thread_id) or {}
+        thread_metadata_value = thread_row.get("metadata")
         thread_metadata = (
-            thread_row.get("metadata")
-            if isinstance(thread_row.get("metadata"), dict)
-            else {}
+            thread_metadata_value if isinstance(thread_metadata_value, dict) else {}
         )
         try:
             persist_turn_timeline(

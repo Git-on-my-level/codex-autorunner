@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import subprocess
 from dataclasses import asdict
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
@@ -17,11 +18,12 @@ if TYPE_CHECKING:
     from . import FlowRouteDependencies, FlowRoutesState
 
 _logger = logging.getLogger(__name__)
+_WorkerHandle = tuple[Optional[subprocess.Popen[Any]], Any, Any]
 
 
 def _reap_dead_worker(run_id: str, state: "FlowRoutesState") -> None:
     with state.lock:
-        handle = state.active_workers.get(run_id)
+        handle = cast(Optional[_WorkerHandle], state.active_workers.get(run_id))
     if not handle:
         return
     proc, *_ = handle
@@ -201,19 +203,17 @@ def build_status_history_routes(
                     if dispatch_path.exists()
                     else (None, ["Dispatch file missing"])
                 )
-                dispatch_dict = asdict(dispatch) if dispatch else None
-                if dispatch_dict:
-                    dispatch_dict["is_handoff"] = (
-                        dispatch.is_handoff
-                        if hasattr(dispatch, "is_handoff")
-                        else False
-                    )
+                if dispatch is not None:
+                    dispatch_dict = asdict(dispatch)
+                    dispatch_dict["is_handoff"] = dispatch.is_handoff
                     try:
                         entry_seq_int = int(entry.name)
                     except Exception:
                         entry_seq_int = 0
                     if entry_seq_int and entry_seq_int in diff_by_seq:
                         dispatch_dict["diff_stats"] = diff_by_seq[entry_seq_int]
+                else:
+                    dispatch_dict = None
                 attachments = []
                 for child in sorted(entry.rglob("*")):
                     if child.name == "DISPATCH.md":

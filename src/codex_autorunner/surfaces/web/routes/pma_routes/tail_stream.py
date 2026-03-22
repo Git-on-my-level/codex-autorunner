@@ -738,7 +738,7 @@ async def _build_managed_thread_tail_snapshot(
     formatter = AppServerEventFormatter(redact_enabled=True)
     tail_events: list[dict[str, Any]] = []
     raw_last_activity_at: Optional[str] = None
-    if can_stream_codex:
+    if can_stream_codex and app_server_events is not None:
         raw_events = await app_server_events.list_events(
             str(backend_thread_id),
             str(backend_turn_id),
@@ -1176,7 +1176,7 @@ def build_managed_thread_tail_routes(
                         return
                     continue
 
-                serialized = _serialize_tail_event(
+                serialized_entry: Optional[dict[str, Any]] = _serialize_tail_event(
                     entry,
                     level=normalized_level,
                     formatter=formatter,
@@ -1185,14 +1185,14 @@ def build_managed_thread_tail_routes(
                 activity_at = _event_received_at_iso(entry)
                 if activity_at:
                     snapshot["last_activity_at"] = activity_at
-                if serialized is None:
+                if serialized_entry is None:
                     continue
-                event_id = int(serialized.get("event_id") or 0)
+                event_id = int(serialized_entry.get("event_id") or 0)
                 if event_id > 0:
                     last_event_id = event_id
                 snapshot_events = snapshot.get("events")
                 if isinstance(snapshot_events, list):
-                    snapshot_events.append(serialized)
+                    snapshot_events.append(serialized_entry)
                 snapshot["last_event_at"] = serialized.get("received_at")
                 yield (
                     "event: tail\n"

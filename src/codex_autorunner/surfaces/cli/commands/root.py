@@ -7,7 +7,7 @@ import os
 import shlex
 import subprocess
 from pathlib import Path
-from typing import NoReturn, Optional
+from typing import NoReturn, Optional, cast
 
 import httpx
 import typer
@@ -95,7 +95,7 @@ def _resolve_hub_config_path_for_cli(
         if candidate.is_dir():
             candidate = candidate / CONFIG_FILENAME
         return candidate if candidate.exists() else None
-    return find_nearest_hub_config_path(repo_root)
+    return cast(Optional[Path], find_nearest_hub_config_path(repo_root))
 
 
 def _resolve_repo_api_path(repo_root: Path, hub: Optional[Path], path: str) -> str:
@@ -590,12 +590,24 @@ def register_root_commands(app: typer.Typer) -> None:
             f"output={summary.totals.output_tokens}, reasoning={summary.totals.reasoning_output_tokens})"
         )
         typer.echo(f"Events counted: {summary.events}")
-        if summary.latest_rate_limits:
-            primary = summary.latest_rate_limits.get("primary", {}) or {}
-            secondary = summary.latest_rate_limits.get("secondary", {}) or {}
+        if isinstance(summary.latest_rate_limits, dict):
+            primary = summary.latest_rate_limits.get("primary")
+            secondary = summary.latest_rate_limits.get("secondary")
+            primary_used = (
+                primary.get("used_percent") if isinstance(primary, dict) else None
+            )
+            primary_window = (
+                primary.get("window_minutes") if isinstance(primary, dict) else None
+            )
+            secondary_used = (
+                secondary.get("used_percent") if isinstance(secondary, dict) else None
+            )
+            secondary_window = (
+                secondary.get("window_minutes") if isinstance(secondary, dict) else None
+            )
             typer.echo(
-                f"Latest rate limits: primary_used={primary.get('used_percent')}%/{primary.get('window_minutes')}m, "
-                f"secondary_used={secondary.get('used_percent')}%/{secondary.get('window_minutes')}m"
+                f"Latest rate limits: primary_used={primary_used}%/{primary_window}m, "
+                f"secondary_used={secondary_used}%/{secondary_window}m"
             )
 
     @app.command()

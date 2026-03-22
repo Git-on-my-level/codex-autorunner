@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.core.flows.models import FlowRunStatus
@@ -583,6 +584,7 @@ def test_hub_messages_dispatch_includes_lifecycle_metadata(
         assert "dismiss" in (item.get("resolvable_actions") or [])
 
 
+@pytest.mark.slow
 def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env, monkeypatch) -> None:
     run_id = "88888888-8888-8888-8888-888888888888"
     _seed_failed_run(hub_env.repo_root, run_id)

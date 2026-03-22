@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional, cast
 
 from .types import (
     AgentId,
@@ -223,7 +223,10 @@ def harness_progress_event_stream(
     conversation_id: str,
     turn_id: str,
 ) -> AsyncIterator[Any]:
-    progress_stream = getattr(harness, "progress_event_stream", None)
+    progress_stream = cast(
+        Optional[Callable[[Path, str, str], AsyncIterator[Any]]],
+        getattr(harness, "progress_event_stream", None),
+    )
     if callable(progress_stream):
         progress_func = getattr(progress_stream, "__func__", None)
         if (
@@ -231,7 +234,10 @@ def harness_progress_event_stream(
             or progress_func is not AgentHarness.progress_event_stream
         ):
             return progress_stream(workspace_root, conversation_id, turn_id)
-    stream_events = getattr(harness, "stream_events", None)
+    stream_events = cast(
+        Optional[Callable[[Path, str, str], AsyncIterator[Any]]],
+        getattr(harness, "stream_events", None),
+    )
     if callable(stream_events) and harness_allows_parallel_event_stream(harness):
         return stream_events(workspace_root, conversation_id, turn_id)
 

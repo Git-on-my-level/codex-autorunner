@@ -134,6 +134,7 @@ warn_return_any = true
 no_implicit_optional = true
 ignore_missing_imports = true
 warn_unused_ignores = true
+check_untyped_defs = true
 files = [
   "src/codex_autorunner",
 ]
