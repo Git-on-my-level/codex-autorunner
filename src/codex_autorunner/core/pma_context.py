@@ -37,6 +37,10 @@ from .freshness import (
     summarize_section_freshness,
 )
 from .hub import HubSupervisor
+from .hub_inbox_resolution import (
+    find_message_resolution,
+    load_hub_inbox_dismissals,
+)
 from .locks import file_lock
 from .managed_thread_status import derive_managed_thread_operator_status
 from .pma_active_context import (
@@ -2057,12 +2061,20 @@ def _stale_terminal_ticket_flow_run_reason(
 ) -> Optional[str]:
     if record.status not in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED):
         return None
-    if not _terminal_ticket_flow_failure_is_worker_dead(record):
-        return None
     has_tickets = _ticket_flow_has_tickets(repo_root)
-    if has_tickets is None or has_tickets:
+    if has_tickets is None:
+        return None
+    if has_tickets:
         return None
     ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    if record.status == FlowRunStatus.STOPPED:
+        return (
+            "Latest stopped run is stale; ticket flow status/resume preflight would "
+            "fail because no tickets remain in "
+            f"{safe_relpath(ticket_dir, repo_root)}"
+        )
+    if not _terminal_ticket_flow_failure_is_worker_dead(record):
+        return None
     return (
         "Latest failed run is stale; worker died and no tickets remain in "
         f"{safe_relpath(ticket_dir, repo_root)}"
@@ -2469,6 +2481,7 @@ def _gather_inbox(
         try:
             config = load_repo_config(repo_root)
             with FlowStore(db_path, durable=config.durable_writes) as store:
+                dismissals = load_hub_inbox_dismissals(repo_root)
                 active_statuses = [
                     FlowRunStatus.PAUSED,
                     FlowRunStatus.RUNNING,
@@ -2575,6 +2588,13 @@ def _gather_inbox(
                         "active_run_id": active_run_id,
                     }
                     if has_dispatch:
+                        if find_message_resolution(
+                            dismissals,
+                            run_id=record_id,
+                            item_type="run_dispatch",
+                            seq=seq if seq > 0 else None,
+                        ):
+                            continue
                         messages.append(
                             {
                                 **base_item,
@@ -2592,6 +2612,13 @@ def _gather_inbox(
                                 repo_root=repo_root, record=record
                             )
                         )
+                        if find_message_resolution(
+                            dismissals,
+                            run_id=record_id,
+                            item_type=item_type,
+                            seq=seq if seq > 0 else None,
+                        ):
+                            continue
                         messages.append(
                             {
                                 **base_item,

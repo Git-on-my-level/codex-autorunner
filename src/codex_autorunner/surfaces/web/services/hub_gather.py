@@ -10,6 +10,12 @@ from ....core.freshness import (
     iso_now,
     resolve_stale_threshold_seconds,
 )
+from ....core.hub_inbox_resolution import (
+    find_message_resolution,
+    load_hub_inbox_dismissals,
+    message_resolution_state,
+    message_resolvable_actions,
+)
 from ....core.pma_context import (
     PMA_MAX_TEXT,
     _gather_inbox,
@@ -21,13 +27,7 @@ from ....core.pma_context import (
 from ....tickets.files import safe_relpath
 from ....tickets.models import Dispatch
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
-from ..app_state import (
-    HubAppContext,
-    _find_message_resolution,
-    _load_hub_inbox_dismissals,
-    _message_resolution_state,
-    _message_resolvable_actions,
-)
+from ..app_state import HubAppContext
 
 
 def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[dict]:
@@ -202,11 +202,11 @@ def gather_hub_messages(context: HubAppContext, *, limit: int = 100) -> list[dic
             repo_root = repo_roots.get(repo_id)
         if repo_root is None:
             continue
-        dismissals = _load_hub_inbox_dismissals(repo_root)
+        dismissals = load_hub_inbox_dismissals(repo_root)
         item_type = str(item.get("item_type") or "run_dispatch")
         seq_raw = item.get("seq")
         item_seq = seq_raw if isinstance(seq_raw, int) and seq_raw > 0 else None
-        if _find_message_resolution(
+        if find_message_resolution(
             dismissals,
             run_id=run_id,
             item_type=item_type,
@@ -214,8 +214,8 @@ def gather_hub_messages(context: HubAppContext, *, limit: int = 100) -> list[dic
         ):
             continue
         copied = dict(item)
-        copied["resolution_state"] = _message_resolution_state(item_type)
-        copied["resolvable_actions"] = _message_resolvable_actions(item_type)
+        copied["resolution_state"] = message_resolution_state(item_type)
+        copied["resolvable_actions"] = message_resolvable_actions(item_type)
         messages.append(copied)
 
     messages.sort(key=lambda m: int(m.get("queue_rank") or 0))
