@@ -10,7 +10,7 @@ import traceback
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 import typer
 
@@ -560,10 +560,11 @@ def register_flow_commands(
         normalized_run_id = _normalize_flow_run_id(run_id)
         if normalized_run_id is None:
             raise_exit("--run-id is required for worker command")
+        worker_run_id: str = cast(str, normalized_run_id)
 
         db_path, artifacts_root, ticket_dir = _ticket_flow_paths(engine)
 
-        typer.echo(f"Starting flow worker for run {normalized_run_id}")
+        typer.echo(f"Starting flow worker for run {worker_run_id}")
 
         exit_code_holder = [0]
         _repo_root = engine.repo_root
@@ -574,7 +575,7 @@ def register_flow_commands(
             try:
                 write_worker_exit_info(
                     _repo_root,
-                    normalized_run_id,  # type: ignore[arg-type]
+                    worker_run_id,
                     returncode=exit_code_holder[0] or None,
                     shutdown_intent=shutdown_intent,
                     artifacts_root=_artifacts_root,
@@ -591,16 +592,16 @@ def register_flow_commands(
         signal.signal(signal.SIGINT, _signal_handler)
 
         async def _run_worker():
-            typer.echo(f"Flow worker started for {normalized_run_id}")
+            typer.echo(f"Flow worker started for {worker_run_id}")
             typer.echo(f"DB path: {db_path}")
             typer.echo(f"Artifacts root: {artifacts_root}")
 
             store = FlowStore(db_path, durable=engine.config.durable_writes)
             store.initialize()
 
-            record = store.get_flow_run(normalized_run_id)
+            record = store.get_flow_run(worker_run_id)
             if not record:
-                typer.echo(f"Flow run {normalized_run_id} not found", err=True)
+                typer.echo(f"Flow run {worker_run_id} not found", err=True)
                 store.close()
                 raise typer.Exit(code=1)
 
@@ -617,7 +618,7 @@ def register_flow_commands(
             try:
                 register_worker_metadata(
                     engine.repo_root,
-                    normalized_run_id,
+                    worker_run_id,
                     artifacts_root=artifacts_root,
                 )
             except Exception as exc:
@@ -640,9 +641,7 @@ def register_flow_commands(
                             engine.config.ticket_flow.include_previous_ticket_context
                         ),
                     )
-                raise_exit(
-                    f"Unknown flow type for run {normalized_run_id}: {flow_type}"
-                )
+                raise_exit(f"Unknown flow type for run {worker_run_id}: {flow_type}")
                 return None
 
             definition = _build_definition(record.flow_type)
@@ -657,9 +656,9 @@ def register_flow_commands(
             controller.initialize()
             shutdown_requested = False
             try:
-                record = controller.get_status(normalized_run_id)
+                record = controller.get_status(worker_run_id)
                 if not record:
-                    typer.echo(f"Flow run {normalized_run_id} not found", err=True)
+                    typer.echo(f"Flow run {worker_run_id} not found", err=True)
                     raise typer.Exit(code=1)
 
                 if record.status.is_terminal() and record.status not in {
@@ -667,7 +666,7 @@ def register_flow_commands(
                     FlowRunStatus.FAILED,
                 }:
                     typer.echo(
-                        f"Flow run {normalized_run_id} already completed (status={record.status})"
+                        f"Flow run {worker_run_id} already completed (status={record.status})"
                     )
                     return
 
@@ -675,10 +674,10 @@ def register_flow_commands(
                     "Resuming" if record.status != FlowRunStatus.PENDING else "Starting"
                 )
                 typer.echo(
-                    f"{action} flow run {normalized_run_id} from step: {record.current_step}"
+                    f"{action} flow run {worker_run_id} from step: {record.current_step}"
                 )
 
-                run_task = asyncio.create_task(controller.run_flow(normalized_run_id))
+                run_task = asyncio.create_task(controller.run_flow(worker_run_id))
                 shutdown_wait_task = asyncio.create_task(
                     asyncio.to_thread(shutdown_event.wait)
                 )
@@ -691,19 +690,19 @@ def register_flow_commands(
                 )
 
                 if shutdown_requested and not run_task.done():
-                    await controller.stop_flow(normalized_run_id)
+                    await controller.stop_flow(worker_run_id)
                     run_task.cancel()
 
                 if run_task.done():
                     final_record = await run_task
                     typer.echo(
-                        f"Flow run {normalized_run_id} finished with status {final_record.status}"
+                        f"Flow run {worker_run_id} finished with status {final_record.status}"
                     )
                 else:
                     try:
                         await run_task
                     except asyncio.CancelledError:
-                        typer.echo(f"Flow run {normalized_run_id} cancelled by signal")
+                        typer.echo(f"Flow run {worker_run_id} cancelled by signal")
                 if not shutdown_wait_task.done():
                     shutdown_wait_task.cancel()
             except Exception as exc:
@@ -711,7 +710,7 @@ def register_flow_commands(
                 last_event = None
                 try:
                     app_event = controller.store.get_last_event_by_type(
-                        normalized_run_id, FlowEventType.APP_SERVER_EVENT
+                        worker_run_id, FlowEventType.APP_SERVER_EVENT
                     )
                     if app_event and isinstance(app_event.data, dict):
                         msg = app_event.data.get("message")
@@ -723,7 +722,7 @@ def register_flow_commands(
                     last_event = None
                 write_worker_crash_info(
                     engine.repo_root,
-                    normalized_run_id,
+                    worker_run_id,
                     worker_pid=os.getpid(),
                     exit_code=1,
                     last_event=last_event,
@@ -990,7 +989,7 @@ You are the first ticket in a new ticket_flow run.
         normalized_run_id = _normalize_flow_run_id(run_id)
         service = _ticket_flow_orchestration_service(engine)
 
-        target = None
+        target: Optional[FlowRunTarget] = None
         if normalized_run_id:
             target = service.get_flow_run(normalized_run_id)
         else:
@@ -998,6 +997,7 @@ You are the first ticket in a new ticket_flow run.
             target = runs[0] if runs else None
         if not target:
             raise_exit("No ticket_flow runs found.")
+        assert target is not None
         normalized_run_id = target.run_id
 
         _, _, ticket_dir = _ticket_flow_paths(engine)

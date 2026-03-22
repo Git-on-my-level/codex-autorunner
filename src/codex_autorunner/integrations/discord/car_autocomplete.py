@@ -55,7 +55,7 @@ def resolve_workspace_from_token(
     if normalized.startswith(REPO_AUTOCOMPLETE_TOKEN_PREFIX):
         digest = normalized[len(REPO_AUTOCOMPLETE_TOKEN_PREFIX) :]
         if digest:
-            matches = [
+            repo_matches: list[tuple[Optional[str], Optional[str], str]] = [
                 (resource_kind, resource_id, workspace_path)
                 for resource_kind, resource_id, workspace_path in candidates
                 if resource_kind == "repo"
@@ -64,26 +64,27 @@ def resolve_workspace_from_token(
                 .hexdigest()
                 .startswith(digest)
             ]
-            if len(matches) == 1:
-                return matches[0]
+            if len(repo_matches) == 1:
+                return repo_matches[0]
 
     if normalized.startswith(WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX):
         digest = normalized[len(WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX) :]
         if digest:
-            matches = [
+            workspace_matches: list[tuple[Optional[str], Optional[str], str]] = [
                 (resource_kind, resource_id, workspace_path)
                 for resource_kind, resource_id, workspace_path in candidates
+                if isinstance(workspace_path, str)
                 if hashlib.sha256(workspace_path.encode("utf-8"))
                 .hexdigest()
                 .startswith(digest)
             ]
-            if len(matches) == 1:
-                return matches[0]
+            if len(workspace_matches) == 1:
+                return workspace_matches[0]
 
     if normalized.startswith(AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX):
         digest = normalized[len(AGENT_WORKSPACE_AUTOCOMPLETE_TOKEN_PREFIX) :]
         if digest:
-            matches = [
+            agent_matches: list[tuple[Optional[str], Optional[str], str]] = [
                 (resource_kind, resource_id, workspace_path)
                 for resource_kind, resource_id, workspace_path in candidates
                 if resource_kind == "agent_workspace"
@@ -92,8 +93,8 @@ def resolve_workspace_from_token(
                 .hexdigest()
                 .startswith(digest)
             ]
-            if len(matches) == 1:
-                return matches[0]
+            if len(agent_matches) == 1:
+                return agent_matches[0]
 
     return None
 
@@ -242,11 +243,14 @@ async def build_session_resume_autocomplete_choices(
 
 
 def _flow_run_matches_action(record: Any, action: str) -> bool:
-    status = getattr(record, "status", None)
+    status: Any = getattr(record, "status", None)
     if action in {"resume", "reply"}:
-        return status == FlowRunStatus.PAUSED
+        return bool(status == FlowRunStatus.PAUSED)
     if action in {"stop", "recover"}:
-        return hasattr(status, "is_terminal") and not status.is_terminal()
+        status_is_terminal = getattr(status, "is_terminal", None)
+        if callable(status_is_terminal):
+            return not bool(status_is_terminal())
+        return False
     return True
 
 

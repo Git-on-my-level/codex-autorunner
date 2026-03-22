@@ -219,24 +219,35 @@ def register_worktree_commands(
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
         try:
-            cleanup_kwargs = {
-                "worktree_repo_id": worktree_repo_id,
-                "delete_branch": delete_branch,
-                "delete_remote": delete_remote,
-                "archive": archive,
-                "force_archive": force_archive,
-                "archive_note": archive_note,
-                "force": force,
-                "archive_profile": archive_profile,
-            }
             force_attestation_payload: Optional[dict[str, str]] = None
             if force or force_archive:
                 force_attestation_payload = _build_force_attestation(
                     force_attestation,
                     target_scope=f"hub.worktree.cleanup:{worktree_repo_id}",
                 )
-                cleanup_kwargs["force_attestation"] = force_attestation_payload
-            result = supervisor.cleanup_worktree(**cleanup_kwargs)
+            if force_attestation_payload is not None:
+                result = supervisor.cleanup_worktree(
+                    worktree_repo_id=worktree_repo_id,
+                    delete_branch=delete_branch,
+                    delete_remote=delete_remote,
+                    archive=archive,
+                    force_archive=force_archive,
+                    archive_note=archive_note,
+                    force=force,
+                    force_attestation=force_attestation_payload,
+                    archive_profile=archive_profile,
+                )
+            else:
+                result = supervisor.cleanup_worktree(
+                    worktree_repo_id=worktree_repo_id,
+                    delete_branch=delete_branch,
+                    delete_remote=delete_remote,
+                    archive=archive,
+                    force_archive=force_archive,
+                    archive_note=archive_note,
+                    force=force,
+                    archive_profile=archive_profile,
+                )
         except Exception as exc:
             raise_exit(str(exc), cause=exc)
         _emit_cleanup_status(result)
@@ -284,24 +295,35 @@ def register_worktree_commands(
         config = require_hub_config(hub)
         supervisor = build_supervisor(config)
         try:
-            cleanup_kwargs = {
-                "worktree_repo_id": worktree_repo_id,
-                "delete_branch": delete_branch,
-                "delete_remote": delete_remote,
-                "archive": True,
-                "force_archive": force_archive,
-                "archive_note": archive_note,
-                "force": force,
-                "archive_profile": archive_profile,
-            }
             force_attestation_payload: Optional[dict[str, str]] = None
             if force or force_archive:
                 force_attestation_payload = _build_force_attestation(
                     force_attestation,
                     target_scope=f"hub.worktree.archive:{worktree_repo_id}",
                 )
-                cleanup_kwargs["force_attestation"] = force_attestation_payload
-            result = supervisor.cleanup_worktree(**cleanup_kwargs)
+            if force_attestation_payload is not None:
+                result = supervisor.cleanup_worktree(
+                    worktree_repo_id=worktree_repo_id,
+                    delete_branch=delete_branch,
+                    delete_remote=delete_remote,
+                    archive=True,
+                    force_archive=force_archive,
+                    archive_note=archive_note,
+                    force=force,
+                    force_attestation=force_attestation_payload,
+                    archive_profile=archive_profile,
+                )
+            else:
+                result = supervisor.cleanup_worktree(
+                    worktree_repo_id=worktree_repo_id,
+                    delete_branch=delete_branch,
+                    delete_remote=delete_remote,
+                    archive=True,
+                    force_archive=force_archive,
+                    archive_note=archive_note,
+                    force=force,
+                    archive_profile=archive_profile,
+                )
         except Exception as exc:
             raise_exit(str(exc), cause=exc)
         _emit_cleanup_status(result)

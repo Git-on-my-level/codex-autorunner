@@ -4961,7 +4961,7 @@ async def test_car_update_starts_worker_with_explicit_target(
         [
             _interaction(
                 name="update",
-                options=[{"type": 3, "name": "target", "value": "both"}],
+                options=[{"type": 3, "name": "target", "value": "all"}],
             )
         ]
     )
@@ -4987,7 +4987,7 @@ async def test_car_update_starts_worker_with_explicit_target(
 
     try:
         await service.run_forever()
-        assert observed["update_target"] == "both"
+        assert observed["update_target"] == "all"
         assert observed["repo_ref"] == "main"
         assert "codex-autorunner.git" in observed["repo_url"]
         assert observed["notify_platform"] == "discord"
@@ -5010,7 +5010,7 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
         [
             _interaction(
                 name="update",
-                options=[{"type": 3, "name": "target", "value": "both"}],
+                options=[{"type": 3, "name": "target", "value": "all"}],
             )
         ]
     )
@@ -5045,10 +5045,36 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
         components = data.get("components") or []
         assert components
         buttons = components[0]["components"]
-        assert buttons[0]["custom_id"] == "update_confirm:both"
-        assert buttons[1]["custom_id"] == "update_cancel:both"
+        assert buttons[0]["custom_id"] == "update_confirm:all"
+        assert buttons[1]["custom_id"] == "update_cancel:all"
     finally:
         await store.close()
+
+
+def test_active_update_session_count_uses_live_running_executions() -> None:
+    class _FakeThread:
+        def __init__(self, thread_target_id: str, status: str) -> None:
+            self.thread_target_id = thread_target_id
+            self.status = status
+
+    class _FakeThreadService:
+        def list_thread_targets(self, *, lifecycle_status: str) -> list[Any]:
+            assert lifecycle_status == "active"
+            return [
+                _FakeThread("thread-live", "running"),
+                _FakeThread("thread-stale", "running"),
+                _FakeThread("thread-idle", "idle"),
+            ]
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            if thread_target_id == "thread-live":
+                return {"execution_id": "exec-live"}
+            return None
+
+    service = object.__new__(DiscordBotService)
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[method-assign]
+
+    assert DiscordBotService._active_update_session_count(service) == 1
 
 
 @pytest.mark.anyio
@@ -5059,7 +5085,7 @@ async def test_component_interaction_update_cancel_reports_cancelled(
     await store.initialize()
     rest = _FakeRest()
     gateway = _FakeGateway(
-        [_component_interaction(custom_id="update_cancel:both", values=["both"])]
+        [_component_interaction(custom_id="update_cancel:all", values=["all"])]
     )
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import time
 import uuid
@@ -1023,7 +1024,7 @@ def resolve_discord_thread_target(
         if binding is not None and str(binding.mode or "").strip().lower() == mode
         else None
     )
-    thread = (
+    thread: Any = (
         orchestration_service.get_thread_target(thread_target_id)
         if isinstance(thread_target_id, str) and thread_target_id
         else None
@@ -1119,6 +1120,7 @@ async def _finalize_discord_thread_execution(
                     stream_backend_thread_id,
                     stream_backend_turn_id,
                 ):
+                    run_events: list[Any]
                     if isinstance(
                         raw_event,
                         (
@@ -1386,7 +1388,7 @@ def _ensure_discord_thread_queue_worker(
                     break
 
                 async def _process_started_execution(
-                    started_execution: RuntimeThreadExecution = started,
+                    started_execution: RuntimeThreadExecution,
                 ) -> None:
                     service._register_discord_turn_approval_context(
                         started_execution=started_execution,
@@ -1433,7 +1435,7 @@ def _ensure_discord_thread_queue_worker(
 
                 await _run_with_discord_typing_indicator(
                     channel_id=channel_id,
-                    work=_process_started_execution,
+                    work=functools.partial(_process_started_execution, started),
                 )
         finally:
             if (

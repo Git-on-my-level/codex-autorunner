@@ -12,7 +12,15 @@ import time
 import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Mapping,
+    Optional,
+    Sequence,
+    cast,
+)
 
 from ...agents.opencode.harness import OpenCodeHarness
 from ...agents.opencode.supervisor import OpenCodeSupervisor
@@ -57,6 +65,7 @@ from ...core.flows.hub_overview import build_hub_flow_overview_entries
 from ...core.flows.reconciler import reconcile_flow_run
 from ...core.flows.surface_defaults import should_route_flow_read_to_hub_overview
 from ...core.flows.ux_helpers import (
+    GitHubServiceProtocol,
     build_flow_status_snapshot,
     ensure_worker,
     issue_md_path,
@@ -454,13 +463,13 @@ class _DiscordBackendNotificationRouter:
     def __init__(
         self,
         *,
-        notification_handler: Callable[[dict[str, object]], Awaitable[None]],
+        notification_handler: Callable[[Mapping[str, object]], Awaitable[None]],
         approval_handler: Callable[[dict[str, Any]], Awaitable[ApprovalDecision]],
     ) -> None:
         self._notification_handler = notification_handler
         self.approval_handler = approval_handler
 
-    async def __call__(self, payload: dict[str, object]) -> None:
+    async def __call__(self, payload: Mapping[str, object]) -> None:
         await self._notification_handler(payload)
 
 
@@ -1728,7 +1737,11 @@ class DiscordBotService:
             _voice_service, voice_config = self._voice_service_for_workspace(
                 workspace_root
             )
-            provider_name = (voice_config.provider if voice_config else "").strip()
+            provider_name = (
+                voice_config.provider.strip()
+                if voice_config and isinstance(voice_config.provider, str)
+                else ""
+            )
             if provider_name == "openai_whisper":
                 details.append("")
                 details.append(
@@ -2230,7 +2243,10 @@ class DiscordBotService:
                     repo_root=workspace_root,
                     config=repo_config,
                     notification_handler=_DiscordBackendNotificationRouter(
-                        notification_handler=self.app_server_events.handle_notification,
+                        notification_handler=cast(
+                            Callable[[Mapping[str, object]], Awaitable[None]],
+                            self.app_server_events.handle_notification,
+                        ),
                         approval_handler=self._handle_backend_approval_request,
                     ),
                     logger=self._logger,
@@ -2262,9 +2278,8 @@ class DiscordBotService:
     @staticmethod
     def _format_discord_approval_prompt(request: dict[str, Any]) -> str:
         method = request.get("method")
-        params = (
-            request.get("params") if isinstance(request.get("params"), dict) else {}
-        )
+        params_value = request.get("params")
+        params: dict[str, Any] = params_value if isinstance(params_value, dict) else {}
         lines = ["Approval required"]
         reason = params.get("reason")
         if isinstance(reason, str) and reason:
@@ -2457,7 +2472,10 @@ class DiscordBotService:
                 command,
                 state_root=self._app_server_state_root,
                 env_builder=self._build_workspace_env,
-                notification_handler=self.app_server_events.handle_notification,
+                notification_handler=cast(
+                    Callable[[Mapping[str, object]], Awaitable[None]],
+                    self.app_server_events.handle_notification,
+                ),
                 logger=self._logger,
             )
             self._app_server_supervisors[key] = supervisor
@@ -3888,7 +3906,7 @@ class DiscordBotService:
                 )
 
     def _spawn_task(self, coro: Awaitable[None]) -> asyncio.Task[Any]:
-        task: asyncio.Task[Any] = asyncio.create_task(coro)
+        task = cast(asyncio.Task[Any], asyncio.ensure_future(coro))
         self._background_tasks.add(task)
         task.add_done_callback(self._on_background_task_done)
         return task
@@ -3909,14 +3927,16 @@ class DiscordBotService:
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
-            event = self._chat_adapter.parse_interaction_event(payload)
-            if event is not None:
-                await self._dispatcher.dispatch(event, self._handle_chat_event)
+            interaction_event = self._chat_adapter.parse_interaction_event(payload)
+            if interaction_event is not None:
+                await self._dispatcher.dispatch(
+                    interaction_event, self._handle_chat_event
+                )
         elif event_type == "MESSAGE_CREATE":
             await self._record_channel_directory_seen_from_message_payload(payload)
-            event = self._chat_adapter.parse_message_event(payload)
-            if event is not None:
-                await self._dispatch_chat_event(event)
+            message_event = self._chat_adapter.parse_message_event(payload)
+            if message_event is not None:
+                await self._dispatch_chat_event(message_event)
 
     async def _record_channel_directory_seen_from_message_payload(
         self, payload: dict[str, Any]
@@ -4422,8 +4442,8 @@ class DiscordBotService:
     def _build_bind_picker_items(
         self,
         candidates: list[tuple[Optional[str], Optional[str], str]],
-    ) -> list[tuple[str, str, Optional[str]]]:
-        items: list[tuple[str, str, Optional[str]]] = []
+    ) -> list[tuple[str, str] | tuple[str, str, Optional[str]]]:
+        items: list[tuple[str, str] | tuple[str, str, Optional[str]]] = []
         for resource_kind, resource_id, workspace_path in candidates:
             value = self._bind_candidate_value(
                 resource_kind, resource_id, workspace_path
@@ -4480,8 +4500,8 @@ class DiscordBotService:
             [str, list[tuple[str, str]]],
             Awaitable[None],
         ],
-        exact_aliases: Optional[dict[str, tuple[str, ...]]] = None,
-        aliases: Optional[dict[str, tuple[str, ...]]] = None,
+        exact_aliases: Optional[Mapping[str, Sequence[str]]] = None,
+        aliases: Optional[Mapping[str, Sequence[str]]] = None,
     ) -> Optional[str]:
         normalized_query = query.strip()
         if not normalized_query:
@@ -4968,11 +4988,14 @@ class DiscordBotService:
         user_id: Optional[str] = None,
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
-        command_result, plain_text_result = evaluate_collaboration_summary(
-            self,
-            channel_id=channel_id,
-            guild_id=guild_id,
-            user_id=user_id,
+        command_result, plain_text_result = cast(
+            tuple[CollaborationEvaluationResult, CollaborationEvaluationResult],
+            evaluate_collaboration_summary(
+                self,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                user_id=user_id,
+            ),
         )
         if binding is None:
             lines = [
@@ -5068,11 +5091,14 @@ class DiscordBotService:
         user_id: Optional[str] = None,
     ) -> None:
         binding = await self._store.get_binding(channel_id=channel_id)
-        command_result, plain_text_result = evaluate_collaboration_summary(
-            self,
-            channel_id=channel_id,
-            guild_id=guild_id,
-            user_id=user_id,
+        command_result, plain_text_result = cast(
+            tuple[CollaborationEvaluationResult, CollaborationEvaluationResult],
+            evaluate_collaboration_summary(
+                self,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                user_id=user_id,
+            ),
         )
         lines = [
             f"Channel ID: {channel_id}",
@@ -5217,11 +5243,14 @@ class DiscordBotService:
             lines.append(f"discord_bot.allowed_guild_ids: [{guild_id}]")
         if user_id:
             lines.append(f"discord_bot.allowed_user_ids: [{user_id}]")
-        command_result, plain_text_result = evaluate_collaboration_summary(
-            self,
-            channel_id=channel_id,
-            guild_id=guild_id,
-            user_id=user_id,
+        command_result, plain_text_result = cast(
+            tuple[CollaborationEvaluationResult, CollaborationEvaluationResult],
+            evaluate_collaboration_summary(
+                self,
+                channel_id=channel_id,
+                guild_id=guild_id,
+                user_id=user_id,
+            ),
         )
         binding = await self._store.get_binding(channel_id=channel_id)
         lines.extend(
@@ -6584,16 +6613,39 @@ class DiscordBotService:
 
     def _active_update_session_count(self) -> int:
         try:
-            threads = self._discord_thread_service().list_thread_targets(
+            orchestration_service = self._discord_thread_service()
+            threads = orchestration_service.list_thread_targets(
                 lifecycle_status="active"
             )
         except Exception:
             return 0
-        return sum(
-            1
-            for thread in threads
-            if str(getattr(thread, "status", "") or "").strip().lower() == "running"
+        get_running_execution = getattr(
+            orchestration_service, "get_running_execution", None
         )
+        if not callable(get_running_execution):
+            return sum(
+                1
+                for thread in threads
+                if str(getattr(thread, "status", "") or "").strip().lower() == "running"
+            )
+
+        active_count = 0
+        for thread in threads:
+            thread_target_id = str(
+                getattr(thread, "thread_target_id", "") or ""
+            ).strip()
+            if not thread_target_id:
+                continue
+            try:
+                if get_running_execution(thread_target_id) is not None:
+                    active_count += 1
+            except Exception:
+                if (
+                    str(getattr(thread, "status", "") or "").strip().lower()
+                    == "running"
+                ):
+                    active_count += 1
+        return active_count
 
     def _build_update_confirmation_components(
         self,
@@ -7833,7 +7885,9 @@ class DiscordBotService:
             seed = seed_issue_from_github(
                 workspace_root,
                 issue_ref,
-                github_service_factory=GitHubService,
+                github_service_factory=lambda repo_root: cast(
+                    GitHubServiceProtocol, GitHubService(repo_root)
+                ),
             )
             atomic_write(issue_md_path(workspace_root), seed.content)
         except GitHubError as exc:

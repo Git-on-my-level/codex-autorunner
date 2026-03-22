@@ -660,6 +660,17 @@ def _event_received_at_iso(event: dict[str, Any]) -> Optional[str]:
     return iso_from_event_ms(received_at_ms)
 
 
+def _record_serialized_tail_event(
+    snapshot: dict[str, Any], serialized_event: dict[str, Any]
+) -> int:
+    event_id = int(serialized_event.get("event_id") or 0)
+    snapshot_events = snapshot.get("events")
+    if isinstance(snapshot_events, list):
+        snapshot_events.append(serialized_event)
+    snapshot["last_event_at"] = serialized_event.get("received_at")
+    return event_id
+
+
 async def _build_managed_thread_tail_snapshot(
     *,
     request: Request,
@@ -738,7 +749,7 @@ async def _build_managed_thread_tail_snapshot(
     formatter = AppServerEventFormatter(redact_enabled=True)
     tail_events: list[dict[str, Any]] = []
     raw_last_activity_at: Optional[str] = None
-    if can_stream_codex:
+    if can_stream_codex and app_server_events is not None:
         raw_events = await app_server_events.list_events(
             str(backend_thread_id),
             str(backend_turn_id),
@@ -1176,7 +1187,7 @@ def build_managed_thread_tail_routes(
                         return
                     continue
 
-                serialized = _serialize_tail_event(
+                serialized_entry: Optional[dict[str, Any]] = _serialize_tail_event(
                     entry,
                     level=normalized_level,
                     formatter=formatter,
@@ -1185,19 +1196,15 @@ def build_managed_thread_tail_routes(
                 activity_at = _event_received_at_iso(entry)
                 if activity_at:
                     snapshot["last_activity_at"] = activity_at
-                if serialized is None:
+                if serialized_entry is None:
                     continue
-                event_id = int(serialized.get("event_id") or 0)
+                event_id = _record_serialized_tail_event(snapshot, serialized_entry)
                 if event_id > 0:
                     last_event_id = event_id
-                snapshot_events = snapshot.get("events")
-                if isinstance(snapshot_events, list):
-                    snapshot_events.append(serialized)
-                snapshot["last_event_at"] = serialized.get("received_at")
                 yield (
                     "event: tail\n"
                     f"id: {event_id}\n"
-                    f"data: {json.dumps(serialized, ensure_ascii=True)}\n\n"
+                    f"data: {json.dumps(serialized_entry, ensure_ascii=True)}\n\n"
                 )
 
         return StreamingResponse(

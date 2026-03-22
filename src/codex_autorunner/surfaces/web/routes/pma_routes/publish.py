@@ -430,11 +430,11 @@ async def publish_automation_result(
                 outbox_key = (
                     f"pma:{correlation_id}:{chat_id}:{thread_id or 'root'}:send"
                 )
-                existing = await telegram_store.get_outbox(record_id)
-                if existing is not None:
+                telegram_existing = await telegram_store.get_outbox(record_id)
+                if telegram_existing is not None:
                     duplicates += 1
                     continue
-                record = TelegramOutboxRecord(
+                telegram_record = TelegramOutboxRecord(
                     record_id=record_id,
                     chat_id=chat_id,
                     thread_id=thread_id,
@@ -448,7 +448,9 @@ async def publish_automation_result(
                 )
                 try:
                     await enqueue_with_retry(
-                        lambda record=record: telegram_store.enqueue_outbox(record)
+                        lambda record=telegram_record: telegram_store.enqueue_outbox(
+                            record
+                        )
                     )
                 except Exception as exc:
                     failed += 1

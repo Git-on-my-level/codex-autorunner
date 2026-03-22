@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional, cast
 
 from ...integrations.app_server.client import (
     CodexAppServerResponseError,
@@ -296,7 +296,10 @@ class CodexHarness(AgentHarness):
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ) -> AsyncIterator[str]:
         _ = workspace_root
-        stream = getattr(self._events, "stream", None)
+        stream = cast(
+            Optional[Callable[[str, str], AsyncIterator[str]]],
+            getattr(self._events, "stream", None),
+        )
         if callable(stream):
             return stream(conversation_id, turn_id)
 

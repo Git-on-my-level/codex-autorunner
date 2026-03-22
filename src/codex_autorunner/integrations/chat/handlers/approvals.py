@@ -24,11 +24,10 @@ class NormalizedApprovalRequest:
 def normalize_backend_approval_request(
     request: dict[str, Any],
 ) -> Optional[NormalizedApprovalRequest]:
-    if not isinstance(request, dict):
-        return None
     request_id_value = request.get("id")
     request_id = str(request_id_value).strip() if request_id_value is not None else ""
-    params = request.get("params") if isinstance(request.get("params"), dict) else {}
+    params_value = request.get("params")
+    params: dict[str, Any] = params_value if isinstance(params_value, dict) else {}
     turn_id_value = params.get("turnId")
     if turn_id_value is None:
         turn_id_value = params.get("turn_id")

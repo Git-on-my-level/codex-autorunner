@@ -18,7 +18,7 @@ set -euo pipefail
 #   DISCORD_LABEL          launchd label for discord bot (default: ${LABEL}.discord)
 #   DISCORD_PLIST_PATH     discord plist path (default: ~/Library/LaunchAgents/${DISCORD_LABEL}.plist)
 #   DISCORD_LOG            discord stdout/stderr log path (default: <hub_root>/.codex-autorunner/codex-autorunner-discord.log)
-#   UPDATE_TARGET          Which services to restart (both|web|chat|telegram|discord; default: both)
+#   UPDATE_TARGET          Which services to restart (all|web|chat|telegram|discord; default: all)
 #   PIPX_ROOT              pipx root (default: ~/.local/pipx)
 #   PIPX_VENV              existing pipx venv path (default: ${PIPX_ROOT}/venvs/codex-autorunner)
 #   PIPX_PYTHON            python used for new venvs (default: pyenv python3, then Homebrew)
@@ -50,7 +50,7 @@ ENABLE_TELEGRAM_BOT="${ENABLE_TELEGRAM_BOT:-auto}"
 DISCORD_LABEL="${DISCORD_LABEL:-${LABEL}.discord}"
 DISCORD_PLIST_PATH="${DISCORD_PLIST_PATH:-$HOME/Library/LaunchAgents/${DISCORD_LABEL}.plist}"
 ENABLE_DISCORD_BOT="${ENABLE_DISCORD_BOT:-auto}"
-UPDATE_TARGET="${UPDATE_TARGET:-both}"
+UPDATE_TARGET="${UPDATE_TARGET:-all}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_SRC="${PACKAGE_SRC:-$SCRIPT_DIR/..}"
@@ -156,8 +156,8 @@ normalize_update_target() {
   local raw
   raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
   case "${raw}" in
-    ""|both|all)
-      echo "both"
+    ""|all|both)
+      echo "all"
       ;;
     web|hub|server|ui)
       echo "web"
@@ -172,7 +172,7 @@ normalize_update_target() {
       echo "discord"
       ;;
     *)
-      fail "Unsupported UPDATE_TARGET '${raw}'. Use both, web, chat, telegram, or discord."
+      fail "Unsupported UPDATE_TARGET '${raw}'. Use all, web, chat, telegram, or discord."
       ;;
   esac
 }
@@ -425,7 +425,7 @@ telegram_health_checked=false
 discord_health_reason=""
 discord_health_checked=false
 case "${UPDATE_TARGET}" in
-  both)
+  all)
     should_reload_hub=true
     should_reload_telegram=true
     should_reload_discord=true

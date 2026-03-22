@@ -1,7 +1,7 @@
 import json
 import shlex
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 import typer
 import uvicorn
@@ -121,11 +121,16 @@ def register_hub_commands(
         if normalized_kind == "local":
             destination = {"kind": "local"}
         elif normalized_kind == "docker":
-            if not isinstance(image, str) or not image.strip():
+            if not isinstance(image, str):
                 raise_exit("image is required for docker destination")
-            destination = {"kind": "docker", "image": image.strip()}
-            if isinstance(name, str) and name.strip():
-                destination["container_name"] = name.strip()
+            image_ref = cast(str, image).strip()
+            if not image_ref:
+                raise_exit("image is required for docker destination")
+            destination = {"kind": "docker", "image": image_ref}
+            if isinstance(name, str):
+                container_name = name.strip()
+                if container_name:
+                    destination["container_name"] = container_name
             env_passthrough = [item.strip() for item in (env or []) if item.strip()]
             if env_passthrough:
                 destination["env_passthrough"] = env_passthrough
@@ -147,10 +152,14 @@ def register_hub_commands(
             )
             if mounts:
                 destination["mounts"] = mounts
-            if isinstance(profile, str) and profile.strip():
-                destination["profile"] = profile.strip()
-            if isinstance(workdir, str) and workdir.strip():
-                destination["workdir"] = workdir.strip()
+            if isinstance(profile, str):
+                profile_value = profile.strip()
+                if profile_value:
+                    destination["profile"] = profile_value
+            if isinstance(workdir, str):
+                workdir_value = workdir.strip()
+                if workdir_value:
+                    destination["workdir"] = workdir_value
         else:
             raise_exit(
                 f"Unsupported destination kind: {kind!r}. Use 'local' or 'docker'."
@@ -159,9 +168,12 @@ def register_hub_commands(
         validated = validate_destination_write_payload(
             destination, context="destination"
         )
-        if not validated.valid or validated.normalized_destination is None:
+        normalized_destination = validated.normalized_destination
+        if not validated.valid:
             raise_exit("; ".join(validated.errors) or "Invalid destination payload")
-        return validated.normalized_destination
+        if normalized_destination is None:
+            raise_exit("; ".join(validated.errors) or "Invalid destination payload")
+        return cast(dict[str, Any], normalized_destination)
 
     def _parse_mount_ref(value: str) -> dict[str, str]:
         source, sep, target = value.partition(":")

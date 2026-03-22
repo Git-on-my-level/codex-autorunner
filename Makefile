@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh
+.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh typecheck-strict
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -102,6 +102,9 @@ test-managed-thread-cutover:
 
 test-integration:
 	$(PYTHON) -m pytest -m integration
+
+typecheck-strict:
+	$(PYTHON) -m mypy src/codex_autorunner
 
 check:
 	./scripts/check.sh

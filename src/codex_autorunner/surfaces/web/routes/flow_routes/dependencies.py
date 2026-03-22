@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 _logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from .....core.flows import FlowController, FlowRunRecord, FlowStore
+    from .....core.flows import FlowRunRecord, FlowStore
+    from .....core.flows.controller import FlowController
     from .....core.flows.ux_helpers import BootstrapCheckResult
 
 
@@ -56,8 +57,11 @@ def build_default_flow_route_dependencies() -> FlowRouteDependencies:
 
     def get_flow_controller_adapter(
         repo_root: Path, flow_type: str, state: Any
-    ) -> FlowController:
-        return get_flow_controller(repo_root, flow_type, state)
+    ) -> "FlowController":
+        from .....core.flows.controller import FlowController as _FlowController
+
+        controller: _FlowController = get_flow_controller(repo_root, flow_type, state)
+        return controller
 
     def safe_list_flow_runs_wrapper(
         repo_root: Path,

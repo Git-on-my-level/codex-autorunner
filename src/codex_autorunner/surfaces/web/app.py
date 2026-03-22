@@ -3,7 +3,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Protocol, cast
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
@@ -46,6 +46,28 @@ from .static_assets import (
 )
 
 __all__ = ["create_app", "create_hub_app", "create_repo_app"]
+
+
+class _IdlePrunable(Protocol):
+    async def prune_idle(self) -> None: ...
+
+
+async def _run_prune_loop(
+    *,
+    interval_seconds: float,
+    supervisor: _IdlePrunable,
+    logger: logging.Logger,
+    failure_message: str,
+) -> None:
+    try:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await supervisor.prune_idle()
+            except Exception as exc:
+                safe_log(logger, logging.WARNING, failure_message, exc)
+    except asyncio.CancelledError:
+        return
 
 
 def create_hub_app(
@@ -201,44 +223,48 @@ def create_hub_app(
 
             tasks.append(asyncio.create_task(_managed_docker_reaper_loop()))
             tasks.append(asyncio.create_task(_housekeeping_loop()))
-        app_server_supervisor = getattr(app.state, "app_server_supervisor", None)
-        app_server_prune_interval = getattr(
+        app_server_supervisor = cast(
+            Optional[_IdlePrunable],
+            getattr(app.state, "app_server_supervisor", None),
+        )
+        app_server_prune_interval_raw = getattr(
             app.state, "app_server_prune_interval", None
         )
-        if app_server_supervisor is not None and app_server_prune_interval:
-
-            async def _app_server_prune_loop():
-                while True:
-                    await asyncio.sleep(app_server_prune_interval)
-                    try:
-                        await app_server_supervisor.prune_idle()
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "Hub app-server prune task failed",
-                            exc,
-                        )
-
-            tasks.append(asyncio.create_task(_app_server_prune_loop()))
-        opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
-        opencode_prune_interval = getattr(app.state, "opencode_prune_interval", None)
-        if opencode_supervisor is not None and opencode_prune_interval:
-
-            async def _opencode_prune_loop():
-                while True:
-                    await asyncio.sleep(opencode_prune_interval)
-                    try:
-                        await opencode_supervisor.prune_idle()
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "Hub opencode prune task failed",
-                            exc,
-                        )
-
-            tasks.append(asyncio.create_task(_opencode_prune_loop()))
+        if app_server_supervisor is not None and isinstance(
+            app_server_prune_interval_raw, (int, float)
+        ):
+            app_server_prune_interval = float(app_server_prune_interval_raw)
+            tasks.append(
+                asyncio.create_task(
+                    _run_prune_loop(
+                        interval_seconds=app_server_prune_interval,
+                        supervisor=app_server_supervisor,
+                        logger=app.state.logger,
+                        failure_message="Hub app-server prune task failed",
+                    )
+                )
+            )
+        opencode_supervisor = cast(
+            Optional[_IdlePrunable],
+            getattr(app.state, "opencode_supervisor", None),
+        )
+        opencode_prune_interval_raw = getattr(
+            app.state, "opencode_prune_interval", None
+        )
+        if opencode_supervisor is not None and isinstance(
+            opencode_prune_interval_raw, (int, float)
+        ):
+            opencode_prune_interval = float(opencode_prune_interval_raw)
+            tasks.append(
+                asyncio.create_task(
+                    _run_prune_loop(
+                        interval_seconds=opencode_prune_interval,
+                        supervisor=opencode_supervisor,
+                        logger=app.state.logger,
+                        failure_message="Hub opencode prune task failed",
+                    )
+                )
+            )
         pma_cfg = getattr(app.state.config, "pma", None)
         if pma_cfg is not None and pma_cfg.enabled:
             starter = getattr(app.state, "pma_lane_worker_start", None)

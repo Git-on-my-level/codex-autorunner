@@ -4572,7 +4572,6 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
     ]
 
 
-@pytest.mark.anyio
 async def test_reset_telegram_thread_binding_archives_after_lost_backend_recovery() -> (
     None
 ):

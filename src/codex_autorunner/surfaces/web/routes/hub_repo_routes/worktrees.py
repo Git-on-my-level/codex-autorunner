@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from fastapi import HTTPException
 
@@ -22,7 +22,7 @@ class HubWorktreeService:
         context: HubAppContext,
         mount_manager: HubMountManager,
         enricher: HubRepoEnricher,
-        build_force_attestation_payload: callable,
+        build_force_attestation_payload: Callable[..., Optional[dict[str, str]]],
     ) -> None:
         self._context = context
         self._mount_manager = mount_manager
@@ -35,7 +35,7 @@ class HubWorktreeService:
         branch: str,
         force: bool,
         start_point: Optional[str],
-    ) -> dict:
+    ) -> dict[str, Any]:
         from .....core.logging_utils import safe_log
 
         safe_log(
@@ -55,9 +55,11 @@ class HubWorktreeService:
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
-        return self._enricher.enrich_repo(snapshot)
+        return cast(dict[str, Any], self._enricher.enrich_repo(snapshot))
 
-    async def create_worktree_job(self, payload: HubCreateWorktreeRequest) -> dict:
+    async def create_worktree_job(
+        self, payload: HubCreateWorktreeRequest
+    ) -> dict[str, Any]:
         async def _run_create_worktree():
             snapshot = await asyncio.to_thread(
                 self._context.supervisor.create_worktree,
@@ -67,7 +69,7 @@ class HubWorktreeService:
                 start_point=str(payload.start_point) if payload.start_point else None,
             )
             await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
-            return self._enricher.enrich_repo(snapshot)
+            return cast(dict[str, Any], self._enricher.enrich_repo(snapshot))
 
         job = await self._context.job_manager.submit(
             "hub.create_worktree",
@@ -92,7 +94,7 @@ class HubWorktreeService:
         force_archive: bool,
         archive_note: Optional[str],
         archive_profile: Optional[str],
-    ) -> dict:
+    ) -> dict[str, Any]:
         from .....core.logging_utils import safe_log
 
         safe_log(
@@ -109,25 +111,25 @@ class HubWorktreeService:
                 bool(force_attestation),
             ),
         )
-        cleanup_kwargs: dict[str, Any] = {
-            "worktree_repo_id": str(worktree_repo_id),
-            "delete_branch": delete_branch,
-            "delete_remote": delete_remote,
-            "archive": archive,
-            "force": force,
-            "force_archive": force_archive,
-            "archive_note": archive_note,
-            "archive_profile": archive_profile,
-        }
-        if force_attestation is not None:
-            cleanup_kwargs["force_attestation"] = self._build_force_attestation_payload(
-                force_attestation,
-                target_scope=f"hub.worktree.cleanup:{worktree_repo_id}",
-            )
         try:
             result = await asyncio.to_thread(
                 self._context.supervisor.cleanup_worktree,
-                **cleanup_kwargs,
+                worktree_repo_id=str(worktree_repo_id),
+                delete_branch=delete_branch,
+                delete_remote=delete_remote,
+                archive=archive,
+                force=force,
+                force_attestation=(
+                    self._build_force_attestation_payload(
+                        force_attestation,
+                        target_scope=f"hub.worktree.cleanup:{worktree_repo_id}",
+                    )
+                    if force_attestation is not None
+                    else None
+                ),
+                force_archive=force_archive,
+                archive_note=archive_note,
+                archive_profile=archive_profile,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -135,25 +137,28 @@ class HubWorktreeService:
             return result
         return {"status": "ok"}
 
-    async def cleanup_worktree_job(self, payload: HubCleanupWorktreeRequest) -> dict:
-        cleanup_kwargs: dict[str, Any] = {
-            "worktree_repo_id": str(payload.worktree_repo_id),
-            "delete_branch": payload.delete_branch,
-            "delete_remote": payload.delete_remote,
-            "archive": payload.archive,
-            "force": payload.force,
-            "force_archive": payload.force_archive,
-            "archive_note": payload.archive_note,
-            "archive_profile": payload.archive_profile,
-        }
-        if payload.force_attestation is not None:
-            cleanup_kwargs["force_attestation"] = self._build_force_attestation_payload(
-                payload.force_attestation,
-                target_scope=f"hub.worktree.cleanup:{payload.worktree_repo_id}",
-            )
-
+    async def cleanup_worktree_job(
+        self, payload: HubCleanupWorktreeRequest
+    ) -> dict[str, Any]:
         def _run_cleanup_worktree():
-            result = self._context.supervisor.cleanup_worktree(**cleanup_kwargs)
+            result = self._context.supervisor.cleanup_worktree(
+                worktree_repo_id=str(payload.worktree_repo_id),
+                delete_branch=payload.delete_branch,
+                delete_remote=payload.delete_remote,
+                archive=payload.archive,
+                force=payload.force,
+                force_attestation=(
+                    self._build_force_attestation_payload(
+                        payload.force_attestation,
+                        target_scope=f"hub.worktree.cleanup:{payload.worktree_repo_id}",
+                    )
+                    if payload.force_attestation is not None
+                    else None
+                ),
+                force_archive=payload.force_archive,
+                archive_note=payload.archive_note,
+                archive_profile=payload.archive_profile,
+            )
             if isinstance(result, dict):
                 return result
             return {"status": "ok"}
@@ -170,7 +175,7 @@ class HubWorktreeService:
         worktree_repo_id: str,
         archive_note: Optional[str],
         archive_profile: Optional[str],
-    ) -> dict:
+    ) -> dict[str, Any]:
         from .....core.logging_utils import safe_log
 
         safe_log(
@@ -187,14 +192,14 @@ class HubWorktreeService:
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return result
+        return cast(dict[str, Any], result)
 
     async def archive_worktree_state(
         self,
         worktree_repo_id: str,
         archive_note: Optional[str],
         archive_profile: Optional[str],
-    ) -> dict:
+    ) -> dict[str, Any]:
         from .....core.logging_utils import safe_log
 
         safe_log(
@@ -211,4 +216,4 @@ class HubWorktreeService:
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return result
+        return cast(dict[str, Any], result)

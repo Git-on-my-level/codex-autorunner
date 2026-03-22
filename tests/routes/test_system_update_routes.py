@@ -49,7 +49,7 @@ def test_system_update_warns_when_terminal_sessions_are_active(
     )
 
     with TestClient(app) as client:
-        response = client.post("/system/update", json={"target": "both"})
+        response = client.post("/system/update", json={"target": "all"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -82,13 +82,13 @@ def test_system_update_force_bypasses_active_session_warning(
     )
 
     with TestClient(app) as client:
-        response = client.post("/system/update", json={"target": "both", "force": True})
+        response = client.post("/system/update", json={"target": "all", "force": True})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["requires_confirmation"] is False
-    assert observed["update_target"] == "both"
+    assert observed["update_target"] == "all"
 
 
 def test_system_update_chat_target_skips_terminal_warning(

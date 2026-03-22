@@ -21,10 +21,10 @@ export interface UpdateTargetOption {
   restartNotice: string;
 }
 
-const DEFAULT_UPDATE_TARGET = "both";
+const DEFAULT_UPDATE_TARGET = "all";
 const UPDATE_TARGET_ALIASES = new Map<string, string>([
-  ["all", "both"],
-  ["both", "both"],
+  ["all", "all"],
+  ["both", "all"],
   ["web", "web"],
   ["hub", "web"],
   ["server", "web"],
@@ -54,7 +54,7 @@ function fallbackTargetOption(value: UpdateTarget): UpdateTargetOption {
     value: normalized,
     label: titleCaseTarget(normalized),
     description: titleCaseTarget(normalized),
-    includesWeb: normalized === "both" || normalized === "web",
+    includesWeb: normalized === "all" || normalized === "web",
     restartNotice: "The selected services will restart.",
   };
 }
