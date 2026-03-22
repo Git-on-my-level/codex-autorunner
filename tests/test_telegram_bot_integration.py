@@ -285,6 +285,34 @@ async def test_status_creates_record(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_unbound_topic_plain_text_stays_quiet_until_activation(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    message = build_message(
+        "hello team",
+        thread_id=55,
+        message_id=10,
+        update_id=10,
+        chat_type="supergroup",
+    )
+    try:
+        with caplog.at_level(logging.INFO):
+            await service._handle_message_inner(message)
+            await _drain_spawned_tasks(service)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert fake_bot.messages == []
+    assert "telegram.collaboration_policy.evaluated" in caplog.text
+    assert '"policy_outcome":"command_only_destination"' in caplog.text
+    assert "Topic not bound" not in caplog.text
+
+
+@pytest.mark.anyio
 async def test_status_reports_collaboration_policy_for_topic(tmp_path: Path) -> None:
     config = make_config(
         tmp_path,

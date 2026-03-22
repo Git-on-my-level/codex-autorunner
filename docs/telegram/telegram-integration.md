@@ -249,6 +249,8 @@ If either set is empty, the bot refuses to handle all messages.
 
 For shared groups, add `collaboration_policy.telegram.destinations` to make root
 chat and topic behavior explicit instead of relying on one chat-wide default.
+Allowlists admit commands, but ordinary plain text in an unbound chat/topic now
+stays human-first until the destination is activated with `/bind` or `/pma on`.
 
 ### Allowlist Check
 

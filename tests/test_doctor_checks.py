@@ -84,7 +84,7 @@ def test_telegram_doctor_reports_collaboration_migration_guidance():
     checks = telegram_doctor_checks(cfg)
     by_id = {check.check_id: check for check in checks}
     assert by_id["telegram.collaboration_migration"].passed is True
-    assert "shared supergroups" in by_id["telegram.collaboration_migration"].message
+    assert "/bind or /pma on" in by_id["telegram.collaboration_migration"].message
 
 
 def test_telegram_doctor_reports_mentions_privacy_guidance():
@@ -111,13 +111,14 @@ def test_telegram_doctor_warns_when_root_chat_remains_active():
         },
         "collaboration_policy": {
             "telegram": {
+                "default_mode": "active",
                 "destinations": [
                     {
                         "chat_id": -1001,
                         "thread_id": 7,
                         "mode": "active",
                     }
-                ]
+                ],
             }
         },
     }

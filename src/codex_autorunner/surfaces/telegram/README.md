@@ -27,6 +27,10 @@ for `status`/`runs` in PMA or unbound contexts.
 
 Note: Telegram currently exposes the superset of flow controls across chat surfaces.
 
+Unbound but allowlisted chats and topics now stay quiet for ordinary conversation.
+This is intentional: plain-text turns only start after the chat is activated with
+`/pma on` or bound with `/bind`.
+
 Command reference:
 - `/flow` or `/flow help`
 - `/flow status [run_id]`

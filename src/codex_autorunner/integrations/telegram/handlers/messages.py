@@ -20,6 +20,7 @@ from ....core.utils import canonicalize_path
 from ...chat.forwarding import compose_forwarded_message_text
 from ...chat.handlers.messages import message_text_candidate
 from ...chat.media import audio_content_type_for_input, is_image_mime_or_path
+from ...chat.turn_policy import PlainTextTurnContext, should_trigger_plain_text_turn
 from ..adapter import (
     TelegramDocument,
     TelegramMessage,
@@ -197,6 +198,58 @@ def _record_with_media_workspace(
     if hub_root is None:
         return None, "PMA unavailable; hub root not configured."
     return dataclasses.replace(record, workspace_path=str(hub_root)), None
+
+
+def _activated_record_allows_plain_text_turn(
+    handlers: Any,
+    message: TelegramMessage,
+    *,
+    text: str,
+    has_media: bool,
+    record: Any,
+    policy_result: Any,
+) -> bool:
+    if record is None:
+        return False
+    if not (
+        bool(getattr(record, "pma_enabled", False))
+        or bool(getattr(record, "workspace_path", None))
+    ):
+        return False
+    if getattr(policy_result, "matched_destination", None) is not None:
+        return False
+    if getattr(policy_result, "destination_mode", None) != "command_only":
+        return False
+    if getattr(policy_result, "reason", None) != "plain_text_disabled":
+        return False
+    if has_media:
+        return True
+
+    default_trigger = getattr(
+        getattr(handlers, "_collaboration_policy", None),
+        "default_plain_text_trigger",
+        "always",
+    )
+    if default_trigger == "disabled":
+        return False
+    if default_trigger not in {"always", "mentions"}:
+        return False
+    return should_trigger_plain_text_turn(
+        mode=default_trigger,
+        context=PlainTextTurnContext(
+            text=text,
+            chat_type=message.chat_type,
+            bot_username=getattr(handlers, "_bot_username", None),
+            reply_to_is_bot=message.reply_to_is_bot,
+            reply_to_username=message.reply_to_username,
+            reply_to_message_id=(
+                str(message.reply_to_message_id)
+                if message.reply_to_message_id is not None
+                else None
+            ),
+            thread_id=str(message.thread_id) if message.thread_id is not None else None,
+        ),
+    )
 
 
 async def _clear_pending_options(
@@ -634,9 +687,19 @@ async def handle_message_inner(
         is_explicit_command=False,
     )
     if not paused and not policy_result.should_start_turn:
-        _log_message_policy_result(handlers, message, policy_result)
-        await _clear_placeholder()
-        return
+        if _activated_record_allows_plain_text_turn(
+            handlers,
+            message,
+            text=text,
+            has_media=has_media,
+            record=record,
+            policy_result=policy_result,
+        ):
+            pass
+        else:
+            _log_message_policy_result(handlers, message, policy_result)
+            await _clear_placeholder()
+            return
 
     if has_media:
 

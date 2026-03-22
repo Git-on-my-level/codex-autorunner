@@ -282,8 +282,9 @@ def telegram_doctor_checks(
                         name="Telegram collaboration migration",
                         passed=True,
                         message=(
-                            "Legacy Telegram personal setups still work with the current "
-                            "allowlists. For shared supergroups, migrate to "
+                            "Telegram allowlists admit commands, but plain-text turns "
+                            "now stay quiet until a chat or topic is activated with "
+                            "/bind or /pma on. For shared supergroups, migrate to "
                             "collaboration_policy.telegram.destinations and gate the "
                             "root chat with require_topics or mode:silent."
                         ),
