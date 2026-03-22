@@ -21,6 +21,7 @@ CollaborationOutcome = Literal[
 
 DEFAULT_DESTINATION_MODE: DestinationMode = "active"
 DEFAULT_PLAIN_TEXT_TRIGGER: PlainTextTriggerMode = "always"
+TELEGRAM_DEFAULT_DESTINATION_MODE: DestinationMode = "command_only"
 DESTINATION_MODE_OPTIONS = {"active", "command_only", "silent", "denied"}
 PLAIN_TEXT_TRIGGER_OPTIONS = {"always", "mentions", "disabled"}
 _TRIGGER_ALIASES = {
@@ -325,7 +326,7 @@ def build_telegram_collaboration_policy(
         required_configured_filters=frozenset({"actor", "container"}),
         require_subdestination=require_subdestination,
         default_mode=_parse_destination_mode(
-            surface_cfg.get("default_mode", DEFAULT_DESTINATION_MODE),
+            surface_cfg.get("default_mode", TELEGRAM_DEFAULT_DESTINATION_MODE),
             key="collaboration_policy.telegram.default_mode",
         ),
         default_plain_text_trigger=_parse_plain_text_trigger(

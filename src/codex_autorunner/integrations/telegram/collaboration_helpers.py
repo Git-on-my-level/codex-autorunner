@@ -35,8 +35,8 @@ def evaluate_collaboration_summary(
         )
     fallback = SimpleNamespace(
         command_allowed=True,
-        destination_mode="active",
-        plain_text_trigger="always",
+        destination_mode="command_only",
+        plain_text_trigger="disabled",
         reason="collaboration_unavailable",
         matched_destination=None,
     )

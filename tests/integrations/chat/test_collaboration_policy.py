@@ -49,6 +49,41 @@ def test_telegram_policy_requires_both_actor_and_container_filters() -> None:
     assert result.reason == "actor_filter_unconfigured"
 
 
+def test_telegram_default_policy_is_command_only_until_activation() -> None:
+    policy = build_telegram_collaboration_policy(
+        allowed_chat_ids=[-1001],
+        allowed_user_ids=[42],
+        require_topics=False,
+        trigger_mode="all",
+    )
+    command_result = evaluate_collaboration_policy(
+        policy,
+        CollaborationEvaluationContext(
+            actor_id="42",
+            container_id="-1001",
+            destination_id="-1001",
+            is_explicit_command=True,
+        ),
+    )
+    message_result = evaluate_collaboration_policy(
+        policy,
+        CollaborationEvaluationContext(
+            actor_id="42",
+            container_id="-1001",
+            destination_id="-1001",
+            plain_text=PlainTextTurnContext(
+                text="hello",
+                chat_type="supergroup",
+            ),
+        ),
+    )
+    assert policy.default_mode == "command_only"
+    assert command_result.command_allowed is True
+    assert command_result.outcome == "command_only_destination"
+    assert message_result.should_start_turn is False
+    assert message_result.reason == "plain_text_disabled"
+
+
 def test_command_only_destination_allows_commands_but_not_plain_text() -> None:
     policy = CollaborationPolicy(
         platform="discord",
@@ -177,7 +212,7 @@ def test_builder_accepts_trigger_alias_and_destination_rules() -> None:
         require_topics=False,
         trigger_mode="all",
         collaboration_raw={
-            "default_mode": "active",
+            "default_mode": "command_only",
             "destinations": [
                 {
                     "chat_id": -1001,
