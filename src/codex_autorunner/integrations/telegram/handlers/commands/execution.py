@@ -359,6 +359,26 @@ async def _resolve_telegram_managed_thread(
                 workspace_root=str(workspace_root),
                 mode=mode,
             )
+            existing_backend_thread_id = (
+                str(getattr(thread, "backend_thread_id", None) or "").strip() or None
+            )
+            if (
+                existing_backend_thread_id is not None
+                and existing_backend_thread_id != normalized_backend_thread_id
+            ):
+                log_event(
+                    handlers._logger,
+                    logging.INFO,
+                    "telegram.thread.binding.rebind_rejected",
+                    surface_key=surface_key,
+                    existing_backend_thread_id=existing_backend_thread_id,
+                    requested_backend_thread_id=normalized_backend_thread_id,
+                    agent=agent,
+                    workspace_root=str(workspace_root),
+                    mode=mode,
+                    reason="runtime_unavailable",
+                )
+            normalized_backend_thread_id = existing_backend_thread_id
     if (
         thread is not None
         and normalized_backend_thread_id
@@ -520,6 +540,27 @@ async def _sync_telegram_thread_binding(
                 workspace_root=str(workspace_root),
                 mode=mode,
             )
+            existing_backend_thread_id = (
+                str(getattr(current_thread, "backend_thread_id", None) or "").strip()
+                or None
+            )
+            if (
+                existing_backend_thread_id is not None
+                and existing_backend_thread_id != effective_backend_thread_id
+            ):
+                log_event(
+                    handlers._logger,
+                    logging.INFO,
+                    "telegram.thread.binding.rebind_rejected",
+                    surface_key=surface_key,
+                    existing_backend_thread_id=existing_backend_thread_id,
+                    requested_backend_thread_id=effective_backend_thread_id,
+                    agent=agent,
+                    workspace_root=str(workspace_root),
+                    mode=mode,
+                    reason="runtime_unavailable",
+                )
+            effective_backend_thread_id = existing_backend_thread_id
     if replace_existing and current_thread is not None:
         stop_outcome = await orchestration_service.stop_thread(
             current_thread.thread_target_id
