@@ -69,6 +69,8 @@ pytestmark = pytest.mark.slow
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
+        self.followup_messages: list[dict[str, Any]] = []
+        self.original_interaction_edits: list[dict[str, Any]] = []
         self.channel_messages: list[dict[str, Any]] = []
         self.attachment_messages: list[dict[str, Any]] = []
         self.edited_channel_messages: list[dict[str, Any]] = []
@@ -92,6 +94,38 @@ class _FakeRest:
                 "payload": payload,
             }
         )
+
+    async def create_followup_message(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.followup_messages.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": dict(payload),
+            }
+        )
+        return {"id": f"followup-{len(self.followup_messages)}"}
+
+    async def edit_original_interaction_response(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.original_interaction_edits.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": dict(payload),
+            }
+        )
+        return {"id": "original-response"}
 
     async def create_channel_message(
         self, *, channel_id: str, payload: dict[str, Any]
@@ -850,6 +884,101 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
             "Done from fake turn" in msg["payload"].get("content", "")
             for msg in rest.channel_messages
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_session_compact_finishes_interaction_when_finalize_fails(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    orchestration_service = service._discord_thread_service()
+    current_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace.resolve(),
+        display_name="discord:channel-1",
+    )
+    service._attach_discord_thread_binding(
+        channel_id="channel-1",
+        thread_target_id=current_thread.thread_target_id,
+        agent="codex",
+        repo_id=None,
+        pma_enabled=False,
+    )
+
+    async def _fake_run_turn(
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return DiscordMessageTurnResult(
+            final_message="summary text",
+            preview_message_id=None,
+        )
+
+    async def _failing_flush(*, workspace_root: Path, channel_id: str) -> None:
+        _ = workspace_root, channel_id
+        raise RuntimeError("outbox boom")
+
+    service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+    service._flush_outbox_files = _failing_flush  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_compact(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert rest.original_interaction_edits
+        assert (
+            rest.original_interaction_edits[-1]["payload"]["content"]
+            == "Compaction summary posted, but finalizing the fresh thread failed."
+        )
+        assert rest.channel_messages
+        assert (
+            rest.channel_messages[-1]["payload"]["content"]
+            == "Compaction summary posted, but finalizing the fresh thread failed."
+        )
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert "summary text" in binding["pending_compact_seed"]
+        assert binding["pending_compact_session_key"]
+        assert binding["pending_compact_session_key"] != current_thread.thread_target_id
     finally:
         await store.close()
 
@@ -6499,6 +6628,11 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
             "token-1",
             channel_id="channel-1",
         )
+        assert rest.original_interaction_edits
+        assert (
+            rest.original_interaction_edits[-1]["payload"]["content"]
+            == "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
+        )
         assert rest.edited_channel_messages
         compact_preview_edit = rest.edited_channel_messages[-1]
         assert compact_preview_edit["message_id"] == "preview-1"
@@ -6669,6 +6803,11 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
             "interaction-1",
             "token-1",
             channel_id="channel-1",
+        )
+        assert rest.original_interaction_edits
+        assert (
+            rest.original_interaction_edits[-1]["payload"]["content"]
+            == "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
         )
         assert not rest.edited_channel_messages
         assert len(rest.channel_messages) > 1

@@ -11517,6 +11517,28 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
+        async def _finish_compact_interaction(text: str) -> None:
+            if deferred:
+                updated = await self._edit_original_component_message(
+                    interaction_token=interaction_token,
+                    text=text,
+                    components=[],
+                )
+                if updated:
+                    return
+                max_len = max(int(self._config.max_message_length), 32)
+                sent = await self._send_followup_ephemeral(
+                    interaction_token=interaction_token,
+                    content=truncate_for_discord(text, max_len=max_len),
+                )
+                if sent:
+                    return
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                text,
+            )
+
         binding = await self._store.get_binding(channel_id=channel_id)
         if binding is None:
             await self._respond_ephemeral(
@@ -11574,142 +11596,177 @@ class DiscordBotService:
             )
             return
 
-        await self._defer_ephemeral(
+        deferred = await self._defer_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
 
+        interaction_text: Optional[str] = None
         try:
-            turn_result = await self._run_agent_turn_for_message(
-                workspace_root=workspace_root,
-                prompt_text=self.COMPACT_SUMMARY_PROMPT,
-                agent=agent,
-                model_override=model_override,
-                reasoning_effort=reasoning_effort,
-                session_key=current_thread.thread_target_id,
-                orchestrator_channel_key=(
-                    channel_id if not pma_enabled else f"pma:{channel_id}"
-                ),
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.compact.turn_failed",
-                channel_id=channel_id,
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {"content": f"Compact failed: {exc}"},
-            )
-            return
-
-        response_text = (
-            turn_result.final_message.strip() if turn_result.final_message else ""
-        )
-        if not response_text:
-            response_text = "(No summary generated.)"
-        try:
-            _had_previous, next_thread_id = await self._reset_discord_thread_binding(
-                channel_id=channel_id,
-                workspace_root=workspace_root,
-                agent=agent,
-                repo_id=(
-                    str(binding.get("repo_id")).strip()
-                    if isinstance(binding.get("repo_id"), str)
-                    and str(binding.get("repo_id")).strip()
-                    else None
-                ),
-                resource_kind=(
-                    str(binding.get("resource_kind")).strip()
-                    if isinstance(binding.get("resource_kind"), str)
-                    and str(binding.get("resource_kind")).strip()
-                    else None
-                ),
-                resource_id=(
-                    str(binding.get("resource_id")).strip()
-                    if isinstance(binding.get("resource_id"), str)
-                    and str(binding.get("resource_id")).strip()
-                    else None
-                ),
-                pma_enabled=pma_enabled,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.compact.reset_failed",
-                channel_id=channel_id,
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {
-                    "content": "Compact summary generated, but starting a fresh thread failed."
-                },
-            )
-            return
-        await self._store.set_pending_compact_seed(
-            channel_id=channel_id,
-            seed_text=build_compact_seed_prompt(response_text),
-            session_key=next_thread_id,
-        )
-
-        chunks = chunk_discord_message(
-            f"**Conversation Summary:**\n\n{response_text}",
-            max_len=self._config.max_message_length,
-            with_numbering=False,
-        )
-        if not chunks:
-            chunks = ["**Conversation Summary:**\n\n(No summary generated.)"]
-
-        next_chunk_index = 0
-        preview_chunk_applied = False
-        preview_message_id = (
-            turn_result.preview_message_id
-            if isinstance(turn_result.preview_message_id, str)
-            and turn_result.preview_message_id
-            else None
-        )
-
-        if preview_message_id:
             try:
-                preview_payload: dict[str, Any] = {"content": chunks[0]}
-                await self._rest.edit_channel_message(
-                    channel_id=channel_id,
-                    message_id=preview_message_id,
-                    payload=preview_payload,
+                turn_result = await self._run_agent_turn_for_message(
+                    workspace_root=workspace_root,
+                    prompt_text=self.COMPACT_SUMMARY_PROMPT,
+                    agent=agent,
+                    model_override=model_override,
+                    reasoning_effort=reasoning_effort,
+                    session_key=current_thread.thread_target_id,
+                    orchestrator_channel_key=(
+                        channel_id if not pma_enabled else f"pma:{channel_id}"
+                    ),
                 )
-                preview_chunk_applied = True
-                next_chunk_index = 1
             except Exception as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
-                    "discord.compact.preview_edit_failed",
+                    "discord.compact.turn_failed",
                     channel_id=channel_id,
-                    message_id=preview_message_id,
+                    workspace_root=str(workspace_root),
                     exc=exc,
                 )
+                await self._send_channel_message_safe(
+                    channel_id,
+                    {"content": f"Compact failed: {exc}"},
+                )
+                interaction_text = (
+                    "Compaction failed. Check the channel for the error message."
+                )
+                return
 
-        if not preview_chunk_applied:
-            first_payload: dict[str, Any] = {"content": chunks[0]}
-            await self._send_channel_message_safe(
-                channel_id,
-                first_payload,
+            response_text = (
+                turn_result.final_message.strip() if turn_result.final_message else ""
             )
-            next_chunk_index = 1
+            if not response_text:
+                response_text = "(No summary generated.)"
+            try:
+                _had_previous, next_thread_id = (
+                    await self._reset_discord_thread_binding(
+                        channel_id=channel_id,
+                        workspace_root=workspace_root,
+                        agent=agent,
+                        repo_id=(
+                            str(binding.get("repo_id")).strip()
+                            if isinstance(binding.get("repo_id"), str)
+                            and str(binding.get("repo_id")).strip()
+                            else None
+                        ),
+                        resource_kind=(
+                            str(binding.get("resource_kind")).strip()
+                            if isinstance(binding.get("resource_kind"), str)
+                            and str(binding.get("resource_kind")).strip()
+                            else None
+                        ),
+                        resource_id=(
+                            str(binding.get("resource_id")).strip()
+                            if isinstance(binding.get("resource_id"), str)
+                            and str(binding.get("resource_id")).strip()
+                            else None
+                        ),
+                        pma_enabled=pma_enabled,
+                    )
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.compact.reset_failed",
+                    channel_id=channel_id,
+                    workspace_root=str(workspace_root),
+                    exc=exc,
+                )
+                await self._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": "Compact summary generated, but starting a fresh thread failed."
+                    },
+                )
+                interaction_text = "Compaction generated a summary, but starting a fresh thread failed."
+                return
+            try:
+                await self._store.set_pending_compact_seed(
+                    channel_id=channel_id,
+                    seed_text=build_compact_seed_prompt(response_text),
+                    session_key=next_thread_id,
+                )
 
-        for chunk in chunks[next_chunk_index:]:
-            payload: dict[str, Any] = {"content": chunk}
-            await self._send_channel_message_safe(channel_id, payload)
-        await self._flush_outbox_files(
-            workspace_root=workspace_root,
-            channel_id=channel_id,
-        )
+                chunks = chunk_discord_message(
+                    f"**Conversation Summary:**\n\n{response_text}",
+                    max_len=self._config.max_message_length,
+                    with_numbering=False,
+                )
+                if not chunks:
+                    chunks = ["**Conversation Summary:**\n\n(No summary generated.)"]
+
+                next_chunk_index = 0
+                preview_chunk_applied = False
+                preview_message_id = (
+                    turn_result.preview_message_id
+                    if isinstance(turn_result.preview_message_id, str)
+                    and turn_result.preview_message_id
+                    else None
+                )
+
+                if preview_message_id:
+                    try:
+                        preview_payload: dict[str, Any] = {"content": chunks[0]}
+                        await self._rest.edit_channel_message(
+                            channel_id=channel_id,
+                            message_id=preview_message_id,
+                            payload=preview_payload,
+                        )
+                        preview_chunk_applied = True
+                        next_chunk_index = 1
+                    except Exception as exc:
+                        log_event(
+                            self._logger,
+                            logging.WARNING,
+                            "discord.compact.preview_edit_failed",
+                            channel_id=channel_id,
+                            message_id=preview_message_id,
+                            exc=exc,
+                        )
+
+                if not preview_chunk_applied:
+                    first_payload: dict[str, Any] = {"content": chunks[0]}
+                    await self._send_channel_message_safe(
+                        channel_id,
+                        first_payload,
+                    )
+                    next_chunk_index = 1
+
+                for chunk in chunks[next_chunk_index:]:
+                    payload: dict[str, Any] = {"content": chunk}
+                    await self._send_channel_message_safe(channel_id, payload)
+                await self._flush_outbox_files(
+                    workspace_root=workspace_root,
+                    channel_id=channel_id,
+                )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.compact.finalize_failed",
+                    channel_id=channel_id,
+                    workspace_root=str(workspace_root),
+                    exc=exc,
+                )
+                await self._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": "Compaction summary posted, but finalizing the fresh thread failed."
+                    },
+                )
+                interaction_text = (
+                    "Compaction summary posted, but finalizing the fresh thread failed."
+                )
+                return
+            interaction_text = (
+                "Compaction complete. Summary posted in the channel. "
+                "Send your next message to continue this session."
+            )
+        finally:
+            if interaction_text:
+                await _finish_compact_interaction(interaction_text)
 
     async def _handle_car_rollout(
         self,
