@@ -11602,6 +11602,8 @@ class DiscordBotService:
         )
 
         interaction_text: Optional[str] = None
+        previous_thread_id = current_thread.thread_target_id
+        next_thread_id: Optional[str] = None
         try:
             try:
                 turn_result = await self._run_agent_turn_for_message(
@@ -11688,7 +11690,83 @@ class DiscordBotService:
                     seed_text=build_compact_seed_prompt(response_text),
                     session_key=next_thread_id,
                 )
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.compact.seed_save_failed",
+                    channel_id=channel_id,
+                    workspace_root=str(workspace_root),
+                    next_thread_id=next_thread_id,
+                    previous_thread_id=previous_thread_id,
+                    exc=exc,
+                )
+                rollback_failed = False
+                try:
+                    orchestration_service = self._discord_thread_service()
+                    if next_thread_id:
+                        with contextlib.suppress(Exception):
+                            orchestration_service.archive_thread_target(next_thread_id)
+                    restored = orchestration_service.resume_thread_target(
+                        previous_thread_id
+                    )
+                    self._attach_discord_thread_binding(
+                        channel_id=channel_id,
+                        thread_target_id=restored.thread_target_id,
+                        agent=agent,
+                        repo_id=(
+                            str(binding.get("repo_id")).strip()
+                            if isinstance(binding.get("repo_id"), str)
+                            and str(binding.get("repo_id")).strip()
+                            else None
+                        ),
+                        resource_kind=(
+                            str(binding.get("resource_kind")).strip()
+                            if isinstance(binding.get("resource_kind"), str)
+                            and str(binding.get("resource_kind")).strip()
+                            else None
+                        ),
+                        resource_id=(
+                            str(binding.get("resource_id")).strip()
+                            if isinstance(binding.get("resource_id"), str)
+                            and str(binding.get("resource_id")).strip()
+                            else None
+                        ),
+                        workspace_root=workspace_root,
+                        pma_enabled=pma_enabled,
+                    )
+                except Exception as rollback_exc:
+                    rollback_failed = True
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.compact.seed_save_rollback_failed",
+                        channel_id=channel_id,
+                        workspace_root=str(workspace_root),
+                        next_thread_id=next_thread_id,
+                        previous_thread_id=previous_thread_id,
+                        exc=rollback_exc,
+                    )
+                await self._send_channel_message_safe(
+                    channel_id,
+                    {
+                        "content": (
+                            "Compaction summary generated, but saving the compacted context failed. "
+                            "Restored the previous thread; please retry."
+                            if not rollback_failed
+                            else "Compaction summary generated, but saving the compacted context failed and restoring the previous thread also failed."
+                        )
+                    },
+                )
+                interaction_text = (
+                    "Compaction summary generated, but saving the compacted context failed. "
+                    "Restored the previous thread; please retry."
+                    if not rollback_failed
+                    else "Compaction summary generated, but saving the compacted context failed and restoring the previous thread also failed."
+                )
+                return
 
+            try:
                 chunks = chunk_discord_message(
                     f"**Conversation Summary:**\n\n{response_text}",
                     max_len=self._config.max_message_length,

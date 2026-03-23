@@ -984,6 +984,129 @@ async def test_car_session_compact_finishes_interaction_when_finalize_fails(
 
 
 @pytest.mark.anyio
+async def test_car_session_compact_restores_previous_thread_when_seed_save_fails(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    orchestration_service = service._discord_thread_service()
+    current_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace.resolve(),
+        display_name="discord:channel-1",
+    )
+    service._attach_discord_thread_binding(
+        channel_id="channel-1",
+        thread_target_id=current_thread.thread_target_id,
+        agent="codex",
+        repo_id=None,
+        pma_enabled=False,
+    )
+
+    async def _fake_run_turn(
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return DiscordMessageTurnResult(
+            final_message="summary text",
+            preview_message_id=None,
+        )
+
+    async def _failing_set_pending_compact_seed(
+        *, channel_id: str, seed_text: str, session_key: str
+    ) -> None:
+        _ = channel_id, seed_text, session_key
+        raise RuntimeError("sqlite locked")
+
+    service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+    store.set_pending_compact_seed = _failing_set_pending_compact_seed  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_compact(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert rest.original_interaction_edits
+        assert (
+            rest.original_interaction_edits[-1]["payload"]["content"]
+            == "Compaction summary generated, but saving the compacted context failed. Restored the previous thread; please retry."
+        )
+        assert rest.channel_messages
+        assert (
+            rest.channel_messages[-1]["payload"]["content"]
+            == "Compaction summary generated, but saving the compacted context failed. Restored the previous thread; please retry."
+        )
+
+        restored_thread = orchestration_service.get_thread_target(
+            current_thread.thread_target_id
+        )
+        assert restored_thread is not None
+        assert restored_thread.lifecycle_status == "active"
+
+        active_threads = orchestration_service.list_thread_targets(
+            lifecycle_status="active"
+        )
+        assert [thread.thread_target_id for thread in active_threads] == [
+            current_thread.thread_target_id
+        ]
+
+        archived_threads = orchestration_service.list_thread_targets(
+            lifecycle_status="archived"
+        )
+        assert len(archived_threads) == 1
+        assert archived_threads[0].thread_target_id != current_thread.thread_target_id
+
+        binding = orchestration_service.get_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        )
+        assert binding is not None
+        assert binding.thread_target_id == current_thread.thread_target_id
+
+        state_binding = await store.get_binding(channel_id="channel-1")
+        assert state_binding is not None
+        assert state_binding["pending_compact_seed"] is None
+        assert state_binding["pending_compact_session_key"] is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_event_submits_through_surface_orchestration_ingress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
