@@ -233,13 +233,18 @@ def harness_progress_event_stream(
             progress_func is None
             or progress_func is not AgentHarness.progress_event_stream
         ):
-            return progress_stream(workspace_root, conversation_id, turn_id)
+            return cast(
+                AsyncIterator[Any],
+                progress_stream(workspace_root, conversation_id, turn_id),
+            )
     stream_events = cast(
         Optional[Callable[[Path, str, str], AsyncIterator[Any]]],
         getattr(harness, "stream_events", None),
     )
     if callable(stream_events) and harness_allows_parallel_event_stream(harness):
-        return stream_events(workspace_root, conversation_id, turn_id)
+        return cast(
+            AsyncIterator[Any], stream_events(workspace_root, conversation_id, turn_id)
+        )
 
     async def _unsupported() -> AsyncIterator[Any]:
         raise UnsupportedAgentCapabilityError(

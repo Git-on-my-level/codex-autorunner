@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ...agents.opencode.run_prompt import OpenCodeRunConfig, run_opencode_prompt
+from ...agents.opencode.runtime import PERMISSION_ALLOW
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.registry import has_capability, validate_agent_id
 from ...core.config import RepoConfig
@@ -813,7 +814,7 @@ class ReviewService:
                 workspace_root=str(self.ctx.repo_root),
                 timeout_seconds=timeout_seconds,
                 interrupt_grace_seconds=REVIEW_INTERRUPT_GRACE_SECONDS,
-                permission_policy="allow",
+                permission_policy=PERMISSION_ALLOW,
             )
 
             opencode_result = await run_opencode_prompt(

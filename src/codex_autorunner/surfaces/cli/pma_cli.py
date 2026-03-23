@@ -311,8 +311,7 @@ def _render_active_turn_diagnostics(data: dict[str, Any]) -> None:
     backend_turn_id = str(data.get("backend_turn_id") or "").strip()
     if backend_thread_id or backend_turn_id:
         typer.echo(
-            "backend: "
-            f"thread={backend_thread_id or '-'} turn={backend_turn_id or '-'}"
+            f"backend: thread={backend_thread_id or '-'} turn={backend_turn_id or '-'}"
         )
     stall_reason = str(data.get("stall_reason") or "").strip()
     if stall_reason:
@@ -720,10 +719,7 @@ def pma_chat(
                     event_type = part[6:].strip()
                 elif part.startswith("data:"):
                     data_str = part[5:].strip()
-                    try:
-                        data = {"raw": data_str}
-                    except Exception:
-                        data = {}
+                    data = {"raw": data_str}
             return event_type, data
 
         token_env = config.server_auth_token_env

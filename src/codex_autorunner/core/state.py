@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import dataclasses
 import json
+import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -93,7 +96,7 @@ class SessionRecord:
         }
 
 
-def _ensure_state_schema(conn) -> None:
+def _ensure_state_schema(conn: sqlite3.Connection) -> None:
     with conn:
         conn.execute(
             """

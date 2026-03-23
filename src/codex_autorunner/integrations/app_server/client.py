@@ -42,6 +42,8 @@ from ...core.retry import retry_transient
 from .event_decoder import decode_notification
 from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 from .protocol_helpers import (
+    _extract_agent_message_phase,
+    _extract_agent_message_text,
     extract_resume_snapshot,
     normalize_notification,
     normalize_response,
@@ -2499,86 +2501,6 @@ def _status_prefers_completion_settle(status: Any) -> bool:
         "success",
         "succeeded",
     }
-
-
-def _extract_agent_message_text(item: Any) -> Optional[str]:
-    if not isinstance(item, dict):
-        return None
-    text = item.get("text")
-    if isinstance(text, str) and text.strip():
-        return text
-    content = item.get("content")
-    if isinstance(content, list):
-        parts: list[str] = []
-        for entry in content:
-            if not isinstance(entry, dict):
-                continue
-            entry_type = entry.get("type")
-            if entry_type not in (None, "output_text", "text", "message"):
-                continue
-            candidate = entry.get("text")
-            if isinstance(candidate, str) and candidate.strip():
-                parts.append(candidate)
-        if parts:
-            return "".join(parts)
-    return None
-
-
-def _extract_agent_message_phase(item: Any) -> Optional[str]:
-    if not isinstance(item, dict):
-        return None
-    phase = item.get("phase")
-    if not isinstance(phase, str):
-        return None
-    normalized = phase.strip().lower()
-    if normalized in {"commentary", "final_answer"}:
-        return normalized
-    return None
-
-
-def _extract_errors_from_container(container: Any) -> list[str]:
-    if not isinstance(container, dict):
-        return []
-    errors: list[str] = []
-    error_message = _extract_error_message(container)
-    if error_message:
-        errors.append(error_message)
-    raw_errors = container.get("errors")
-    if isinstance(raw_errors, list):
-        for entry in raw_errors:
-            if isinstance(entry, str) and entry.strip():
-                errors.append(entry.strip())
-            elif isinstance(entry, dict):
-                extracted = _extract_error_message(entry)
-                if extracted:
-                    errors.append(extracted)
-    return errors
-
-
-def _extract_agent_messages_from_container(
-    container: Any, target_turn_id: Optional[str]
-) -> list[str]:
-    if not isinstance(container, dict):
-        return []
-    agent_messages: list[str] = []
-    for key in ("items", "messages"):
-        entries = container.get(key)
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            entry_turn_id = extract_turn_id(entry)
-            if entry_turn_id and target_turn_id and entry_turn_id != target_turn_id:
-                continue
-            text = _extract_agent_message_text(entry)
-            if text:
-                agent_messages.append(text)
-            elif entry.get("role") == "assistant":
-                fallback = entry.get("text")
-                if isinstance(fallback, str) and fallback.strip():
-                    agent_messages.append(fallback)
-    return agent_messages
 
 
 @no_type_check
