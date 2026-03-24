@@ -41,7 +41,9 @@ from ...core.config import (
     resolve_env_for_root,
 )
 from ...core.filebox import (
+    delete_regular_files,
     inbox_dir,
+    list_regular_files,
     outbox_dir,
     outbox_pending_dir,
     outbox_sent_dir,
@@ -51,7 +53,6 @@ from ...core.filebox_retention import (
     resolve_filebox_retention_policy,
 )
 from ...core.flows import (
-    FLOW_ACTION_SPECS,
     FLOW_ACTIONS_WITH_RUN_PICKER,
     FlowRunRecord,
     FlowRunStatus,
@@ -73,6 +74,7 @@ from ...core.flows.ux_helpers import (
     seed_issue_from_github,
     seed_issue_from_text,
     select_default_ticket_flow_run,
+    select_ticket_flow_run_record,
     summarize_flow_freshness,
     ticket_flow_archive_requires_force,
     ticket_progress,
@@ -146,6 +148,7 @@ from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.handlers.approvals import (
     normalize_backend_approval_request,
 )
+from ...integrations.chat.help_catalog import build_discord_help_lines
 from ...integrations.chat.media import (
     audio_content_type_for_input,
     audio_extension_for_input,
@@ -1855,10 +1858,7 @@ class DiscordBotService:
             return None
         try:
             runs = store.list_flow_runs(flow_type="ticket_flow")
-            return next(
-                (record for record in runs if record.status == FlowRunStatus.PAUSED),
-                None,
-            )
+            return select_ticket_flow_run_record(runs, selection="paused")
         except Exception:
             return None
         finally:
@@ -5224,60 +5224,7 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        flow_usage_overrides = {"runs": "[limit]"}
-        lines = [
-            "**CAR Commands:**",
-            "",
-            "/car bind [path] - Bind channel to workspace",
-            "/car status - Show binding status",
-            "/car new - Start a fresh chat session",
-            "/car newt - Reset current workspace branch from origin default branch and start session",
-            "/car debug - Show debug info",
-            "/car help - Show this help",
-            "/car ids - Show channel/user IDs for debugging",
-            "/car diff [path] - Show git diff",
-            "/car skills [search] - List available skills",
-            "/car tickets [search] - Browse and edit tickets",
-            "/car mcp - Show MCP server status",
-            "/car init - Generate AGENTS.md",
-            "/car repos - List available repos",
-            "/car agent [name] - Set or show agent",
-            "/car model [name] - Set or show model",
-            "/car update [target] - Start update or check status",
-            "/car review [target] - Run a code review",
-            "/car approvals [mode] - Set approval and sandbox policy",
-            "/car mention <path> [request] - Include a file in a request",
-            "/car experimental [action] [feature] - Toggle experimental features",
-            "/car rollout - Show current thread rollout path",
-            "/car feedback <reason> - Send feedback and logs",
-            "/car archive - Archive workspace state and managed threads for a fresh start",
-            "",
-            "**Session Commands:**",
-            "/car session resume [thread_id] - Resume a previous chat thread",
-            "/car session reset - Reset PMA thread state",
-            "/car session compact - Compact the conversation",
-            "/car session interrupt - Stop the active turn",
-            "/car session logout - Log out of the Codex account",
-            "",
-            "**Flow Commands:**",
-            *[
-                f"/car flow {spec.name} {flow_usage_overrides.get(spec.name, spec.usage)} - {spec.description}"
-                for spec in FLOW_ACTION_SPECS
-            ],
-            "",
-            "**File Commands:**",
-            "/car files inbox - List inbox files",
-            "/car files outbox - List pending outbox files",
-            "/car files clear [target] - Clear inbox/outbox",
-            "",
-            "**PMA Commands:**",
-            "/pma on - Enable PMA mode",
-            "/pma off - Disable PMA mode",
-            "/pma status - Show PMA status",
-            "",
-            "Direct shell:",
-            "!<cmd> - run a bash command in the bound workspace",
-        ]
+        lines = build_discord_help_lines()
         content = format_discord_message("\n".join(lines))
         await self._respond_ephemeral(interaction_id, interaction_token, content)
 
@@ -8334,9 +8281,7 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = next(
-                    (record for record in runs if record.status.is_active()), None
-                )
+                target = select_ticket_flow_run_record(runs, selection="active")
         finally:
             store.close()
 
@@ -8449,10 +8394,7 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = next(
-                    (record for record in runs if record.status.is_active()),
-                    None,
-                )
+                target = select_ticket_flow_run_record(runs, selection="active")
 
             if target is None:
                 await self._respond_ephemeral(
@@ -8546,14 +8488,7 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = next(
-                    (
-                        record
-                        for record in runs
-                        if record.status == FlowRunStatus.PAUSED
-                    ),
-                    None,
-                )
+                target = select_ticket_flow_run_record(runs, selection="paused")
         finally:
             store.close()
 
@@ -8667,10 +8602,7 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = next(
-                    (record for record in runs if not record.status.is_terminal()),
-                    None,
-                )
+                target = select_ticket_flow_run_record(runs, selection="non_terminal")
         finally:
             store.close()
 
@@ -9069,23 +9001,7 @@ class DiscordBotService:
         return f"{value:.1f} TB"
 
     def _list_paths_in_dir(self, folder: Path) -> list[Path]:
-        if not folder.exists():
-            return []
-        files: list[Path] = []
-        for path in folder.iterdir():
-            try:
-                if path.is_file():
-                    files.append(path)
-            except OSError:
-                continue
-
-        def _mtime(entry: Path) -> float:
-            try:
-                return entry.stat().st_mtime
-            except OSError:
-                return 0.0
-
-        return sorted(files, key=_mtime, reverse=True)
+        return list_regular_files(folder)
 
     def _list_files_in_dir(self, folder: Path) -> list[tuple[str, int, str]]:
         files: list[tuple[str, int, str]] = []
@@ -9228,17 +9144,7 @@ class DiscordBotService:
             )
 
     def _delete_files_in_dir(self, folder: Path) -> int:
-        if not folder.exists():
-            return 0
-        deleted = 0
-        for path in folder.iterdir():
-            try:
-                if path.is_file():
-                    path.unlink()
-                    deleted += 1
-            except OSError:
-                continue
-        return deleted
+        return delete_regular_files(folder)
 
     async def _handle_files_inbox(
         self,

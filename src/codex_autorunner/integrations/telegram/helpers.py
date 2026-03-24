@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
 from ...core.coercion import coerce_int
-from ...core.flows import flow_help_lines
 from ...core.injected_context import strip_injected_context_blocks
 from ...core.redaction import redact_text
 from ...core.state_roots import resolve_global_state_root
@@ -24,6 +23,7 @@ from ...integrations.chat.compaction import (
     COMPACT_SEED_PREFIX,
     COMPACT_SEED_SUFFIX,
 )
+from ...integrations.chat.help_catalog import build_telegram_help_text
 from ...integrations.chat.review_commits import (  # noqa: F401
     _format_review_commit_label,
     _parse_review_commit_log,
@@ -793,70 +793,7 @@ def _format_mcp_list(result: Any) -> str:
 
 
 def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
-    order = [
-        "bind",
-        "new",
-        "resume",
-        "review",
-        "flow",
-        "reply",
-        "pr",
-        "agent",
-        "model",
-        "approvals",
-        "pma",
-        "status",
-        "diff",
-        "mention",
-        "skills",
-        "mcp",
-        "experimental",
-        "init",
-        "compact",
-        "rollout",
-        "feedback",
-        "logout",
-        "interrupt",
-        "help",
-    ]
-    lines = ["Commands:"]
-    for name in order:
-        spec = command_specs.get(name)
-        if spec:
-            lines.append(f"/{name} - {spec.description}")
-    if "review" in command_specs:
-        lines.append("")
-        lines.append("Review:")
-        lines.append("/review")
-        lines.append("/review pr [branch]")
-        lines.append("/review commit <sha> (or /review commit to pick)")
-        lines.append("/review custom <instructions> (or /review custom to prompt)")
-        lines.append("/review detached ...")
-
-    if "flow" in command_specs:
-        lines.append("")
-        lines.append("Flow:")
-        lines.append("/flow")
-        lines.extend(
-            flow_help_lines(
-                prefix="/flow",
-                usage_overrides={
-                    "start": "[--force-new]",
-                    "reply": "<message>",
-                },
-            )[1:]
-        )
-        lines.append("(Use /pma for full flow controls via web app)")
-        if "reply" in command_specs:
-            lines.append("/reply <message> (legacy)")
-
-    lines.append("")
-    lines.append("Other:")
-    lines.append("Note: /resume is supported for the codex and opencode agents.")
-    lines.append(
-        "!<cmd> - run a bash command in the bound workspace (non-interactive; long-running commands time out)"
-    )
-    return "\n".join(lines)
+    return build_telegram_help_text(command_specs.keys())
 
 
 def _render_command_output(result: Any) -> str:
