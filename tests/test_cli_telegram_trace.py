@@ -137,6 +137,111 @@ def test_telegram_trace_default_scans_whole_file(repo: Path) -> None:
     assert "Matched lines: 1 | Error candidates: 1" in result.output
 
 
+def test_telegram_trace_avoids_prefix_conversation_collisions(repo: Path) -> None:
+    log_path = repo / ".codex-autorunner" / "codex-server.log"
+    _write(
+        log_path,
+        "\n".join(
+            [
+                '2026-03-24 11:05:00,000 [WARNING] {"event":"telegram.turn.failed","chat_id":-1003679298862,"thread_id":7073,"conversation_id":"-1003679298862:7073"}',
+            ]
+        )
+        + "\n",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "telegram",
+            "trace",
+            "--path",
+            str(repo),
+            "--conversation=-1003679298862:707",
+            "--limit",
+            "10",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "No matches for conversation_id -1003679298862:707" in result.output
+
+
+def test_telegram_trace_matches_string_chat_and_thread_fields(repo: Path) -> None:
+    conversation_id = "-1003679298862:7073"
+    log_path = repo / ".codex-autorunner" / "codex-server.log"
+    _write(
+        log_path,
+        "\n".join(
+            [
+                '2026-03-24 11:06:00,000 [INFO] {"event":"chat.dispatch.received","chat_id":"-1003679298862","thread_id":"7073","update_id":"1"}',
+            ]
+        )
+        + "\n",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "telegram",
+            "trace",
+            "--path",
+            str(repo),
+            f"--conversation={conversation_id}",
+            "--limit",
+            "10",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Matched lines: 1 | Error candidates: 0" in result.output
+    assert "event=chat.dispatch.received" in result.output
+
+
+def test_telegram_trace_recent_matches_use_chronological_order(repo: Path) -> None:
+    conversation_id = "-1003679298862:7073"
+    current_log = repo / ".codex-autorunner" / "codex-server.log"
+    rotated_log = repo / ".codex-autorunner" / "codex-server.log.1"
+    _write(
+        current_log,
+        "\n".join(
+            [
+                '2026-03-24 12:00:00,000 [WARNING] {"event":"telegram.turn.failed","chat_id":-1003679298862,"thread_id":7073,"conversation_id":"-1003679298862:7073","error":"newest"}',
+            ]
+        )
+        + "\n",
+    )
+    _write(
+        rotated_log,
+        "\n".join(
+            [
+                '2026-03-24 11:00:00,000 [WARNING] {"event":"telegram.turn.failed","chat_id":-1003679298862,"thread_id":7073,"conversation_id":"-1003679298862:7073","error":"older"}',
+            ]
+        )
+        + "\n",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "telegram",
+            "trace",
+            "--path",
+            str(repo),
+            "--json",
+            f"--conversation={conversation_id}",
+            "--limit",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert len(payload["matches"]) == 1
+    latest_match = payload["matches"][0]
+    assert latest_match["timestamp"] == "2026-03-24 12:00:00,000"
+    assert latest_match["payload"]["error"] == "newest"
+
+
 def test_telegram_trace_requires_parseable_conversation_id(repo: Path) -> None:
     result = runner.invoke(
         app,

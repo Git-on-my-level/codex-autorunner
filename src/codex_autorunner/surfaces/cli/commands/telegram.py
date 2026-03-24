@@ -40,6 +40,10 @@ _CONVERSATION_IN_TEXT_PATTERN = re.compile(
     r"\bconversation\s+(?P<conversation_id>-?\d+:(?:\d+|root)(?::[^\s\)]+)?)",
     re.IGNORECASE,
 )
+_TOPIC_KEY_IN_TEXT_PATTERN = re.compile(
+    r"(?P<conversation_id>-?\d+:(?:\d+|root)(?::[^\s\)\"',]+)?)",
+    re.IGNORECASE,
+)
 _ERROR_EVENT_HINTS = (
     ".failed",
     ".error",
@@ -73,6 +77,7 @@ class _ConversationTarget:
 class _LogTraceMatch:
     path: Path
     line_no: int
+    sequence: int
     timestamp: Optional[str]
     level: Optional[str]
     event: Optional[str]
@@ -150,16 +155,17 @@ def _payload_matches_conversation(
     ):
         return True
 
-    payload_chat = payload.get("chat_id")
-    if not isinstance(payload_chat, int) or payload_chat != chat_id:
+    payload_chat = _coerce_int(payload.get("chat_id"))
+    if payload_chat != chat_id:
         return False
 
     if "thread_id" in payload:
-        payload_thread = payload.get("thread_id")
-        if payload_thread is None and thread_id is None:
-            return True
-        if isinstance(payload_thread, int) and thread_id is not None:
-            return payload_thread == thread_id
+        is_valid_thread, normalized_payload_thread = _coerce_optional_thread_id(
+            payload.get("thread_id")
+        )
+        if not is_valid_thread:
+            return False
+        return normalized_payload_thread == thread_id
 
     payload_topic_key = payload.get("topic_key")
     if isinstance(payload_topic_key, str):
@@ -175,7 +181,7 @@ def _payload_matches_conversation(
 def _line_matches_conversation(
     raw_line: str, payload: Optional[dict[str, Any]], target: _ConversationTarget
 ) -> bool:
-    if target.conversation_id in raw_line:
+    if _raw_line_mentions_conversation(raw_line, target):
         return True
     if not isinstance(payload, dict):
         return False
@@ -185,6 +191,48 @@ def _line_matches_conversation(
         chat_id=target.chat_id,
         thread_id=target.thread_id,
     )
+
+
+def _coerce_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip()
+        if re.fullmatch(r"-?\d+", normalized):
+            return int(normalized)
+    return None
+
+
+def _coerce_optional_thread_id(value: Any) -> tuple[bool, Optional[int]]:
+    if value is None:
+        return True, None
+    if isinstance(value, str) and value.strip().lower() == "root":
+        return True, None
+    coerced = _coerce_int(value)
+    if coerced is None:
+        return False, None
+    return True, coerced
+
+
+def _raw_line_mentions_conversation(raw_line: str, target: _ConversationTarget) -> bool:
+    for match in _TOPIC_KEY_IN_TEXT_PATTERN.finditer(raw_line):
+        candidate = match.group("conversation_id")
+        try:
+            topic_chat, topic_thread, _scope = parse_topic_key(candidate)
+        except ValueError:
+            continue
+        if topic_chat == target.chat_id and topic_thread == target.thread_id:
+            return True
+    return False
+
+
+def _match_chronological_key(match: _LogTraceMatch) -> tuple[int, str, int]:
+    # Use parsed timestamps first; preserve original sequence for stable ties.
+    if isinstance(match.timestamp, str) and match.timestamp:
+        return (0, match.timestamp, match.sequence)
+    return (1, "", match.sequence)
 
 
 def _is_error_candidate(
@@ -513,6 +561,7 @@ def register_telegram_commands(
             raise_exit(f"No log files found under: {searched}")
 
         matches: list[_LogTraceMatch] = []
+        match_sequence = 0
         total_scanned_lines = 0
         read_errors: list[str] = []
         for log_path in log_paths:
@@ -546,6 +595,7 @@ def register_telegram_commands(
                     _LogTraceMatch(
                         path=log_path,
                         line_no=line_no,
+                        sequence=match_sequence,
                         timestamp=timestamp,
                         level=level,
                         event=event,
@@ -562,7 +612,9 @@ def register_telegram_commands(
                         context=context,
                     )
                 )
+                match_sequence += 1
 
+        matches = sorted(matches, key=_match_chronological_key)
         error_matches = [match for match in matches if match.is_error_candidate]
         recent_matches = matches[-limit:]
         recent_error_matches = error_matches[-limit:]
