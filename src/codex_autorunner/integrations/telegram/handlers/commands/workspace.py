@@ -24,6 +24,10 @@ from ....chat.agents import (
     chat_agent_supports_effort,
     normalize_chat_agent,
 )
+from ....chat.status_diagnostics import (
+    StatusBlockContext,
+    build_status_block_lines,
+)
 from ...adapter import (
     TelegramCallbackQuery,
     TelegramMessage,
@@ -53,9 +57,7 @@ from ...helpers import (
     _extract_thread_list_cursor,
     _extract_thread_preview_parts,
     _format_missing_thread_label,
-    _format_rate_limits,
     _format_resume_summary,
-    _format_sandbox_policy,
     _format_thread_preview,
     _format_token_usage,
     _local_workspace_threads,
@@ -111,6 +113,42 @@ class ResumeThreadData:
     threads: list[dict[str, Any]]
     unscoped_entries: list[dict[str, Any]]
     saw_path: bool
+
+
+def _telegram_status_base_lines(
+    *,
+    message: TelegramMessage,
+    record: "TelegramTopicRecord",
+    runtime: Any,
+    command_policy: Any,
+    plain_text_policy: Any,
+) -> list[str]:
+    workspace_label = record.workspace_path or (
+        "hub" if record.pma_enabled else "unbound"
+    )
+    lines: list[str] = []
+    if record.pma_enabled:
+        lines.append("Mode: PMA (hub)")
+        if record.pma_prev_workspace_path:
+            lines.append(f"Previous binding: {record.pma_prev_workspace_path}")
+            lines.append("Use /pma off to restore previous binding.")
+    elif record.workspace_path:
+        lines.append("Mode: workspace")
+        lines.append("Topic is bound.")
+    lines.extend(
+        [
+            f"Workspace: {workspace_label}",
+            f"Workspace ID: {record.workspace_id or 'unknown'}",
+            f"Active thread: {record.active_thread_id or 'none'}",
+            f"Active turn: {runtime.current_turn_id or 'none'}",
+            *collaboration_summary_lines(
+                message,
+                command_result=command_policy,
+                plain_text_result=plain_text_policy,
+            ),
+        ]
+    )
+    return lines
 
 
 class WorkspaceCommands(SharedHelpers):
@@ -3085,36 +3123,34 @@ class WorkspaceCommands(SharedHelpers):
             message,
             command_text="/status",
         )
-        workspace_label = record.workspace_path or ("hub" if is_pma else "unbound")
+        lines = _telegram_status_base_lines(
+            message=message,
+            record=record,
+            runtime=runtime,
+            command_policy=command_policy,
+            plain_text_policy=plain_text_policy,
+        )
         effort_label = (
             record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
         )
-        lines = []
-        if is_pma:
-            lines.append("Mode: PMA (hub)")
-            # Show previous binding if available
-            if record.pma_prev_workspace_path:
-                lines.append(f"Previous binding: {record.pma_prev_workspace_path}")
-                lines.append("Use /pma off to restore previous binding.")
+        rate_limits = await self._read_rate_limits(record.workspace_path, agent=agent)
         lines.extend(
-            [
-                f"Workspace: {workspace_label}",
-                f"Workspace ID: {record.workspace_id or 'unknown'}",
-                f"Active thread: {record.active_thread_id or 'none'}",
-                f"Active turn: {runtime.current_turn_id or 'none'}",
-                *collaboration_summary_lines(
-                    message,
-                    command_result=command_policy,
-                    plain_text_result=plain_text_policy,
-                ),
-                f"Agent: {agent}",
-                f"Resume: {'supported' if self._agent_supports_resume(agent) else 'unsupported'}",
-                f"Model: {record.model or 'default'}",
-                f"Effort: {effort_label}",
-                f"Approval mode: {record.approval_mode}",
-                f"Approval policy: {approval_policy or 'default'}",
-                f"Sandbox policy: {_format_sandbox_policy(sandbox_policy)}",
-            ]
+            build_status_block_lines(
+                StatusBlockContext(
+                    agent=agent,
+                    resume=(
+                        "supported"
+                        if self._agent_supports_resume(agent)
+                        else "unsupported"
+                    ),
+                    model=record.model or "default",
+                    effort=effort_label,
+                    approval_mode=record.approval_mode,
+                    approval_policy=approval_policy or "default",
+                    sandbox_policy=sandbox_policy,
+                    rate_limits=rate_limits,
+                )
+            )
         )
         pending = await self._store.pending_approvals_for_key(key)
         if pending:
@@ -3132,8 +3168,6 @@ class WorkspaceCommands(SharedHelpers):
         if record.active_thread_id:
             token_usage = self._token_usage_by_thread.get(record.active_thread_id)
             lines.extend(_format_token_usage(token_usage))
-        rate_limits = await self._read_rate_limits(record.workspace_path, agent=agent)
-        lines.extend(_format_rate_limits(rate_limits))
 
         manifest_path = getattr(self, "_manifest_path", None)
         hub_root = getattr(self, "_hub_root", None)

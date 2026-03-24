@@ -28,6 +28,10 @@ from ...integrations.chat.review_commits import (  # noqa: F401
     _format_review_commit_label,
     _parse_review_commit_log,
 )
+from ...integrations.chat.status_diagnostics import (
+    extract_rate_limits,
+    format_sandbox_policy,
+)
 from ...integrations.chat.thread_summaries import (  # noqa: F401
     _coerce_thread_list,
     _extract_thread_list_cursor,
@@ -325,18 +329,7 @@ def _format_persist_note(message: str, *, persist: bool) -> str:
 
 
 def _format_sandbox_policy(sandbox_policy: Any) -> str:
-    if sandbox_policy is None:
-        return "default"
-    if isinstance(sandbox_policy, str):
-        return sandbox_policy
-    if isinstance(sandbox_policy, dict):
-        sandbox_type = sandbox_policy.get("type")
-        if isinstance(sandbox_type, str):
-            suffix = ""
-            if "networkAccess" in sandbox_policy:
-                suffix = f", network={sandbox_policy.get('networkAccess')}"
-            return f"{sandbox_type}{suffix}"
-    return str(sandbox_policy)
+    return format_sandbox_policy(sandbox_policy)
 
 
 def _format_token_usage(token_usage: Optional[dict[str, Any]]) -> list[str]:
@@ -362,40 +355,7 @@ def _format_token_usage(token_usage: Optional[dict[str, Any]]) -> list[str]:
 
 
 def _extract_rate_limits(payload: Any) -> Optional[dict[str, Any]]:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("rateLimits", "rate_limits", "limits"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            return value
-    if "primary" in payload or "secondary" in payload:
-        return payload
-    return None
-
-
-def _format_rate_limits(rate_limits: Optional[dict[str, Any]]) -> list[str]:
-    if not isinstance(rate_limits, dict):
-        return []
-    parts: list[str] = []
-    for key in ("primary", "secondary"):
-        entry = rate_limits.get(key)
-        if not isinstance(entry, dict):
-            continue
-        used_value = entry.get("used_percent", entry.get("usedPercent"))
-        used = _coerce_number(used_value)
-        if used is None:
-            used = _compute_used_percent(entry)
-        used_text = _format_percent(used)
-        window_minutes = _rate_limit_window_minutes(entry, key)
-        label = _format_rate_limit_window(window_minutes) or key
-        if used_text:
-            parts.append(f"[{label}: {used_text}]")
-    if not parts:
-        return []
-    refresh_label = _format_rate_limit_refresh(rate_limits)
-    if refresh_label:
-        parts.append(f"[refresh: {refresh_label}]")
-    return [f"Limits: {' '.join(parts)}"]
+    return extract_rate_limits(payload)
 
 
 def _rate_limit_window_minutes(

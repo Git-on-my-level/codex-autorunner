@@ -131,6 +131,10 @@ from ...integrations.chat.collaboration_policy import (
     evaluate_collaboration_admission,
     evaluate_collaboration_policy,
 )
+from ...integrations.chat.command_diagnostics import (
+    ActiveFlowInfo,
+    build_status_text,
+)
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.compaction import build_compact_seed_prompt
 from ...integrations.chat.dispatcher import (
@@ -172,6 +176,11 @@ from ...integrations.chat.picker_filter import (
     resolve_picker_query,
 )
 from ...integrations.chat.run_mirror import ChatRunMirror
+from ...integrations.chat.status_diagnostics import (
+    StatusBlockContext,
+    build_status_block_lines,
+    extract_rate_limits,
+)
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
@@ -196,7 +205,11 @@ from ...tickets.files import (
 from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
-from ..chat.approval_modes import APPROVAL_MODE_USAGE, normalize_approval_mode
+from ..chat.approval_modes import (
+    APPROVAL_MODE_USAGE,
+    normalize_approval_mode,
+    resolve_approval_mode_policies,
+)
 from ..chat.review_commits import _parse_review_commit_log
 from ..chat.thread_summaries import (
     _coerce_thread_list,
@@ -4728,6 +4741,51 @@ class DiscordBotService:
             or self.DEFAULT_AGENT
         )
 
+    def _agent_supports_effort(self, agent: str) -> bool:
+        return agent == "codex"
+
+    def _agent_supports_resume(self, agent: str) -> bool:
+        return agent in {"codex", "opencode"}
+
+    def _status_model_label(self, binding: dict[str, Any]) -> str:
+        model = binding.get("model_override")
+        if isinstance(model, str):
+            model = model.strip()
+            if model:
+                return model
+        return "default"
+
+    def _status_effort_label(self, binding: dict[str, Any], agent: str) -> str:
+        if not self._agent_supports_effort(agent):
+            return "n/a"
+        effort = binding.get("reasoning_effort")
+        if isinstance(effort, str):
+            effort = effort.strip()
+            if effort:
+                return effort
+        return "default"
+
+    async def _read_status_rate_limits(
+        self, workspace_path: Optional[str], *, agent: str
+    ) -> Optional[dict[str, Any]]:
+        if not self._agent_supports_effort(agent):
+            return None
+        try:
+            client = await self._client_for_workspace(workspace_path)
+        except AppServerUnavailableError:
+            return None
+        if client is None:
+            return None
+        for method in ("account/rateLimits/read", "account/read"):
+            try:
+                result = await client.request(method, params=None, timeout=5.0)
+            except Exception:
+                continue
+            rate_limits = extract_rate_limits(result)
+            if rate_limits:
+                return rate_limits
+        return None
+
     async def _list_model_items_for_binding(
         self,
         *,
@@ -4997,70 +5055,71 @@ class DiscordBotService:
                 user_id=user_id,
             ),
         )
-        if binding is None:
-            lines = [
-                "This channel is not bound.",
-                "Use /car bind workspace:<workspace> or /pma on to enable plain-text turns here.",
-                *collaboration_summary_lines(
-                    channel_id=channel_id,
-                    command_result=command_result,
-                    plain_text_result=plain_text_result,
-                    binding=None,
-                ),
-                "Then use /car flow status once flow commands are enabled.",
-            ]
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "\n".join(lines),
-            )
-            return
-
-        lines = []
-        is_pma = binding.get("pma_enabled", False)
-        workspace_path = binding.get("workspace_path", "unknown")
-        repo_id = binding.get("repo_id")
-        guild_id = binding.get("guild_id")
-        updated_at = binding.get("updated_at", "unknown")
-
-        if is_pma:
-            lines.append("Mode: PMA (hub)")
-            prev_workspace = binding.get("pma_prev_workspace_path")
-            if prev_workspace:
-                lines.append(f"Previous binding: {prev_workspace}")
-                lines.append("Use /pma off to restore previous binding.")
-        else:
-            lines.append("Mode: workspace")
-            lines.append("Channel is bound.")
-
-        lines.extend(
-            [
-                f"Workspace: {workspace_path}",
-                f"Repo ID: {repo_id or 'none'}",
-                f"Guild ID: {guild_id or 'none'}",
-                f"Channel ID: {channel_id}",
-                f"Last updated: {updated_at}",
-            ]
-        )
-
-        active_flow_info = await self._get_active_flow_info(workspace_path)
-        if active_flow_info:
-            lines.append(f"Active flow: {active_flow_info}")
-
-        lines.extend(
+        active_flow = None
+        workspace_path = None
+        if isinstance(binding, dict):
+            workspace_raw = binding.get("workspace_path")
+            if isinstance(workspace_raw, str) and workspace_raw.strip():
+                workspace_path = workspace_raw.strip()
+                active_flow = await self._get_active_flow_info(workspace_path)
+        lines = build_status_text(
+            binding,
             collaboration_summary_lines(
                 channel_id=channel_id,
                 command_result=command_result,
                 plain_text_result=plain_text_result,
                 binding=binding,
-            )
+            ),
+            active_flow,
+            channel_id,
+            include_flow_hint=False,
         )
+        if binding is None:
+            await self._respond_ephemeral(
+                interaction_id, interaction_token, "\n".join(lines)
+            )
+            return
+
+        agent = self._normalize_agent(binding.get("agent"))
+        rate_limits = await self._read_status_rate_limits(workspace_path, agent=agent)
+        approval_mode = normalize_approval_mode(
+            binding.get("approval_mode"),
+            default="yolo",
+            include_command_aliases=True,
+        )
+        if approval_mode is None:
+            approval_mode = "yolo"
+        approval_policy, sandbox_policy = resolve_approval_mode_policies(approval_mode)
+        explicit_approval_policy = binding.get("approval_policy")
+        if (
+            isinstance(explicit_approval_policy, str)
+            and explicit_approval_policy.strip()
+        ):
+            approval_policy = explicit_approval_policy.strip()
+        explicit_sandbox_policy = binding.get("sandbox_policy")
+        if explicit_sandbox_policy is not None:
+            sandbox_policy = explicit_sandbox_policy
+        model_label = self._status_model_label(binding)
+        effort_label = self._status_effort_label(binding, agent)
+        status_block = StatusBlockContext(
+            agent=agent,
+            resume="supported" if self._agent_supports_resume(agent) else "unsupported",
+            model=model_label,
+            effort=effort_label,
+            approval_mode=approval_mode,
+            approval_policy=approval_policy or "default",
+            sandbox_policy=sandbox_policy,
+            rate_limits=rate_limits,
+        )
+        lines.extend(build_status_block_lines(status_block))
         lines.append("Use /car flow status for ticket flow details.")
         await self._respond_ephemeral(
             interaction_id, interaction_token, "\n".join(lines)
         )
 
-    async def _get_active_flow_info(self, workspace_path: str) -> Optional[str]:
+    async def _get_active_flow_info(
+        self, workspace_path: str
+    ) -> Optional[ActiveFlowInfo]:
         if not workspace_path or workspace_path == "unknown":
             return None
         try:
@@ -5072,9 +5131,9 @@ class DiscordBotService:
                 runs = store.list_flow_runs(flow_type="ticket_flow")
                 for record in runs:
                     if record.status == FlowRunStatus.RUNNING:
-                        return f"{record.id} (running)"
+                        return ActiveFlowInfo(flow_id=record.id, status="running")
                     if record.status == FlowRunStatus.PAUSED:
-                        return f"{record.id} (paused)"
+                        return ActiveFlowInfo(flow_id=record.id, status="paused")
             finally:
                 store.close()
         except Exception:

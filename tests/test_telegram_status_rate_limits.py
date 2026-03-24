@@ -118,6 +118,14 @@ async def test_status_opencode_skips_rate_limits() -> None:
     await handler._handle_status(_message(), runtime=runtime)
 
     assert handler._client_calls == 0
+    text = handler._sent_messages[-1]
+    assert "Workspace ID: unknown" in text
+    assert "Active thread: none" in text
+    assert "Agent: opencode" in text
+    assert "Resume: supported" in text
+    assert "Model: default" in text
+    assert "Channel is bound." not in text
+    assert "/car flow status" not in text
     assert "Limits:" not in handler._sent_messages[-1]
 
 
@@ -130,7 +138,19 @@ async def test_status_codex_includes_rate_limits() -> None:
     await handler._handle_status(_message(), runtime=runtime)
 
     assert handler._client_calls == 1
-    assert "Limits:" in handler._sent_messages[-1]
+    text = handler._sent_messages[-1]
+    assert "Mode: workspace" in text
+    assert "Topic is bound." in text
+    assert "Workspace ID: unknown" in text
+    assert "Active thread: none" in text
+    assert "Agent: codex" in text
+    assert "Resume: supported" in text
+    assert "Model: default" in text
+    assert "Approval mode: yolo" in text
+    assert "Sandbox policy: default" in text
+    assert "Limits:" in text
+    assert "Channel is bound." not in text
+    assert "/car flow status" not in text
 
 
 @pytest.mark.anyio
@@ -143,5 +163,8 @@ async def test_status_pma_mode_skips_bind_hint() -> None:
 
     assert handler._sent_messages
     text = handler._sent_messages[-1]
-    assert "PMA" in text
+    assert "Mode: PMA (hub)" in text
+    assert "Workspace: hub" in text
+    assert "Workspace ID: unknown" in text
+    assert "/car flow status" not in text
     assert "Use /bind" not in text
