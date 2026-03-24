@@ -1,4 +1,9 @@
-from .core.codex_runner import (
+"""Internal modules not part of the public API.
+
+These modules are kept for backwards compatibility or testing purposes but
+"""
+
+from .codex_runner import (
     CodexRunnerError,
     CodexTimeoutError,
     build_codex_command,

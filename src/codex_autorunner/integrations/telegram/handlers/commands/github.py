@@ -68,7 +68,7 @@ from ..utils import _build_opencode_token_usage
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
 
-from .shared import SharedHelpers
+from .shared import TelegramCommandSupportMixin
 
 
 def _opencode_review_arguments(target: dict[str, Any]) -> str:
@@ -143,7 +143,7 @@ class OpencodeTurnContext:
     turn_slot_acquired: bool = False
 
 
-class GitHubCommands(SharedHelpers):
+class GitHubCommands(TelegramCommandSupportMixin):
     """GitHub/PR command handlers for Telegram integration.
 
     This class is designed to be used as a mixin in command handler classes.

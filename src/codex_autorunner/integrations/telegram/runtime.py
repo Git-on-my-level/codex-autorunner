@@ -23,7 +23,15 @@ from .state import topic_key as build_topic_key
 from .types import TurnContext
 
 
-class TelegramRuntimeHelpers:
+class TelegramWorkspaceAndTurnMixin:
+    """Mixin providing workspace client management and turn context utilities.
+
+    This mixin consolidates runtime helpers for:
+    - Workspace path resolution and client acquisition
+    - Turn context registration and lookup
+    - Message rendering and formatting
+    """
+
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
         return await self._router.resolve_key(chat_id, thread_id)
 

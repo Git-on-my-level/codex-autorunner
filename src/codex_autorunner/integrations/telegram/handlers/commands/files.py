@@ -30,7 +30,7 @@ from ...forwarding import format_forwarded_telegram_message_text
 from ...helpers import _path_within, format_public_error
 from ...state import PendingVoiceRecord, TelegramTopicRecord
 from .. import messages as message_handlers
-from .shared import SharedHelpers
+from .shared import TelegramCommandSupportMixin
 
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"
@@ -113,7 +113,7 @@ class MediaBatchResult:
     stats: MediaBatchStats
 
 
-class FilesCommands(SharedHelpers):
+class FilesCommands(TelegramCommandSupportMixin):
     def _files_usage(self, *, pma: bool) -> str:
         header = "Usage:"
         lines = [

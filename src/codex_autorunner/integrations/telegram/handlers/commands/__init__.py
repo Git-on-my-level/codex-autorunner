@@ -10,9 +10,11 @@ from .files import FilesCommands
 from .flows import FlowCommands
 from .formatting import FormattingHelpers
 from .github import GitHubCommands
-from .shared import SharedHelpers
+from .shared import TelegramCommandSupportMixin
 from .voice import VoiceCommands
 from .workspace import WorkspaceCommands
+
+SharedHelpers = TelegramCommandSupportMixin
 
 __all__ = [
     "ApprovalsCommands",
@@ -23,6 +25,7 @@ __all__ = [
     "FormattingHelpers",
     "GitHubCommands",
     "SharedHelpers",
+    "TelegramCommandSupportMixin",
     "VoiceCommands",
     "WorkspaceCommands",
     "build_command_specs",

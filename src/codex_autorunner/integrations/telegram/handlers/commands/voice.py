@@ -11,10 +11,10 @@ from ...state import PendingVoiceRecord
 if TYPE_CHECKING:
     pass
 
-from .shared import SharedHelpers
+from .shared import TelegramCommandSupportMixin
 
 
-class VoiceCommands(SharedHelpers):
+class VoiceCommands(TelegramCommandSupportMixin):
     async def _send_voice_progress_message(
         self, record: PendingVoiceRecord, text: str
     ) -> Optional[int]:

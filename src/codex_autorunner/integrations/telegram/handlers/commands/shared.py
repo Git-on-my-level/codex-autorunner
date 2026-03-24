@@ -22,10 +22,11 @@ if TYPE_CHECKING:
     pass
 
 
-class SharedHelpers:
+class TelegramCommandSupportMixin:
     """Shared helper methods for Telegram command handlers.
 
-    This class is designed to be used as a mixin in command handler classes.
+    This mixin provides common utilities for error formatting, argument parsing,
+    and OpenCode session handling across Telegram command handler classes.
     All methods use `self` to access instance attributes.
     """
 

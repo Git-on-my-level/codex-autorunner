@@ -80,7 +80,7 @@ from .agent_model_utils import (
 from .agent_model_utils import (
     _model_list_with_agent_compat as _workspace_model_list_with_agent_compat,
 )
-from .shared import SharedHelpers
+from .shared import TelegramCommandSupportMixin
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
@@ -156,7 +156,7 @@ def _telegram_status_base_lines(
     return lines
 
 
-class WorkspaceCommands(SharedHelpers):
+class WorkspaceCommands(TelegramCommandSupportMixin):
     def _resolve_workspace_path(
         self,
         record: Optional["TelegramTopicRecord"],

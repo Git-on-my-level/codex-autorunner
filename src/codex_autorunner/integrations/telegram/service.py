@@ -101,7 +101,7 @@ from .helpers import (
 )
 from .notifications import TelegramNotificationHandlers
 from .outbox import TelegramOutboxManager
-from .runtime import TelegramRuntimeHelpers
+from .runtime import TelegramWorkspaceAndTurnMixin
 from .state import (
     TelegramStateStore,
     TopicRouter,
@@ -180,7 +180,7 @@ def _next_reply_seq_sync(reply_history_dir: Any) -> int:
 
 
 class TelegramBotService(
-    TelegramRuntimeHelpers,
+    TelegramWorkspaceAndTurnMixin,
     TelegramMessageTransport,
     TelegramNotificationHandlers,
     TelegramApprovalHandlers,

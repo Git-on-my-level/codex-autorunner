@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
@@ -58,7 +58,7 @@ from ...adapter import (
 from ...config import DEFAULT_APPROVAL_TIMEOUT_SECONDS
 from ...helpers import _truncate_text
 from ...types import PendingQuestion, SelectionState
-from .shared import SharedHelpers
+from .shared import TelegramCommandSupportMixin
 
 _logger = logging.getLogger(__name__)
 _FLOW_REPO_CONTEXT_CACHE_MAX = 512
@@ -124,7 +124,16 @@ def _worktree_suffix(repo_id: str) -> Optional[str]:
     return parts[-1]
 
 
-class FlowCommands(SharedHelpers):
+def _select_latest_run(
+    store: FlowStore, predicate: Callable[[object], bool]
+) -> Optional[object]:
+    for record in store.list_flow_runs(flow_type="ticket_flow"):
+        if predicate(record):
+            return record
+    return None
+
+
+class FlowCommands(TelegramCommandSupportMixin):
     def _flow_run_mirror(self, repo_root: Path) -> ChatRunMirror:
         return ChatRunMirror(repo_root, logger_=_logger)
 

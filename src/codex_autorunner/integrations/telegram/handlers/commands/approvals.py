@@ -16,10 +16,10 @@ from ...helpers import (
     _format_sandbox_policy,
     _set_policy_overrides,
 )
-from .shared import SharedHelpers
+from .shared import TelegramCommandSupportMixin
 
 
-class ApprovalsCommands(SharedHelpers):
+class ApprovalsCommands(TelegramCommandSupportMixin):
     async def _read_rate_limits(
         self, workspace_path: Optional[str], *, agent: str
     ) -> Optional[dict[str, Any]]:

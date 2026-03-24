@@ -131,7 +131,7 @@ from .command_utils import (
     _format_httpx_exception,
     _format_opencode_exception,
 )
-from .shared import SharedHelpers
+from .shared import TelegramCommandSupportMixin
 
 FILES_HINT_TEMPLATE = (
     "Inbox: {inbox}\n"
@@ -1521,7 +1521,7 @@ async def _run_telegram_managed_thread_turn(
     )
 
 
-class ExecutionCommands(SharedHelpers):
+class ExecutionCommands(TelegramCommandSupportMixin):
     """Execution-related command handlers for Telegram integration."""
 
     def _maybe_append_whisper_disclaimer(

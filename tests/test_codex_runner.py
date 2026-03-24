@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from codex_autorunner.codex_runner import (
+from codex_autorunner._internal.codex_runner import (
     CodexTimeoutError,
     build_codex_command,
     run_codex_capture_async,
