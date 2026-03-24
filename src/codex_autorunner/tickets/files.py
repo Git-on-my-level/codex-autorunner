@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from .frontmatter import parse_markdown_frontmatter
+from .frontmatter import deterministic_ticket_id, parse_markdown_frontmatter
 from .lint import lint_ticket_frontmatter, parse_ticket_index
 from .models import TicketDoc, TicketFrontmatter
 
@@ -42,7 +42,10 @@ def read_ticket(path: Path) -> tuple[Optional[TicketDoc], list[str]]:
             "Invalid ticket filename; expected TICKET-<number>[suffix].md (e.g. TICKET-001-foo.md)"
         ]
 
-    frontmatter, errors = lint_ticket_frontmatter(data)
+    frontmatter, errors = lint_ticket_frontmatter(
+        data,
+        fallback_ticket_id=deterministic_ticket_id(path),
+    )
     if errors:
         return None, errors
     assert frontmatter is not None
@@ -57,7 +60,10 @@ def read_ticket_frontmatter(
     except OSError as exc:
         return None, [f"Failed to read ticket: {exc}"]
     data, _ = parse_markdown_frontmatter(raw)
-    frontmatter, errors = lint_ticket_frontmatter(data)
+    frontmatter, errors = lint_ticket_frontmatter(
+        data,
+        fallback_ticket_id=deterministic_ticket_id(path),
+    )
     return frontmatter, errors
 
 

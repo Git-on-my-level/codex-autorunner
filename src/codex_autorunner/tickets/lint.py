@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from ..agents.registry import validate_agent_id
-from .frontmatter import parse_markdown_frontmatter, sanitize_ticket_id
+from .frontmatter import (
+    parse_markdown_frontmatter,
+    sanitize_ticket_id,
+)
 from .models import TicketContextEntry, TicketFrontmatter
 
 # Accept TICKET-###.md or TICKET-###<suffix>.md (suffix optional), case-insensitive.
@@ -91,11 +94,13 @@ def _parse_context_entries(
 
 def lint_ticket_frontmatter(
     data: dict[str, Any],
+    *,
+    fallback_ticket_id: str | None = None,
 ) -> Tuple[Optional[TicketFrontmatter], list[str]]:
     """Validate and normalize ticket frontmatter.
 
     Required keys:
-    - ticket_id: stable opaque ticket identity
+    - ticket_id: stable opaque ticket identity (or a caller-supplied fallback)
     - agent: string (or the special value "user")
     - done: bool
     """
@@ -106,7 +111,14 @@ def lint_ticket_frontmatter(
 
     extra = {k: v for k, v in data.items()}
 
-    ticket_id = sanitize_ticket_id(data.get("ticket_id"))
+    raw_ticket_id = data.get("ticket_id")
+    ticket_id = sanitize_ticket_id(raw_ticket_id)
+    if raw_ticket_id is not None and ticket_id is None:
+        errors.append(
+            "frontmatter.ticket_id must match [A-Za-z0-9._-]{6,128} when provided."
+        )
+    if ticket_id is None:
+        ticket_id = sanitize_ticket_id(fallback_ticket_id)
     if not ticket_id:
         errors.append(
             "frontmatter.ticket_id is required and must match [A-Za-z0-9._-]{6,128}."

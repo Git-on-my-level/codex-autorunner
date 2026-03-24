@@ -61,7 +61,8 @@ For the personal path:
 - Prefer a DM with the bot when possible.
 - A dedicated topic also works if the group is effectively private to one operator.
 - Legacy `telegram_bot.allowed_chat_ids`, `allowed_user_ids`, `trigger_mode`, and
-  `require_topics` are still valid for this path.
+  `require_topics` are still valid for this path, but plain-text turns stay quiet
+  until you activate the chat with `/bind` or `/pma on`.
 
 If using supergroups/topics:
 - Enable Topics in Telegram group settings.
@@ -87,6 +88,9 @@ telegram_bot:
   require_topics: false
   trigger_mode: all
 ```
+
+After the bot starts, activate the DM or topic with `/bind <repo_id|path>` or
+`/pma on` before expecting plain-text turns.
 
 For a shared supergroup with one active topic and a silent root chat:
 

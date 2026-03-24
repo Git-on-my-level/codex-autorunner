@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..tickets.frontmatter import parse_markdown_frontmatter, sanitize_ticket_id
+from ..tickets.frontmatter import (
+    deterministic_ticket_id,
+    parse_markdown_frontmatter,
+    sanitize_ticket_id,
+)
 
 
 def ticket_stable_id(path: Path) -> str | None:
-    """Return explicit frontmatter ticket_id when present."""
+    """Return the ticket's stable identity token."""
     if not path.exists():
         return None
     try:
@@ -14,14 +18,17 @@ def ticket_stable_id(path: Path) -> str | None:
     except OSError:
         return None
     data, _ = parse_markdown_frontmatter(content)
-    return sanitize_ticket_id(data.get("ticket_id"))
+    explicit_ticket_id = sanitize_ticket_id(data.get("ticket_id"))
+    if explicit_ticket_id:
+        return explicit_ticket_id
+    return deterministic_ticket_id(path)
 
 
 def ticket_instance_token(path: Path) -> str:
     """Return a stable ticket identity token.
 
-    Uses explicit frontmatter `ticket_id` so normal saves (which use atomic_write)
-    do not churn identity.
+    Uses explicit frontmatter `ticket_id` when present, otherwise a deterministic
+    fallback derived from the ticket path.
     """
     ticket_id = ticket_stable_id(path)
     if ticket_id:

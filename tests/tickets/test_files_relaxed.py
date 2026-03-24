@@ -7,6 +7,7 @@ from codex_autorunner.tickets.files import (
     parse_ticket_index,
     read_ticket,
 )
+from codex_autorunner.tickets.frontmatter import deterministic_ticket_id
 
 
 def test_parse_ticket_index_accepts_suffix() -> None:
@@ -39,3 +40,22 @@ def test_read_ticket_rejects_invalid_filename(tmp_path: Path) -> None:
     doc, errors = read_ticket(ticket_path)
     assert doc is None
     assert any("Invalid ticket filename" in e for e in errors)
+
+
+def test_read_ticket_assigns_stable_ticket_id_when_missing(tmp_path: Path) -> None:
+    ticket_path = tmp_path / ".codex-autorunner" / "tickets" / "TICKET-001-no-id.md"
+    ticket_path.parent.mkdir(parents=True)
+    ticket_path.write_text(
+        "---\nagent: codex\ndone: false\n---\nBody\n",
+        encoding="utf-8",
+    )
+
+    first_doc, first_errors = read_ticket(ticket_path)
+    second_doc, second_errors = read_ticket(ticket_path)
+
+    assert first_errors == []
+    assert second_errors == []
+    assert first_doc is not None
+    assert second_doc is not None
+    assert first_doc.frontmatter.ticket_id == deterministic_ticket_id(ticket_path)
+    assert second_doc.frontmatter.ticket_id == first_doc.frontmatter.ticket_id

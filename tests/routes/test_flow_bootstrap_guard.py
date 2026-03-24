@@ -465,14 +465,14 @@ def test_ticket_flow_start_rejects_when_ticket_path_is_file(tmp_path, monkeypatc
 
 
 def test_ticket_flow_start_allows_with_tickets(tmp_path, monkeypatch):
-    """Starting ticket_flow with force_new should succeed when tickets exist."""
+    """Starting ticket_flow with force_new should succeed when tickets omit ticket_id."""
     _reset_state()
     monkeypatch.setattr(flow_routes, "find_repo_root", lambda: Path(tmp_path))
 
     ticket_dir = tmp_path / ".codex-autorunner" / "tickets"
     ticket_dir.mkdir(parents=True, exist_ok=True)
     (ticket_dir / "TICKET-001.md").write_text(
-        '---\nticket_id: "tkt_guard002"\nagent: codex\ndone: false\n---\n',
+        "---\nagent: codex\ndone: false\n---\n",
         encoding="utf-8",
     )
 

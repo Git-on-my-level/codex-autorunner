@@ -10,6 +10,7 @@ from codex_autorunner.core.config import load_hub_config
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.hub_inbox_resolution import record_message_resolution
 from codex_autorunner.core.pma_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     build_hub_snapshot,
@@ -118,6 +119,24 @@ def _seed_failed_worker_dead_legacy_run(repo_root: Path, run_id: str) -> None:
         state={"ticket_engine": {"reason_code": "worker_dead"}},
         error_message=None,
     )
+
+
+def _seed_stopped_run(repo_root: Path, run_id: str) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, FlowRunStatus.STOPPED)
 
 
 def _write_dispatch_history(
@@ -866,6 +885,66 @@ def test_build_hub_snapshot_suppresses_stale_failed_worker_dead_legacy_run_when_
 
     assert (snapshot.get("inbox") or []) == []
     assert (snapshot.get("action_queue") or []) == []
+
+
+def test_build_hub_snapshot_filters_dismissed_stopped_run_from_inbox_and_queue(
+    hub_env,
+) -> None:
+    run_id = "6a6a6a6a-6a6a-6a6a-6a6a-6a6a6a6a6a6a"
+    _write_ticket(hub_env.repo_root, "TICKET-001.md", done=False)
+    _seed_stopped_run(hub_env.repo_root, run_id)
+    record_message_resolution(
+        repo_root=hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        run_id=run_id,
+        item_type="run_stopped",
+        seq=None,
+        action="dismiss",
+        reason="superseded by newer authoritative run",
+        actor="test",
+    )
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    assert (snapshot.get("inbox") or []) == []
+    assert (snapshot.get("action_queue") or []) == []
+
+
+def test_build_hub_snapshot_keeps_stopped_run_visible_when_no_tickets_remain(
+    hub_env,
+) -> None:
+    ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    for ticket in ticket_dir.glob("TICKET-*.md"):
+        ticket.unlink()
+
+    run_id = "7a7a7a7a-7a7a-7a7a-7a7a-7a7a7a7a7a7a"
+    _seed_stopped_run(hub_env.repo_root, run_id)
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    inbox = snapshot.get("inbox") or []
+    assert len(inbox) == 1
+    assert inbox[0]["run_id"] == run_id
+    assert inbox[0]["item_type"] == "run_stopped"
+    assert inbox[0]["next_action"] == "diagnose_or_restart"
+
+    queue = snapshot.get("action_queue") or []
+    assert len(queue) == 1
+    assert queue[0]["run_id"] == run_id
+    assert queue[0]["queue_source"] == "ticket_flow_inbox"
 
 
 def test_build_hub_snapshot_repo_entries_include_canonical_state_v1(hub_env) -> None:

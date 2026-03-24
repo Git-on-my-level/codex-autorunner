@@ -7,8 +7,7 @@ from typing import Any, Optional
 from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats, run_git
-from .frontmatter import parse_markdown_frontmatter
-from .lint import lint_ticket_frontmatter
+from .files import read_ticket_frontmatter
 from .outbox import (
     archive_dispatch,
     create_turn_summary,
@@ -104,13 +103,14 @@ def check_ticket_frontmatter(
     ticket_path: Path,
 ) -> tuple[Optional[Any], Optional[list[str]]]:
     """Check ticket frontmatter after turn execution."""
-    try:
-        raw = ticket_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return None, [f"Failed to read ticket after turn: {exc}"]
-
-    data, _ = parse_markdown_frontmatter(raw)
-    fm, errors = lint_ticket_frontmatter(data)
+    fm, errors = read_ticket_frontmatter(ticket_path)
+    if errors and any(err.startswith("Failed to read ticket:") for err in errors):
+        return None, [
+            err.replace(
+                "Failed to read ticket:", "Failed to read ticket after turn:", 1
+            )
+            for err in errors
+        ]
     return fm, errors
 
 

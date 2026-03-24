@@ -285,6 +285,34 @@ async def test_status_creates_record(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_unbound_topic_plain_text_stays_quiet_until_activation(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    message = build_message(
+        "hello team",
+        thread_id=55,
+        message_id=10,
+        update_id=10,
+        chat_type="supergroup",
+    )
+    try:
+        with caplog.at_level(logging.INFO):
+            await service._handle_message_inner(message)
+            await _drain_spawned_tasks(service)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert fake_bot.messages == []
+    assert "telegram.collaboration_policy.evaluated" in caplog.text
+    assert '"policy_outcome":"command_only_destination"' in caplog.text
+    assert "Topic not bound" not in caplog.text
+
+
+@pytest.mark.anyio
 async def test_status_reports_collaboration_policy_for_topic(tmp_path: Path) -> None:
     config = make_config(
         tmp_path,
@@ -588,6 +616,39 @@ async def test_private_chat_default_path_runs_without_collaboration_policy(
     finally:
         await service._app_server_supervisor.close_all()
     assert any("fixture reply" in msg["text"] for msg in fake_bot.messages)
+
+
+@pytest.mark.anyio
+async def test_bound_media_respects_mentions_trigger_before_turn_starts(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    config = make_config(
+        tmp_path,
+        fixture_command("basic"),
+        overrides={"trigger_mode": "mentions"},
+    )
+    service = TelegramBotService(config, hub_root=tmp_path)
+    fake_bot = FakeBot()
+    service._bot = fake_bot
+    bind_message = build_message("/bind", message_id=10)
+    media_message = build_photo_message(
+        (TelegramPhotoSize("p1", None, 800, 600, 3),),
+        thread_id=77,
+        message_id=11,
+        update_id=11,
+        chat_type="supergroup",
+    )
+    try:
+        await service._handle_bind(bind_message, str(repo))
+        await service._handle_message_inner(media_message)
+        await _drain_spawned_tasks(service)
+    finally:
+        await service._app_server_supervisor.close_all()
+    assert len(fake_bot.messages) == 1
+    assert "Bound to" in fake_bot.messages[0]["text"]
+    assert not any("fixture reply" in msg["text"] for msg in fake_bot.messages)
 
 
 @pytest.mark.anyio

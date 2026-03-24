@@ -37,6 +37,10 @@ from .freshness import (
     summarize_section_freshness,
 )
 from .hub import HubSupervisor
+from .hub_inbox_resolution import (
+    find_message_resolution,
+    load_hub_inbox_dismissals,
+)
 from .locks import file_lock
 from .managed_thread_status import derive_managed_thread_operator_status
 from .pma_active_context import (
@@ -2469,6 +2473,7 @@ def _gather_inbox(
         try:
             config = load_repo_config(repo_root)
             with FlowStore(db_path, durable=config.durable_writes) as store:
+                dismissals = load_hub_inbox_dismissals(repo_root)
                 active_statuses = [
                     FlowRunStatus.PAUSED,
                     FlowRunStatus.RUNNING,
@@ -2575,6 +2580,13 @@ def _gather_inbox(
                         "active_run_id": active_run_id,
                     }
                     if has_dispatch:
+                        if find_message_resolution(
+                            dismissals,
+                            run_id=record_id,
+                            item_type="run_dispatch",
+                            seq=seq if seq > 0 else None,
+                        ):
+                            continue
                         messages.append(
                             {
                                 **base_item,
@@ -2592,6 +2604,13 @@ def _gather_inbox(
                                 repo_root=repo_root, record=record
                             )
                         )
+                        if find_message_resolution(
+                            dismissals,
+                            run_id=record_id,
+                            item_type=item_type,
+                            seq=seq if seq > 0 else None,
+                        ):
+                            continue
                         messages.append(
                             {
                                 **base_item,

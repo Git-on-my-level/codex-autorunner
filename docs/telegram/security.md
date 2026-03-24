@@ -94,8 +94,8 @@ tradeoffs involved.
 
 ## Migration guidance
 
-- Legacy personal setups remain valid. A DM or dedicated topic does not need a
-  forced migration to `collaboration_policy.telegram`.
+- Legacy personal setups still use the same allowlists, but a DM or dedicated
+  topic now needs `/bind` or `/pma on` before plain-text turns will run.
 - Shared groups should migrate when they need intentional topic behavior. The
   security win is explicit scope: only the topics marked `active` or
   `command_only` can reach CAR, and the root chat can be made `silent` or
