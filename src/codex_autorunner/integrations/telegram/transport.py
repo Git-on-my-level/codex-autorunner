@@ -6,7 +6,6 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...core.state import now_iso
-from ..chat.text_sanitization import collapse_local_markdown_links
 from .adapter import TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .helpers import (
@@ -20,7 +19,11 @@ from .outbox import (
     OUTBOX_OPERATION_SEND_KEEP_PLACEHOLDER,
 )
 from .overflow import split_markdown_message, trim_markdown_message
-from .rendering import _format_telegram_html, _format_telegram_markdown
+from .rendering import (
+    _format_telegram_html,
+    _format_telegram_markdown,
+    sanitize_telegram_outbound_text,
+)
 from .state import OutboxRecord
 
 
@@ -392,7 +395,7 @@ class TelegramMessageTransport:
         if prefix:
             text = f"{prefix}{text}"
         effective_parse_mode = parse_mode or self._config.parse_mode
-        text = collapse_local_markdown_links(text)
+        text = sanitize_telegram_outbound_text(text)
         if effective_parse_mode:
             try:
                 rendered, used_mode = self._render_message(

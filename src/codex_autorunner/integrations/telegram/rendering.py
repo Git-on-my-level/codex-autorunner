@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import html
 import re
+from typing import Optional
 
-from ..chat.text_sanitization import collapse_local_markdown_links
+from ..chat.text_sanitization import prepare_outbound_source_text
+from .constants import TELEGRAM_MAX_MESSAGE_LENGTH
 
 _CODE_BLOCK_RE = re.compile(r"```(?:[^\n`]*)\n(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
@@ -12,10 +14,22 @@ _MARKDOWN_ESCAPE_RE = re.compile(r"([_*\[\]\(\)`])")
 _MARKDOWN_V2_ESCAPE_RE = re.compile(r"([_*\[\]\(\)~`>#+\-=|{}.!\\])")
 
 
+def sanitize_telegram_outbound_text(text: str) -> str:
+    if not text:
+        return ""
+    return prepare_outbound_source_text(text)
+
+
 def _format_telegram_html(text: str) -> str:
     if not text:
         return ""
-    text = collapse_local_markdown_links(text)
+    text = sanitize_telegram_outbound_text(text)
+    return _format_telegram_html_sanitized(text)
+
+
+def _format_telegram_html_sanitized(text: str) -> str:
+    if not text:
+        return ""
     parts: list[str] = []
     last = 0
     for match in _CODE_BLOCK_RE.finditer(text):
@@ -66,7 +80,13 @@ def _escape_markdown_code(text: str, *, version: str) -> str:
 def _format_telegram_markdown(text: str, version: str) -> str:
     if not text:
         return ""
-    text = collapse_local_markdown_links(text)
+    text = sanitize_telegram_outbound_text(text)
+    return _format_telegram_markdown_sanitized(text, version)
+
+
+def _format_telegram_markdown_sanitized(text: str, version: str) -> str:
+    if not text:
+        return ""
     parts: list[str] = []
     last = 0
     for match in _CODE_BLOCK_RE.finditer(text):
@@ -104,3 +124,28 @@ def _format_telegram_markdown_inline(text: str, version: str) -> str:
         token = f"\x00CODE{idx}\x00"
         escaped = escaped.replace(token, f"`{code}`")
     return escaped
+
+
+def render_telegram_message(
+    text: str, *, parse_mode: Optional[str] = None
+) -> tuple[str, Optional[str]]:
+    sanitized = sanitize_telegram_outbound_text(text)
+    if not parse_mode:
+        return sanitized, None
+    if parse_mode == "HTML":
+        return _format_telegram_html_sanitized(sanitized), parse_mode
+    if parse_mode in ("Markdown", "MarkdownV2"):
+        return _format_telegram_markdown_sanitized(sanitized, parse_mode), parse_mode
+    return sanitized, parse_mode
+
+
+def prepare_telegram_message(
+    text: str,
+    *,
+    parse_mode: Optional[str] = None,
+    max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH,
+) -> tuple[str, Optional[str]]:
+    rendered, resolved_parse_mode = render_telegram_message(text, parse_mode=parse_mode)
+    if resolved_parse_mode and len(rendered) <= max_length:
+        return rendered, resolved_parse_mode
+    return sanitize_telegram_outbound_text(text), None

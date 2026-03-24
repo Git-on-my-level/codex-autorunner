@@ -526,6 +526,98 @@ async def test_send_message_chunks_long_text() -> None:
 
 
 @pytest.mark.anyio
+async def test_send_message_collapses_local_file_links() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json={"ok": True, "result": {}})
+    )
+    http_client = httpx.AsyncClient(transport=transport)
+    client = TelegramBotClient("test-token", client=http_client)
+    calls: list[dict[str, object]] = []
+
+    async def fake_request(self, method: str, payload: dict[str, object]) -> object:
+        calls.append({"method": method, "payload": payload})
+        return {"message_id": 1}
+
+    client._request = types.MethodType(fake_request, client)
+    try:
+        await client.send_message(
+            123,
+            (
+                "Updated "
+                "[update_targets.py](/Users/dazheng/worktree/src/update_targets.py) "
+                "and kept [docs](https://example.com/docs)."
+            ),
+            parse_mode="Markdown",
+        )
+    finally:
+        await client.close()
+
+    assert calls == [
+        {
+            "method": "sendMessage",
+            "payload": {
+                "chat_id": 123,
+                "text": (
+                    "Updated update_targets.py and kept "
+                    "[docs](https://example.com/docs)."
+                ),
+                "disable_web_page_preview": True,
+                "parse_mode": "Markdown",
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_send_document_caption_collapses_local_file_links() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json={"ok": True, "result": {}})
+    )
+    http_client = httpx.AsyncClient(transport=transport)
+    client = TelegramBotClient("test-token", client=http_client)
+    multipart_calls: list[dict[str, object]] = []
+
+    async def fake_request_multipart(
+        self,
+        method: str,
+        data: dict[str, object],
+        files: dict[str, object],
+    ) -> object:
+        multipart_calls.append({"method": method, "data": data, "files": files})
+        return {"message_id": 1}
+
+    client._request_multipart = types.MethodType(fake_request_multipart, client)
+    try:
+        await client.send_document(
+            123,
+            b"hello",
+            filename="response.md",
+            caption=(
+                "See "
+                "[update_targets.py](/Users/dazheng/worktree/src/update_targets.py) "
+                "for details."
+            ),
+            parse_mode="Markdown",
+        )
+    finally:
+        await client.close()
+
+    assert multipart_calls == [
+        {
+            "method": "sendDocument",
+            "data": {
+                "chat_id": 123,
+                "caption": "See update_targets.py for details.",
+                "parse_mode": "Markdown",
+            },
+            "files": {
+                "document": ("response.md", b"hello", "text/plain"),
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_send_chat_action_posts_typing_payload() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(200, json={"ok": True, "result": True})

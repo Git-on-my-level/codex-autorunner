@@ -1,5 +1,6 @@
 from codex_autorunner.integrations.chat.text_sanitization import (
     collapse_local_markdown_links,
+    prepare_outbound_source_text,
 )
 
 
@@ -41,3 +42,11 @@ def test_collapse_local_markdown_links_handles_parentheses_in_paths() -> None:
     result = collapse_local_markdown_links(text)
 
     assert result == "Check f for details."
+
+
+def test_prepare_outbound_source_text_reuses_platform_neutral_cleanup() -> None:
+    text = "Open [repo](/workspace/codex-autorunner/README.md) next."
+
+    result = prepare_outbound_source_text(text)
+
+    assert result == "Open repo next."

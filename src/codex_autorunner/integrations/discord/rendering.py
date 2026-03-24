@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Final
 
-from ..chat.text_sanitization import collapse_local_markdown_links
+from ..chat.text_sanitization import prepare_outbound_source_text
 from .overflow import split_markdown_message, trim_markdown_message
 
 DISCORD_MAX_MESSAGE_LENGTH: Final[int] = 2000
@@ -13,6 +13,12 @@ _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC_RE = re.compile(r"\*(.+?)\*")
 _DISCORD_ESCAPE_RE = re.compile(r"([*_~`>|{}\\])")
+
+
+def sanitize_discord_outbound_text(text: str) -> str:
+    if not text:
+        return ""
+    return prepare_outbound_source_text(text)
 
 
 def escape_discord_markdown(text: str) -> str:
@@ -60,7 +66,7 @@ def format_italic(text: str) -> str:
 def format_discord_message(text: str) -> str:
     if not text:
         return ""
-    text = collapse_local_markdown_links(text)
+    text = sanitize_discord_outbound_text(text)
     parts: list[str] = []
     last = 0
     for match in _CODE_BLOCK_RE.finditer(text):
@@ -114,6 +120,7 @@ def _format_discord_inline(text: str) -> str:
 def truncate_for_discord(text: str, max_len: int = DISCORD_MAX_MESSAGE_LENGTH) -> str:
     if not text:
         return ""
+    text = sanitize_discord_outbound_text(text)
     return trim_markdown_message(text, max_len=max_len)
 
 
@@ -122,6 +129,7 @@ def chunk_discord_message(
 ) -> list[str]:
     if not text:
         return []
+    text = sanitize_discord_outbound_text(text)
     return split_markdown_message(
         text, max_len=max_len, include_indicator=with_numbering
     )

@@ -292,6 +292,7 @@ from .pma_commands import handle_pma_off, handle_pma_on, handle_pma_status
 from .rendering import (
     chunk_discord_message,
     format_discord_message,
+    sanitize_discord_outbound_text,
     truncate_for_discord,
 )
 from .rest import DiscordRestClient
@@ -3826,6 +3827,10 @@ class DiscordBotService:
     async def _send_channel_message(
         self, channel_id: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        payload = dict(payload)
+        content = payload.get("content")
+        if isinstance(content, str):
+            payload["content"] = sanitize_discord_outbound_text(content)
         return await self._rest.create_channel_message(
             channel_id=channel_id, payload=payload
         )

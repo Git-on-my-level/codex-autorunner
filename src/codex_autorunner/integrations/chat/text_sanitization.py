@@ -37,6 +37,13 @@ def collapse_local_markdown_links(text: str) -> str:
     return sanitized
 
 
+def prepare_outbound_source_text(text: str) -> str:
+    """Normalize platform-neutral outbound text before surface rendering."""
+    if not text:
+        return ""
+    return collapse_local_markdown_links(text)
+
+
 def _collapse_local_markdown_links_outside_code(text: str) -> str:
     if not text:
         return ""

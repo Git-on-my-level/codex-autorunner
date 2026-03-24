@@ -144,6 +144,18 @@ class TestTruncateForDiscord:
     def test_handles_empty_text(self) -> None:
         assert truncate_for_discord("") == ""
 
+    def test_collapses_local_file_markdown_links(self) -> None:
+        text = (
+            "See [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
+            "and [docs](https://example.com/docs)."
+        )
+
+        result = truncate_for_discord(text)
+
+        assert "archive_helpers.py" in result
+        assert "/Users/dazheng/worktree/src/archive_helpers.py" not in result
+        assert "[docs](https://example.com/docs)." in result
+
 
 class TestChunkDiscordMessage:
     def test_returns_single_chunk_for_short_text(self) -> None:
@@ -173,3 +185,15 @@ class TestChunkDiscordMessage:
 
     def test_handles_empty_text(self) -> None:
         assert chunk_discord_message("") == []
+
+    def test_collapses_local_file_markdown_links(self) -> None:
+        text = (
+            "See [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
+            "and [docs](https://example.com/docs)."
+        )
+
+        chunks = chunk_discord_message(text)
+
+        assert chunks == [
+            "See archive_helpers.py and [docs](https://example.com/docs)."
+        ]

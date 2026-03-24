@@ -15,10 +15,9 @@ from .config import AppServerUnavailableError
 from .constants import (
     APP_SERVER_START_BACKOFF_INITIAL_SECONDS,
     APP_SERVER_START_BACKOFF_MAX_SECONDS,
-    TELEGRAM_MAX_MESSAGE_LENGTH,
     TurnKey,
 )
-from .rendering import _format_telegram_html, _format_telegram_markdown
+from .rendering import prepare_telegram_message, render_telegram_message
 from .state import TOPIC_ROOT, parse_topic_key
 from .state import topic_key as build_topic_key
 from .types import TurnContext
@@ -270,19 +269,10 @@ class TelegramRuntimeHelpers:
     ) -> tuple[str, Optional[str]]:
         # Allow callers to override parse_mode (needed for ad-hoc Markdown/HTML sends)
         parse_mode = self._config.parse_mode if parse_mode is None else parse_mode
-        if not parse_mode:
-            return text, None
-        if parse_mode == "HTML":
-            return _format_telegram_html(text), parse_mode
-        if parse_mode in ("Markdown", "MarkdownV2"):
-            return _format_telegram_markdown(text, parse_mode), parse_mode
-        return text, parse_mode
+        return render_telegram_message(text, parse_mode=parse_mode)
 
     def _prepare_message(
         self, text: str, *, parse_mode: Optional[str] = None
     ) -> tuple[str, Optional[str]]:
-        rendered, parse_mode = self._render_message(text, parse_mode=parse_mode)
-        # Avoid parse_mode when chunking to keep markup intact.
-        if parse_mode and len(rendered) <= TELEGRAM_MAX_MESSAGE_LENGTH:
-            return rendered, parse_mode
-        return text, None
+        parse_mode = self._config.parse_mode if parse_mode is None else parse_mode
+        return prepare_telegram_message(text, parse_mode=parse_mode)

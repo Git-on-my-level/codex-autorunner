@@ -39,6 +39,7 @@ from .api_schemas import (
 )
 from .command_parsing import parse_command_payload
 from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
+from .rendering import sanitize_telegram_outbound_text
 from .retry import _extract_retry_after_seconds
 
 _RATE_LIMIT_BUFFER_SECONDS = 0.0
@@ -1144,6 +1145,7 @@ class TelegramBotClient:
         parse_mode: Optional[str] = None,
         disable_web_page_preview: bool = True,
     ) -> dict[str, Any]:
+        text = sanitize_telegram_outbound_text(text)
         if len(text) > TELEGRAM_MAX_MESSAGE_LENGTH:
             responses = await self.send_message_chunks(
                 chat_id,
@@ -1176,6 +1178,7 @@ class TelegramBotClient:
         parse_mode: Optional[str] = None,
         disable_web_page_preview: bool = True,
     ) -> dict[str, Any]:
+        text = sanitize_telegram_outbound_text(text)
         log_event(
             self._logger,
             logging.INFO,
@@ -1215,6 +1218,8 @@ class TelegramBotClient:
         caption: Optional[str] = None,
         parse_mode: Optional[str] = None,
     ) -> dict[str, Any]:
+        if isinstance(caption, str):
+            caption = sanitize_telegram_outbound_text(caption)
         log_event(
             self._logger,
             logging.INFO,
@@ -1388,6 +1393,7 @@ class TelegramBotClient:
         disable_web_page_preview: bool = True,
         max_len: int = TELEGRAM_MAX_MESSAGE_LENGTH,
     ) -> list[dict[str, Any]]:
+        text = sanitize_telegram_outbound_text(text)
         chunks = chunk_message(text, max_len=max_len, with_numbering=False)
         if not chunks:
             return []
@@ -1426,6 +1432,7 @@ class TelegramBotClient:
         parse_mode: Optional[str] = None,
         disable_web_page_preview: bool = True,
     ) -> dict[str, Any]:
+        text = sanitize_telegram_outbound_text(text)
         log_event(
             self._logger,
             logging.INFO,

@@ -3899,6 +3899,49 @@ async def test_car_update_without_target_returns_picker(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_send_channel_message_safe_collapses_local_file_links(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service._send_channel_message_safe(
+            "channel-1",
+            {
+                "content": (
+                    "Updated "
+                    "[update_targets.py](/Users/dazheng/worktree/src/update_targets.py) "
+                    "and kept [docs](https://example.com/docs)."
+                )
+            },
+        )
+        assert rest.channel_messages == [
+            {
+                "channel_id": "channel-1",
+                "payload": {
+                    "content": (
+                        "Updated update_targets.py and kept "
+                        "[docs](https://example.com/docs)."
+                    )
+                },
+                "message_id": "msg-1",
+            }
+        ]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_tickets_returns_ticket_picker_components(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     ticket_dir = workspace / ".codex-autorunner" / "tickets"
