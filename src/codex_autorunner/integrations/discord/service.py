@@ -74,6 +74,7 @@ from ...core.flows.ux_helpers import (
     seed_issue_from_github,
     seed_issue_from_text,
     select_default_ticket_flow_run,
+    select_ticket_flow_run_record,
     summarize_flow_freshness,
     ticket_flow_archive_requires_force,
     ticket_progress,
@@ -1857,10 +1858,7 @@ class DiscordBotService:
             return None
         try:
             runs = store.list_flow_runs(flow_type="ticket_flow")
-            return next(
-                (record for record in runs if record.status == FlowRunStatus.PAUSED),
-                None,
-            )
+            return select_ticket_flow_run_record(runs, selection="paused")
         except Exception:
             return None
         finally:
@@ -8283,9 +8281,7 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = next(
-                    (record for record in runs if record.status.is_active()), None
-                )
+                target = select_ticket_flow_run_record(runs, selection="active")
         finally:
             store.close()
 
@@ -8398,10 +8394,7 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = next(
-                    (record for record in runs if record.status.is_active()),
-                    None,
-                )
+                target = select_ticket_flow_run_record(runs, selection="active")
 
             if target is None:
                 await self._respond_ephemeral(
@@ -8495,14 +8488,7 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = next(
-                    (
-                        record
-                        for record in runs
-                        if record.status == FlowRunStatus.PAUSED
-                    ),
-                    None,
-                )
+                target = select_ticket_flow_run_record(runs, selection="paused")
         finally:
             store.close()
 
@@ -8616,10 +8602,7 @@ class DiscordBotService:
                         f"Failed to query flow runs: {exc}",
                         user_message="Unable to query flow database. Please try again later.",
                     ) from None
-                target = next(
-                    (record for record in runs if not record.status.is_terminal()),
-                    None,
-                )
+                target = select_ticket_flow_run_record(runs, selection="non_terminal")
         finally:
             store.close()
 

@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
@@ -29,6 +29,7 @@ from .....core.flows.ux_helpers import (
     seed_issue_from_github,
     seed_issue_from_text,
     select_default_ticket_flow_run,
+    select_ticket_flow_run,
     summarize_flow_freshness,
     ticket_flow_archive_requires_force,
     ticket_progress,
@@ -120,15 +121,6 @@ def _worktree_suffix(repo_id: str) -> Optional[str]:
     if len(parts) <= 1:
         return None
     return parts[-1]
-
-
-def _select_latest_run(
-    store: FlowStore, predicate: Callable[[object], bool]
-) -> Optional[object]:
-    for record in store.list_flow_runs(flow_type="ticket_flow"):
-        if predicate(record):
-            return record
-    return None
 
 
 class FlowCommands(SharedHelpers):
@@ -688,9 +680,7 @@ class FlowCommands(SharedHelpers):
                 if run_id_raw and error:
                     record = None
                 if error is None and record is None:
-                    record = _select_latest_run(
-                        store, lambda run: run.status == FlowRunStatus.PAUSED
-                    )
+                    record = select_ticket_flow_run(store, selection="paused")
                 if error is None and record is None:
                     error = "No paused ticket flow run found."
                 if error is None and record.status != FlowRunStatus.PAUSED:
@@ -713,9 +703,7 @@ class FlowCommands(SharedHelpers):
                 if run_id_raw and error:
                     record = None
                 if error is None and record is None:
-                    record = _select_latest_run(
-                        store, lambda run: run.status.is_active()
-                    )
+                    record = select_ticket_flow_run(store, selection="active")
                 if error is None and record is None:
                     error = "No active ticket flow run found."
                 if error is None and record.status.is_terminal():
@@ -734,9 +722,7 @@ class FlowCommands(SharedHelpers):
                 if run_id_raw and error:
                     record = None
                 if error is None and record is None:
-                    record = _select_latest_run(
-                        store, lambda run: run.status.is_active()
-                    )
+                    record = select_ticket_flow_run(store, selection="active")
                 if error is None and record is None:
                     error = "No active ticket flow run found."
                 if error is None:
@@ -1757,9 +1743,7 @@ You are the first ticket in a new ticket_flow run.
                 )
                 return
             if record is None:
-                record = _select_latest_run(
-                    store, lambda run: run.status == FlowRunStatus.PAUSED
-                )
+                record = select_ticket_flow_run(store, selection="paused")
             if record is None:
                 await self._send_message(
                     message.chat_id,
@@ -1843,7 +1827,7 @@ You are the first ticket in a new ticket_flow run.
                 )
                 return
             if record is None:
-                record = _select_latest_run(store, lambda run: run.status.is_active())
+                record = select_ticket_flow_run(store, selection="active")
             if record is None:
                 await self._send_message(
                     message.chat_id,
@@ -1917,7 +1901,7 @@ You are the first ticket in a new ticket_flow run.
                 )
                 return
             if record is None:
-                record = _select_latest_run(store, lambda run: run.status.is_active())
+                record = select_ticket_flow_run(store, selection="active")
             if record is None:
                 await self._send_message(
                     message.chat_id,
@@ -1991,7 +1975,7 @@ You are the first ticket in a new ticket_flow run.
                         )
                         return
             else:
-                record = _select_latest_run(store, lambda run: run.status.is_active())
+                record = select_ticket_flow_run(store, selection="active")
         finally:
             store.close()
         if record and not record.status.is_terminal():

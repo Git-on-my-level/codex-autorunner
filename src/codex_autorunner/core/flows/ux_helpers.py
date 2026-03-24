@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Protocol
+from typing import Any, Callable, Literal, Mapping, Optional, Protocol, Sequence
 
 from ...tickets.files import list_ticket_paths, ticket_is_done
 from ..config import ConfigError, load_repo_config
@@ -44,6 +44,9 @@ class GitHubServiceProtocol(Protocol):
     def validate_issue_same_repo(self, issue_ref: str) -> int: ...
 
     def issue_view(self, number: int) -> dict: ...
+
+
+TicketFlowRunSelection = Literal["active", "authoritative", "non_terminal", "paused"]
 
 
 def issue_md_path(repo_root: Path) -> Path:
@@ -203,8 +206,34 @@ def _derive_effective_current_ticket(
 def select_default_ticket_flow_run(
     store: FlowStore,
 ) -> Optional[FlowRunRecord]:
+    return select_ticket_flow_run(store, selection="authoritative")
+
+
+def select_ticket_flow_run_record(
+    records: Sequence[FlowRunRecord],
+    *,
+    selection: TicketFlowRunSelection,
+) -> Optional[FlowRunRecord]:
+    if selection == "authoritative":
+        return select_authoritative_run_record(list(records))
+    if selection == "paused":
+        return next((record for record in records if record.status.is_paused()), None)
+    if selection == "active":
+        return next((record for record in records if record.status.is_active()), None)
+    if selection == "non_terminal":
+        return next(
+            (record for record in records if not record.status.is_terminal()), None
+        )
+    raise ValueError(f"Unsupported ticket flow run selection: {selection}")
+
+
+def select_ticket_flow_run(
+    store: FlowStore,
+    *,
+    selection: TicketFlowRunSelection,
+) -> Optional[FlowRunRecord]:
     records = store.list_flow_runs(flow_type="ticket_flow")
-    return select_authoritative_run_record(records)
+    return select_ticket_flow_run_record(records, selection=selection)
 
 
 def resolve_ticket_flow_archive_mode(record: FlowRunRecord) -> str:
@@ -400,6 +429,8 @@ __all__ = [
     "seed_issue_from_github",
     "seed_issue_from_text",
     "select_default_ticket_flow_run",
+    "select_ticket_flow_run",
+    "select_ticket_flow_run_record",
     "summarize_flow_freshness",
     "ticket_flow_archive_requires_force",
     "ticket_progress",

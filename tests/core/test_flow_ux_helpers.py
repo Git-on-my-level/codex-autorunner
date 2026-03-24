@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from codex_autorunner.core.flows import ux_helpers
+from codex_autorunner.core.flows.models import FlowRunRecord, FlowRunStatus
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
 from codex_autorunner.integrations.github.service import RepoInfo
 
@@ -128,3 +129,48 @@ def test_ensure_worker_closes_spawned_stream_handles(monkeypatch, tmp_path: Path
     assert result["stderr"] is None
     assert stdout.closed is True
     assert stderr.closed is True
+
+
+def _run(run_id: str, status: FlowRunStatus) -> FlowRunRecord:
+    return FlowRunRecord(
+        id=run_id,
+        flow_type="ticket_flow",
+        status=status,
+        created_at="2026-01-01T00:00:00Z",
+    )
+
+
+def test_select_ticket_flow_run_record_supports_shared_selection_modes() -> None:
+    records = [
+        _run("paused-run", FlowRunStatus.PAUSED),
+        _run("running-run", FlowRunStatus.RUNNING),
+        _run("stopped-run", FlowRunStatus.STOPPED),
+    ]
+
+    assert (
+        ux_helpers.select_ticket_flow_run_record(records, selection="paused").id
+        == "paused-run"
+    )
+    assert (
+        ux_helpers.select_ticket_flow_run_record(records, selection="active").id
+        == "running-run"
+    )
+    assert (
+        ux_helpers.select_ticket_flow_run_record(records, selection="non_terminal").id
+        == "paused-run"
+    )
+
+
+def test_select_ticket_flow_run_record_authoritative_matches_existing_policy() -> None:
+    records = [
+        _run("paused-run", FlowRunStatus.PAUSED),
+        _run("running-run", FlowRunStatus.RUNNING),
+        _run("completed-run", FlowRunStatus.COMPLETED),
+    ]
+
+    result = ux_helpers.select_ticket_flow_run_record(
+        records, selection="authoritative"
+    )
+
+    assert result is not None
+    assert result.id == "paused-run"
