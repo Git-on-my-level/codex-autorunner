@@ -1420,12 +1420,12 @@ async def test_resume_paginates_thread_list(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
-async def test_update_with_explicit_target_prompts_for_confirmation_when_turn_active(
+async def test_update_with_all_target_prompts_for_confirmation_when_turn_active(
     tmp_path: Path,
 ) -> None:
     config = make_config(tmp_path, fixture_command("basic"))
     service = TelegramBotService(config, hub_root=tmp_path)
-    message = build_message("/update both", message_id=20)
+    message = build_message("/update all", message_id=20)
     captured: dict[str, object] = {}
 
     async def _fake_prompt_update_confirmation(
@@ -1438,7 +1438,7 @@ async def test_update_with_explicit_target_prompts_for_confirmation_when_turn_ac
     service._prompt_update_confirmation = _fake_prompt_update_confirmation  # type: ignore[assignment]
 
     try:
-        await service._handle_update(message, "both", None)
+        await service._handle_update(message, "all", None)
     finally:
         await service._app_server_supervisor.close_all()
 

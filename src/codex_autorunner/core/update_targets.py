@@ -55,7 +55,6 @@ _UPDATE_TARGET_DEFINITIONS = {
 _UPDATE_TARGET_ALIASES = {
     "": _DEFAULT_UPDATE_TARGET,
     "all": "all",
-    "both": "all",
     "web": "web",
     "hub": "web",
     "server": "web",
@@ -128,10 +127,7 @@ def update_target_command_choices(
     *, include_status: bool = False
 ) -> tuple[dict[str, str], ...]:
     choices = tuple(
-        {
-            "name": definition.label,
-            "value": "all" if definition.value == "both" else definition.value,
-        }
+        {"name": definition.label, "value": definition.value}
         for definition in all_update_target_definitions()
     )
     if not include_status:

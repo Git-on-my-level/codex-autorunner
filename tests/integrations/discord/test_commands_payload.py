@@ -173,7 +173,10 @@ def test_agent_and_effort_options_include_choices() -> None:
 
     update = _find_option(car_options, "update")
     update_target = _find_option(update["options"], "target")
-    assert update_target["description"] == "Target service group or status"
+    assert (
+        update_target["description"]
+        == "Target: all, web, chat, telegram, discord, or status"
+    )
     assert update_target.get("choices", []) == list(
         update_target_command_choices(include_status=True)
     )

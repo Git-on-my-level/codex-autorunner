@@ -111,7 +111,7 @@ normalize_update_target() {
   local raw
   raw="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
   case "${raw}" in
-    ""|all|both)
+    ""|all)
       echo "all"
       ;;
     web|hub|server|ui)

@@ -234,7 +234,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "target",
-                            "description": "Target service group or status",
+                            "description": "Target: all, web, chat, telegram, discord, or status",
                             "required": False,
                             "choices": list(
                                 update_target_command_choices(include_status=True)

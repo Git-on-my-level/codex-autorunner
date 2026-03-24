@@ -2,7 +2,6 @@
 const DEFAULT_UPDATE_TARGET = "all";
 const UPDATE_TARGET_ALIASES = new Map([
     ["all", "all"],
-    ["both", "all"],
     ["web", "web"],
     ["hub", "web"],
     ["server", "web"],

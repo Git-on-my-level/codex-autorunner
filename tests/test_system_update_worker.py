@@ -21,7 +21,6 @@ from codex_autorunner.core.update_targets import (
         (None, "all"),
         ("", "all"),
         ("ALL", "all"),
-        ("both", "all"),
         ("web", "web"),
         ("ui", "web"),
         ("chat", "chat"),
@@ -34,6 +33,11 @@ from codex_autorunner.core.update_targets import (
 )
 def test_normalize_update_target(raw: str | None, expected: str) -> None:
     assert system._normalize_update_target(raw) == expected
+
+
+def test_normalize_update_target_rejects_legacy_both_alias() -> None:
+    with pytest.raises(ValueError, match="Unsupported update target"):
+        system._normalize_update_target("both")
 
 
 def test_available_update_target_options_web_only_when_no_chat_available(
