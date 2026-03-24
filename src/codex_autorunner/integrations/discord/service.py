@@ -51,7 +51,6 @@ from ...core.filebox_retention import (
     resolve_filebox_retention_policy,
 )
 from ...core.flows import (
-    FLOW_ACTION_SPECS,
     FLOW_ACTIONS_WITH_RUN_PICKER,
     FlowRunRecord,
     FlowRunStatus,
@@ -146,6 +145,7 @@ from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.handlers.approvals import (
     normalize_backend_approval_request,
 )
+from ...integrations.chat.help_catalog import build_discord_help_lines
 from ...integrations.chat.media import (
     audio_content_type_for_input,
     audio_extension_for_input,
@@ -5224,60 +5224,7 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
-        flow_usage_overrides = {"runs": "[limit]"}
-        lines = [
-            "**CAR Commands:**",
-            "",
-            "/car bind [path] - Bind channel to workspace",
-            "/car status - Show binding status",
-            "/car new - Start a fresh chat session",
-            "/car newt - Reset current workspace branch from origin default branch and start session",
-            "/car debug - Show debug info",
-            "/car help - Show this help",
-            "/car ids - Show channel/user IDs for debugging",
-            "/car diff [path] - Show git diff",
-            "/car skills [search] - List available skills",
-            "/car tickets [search] - Browse and edit tickets",
-            "/car mcp - Show MCP server status",
-            "/car init - Generate AGENTS.md",
-            "/car repos - List available repos",
-            "/car agent [name] - Set or show agent",
-            "/car model [name] - Set or show model",
-            "/car update [target] - Start update or check status",
-            "/car review [target] - Run a code review",
-            "/car approvals [mode] - Set approval and sandbox policy",
-            "/car mention <path> [request] - Include a file in a request",
-            "/car experimental [action] [feature] - Toggle experimental features",
-            "/car rollout - Show current thread rollout path",
-            "/car feedback <reason> - Send feedback and logs",
-            "/car archive - Archive workspace state and managed threads for a fresh start",
-            "",
-            "**Session Commands:**",
-            "/car session resume [thread_id] - Resume a previous chat thread",
-            "/car session reset - Reset PMA thread state",
-            "/car session compact - Compact the conversation",
-            "/car session interrupt - Stop the active turn",
-            "/car session logout - Log out of the Codex account",
-            "",
-            "**Flow Commands:**",
-            *[
-                f"/car flow {spec.name} {flow_usage_overrides.get(spec.name, spec.usage)} - {spec.description}"
-                for spec in FLOW_ACTION_SPECS
-            ],
-            "",
-            "**File Commands:**",
-            "/car files inbox - List inbox files",
-            "/car files outbox - List pending outbox files",
-            "/car files clear [target] - Clear inbox/outbox",
-            "",
-            "**PMA Commands:**",
-            "/pma on - Enable PMA mode",
-            "/pma off - Disable PMA mode",
-            "/pma status - Show PMA status",
-            "",
-            "Direct shell:",
-            "!<cmd> - run a bash command in the bound workspace",
-        ]
+        lines = build_discord_help_lines()
         content = format_discord_message("\n".join(lines))
         await self._respond_ephemeral(interaction_id, interaction_token, content)
 
