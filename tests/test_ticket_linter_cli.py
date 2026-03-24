@@ -96,7 +96,7 @@ def test_linter_flags_invalid_yaml_with_suffix(repo: Path) -> None:
     assert "OK" in result_good.stdout
 
 
-def test_linter_requires_ticket_id(repo: Path) -> None:
+def test_linter_allows_missing_ticket_id(repo: Path) -> None:
     tickets_dir = repo / ".codex-autorunner" / "tickets"
     tickets_dir.mkdir(parents=True, exist_ok=True)
 
@@ -106,8 +106,8 @@ def test_linter_requires_ticket_id(repo: Path) -> None:
     )
 
     result = _run_linter(repo)
-    assert result.returncode == 1
-    assert "frontmatter.ticket_id is required" in result.stderr
+    assert result.returncode == 0
+    assert "OK" in result.stdout
 
 
 def test_linter_rejects_unknown_agent(repo: Path) -> None:

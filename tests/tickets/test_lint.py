@@ -53,6 +53,25 @@ def test_lint_ticket_frontmatter_accepts_known_agents_and_user() -> None:
     assert any("invalid" in e for e in errors)
 
 
+def test_lint_ticket_frontmatter_accepts_fallback_ticket_id() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        {"agent": "codex", "done": False},
+        fallback_ticket_id="tkt_fallback123",
+    )
+    assert errors == []
+    assert fm is not None
+    assert fm.ticket_id == "tkt_fallback123"
+
+
+def test_lint_ticket_frontmatter_rejects_invalid_provided_ticket_id() -> None:
+    fm, errors = lint_ticket_frontmatter(
+        {"ticket_id": "bad id", "agent": "codex", "done": False},
+        fallback_ticket_id="tkt_fallback123",
+    )
+    assert fm is None
+    assert any("ticket_id must match" in e for e in errors)
+
+
 def test_lint_ticket_frontmatter_preserves_extra() -> None:
     fm, errors = lint_ticket_frontmatter(
         {

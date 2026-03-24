@@ -6,7 +6,7 @@ from .agents.registry import get_registered_agents
 
 PORTABLE_TICKET_ID_PATTERN = r"^[A-Za-z0-9._-]{6,128}$"
 PORTABLE_TICKET_ID_ERROR = (
-    "frontmatter.ticket_id is required and must match [A-Za-z0-9._-]{6,128}."
+    "frontmatter.ticket_id must match [A-Za-z0-9._-]{6,128} when provided."
 )
 PORTABLE_TICKET_AGENT_REQUIRED_ERROR = (
     "frontmatter.agent is required (e.g. 'codex' or 'opencode')."
@@ -54,8 +54,9 @@ def portable_ticket_validation_source() -> str:
         def _lint_frontmatter(data: dict[str, Any]) -> List[str]:
             errors: List[str] = []
 
-            ticket_id = _sanitize_ticket_id(data.get("ticket_id"))
-            if not ticket_id:
+            raw_ticket_id = data.get("ticket_id")
+            ticket_id = _sanitize_ticket_id(raw_ticket_id)
+            if raw_ticket_id is not None and not ticket_id:
                 errors.append("{PORTABLE_TICKET_ID_ERROR}")
 
             _agent, agent_error = _normalize_agent(data.get("agent"))

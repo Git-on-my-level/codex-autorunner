@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from collections.abc import MutableMapping
+from pathlib import Path, PurePosixPath
 from typing import Any, Optional, Tuple
 
 import yaml
@@ -60,6 +62,25 @@ def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 def generate_ticket_id() -> str:
     return f"tkt_{uuid.uuid4().hex}"
+
+
+def deterministic_ticket_id(ticket_path: Path) -> str:
+    """Derive a stable ticket_id from the ticket path."""
+    identity_path = _ticket_identity_path(ticket_path)
+    digest = hashlib.sha256(identity_path.encode("utf-8")).hexdigest()[:32]
+    return f"tkt_auto_{digest}"
+
+
+def _ticket_identity_path(ticket_path: Path) -> str:
+    parts = ticket_path.parts
+    if not parts:
+        return ticket_path.as_posix()
+    if not ticket_path.is_absolute():
+        return PurePosixPath(*parts).as_posix()
+    for idx, part in enumerate(parts):
+        if part == ".codex-autorunner":
+            return PurePosixPath(*parts[idx:]).as_posix()
+    return PurePosixPath(ticket_path.name).as_posix()
 
 
 def sanitize_ticket_id(raw: object) -> str | None:
