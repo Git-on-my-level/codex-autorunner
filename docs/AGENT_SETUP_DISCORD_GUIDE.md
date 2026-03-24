@@ -430,6 +430,17 @@ Quick grep:
 rg -n "discord\\.(bot\\.starting|commands\\.sync\\.overwrite|pause_watch\\.(notified|scan_failed)|outbox\\.send_failed)|Discord gateway error" .codex-autorunner/codex-autorunner-hub.log
 ```
 
+Trace a specific failed Discord turn by conversation ID:
+
+```bash
+car discord trace "Turn failed: ... (conversation discord:<channel_id>:<guild_id|->)" --path <repo_or_hub_root>
+car discord trace --conversation=discord:<channel_id>:<guild_id|-> --path <repo_or_hub_root>
+car discord trace --conversation=<channel_id>:<guild_id|-> --path <repo_or_hub_root> --json
+```
+
+`car discord trace` scans log files under `.codex-autorunner/`, filters by the
+conversation id, and highlights likely error lines with nearby context.
+
 ---
 
 ## Related Docs

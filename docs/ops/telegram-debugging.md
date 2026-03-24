@@ -61,6 +61,11 @@ If you see `app_server.turn.completed` but no `telegram.turn.completed`, the bot
 ## Useful Commands
 
 ```bash
+# Trace one conversation from a Telegram error message or explicit conversation id
+car telegram trace "Telegram turn failed (conversation -1003679298862:7073)" --path <repo_or_hub_root>
+# equivalent:
+car telegram trace --conversation=-1003679298862:7073 --path <repo_or_hub_root>
+
 # Find a thread id in hub log
 rg -n "019b" .codex-autorunner/codex-autorunner-hub.log -S
 
