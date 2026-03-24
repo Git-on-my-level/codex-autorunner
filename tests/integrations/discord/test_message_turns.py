@@ -6317,6 +6317,226 @@ async def test_message_create_enqueues_outbox_when_channel_send_fails(
 
 
 @pytest.mark.anyio
+async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queued_started = SimpleNamespace()
+    events: list[Any] = []
+    begin_calls = 0
+
+    class _Service:
+        def __init__(self) -> None:
+            self._spawned_tasks: list[asyncio.Task[Any]] = []
+
+        def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
+            task = asyncio.create_task(coro)
+            self._spawned_tasks.append(task)
+            return task
+
+        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
+            _ = kwargs
+
+        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
+            _ = kwargs
+
+        async def _send_channel_message_safe(
+            self,
+            channel_id: str,
+            payload: dict[str, Any],
+            *,
+            record_id: str,
+        ) -> None:
+            events.append((channel_id, payload, record_id))
+
+    class _OrchestrationServiceStub:
+        def get_running_execution(self, managed_thread_id: str) -> None:
+            _ = managed_thread_id
+            return None
+
+    async def _fake_begin_next(
+        orchestration_service: object,
+        managed_thread_id: str,
+    ) -> Optional[object]:
+        nonlocal begin_calls
+        _ = orchestration_service, managed_thread_id
+        if begin_calls == 0:
+            begin_calls += 1
+            return queued_started
+        return None
+
+    async def _fake_finalize(
+        service: object,
+        *,
+        orchestration_service: object,
+        started: object,
+        channel_id: str,
+        public_execution_error: str,
+        timeout_error: str,
+        interrupted_error: str,
+    ) -> dict[str, object]:
+        _ = (
+            service,
+            orchestration_service,
+            channel_id,
+            public_execution_error,
+            timeout_error,
+            interrupted_error,
+        )
+        assert started is queued_started
+        return {
+            "status": "ok",
+            "assistant_text": "",
+            "managed_turn_id": "turn-1",
+        }
+
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "begin_next_queued_runtime_thread_execution",
+        _fake_begin_next,
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "_finalize_discord_thread_execution",
+        _fake_finalize,
+    )
+
+    service = _Service()
+    discord_message_turns_module._ensure_discord_thread_queue_worker(
+        service,
+        orchestration_service=_OrchestrationServiceStub(),
+        managed_thread_id="managed-thread-1",
+        channel_id="channel-1",
+        public_execution_error="Runtime thread failed",
+        timeout_error="Runtime thread timed out",
+        interrupted_error="Runtime thread interrupted",
+    )
+
+    await asyncio.gather(*service._spawned_tasks)
+
+    assert events == [
+        (
+            "channel-1",
+            {"content": "(No response text returned.)"},
+            "discord-queued:managed-thread-1:turn-1",
+        )
+    ]
+
+
+@pytest.mark.anyio
+async def test_discord_managed_thread_queue_worker_formats_local_file_links(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queued_started = SimpleNamespace()
+    events: list[Any] = []
+    begin_calls = 0
+
+    class _Service:
+        def __init__(self) -> None:
+            self._spawned_tasks: list[asyncio.Task[Any]] = []
+
+        def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
+            task = asyncio.create_task(coro)
+            self._spawned_tasks.append(task)
+            return task
+
+        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
+            _ = kwargs
+
+        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
+            _ = kwargs
+
+        async def _send_channel_message_safe(
+            self,
+            channel_id: str,
+            payload: dict[str, Any],
+            *,
+            record_id: str,
+        ) -> None:
+            events.append((channel_id, payload, record_id))
+
+    class _OrchestrationServiceStub:
+        def get_running_execution(self, managed_thread_id: str) -> None:
+            _ = managed_thread_id
+            return None
+
+    async def _fake_begin_next(
+        orchestration_service: object,
+        managed_thread_id: str,
+    ) -> Optional[object]:
+        nonlocal begin_calls
+        _ = orchestration_service, managed_thread_id
+        if begin_calls == 0:
+            begin_calls += 1
+            return queued_started
+        return None
+
+    async def _fake_finalize(
+        service: object,
+        *,
+        orchestration_service: object,
+        started: object,
+        channel_id: str,
+        public_execution_error: str,
+        timeout_error: str,
+        interrupted_error: str,
+    ) -> dict[str, object]:
+        _ = (
+            service,
+            orchestration_service,
+            channel_id,
+            public_execution_error,
+            timeout_error,
+            interrupted_error,
+        )
+        assert started is queued_started
+        return {
+            "status": "ok",
+            "assistant_text": (
+                "Updated [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
+                "and kept [docs](https://example.com/docs)."
+            ),
+            "managed_turn_id": "turn-2",
+        }
+
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "begin_next_queued_runtime_thread_execution",
+        _fake_begin_next,
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "_finalize_discord_thread_execution",
+        _fake_finalize,
+    )
+
+    service = _Service()
+    discord_message_turns_module._ensure_discord_thread_queue_worker(
+        service,
+        orchestration_service=_OrchestrationServiceStub(),
+        managed_thread_id="managed-thread-1",
+        channel_id="channel-1",
+        public_execution_error="Runtime thread failed",
+        timeout_error="Runtime thread timed out",
+        interrupted_error="Runtime thread interrupted",
+    )
+
+    await asyncio.gather(*service._spawned_tasks)
+
+    assert events == [
+        (
+            "channel-1",
+            {
+                "content": (
+                    "Updated archive\\_helpers.py and kept "
+                    "[docs](https://example.com/docs)."
+                )
+            },
+            "discord-queued:managed-thread-1:turn-2",
+        )
+    ]
+
+
+@pytest.mark.anyio
 async def test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flush_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

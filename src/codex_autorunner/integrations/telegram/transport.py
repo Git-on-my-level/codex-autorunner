@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...core.state import now_iso
+from ..chat.text_sanitization import collapse_local_markdown_links
 from .adapter import TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .helpers import (
@@ -391,6 +392,7 @@ class TelegramMessageTransport:
         if prefix:
             text = f"{prefix}{text}"
         effective_parse_mode = parse_mode or self._config.parse_mode
+        text = collapse_local_markdown_links(text)
         if effective_parse_mode:
             try:
                 rendered, used_mode = self._render_message(

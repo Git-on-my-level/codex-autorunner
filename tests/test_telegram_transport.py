@@ -74,6 +74,12 @@ class _DummyTransport(TelegramMessageTransport):
             return rendered, used_mode
         return text, None
 
+    def _prepare_outgoing_text(  # type: ignore[no-untyped-def]
+        self, text: str, *, chat_id, thread_id=None, reply_to=None
+    ):
+        _ = chat_id, thread_id, reply_to
+        return text, None
+
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("parse_mode", ["Markdown", "MarkdownV2", "HTML"])
@@ -277,6 +283,28 @@ def test_telegram_markdown_collapses_local_file_links(parse_mode: str) -> None:
     assert "docs" in rendered
     assert "example" in rendered
     assert "docs" in rendered
+
+
+@pytest.mark.anyio
+async def test_send_plain_text_collapses_local_file_links() -> None:
+    transport = _DummyTransport(parse_mode=None)
+
+    await transport._send_message(
+        123,
+        "See [archive_helpers.py](/Users/dazheng/worktree/src/archive_helpers.py) "
+        "and [docs](https://example.com/docs).",
+    )
+
+    assert transport._bot.sent_messages == [
+        {
+            "chat_id": 123,
+            "text": "See archive_helpers.py and [docs](https://example.com/docs).",
+            "message_thread_id": None,
+            "reply_to_message_id": None,
+            "reply_markup": None,
+            "parse_mode": None,
+        }
+    ]
 
 
 def test_telegram_html_collapses_local_file_links() -> None:

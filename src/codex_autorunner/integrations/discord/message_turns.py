@@ -1409,16 +1409,22 @@ def _ensure_discord_thread_queue_worker(
                             started_execution=started_execution
                         )
                     if finalized["status"] == "ok":
-                        message = str(finalized.get("assistant_text") or "").strip()
-                        if message:
-                            await service._send_channel_message_safe(
-                                channel_id,
-                                {"content": message},
-                                record_id=(
-                                    "discord-queued:"
-                                    f"{managed_thread_id}:{finalized['managed_turn_id']}"
-                                ),
-                            )
+                        assistant_text = str(
+                            finalized.get("assistant_text") or ""
+                        ).strip()
+                        message = (
+                            format_discord_message(assistant_text)
+                            if assistant_text
+                            else "(No response text returned.)"
+                        )
+                        await service._send_channel_message_safe(
+                            channel_id,
+                            {"content": message},
+                            record_id=(
+                                "discord-queued:"
+                                f"{managed_thread_id}:{finalized['managed_turn_id']}"
+                            ),
+                        )
                         return
                     await service._send_channel_message_safe(
                         channel_id,
