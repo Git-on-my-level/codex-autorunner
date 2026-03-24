@@ -4572,6 +4572,84 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
     ]
 
 
+@pytest.mark.anyio
+async def test_resolve_telegram_managed_thread_keeps_requested_backend_thread_id_for_new_thread() -> (
+    None
+):
+    workspace = Path("/tmp/telegram-runtime-missing-resolve-new-workspace").resolve()
+    other_workspace = Path("/tmp/telegram-runtime-missing-existing-workspace").resolve()
+    calls: list[tuple[str, str, object]] = []
+
+    thread = SimpleNamespace(
+        thread_target_id="thread-existing",
+        agent_id="opencode",
+        workspace_root=str(other_workspace),
+        backend_thread_id="backend-old",
+        lifecycle_status="active",
+    )
+
+    class _FakeThreadService:
+        async def resolve_backend_runtime_instance_id(
+            self, agent_id: str, workspace_root: Path
+        ) -> Optional[str]:
+            calls.append(("resolve", agent_id, str(workspace_root)))
+            return None
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            calls.append(("create", agent, kwargs.get("backend_thread_id")))
+            assert workspace_root == workspace
+            return SimpleNamespace(
+                thread_target_id="thread-new",
+                agent_id=agent,
+                workspace_root=str(workspace_root),
+                backend_thread_id=kwargs.get("backend_thread_id"),
+                lifecycle_status="active",
+            )
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            calls.append(("bind", str(kwargs["thread_target_id"]), kwargs.get("mode")))
+
+    handlers = SimpleNamespace(_logger=logging.getLogger("test"))
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            None,
+            thread,
+        ),
+    )
+    try:
+        _service, resolved_thread = (
+            await execution_commands_module._resolve_telegram_managed_thread(
+                handlers,
+                surface_key="topic-1",
+                workspace_root=workspace,
+                agent="opencode",
+                repo_id="repo-1",
+                resource_kind="repo",
+                resource_id="repo-1",
+                mode="repo",
+                pma_enabled=False,
+                backend_thread_id="backend-new",
+                allow_new_thread=True,
+            )
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert resolved_thread.thread_target_id == "thread-new"
+    assert resolved_thread.backend_thread_id == "backend-new"
+    assert calls == [
+        ("resolve", "opencode", str(workspace)),
+        ("create", "opencode", "backend-new"),
+        ("bind", "thread-new", "repo"),
+    ]
+
+
 async def test_reset_telegram_thread_binding_archives_after_lost_backend_recovery() -> (
     None
 ):
@@ -4646,6 +4724,88 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
         ("archive", "thread-1"),
         ("create", "codex"),
         ("bind", "thread-2"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_for_replacement() -> (
+    None
+):
+    workspace = Path("/tmp/telegram-sync-runtime-missing-workspace").resolve()
+    calls: list[tuple[str, str, object]] = []
+
+    class _FakeThreadService:
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            calls.append(("stop", thread_target_id, None))
+            return SimpleNamespace(recovered_lost_backend=False)
+
+        async def resolve_backend_runtime_instance_id(
+            self, agent_id: str, workspace_root: Path
+        ) -> Optional[str]:
+            calls.append(("resolve", agent_id, str(workspace_root)))
+            return None
+
+        def archive_thread_target(self, thread_target_id: str) -> None:
+            calls.append(("archive", thread_target_id, None))
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            calls.append(("create", agent, kwargs.get("backend_thread_id")))
+            assert workspace_root == workspace
+            return SimpleNamespace(
+                thread_target_id="thread-2",
+                agent_id=agent,
+                workspace_root=str(workspace_root),
+                backend_thread_id=kwargs.get("backend_thread_id"),
+            )
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            calls.append(("bind", str(kwargs["thread_target_id"]), kwargs.get("mode")))
+
+    handlers = SimpleNamespace(_logger=logging.getLogger("test"))
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="repo"),
+            SimpleNamespace(
+                thread_target_id="thread-1",
+                agent_id="codex",
+                workspace_root=str(workspace),
+                backend_thread_id="backend-old",
+            ),
+        ),
+    )
+    try:
+        _service, current_thread = (
+            await execution_commands_module._sync_telegram_thread_binding(
+                handlers,
+                surface_key="topic-1",
+                workspace_root=workspace,
+                agent="codex",
+                repo_id="repo-1",
+                resource_kind="repo",
+                resource_id="repo-1",
+                backend_thread_id="backend-new",
+                mode="repo",
+                pma_enabled=False,
+                replace_existing=True,
+            )
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert current_thread.thread_target_id == "thread-2"
+    assert current_thread.backend_thread_id == "backend-new"
+    assert calls == [
+        ("resolve", "codex", str(workspace)),
+        ("stop", "thread-1", None),
+        ("archive", "thread-1", None),
+        ("create", "codex", "backend-new"),
+        ("bind", "thread-2", "repo"),
     ]
 
 

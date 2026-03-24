@@ -338,6 +338,9 @@ async def _resolve_telegram_managed_thread(
         if isinstance(backend_thread_id, str) and backend_thread_id.strip()
         else None
     )
+    existing_backend_thread_id = (
+        str(getattr(thread, "backend_thread_id", None) or "").strip() or None
+    )
     backend_runtime_instance_id: Optional[str] = None
     if pma_enabled:
         normalized_backend_thread_id = None
@@ -359,9 +362,6 @@ async def _resolve_telegram_managed_thread(
                 workspace_root=str(workspace_root),
                 mode=mode,
             )
-            existing_backend_thread_id = (
-                str(getattr(thread, "backend_thread_id", None) or "").strip() or None
-            )
             if (
                 existing_backend_thread_id is not None
                 and existing_backend_thread_id != normalized_backend_thread_id
@@ -378,33 +378,30 @@ async def _resolve_telegram_managed_thread(
                     mode=mode,
                     reason="runtime_unavailable",
                 )
-            normalized_backend_thread_id = existing_backend_thread_id
-    if (
-        thread is not None
-        and normalized_backend_thread_id
-        and thread.backend_thread_id != normalized_backend_thread_id
-    ):
-        thread = orchestration_service.resume_thread_target(
-            thread.thread_target_id,
-            backend_thread_id=normalized_backend_thread_id,
-            backend_runtime_instance_id=backend_runtime_instance_id,
-        )
     reusable_thread = (
         thread is not None
         and thread.agent_id == agent
         and str(thread.workspace_root or "").strip() == canonical_workspace
     )
+    effective_backend_thread_id = normalized_backend_thread_id
     if (
         reusable_thread
-        and str(thread.lifecycle_status or "").strip().lower() != "active"
+        and normalized_backend_thread_id is not None
+        and backend_runtime_instance_id is None
+        and existing_backend_thread_id is not None
+    ):
+        effective_backend_thread_id = existing_backend_thread_id
+    if reusable_thread and (
+        str(thread.lifecycle_status or "").strip().lower() != "active"
+        or thread.backend_thread_id != effective_backend_thread_id
     ):
         thread = orchestration_service.resume_thread_target(
             thread.thread_target_id,
-            backend_thread_id=normalized_backend_thread_id,
+            backend_thread_id=effective_backend_thread_id,
             backend_runtime_instance_id=backend_runtime_instance_id,
         )
     elif not reusable_thread:
-        if not allow_new_thread and not normalized_backend_thread_id:
+        if not allow_new_thread and not effective_backend_thread_id:
             return orchestration_service, None
         thread = orchestration_service.create_thread_target(
             agent,
@@ -413,7 +410,7 @@ async def _resolve_telegram_managed_thread(
             resource_kind=resource_kind,
             resource_id=resource_id,
             display_name=f"telegram:{surface_key}",
-            backend_thread_id=normalized_backend_thread_id,
+            backend_thread_id=effective_backend_thread_id,
             metadata=(
                 {
                     "backend_runtime_instance_id": backend_runtime_instance_id,
@@ -521,6 +518,9 @@ async def _sync_telegram_thread_binding(
     canonical_workspace = str(workspace_root.resolve())
     normalized_repo_id = repo_id.strip() if isinstance(repo_id, str) else None
     effective_backend_thread_id = None if pma_enabled else backend_thread_id
+    existing_backend_thread_id = (
+        str(getattr(current_thread, "backend_thread_id", None) or "").strip() or None
+    )
     backend_runtime_instance_id: Optional[str] = None
     if effective_backend_thread_id is not None:
         backend_runtime_instance_id = (
@@ -540,10 +540,6 @@ async def _sync_telegram_thread_binding(
                 workspace_root=str(workspace_root),
                 mode=mode,
             )
-            existing_backend_thread_id = (
-                str(getattr(current_thread, "backend_thread_id", None) or "").strip()
-                or None
-            )
             if (
                 existing_backend_thread_id is not None
                 and existing_backend_thread_id != effective_backend_thread_id
@@ -560,7 +556,6 @@ async def _sync_telegram_thread_binding(
                     mode=mode,
                     reason="runtime_unavailable",
                 )
-            effective_backend_thread_id = existing_backend_thread_id
     if replace_existing and current_thread is not None:
         stop_outcome = await orchestration_service.stop_thread(
             current_thread.thread_target_id
@@ -581,6 +576,12 @@ async def _sync_telegram_thread_binding(
         and current_thread.agent_id == agent
         and str(current_thread.workspace_root or "").strip() == canonical_workspace
     ):
+        if (
+            effective_backend_thread_id is not None
+            and backend_runtime_instance_id is None
+            and existing_backend_thread_id is not None
+        ):
+            effective_backend_thread_id = existing_backend_thread_id
         current_thread = orchestration_service.resume_thread_target(
             current_thread.thread_target_id,
             backend_thread_id=effective_backend_thread_id,
