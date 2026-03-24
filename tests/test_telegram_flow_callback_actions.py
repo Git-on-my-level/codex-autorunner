@@ -161,7 +161,7 @@ async def test_flow_callback_resume_latest_paused(
     await handler._handle_flow_callback(_callback(), FlowCallback(action="resume"))
 
     assert flow_service.resume_calls == [run_id]
-    assert "Resumed." in handler.answers
+    assert handler.answers == ["Working..."]
     assert handler.rendered
 
 
@@ -185,7 +185,7 @@ async def test_flow_callback_stop_latest_active(
     await handler._handle_flow_callback(_callback(), FlowCallback(action="stop"))
 
     assert flow_service.stop_calls == [run_id]
-    assert "Stopped." in handler.answers
+    assert handler.answers == ["Working..."]
     assert handler.rendered
 
 
@@ -209,7 +209,7 @@ async def test_flow_callback_recover_latest_active(
     await handler._handle_flow_callback(_callback(), FlowCallback(action="recover"))
 
     assert flow_service.reconcile_calls == [run_id]
-    assert "Recovered." in handler.answers
+    assert handler.answers == ["Working..."]
     assert handler.rendered
 
 

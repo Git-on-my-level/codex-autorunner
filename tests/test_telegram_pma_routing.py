@@ -5458,7 +5458,7 @@ async def test_resume_opencode_missing_session_clears_stale_topic_state(
     assert record.active_thread_id is None
     assert stale_session not in record.thread_ids
     assert stale_session not in record.thread_summaries
-    assert handler.answers and handler.answers[-1] == "Thread missing"
+    assert handler.answers == []
     assert any("Thread no longer exists." in text for text in handler.final_messages)
 
 

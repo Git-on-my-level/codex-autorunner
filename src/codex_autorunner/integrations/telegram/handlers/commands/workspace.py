@@ -2693,6 +2693,15 @@ class WorkspaceCommands(SharedHelpers):
         thread_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
+        callback_answered = False
+
+        async def _answer_once(text: str) -> None:
+            nonlocal callback_answered
+            if callback_answered or callback is None:
+                return
+            await self._answer_callback(callback, text)
+            callback_answered = True
+
         chat_id, thread_id_val = _split_topic_key(key)
         self._resume_options.pop(key, None)
         record = await self._router.get_topic(key)
@@ -2701,7 +2710,7 @@ class WorkspaceCommands(SharedHelpers):
             return
         workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
         if workspace_path is None:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2714,6 +2723,7 @@ class WorkspaceCommands(SharedHelpers):
             return
         record = self._record_with_workspace_path(record, workspace_path)
         try:
+            await _answer_once("Resuming...")
             client = await self._client_for_workspace(record.workspace_path)
         except AppServerUnavailableError as exc:
             log_event(
@@ -2724,7 +2734,7 @@ class WorkspaceCommands(SharedHelpers):
                 thread_id=thread_id_val,
                 exc=exc,
             )
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2736,7 +2746,7 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
         if client is None:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2767,7 +2777,7 @@ class WorkspaceCommands(SharedHelpers):
                     record.thread_summaries.pop(thread_id, None)
 
                 await self._store.update_topic(key, clear_stale)
-                await self._answer_callback(callback, "Thread missing")
+                await _answer_once("Thread missing")
                 await self._finalize_selection(
                     key,
                     callback,
@@ -2786,7 +2796,7 @@ class WorkspaceCommands(SharedHelpers):
                 thread_id=thread_id,
                 exc=exc,
             )
-            await self._answer_callback(callback, "Resume failed")
+            await _answer_once("Resume failed")
             chat_id, thread_id_val = _split_topic_key(key)
             await self._finalize_selection(
                 key,
@@ -2801,7 +2811,7 @@ class WorkspaceCommands(SharedHelpers):
         info = _extract_thread_info(result)
         resumed_path = info.get("workspace_path")
         if record is None or not record.workspace_path:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2813,7 +2823,7 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
         if not isinstance(resumed_path, str):
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2828,7 +2838,7 @@ class WorkspaceCommands(SharedHelpers):
             workspace_root = Path(record.workspace_path).expanduser().resolve()
             resumed_root = Path(resumed_path).expanduser().resolve()
         except Exception:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2840,7 +2850,7 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
         if not _paths_compatible(workspace_root, resumed_root):
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2853,7 +2863,7 @@ class WorkspaceCommands(SharedHelpers):
             return
         conflict_key = await self._find_thread_conflict(thread_id, key=key)
         if conflict_key:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2879,7 +2889,7 @@ class WorkspaceCommands(SharedHelpers):
             active_thread_id=thread_id,
             overwrite_defaults=True,
         )
-        await self._answer_callback(callback, "Resumed thread")
+        await _answer_once("Resumed thread")
         message = _format_resume_summary(
             thread_id,
             result,
@@ -2895,12 +2905,21 @@ class WorkspaceCommands(SharedHelpers):
         thread_id: str,
         callback: Optional[TelegramCallbackQuery] = None,
     ) -> None:
+        callback_answered = False
+
+        async def _answer_once(text: str) -> None:
+            nonlocal callback_answered
+            if callback_answered or callback is None:
+                return
+            await self._answer_callback(callback, text)
+            callback_answered = True
+
         chat_id, thread_id_val = _split_topic_key(key)
         self._resume_options.pop(key, None)
         record = await self._router.get_topic(key)
         workspace_path, error = self._resolve_workspace_path(record, allow_pma=True)
         if workspace_path is None:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2914,7 +2933,7 @@ class WorkspaceCommands(SharedHelpers):
         record = self._record_with_workspace_path(record, workspace_path)
         supervisor = getattr(self, "_opencode_supervisor", None)
         if supervisor is None:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2927,7 +2946,7 @@ class WorkspaceCommands(SharedHelpers):
             return
         workspace_root = self._canonical_workspace_root(record.workspace_path)
         if workspace_root is None:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2939,6 +2958,7 @@ class WorkspaceCommands(SharedHelpers):
             )
             return
         try:
+            await _answer_once("Resuming...")
             client = await supervisor.get_client(workspace_root)
             session = await client.get_session(thread_id)
         except Exception as exc:
@@ -2960,7 +2980,7 @@ class WorkspaceCommands(SharedHelpers):
                     record.thread_summaries.pop(thread_id, None)
 
                 await self._store.update_topic(key, clear_stale)
-                await self._answer_callback(callback, "Thread missing")
+                await _answer_once("Thread missing")
                 await self._finalize_selection(
                     key,
                     callback,
@@ -2979,7 +2999,7 @@ class WorkspaceCommands(SharedHelpers):
                 thread_id=thread_id,
                 exc=exc,
             )
-            await self._answer_callback(callback, "Resume failed")
+            await _answer_once("Resume failed")
             await self._finalize_selection(
                 key,
                 callback,
@@ -2996,7 +3016,7 @@ class WorkspaceCommands(SharedHelpers):
                 workspace_root = Path(record.workspace_path).expanduser().resolve()
                 resumed_root = Path(resumed_path).expanduser().resolve()
             except Exception:
-                await self._answer_callback(callback, "Resume aborted")
+                await _answer_once("Resume aborted")
                 await self._finalize_selection(
                     key,
                     callback,
@@ -3008,7 +3028,7 @@ class WorkspaceCommands(SharedHelpers):
                 )
                 return
             if not _paths_compatible(workspace_root, resumed_root):
-                await self._answer_callback(callback, "Resume aborted")
+                await _answer_once("Resume aborted")
                 await self._finalize_selection(
                     key,
                     callback,
@@ -3021,7 +3041,7 @@ class WorkspaceCommands(SharedHelpers):
                 return
         conflict_key = await self._find_thread_conflict(thread_id, key=key)
         if conflict_key:
-            await self._answer_callback(callback, "Resume aborted")
+            await _answer_once("Resume aborted")
             await self._finalize_selection(
                 key,
                 callback,

@@ -2938,6 +2938,7 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         action: str,
+        deferred: bool = False,
     ) -> None:
         try:
             store = self._open_flow_store(workspace_root)
@@ -2958,20 +2959,22 @@ class DiscordBotService:
 
         filtered = [run for run in runs if _flow_run_matches_action(run, action)]
         if not filtered:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"No ticket_flow runs available for {flow_action_label(action)}.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=f"No ticket_flow runs available for {flow_action_label(action)}.",
             )
             return
         run_tuples = [(record.id, record.status.value) for record in filtered]
         custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
         prompt = f"Select a run to {flow_action_label(action)}:"
-        await self._respond_with_components(
-            interaction_id,
-            interaction_token,
-            prompt,
-            [
+        await self._send_or_respond_with_components_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=prompt,
+            components=[
                 build_flow_runs_picker(
                     run_tuples,
                     custom_id=custom_id,
@@ -2988,6 +2991,7 @@ class DiscordBotService:
         workspace_root: Path,
         action: str,
         run_id_opt: Any,
+        deferred: bool = False,
     ) -> Optional[str]:
         if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
             if action == "status":
@@ -2997,6 +3001,7 @@ class DiscordBotService:
                 interaction_token,
                 workspace_root=workspace_root,
                 action=action,
+                deferred=deferred,
             )
             return None
 
@@ -3034,11 +3039,12 @@ class DiscordBotService:
                 f"Matched {len(filtered_items)} runs for `{query_text}`. "
                 f"Select a run to {flow_action_label(action)}:"
             )
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                prompt,
-                [
+            await self._send_or_respond_with_components_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=prompt,
+                components=[
                     build_flow_runs_picker(
                         filtered_items,
                         custom_id=custom_id,
@@ -5301,6 +5307,10 @@ class DiscordBotService:
             except Exception:
                 cwd = workspace_root
 
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         git_check = ["git", "rev-parse", "--is-inside-work-tree"]
         try:
             result = await asyncio.to_thread(
@@ -5312,24 +5322,27 @@ class DiscordBotService:
                 timeout=5,
             )
             if result.returncode != 0:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Not a git repository.",
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text="Not a git repository.",
                 )
                 return
         except subprocess.TimeoutExpired:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Git check timed out.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="Git check timed out.",
             )
             return
         except Exception as exc:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Git check failed: {exc}",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=f"Git check failed: {exc}",
             )
             return
 
@@ -5359,7 +5372,12 @@ class DiscordBotService:
         from .rendering import truncate_for_discord
 
         output = truncate_for_discord(output, self._config.max_message_length - 100)
-        await self._respond_ephemeral(interaction_id, interaction_token, output)
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=output,
+        )
 
     async def _handle_skills(
         self,
@@ -6538,6 +6556,10 @@ class DiscordBotService:
                 )
                 return
 
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
         if not repo_url:
             repo_url = DEFAULT_UPDATE_REPO_URL
@@ -6583,10 +6605,11 @@ class DiscordBotService:
             text = format_discord_message(
                 f"{exc} Use `/car update target:status` for current state."
             )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
             )
             return
         except Exception as exc:
@@ -6597,10 +6620,11 @@ class DiscordBotService:
                 update_target=update_target,
                 exc=exc,
             )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Update failed to start. Check logs for details.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="Update failed to start. Check logs for details.",
             )
             return
 
@@ -6610,10 +6634,11 @@ class DiscordBotService:
             "I will post completion status in this channel. "
             "Use `/car update target:status` for progress."
         )
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            text,
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
         )
         self._update_status_notifier.schedule_watch({"chat_id": channel_id})
 
@@ -6734,13 +6759,18 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         status = await asyncio.to_thread(_read_update_status)
         if not isinstance(status, dict):
             status = None
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            self._format_update_status_message(status),
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=self._format_update_status_message(status),
         )
 
     VALID_AGENT_VALUES = VALID_CHAT_AGENT_VALUES
@@ -7614,12 +7644,19 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         update_message: bool = False,
     ) -> None:
+        deferred_public = False
+        if not update_message:
+            deferred_public = await self._defer_public(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
         run_id_opt = await self._resolve_flow_run_input(
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
             action="status",
             run_id_opt=options.get("run_id"),
+            deferred=deferred_public,
         )
         if run_id_opt is None:
             return
@@ -7704,8 +7741,11 @@ class DiscordBotService:
                     if explicit_run_requested
                     else "No ticket_flow runs found."
                 )
-                await self._respond_ephemeral(
-                    interaction_id, interaction_token, message
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred_public,
+                    text=message,
                 )
                 return
             try:
@@ -7713,10 +7753,11 @@ class DiscordBotService:
                     workspace_root, record, store
                 )
                 if locked:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        f"Run {record.id} is locked for reconcile; try again.",
+                    await self._send_or_respond_ephemeral(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred_public,
+                        text=f"Run {record.id} is locked for reconcile; try again.",
                     )
                     return
             except (sqlite3.Error, OSError) as exc:
@@ -7787,11 +7828,12 @@ class DiscordBotService:
                     components=status_buttons,
                 )
             else:
-                await self._respond_with_components_public(
-                    interaction_id,
-                    interaction_token,
-                    response_text,
-                    status_buttons,
+                await self._send_or_respond_with_components_public(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred_public,
+                    text=response_text,
+                    components=status_buttons,
                 )
         else:
             if update_message:
@@ -7802,8 +7844,11 @@ class DiscordBotService:
                     components=[],
                 )
             else:
-                await self._respond_public(
-                    interaction_id, interaction_token, response_text
+                await self._send_or_respond_public(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred_public,
+                    text=response_text,
                 )
 
     async def _handle_flow_runs(
@@ -7814,6 +7859,10 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         raw_limit = options.get("limit")
         limit = FLOW_RUNS_DEFAULT_LIMIT
         if isinstance(raw_limit, int):
@@ -7853,8 +7902,11 @@ class DiscordBotService:
             store.close()
 
         if not runs:
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "No ticket_flow runs found."
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="No ticket_flow runs found.",
             )
             return
 
@@ -7863,8 +7915,12 @@ class DiscordBotService:
         lines = [f"Recent ticket_flow runs (limit={limit}):"]
         for record in runs:
             lines.append(f"- {record.id} [{record.status.value}]")
-        await self._respond_with_components(
-            interaction_id, interaction_token, "\n".join(lines), components
+        await self._send_or_respond_with_components_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text="\n".join(lines),
+            components=components,
         )
 
     async def _handle_flow_issue(
@@ -7887,34 +7943,55 @@ class DiscordBotService:
             )
             return
         issue_ref = issue_ref.strip()
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         try:
-            seed = seed_issue_from_github(
-                workspace_root,
-                issue_ref,
-                github_service_factory=lambda repo_root: cast(
-                    GitHubServiceProtocol, GitHubService(repo_root)
-                ),
+
+            def _seed_issue() -> Any:
+                seeded = seed_issue_from_github(
+                    workspace_root,
+                    issue_ref,
+                    github_service_factory=lambda repo_root: cast(
+                        GitHubServiceProtocol, GitHubService(repo_root)
+                    ),
+                )
+                atomic_write(issue_md_path(workspace_root), seeded.content)
+                return seeded
+
+            seed = await asyncio.to_thread(
+                _seed_issue,
             )
-            atomic_write(issue_md_path(workspace_root), seed.content)
         except GitHubError as exc:
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, f"GitHub error: {exc}"
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=f"GitHub error: {exc}",
             )
             return
         except RuntimeError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
-            return
-        except Exception as exc:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to fetch issue: {exc}",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=str(exc),
             )
             return
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"Seeded ISSUE.md from GitHub issue {seed.issue_number}.",
+        except Exception as exc:
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=f"Failed to fetch issue: {exc}",
+            )
+            return
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=f"Seeded ISSUE.md from GitHub issue {seed.issue_number}.",
         )
 
     async def _handle_flow_plan(
@@ -7951,10 +8028,16 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        deferred_public: Optional[bool] = None,
     ) -> None:
         force_new = bool(options.get("force_new"))
         restart_from = options.get("restart_from")
         flow_service = self._ticket_flow_orchestration_service(workspace_root)
+        if deferred_public is None:
+            deferred_public = await self._defer_public(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
 
         try:
             store = self._open_flow_store(workspace_root)
@@ -8035,10 +8118,11 @@ class DiscordBotService:
                             user_message="Unable to query flow database. Please try again later.",
                         ) from None
                     if record is None:
-                        await self._respond_ephemeral(
-                            interaction_id,
-                            interaction_token,
-                            (
+                        await self._send_or_respond_public(
+                            interaction_id=interaction_id,
+                            interaction_token=interaction_token,
+                            deferred=deferred_public,
+                            text=(
                                 "Reusing ticket_flow run "
                                 f"{active_or_paused.id} ({active_or_paused.status.value})."
                             ),
@@ -8049,10 +8133,11 @@ class DiscordBotService:
                             workspace_root, record, store
                         )
                         if locked:
-                            await self._respond_ephemeral(
-                                interaction_id,
-                                interaction_token,
-                                f"Run {record.id} is locked for reconcile; try again.",
+                            await self._send_or_respond_ephemeral(
+                                interaction_id=interaction_id,
+                                interaction_token=interaction_token,
+                                deferred=deferred_public,
+                                text=f"Run {record.id} is locked for reconcile; try again.",
                             )
                             return
                     except (sqlite3.Error, OSError) as exc:
@@ -8095,15 +8180,19 @@ class DiscordBotService:
                     ),
                 )
                 if status_buttons:
-                    await self._respond_with_components_public(
-                        interaction_id,
-                        interaction_token,
-                        response_text,
-                        status_buttons,
+                    await self._send_or_respond_with_components_public(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred_public,
+                        text=response_text,
+                        components=status_buttons,
                     )
                 else:
-                    await self._respond_public(
-                        interaction_id, interaction_token, response_text
+                    await self._send_or_respond_public(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred_public,
+                        text=response_text,
                     )
                 return
 
@@ -8118,7 +8207,12 @@ class DiscordBotService:
                 metadata=metadata,
             )
         except ValueError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred_public,
+                text=str(exc),
+            )
             return
 
         try:
@@ -8153,10 +8247,11 @@ class DiscordBotService:
                 ) from None
             if record is None:
                 prefix = "Started new" if force_new else "Started"
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"{prefix} ticket_flow run {started.run_id}.",
+                await self._send_or_respond_public(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred_public,
+                    text=f"{prefix} ticket_flow run {started.run_id}.",
                 )
                 return
             try:
@@ -8164,10 +8259,11 @@ class DiscordBotService:
                     workspace_root, record, store
                 )
                 if locked:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        f"Run {record.id} is locked for reconcile; try again.",
+                    await self._send_or_respond_ephemeral(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred_public,
+                        text=f"Run {record.id} is locked for reconcile; try again.",
                     )
                     return
             except (sqlite3.Error, OSError) as exc:
@@ -8207,14 +8303,20 @@ class DiscordBotService:
             prefix=f"{prefix} ticket_flow run {record.id}.",
         )
         if status_buttons:
-            await self._respond_with_components_public(
-                interaction_id,
-                interaction_token,
-                response_text,
-                status_buttons,
+            await self._send_or_respond_with_components_public(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred_public,
+                text=response_text,
+                components=status_buttons,
             )
         else:
-            await self._respond_public(interaction_id, interaction_token, response_text)
+            await self._send_or_respond_public(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred_public,
+                text=response_text,
+            )
 
     async def _handle_flow_restart(
         self,
@@ -8223,13 +8325,20 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         options: dict[str, Any],
+        deferred_public: Optional[bool] = None,
     ) -> None:
+        if deferred_public is None:
+            deferred_public = await self._defer_public(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
         run_id_opt = await self._resolve_flow_run_input(
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
             action="restart",
             run_id_opt=options.get("run_id"),
+            deferred=deferred_public,
         )
         if run_id_opt is None:
             return
@@ -8286,10 +8395,11 @@ class DiscordBotService:
             store.close()
 
         if isinstance(run_id_opt, str) and run_id_opt.strip() and target is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"No ticket_flow run found for run_id {run_id_opt.strip()}.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred_public,
+                text=f"No ticket_flow run found for run_id {run_id_opt.strip()}.",
             )
             return
 
@@ -8298,8 +8408,11 @@ class DiscordBotService:
             try:
                 await flow_service.stop_flow_run(target.id)
             except ValueError as exc:
-                await self._respond_ephemeral(
-                    interaction_id, interaction_token, str(exc)
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred_public,
+                    text=str(exc),
                 )
                 return
             latest = await flow_service.wait_for_flow_run_terminal(target.id)
@@ -8309,10 +8422,11 @@ class DiscordBotService:
                 "failed",
             }:
                 status_value = latest.status if latest is not None else "unknown"
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    (
+                await self._send_or_respond_public(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred_public,
+                    text=(
                         f"Run {target.id} is still active ({status_value}); "
                         "restart aborted to avoid concurrent workers. Try again after it stops."
                     ),
@@ -8327,6 +8441,7 @@ class DiscordBotService:
                 "force_new": True,
                 "restart_from": target.id if target is not None else None,
             },
+            deferred_public=deferred_public,
         )
 
     async def _handle_flow_recover(
@@ -8337,12 +8452,17 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         run_id_opt = await self._resolve_flow_run_input(
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
             action="recover",
             run_id_opt=options.get("run_id"),
+            deferred=deferred,
         )
         if run_id_opt is None:
             return
@@ -8397,27 +8517,30 @@ class DiscordBotService:
                 target = select_ticket_flow_run_record(runs, selection="active")
 
             if target is None:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "No active ticket_flow run found.",
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text="No active ticket_flow run found.",
                 )
                 return
 
             flow_service = self._ticket_flow_orchestration_service(workspace_root)
             target_run, updated, locked = flow_service.reconcile_flow_run(target.id)
             if locked:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"Run {target_run.run_id} is locked for reconcile; try again.",
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=f"Run {target_run.run_id} is locked for reconcile; try again.",
                 )
                 return
             verdict = "Recovered" if updated else "No changes needed"
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"{verdict} for run {target_run.run_id} ({target_run.status}).",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=f"{verdict} for run {target_run.run_id} ({target_run.status}).",
             )
         finally:
             store.close()
@@ -8432,12 +8555,17 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         run_id_opt = await self._resolve_flow_run_input(
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
             action="resume",
             run_id_opt=options.get("run_id"),
+            deferred=deferred,
         )
         if run_id_opt is None:
             return
@@ -8493,10 +8621,11 @@ class DiscordBotService:
             store.close()
 
         if target is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No paused ticket_flow run found to resume.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="No paused ticket_flow run found to resume.",
             )
             return
 
@@ -8516,14 +8645,20 @@ class DiscordBotService:
         try:
             updated = await flow_service.resume_flow_run(target.id)
         except ValueError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=str(exc),
+            )
             return
 
         outbound_text = f"Resumed run {updated.run_id}."
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            outbound_text,
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=outbound_text,
         )
         run_mirror.mirror_outbound(
             run_id=updated.run_id,
@@ -8546,12 +8681,17 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         run_id_opt = await self._resolve_flow_run_input(
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
             action="stop",
             run_id_opt=options.get("run_id"),
+            deferred=deferred,
         )
         if run_id_opt is None:
             return
@@ -8607,10 +8747,11 @@ class DiscordBotService:
             store.close()
 
         if target is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No active ticket_flow run found to stop.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="No active ticket_flow run found to stop.",
             )
             return
 
@@ -8630,14 +8771,20 @@ class DiscordBotService:
         try:
             updated = await flow_service.stop_flow_run(target.id)
         except ValueError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=str(exc),
+            )
             return
 
         outbound_text = f"Stop requested for run {updated.run_id} ({updated.status})."
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            outbound_text,
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=outbound_text,
         )
         run_mirror.mirror_outbound(
             run_id=updated.run_id,
@@ -8834,6 +8981,10 @@ class DiscordBotService:
             )
             return
 
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         run_id_opt = options.get("run_id")
         if not (isinstance(run_id_opt, str) and run_id_opt.strip()) and channel_id:
             pending_key = self._pending_interaction_scope_key(
@@ -8846,6 +8997,7 @@ class DiscordBotService:
                 interaction_token,
                 workspace_root=workspace_root,
                 action="reply",
+                deferred=deferred,
             )
             return
         if isinstance(run_id_opt, str) and run_id_opt.strip():
@@ -8855,6 +9007,7 @@ class DiscordBotService:
                 workspace_root=workspace_root,
                 action="reply",
                 run_id_opt=run_id_opt,
+                deferred=deferred,
             )
             if run_id_opt is None:
                 return
@@ -8919,10 +9072,11 @@ class DiscordBotService:
             store.close()
 
         if target is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No paused ticket_flow run found for reply.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="No paused ticket_flow run found for reply.",
             )
             return
 
@@ -8944,16 +9098,22 @@ class DiscordBotService:
         try:
             updated = await flow_service.resume_flow_run(target.id)
         except ValueError as exc:
-            await self._respond_ephemeral(interaction_id, interaction_token, str(exc))
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=str(exc),
+            )
             return
 
         outbound_text = (
             f"Reply saved to {reply_path.name} and resumed run {updated.run_id}."
         )
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            outbound_text,
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=outbound_text,
         )
         run_mirror.mirror_outbound(
             run_id=updated.run_id,
@@ -9433,6 +9593,28 @@ class DiscordBotService:
                 return
         await self._respond_ephemeral(interaction_id, interaction_token, text)
 
+    async def _send_or_respond_with_components_ephemeral(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        if deferred:
+            max_len = max(int(self._config.max_message_length), 32)
+            sent = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=truncate_for_discord(text, max_len=max_len),
+                components=components,
+            )
+            if sent:
+                return
+        await self._respond_with_components(
+            interaction_id, interaction_token, text, components
+        )
+
     async def _respond_with_components(
         self,
         interaction_id: str,
@@ -9664,6 +9846,28 @@ class DiscordBotService:
             if sent:
                 return
         await self._respond_public(interaction_id, interaction_token, text)
+
+    async def _send_or_respond_with_components_public(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+        components: list[dict[str, Any]],
+    ) -> None:
+        if deferred:
+            max_len = max(int(self._config.max_message_length), 32)
+            sent = await self._send_followup_public(
+                interaction_token=interaction_token,
+                content=truncate_for_discord(text, max_len=max_len),
+                components=components,
+            )
+            if sent:
+                return
+        await self._respond_with_components_public(
+            interaction_id, interaction_token, text, components
+        )
 
     async def _respond_with_components_public(
         self,
@@ -10854,6 +11058,7 @@ class DiscordBotService:
                 interaction_token,
                 workspace_root=workspace_root,
                 options={"run_id": run_id},
+                deferred_public=False,
             )
         elif action == "refresh":
             await self._handle_flow_status(
@@ -10982,6 +11187,10 @@ class DiscordBotService:
             )
             return
 
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         target_arg = options.get("target", "")
         target_type = "uncommittedChanges"
         target_value: Optional[str] = None
@@ -11018,14 +11227,15 @@ class DiscordBotService:
                             (commit_sha, commit_subjects.get(commit_sha, ""))
                             for commit_sha, _label in filtered_search_items
                         ]
-                        await self._respond_with_components(
-                            interaction_id,
-                            interaction_token,
-                            (
+                        await self._send_or_respond_with_components_ephemeral(
+                            interaction_id=interaction_id,
+                            interaction_token=interaction_token,
+                            deferred=deferred,
+                            text=(
                                 f"Matched {len(filtered_commits)} commits for `{query_text}`. "
                                 "Select a commit to review:"
                             ),
-                            [
+                            components=[
                                 build_review_commit_picker(
                                     filtered_commits,
                                     custom_id=REVIEW_COMMIT_SELECT_ID,
@@ -11053,21 +11263,27 @@ class DiscordBotService:
             elif target_lower in ("uncommitted", ""):
                 pass
             elif target_lower == "custom":
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Provide custom review instructions after `custom`, for example: "
-                    "`/car review target:custom focus on security regressions`.",
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=(
+                        "Provide custom review instructions after `custom`, for example: "
+                        "`/car review target:custom focus on security regressions`."
+                    ),
                 )
                 return
             elif target_lower.startswith("custom "):
                 custom_instructions = target_text[7:].strip()
                 if not custom_instructions:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Provide custom review instructions after `custom`, for example: "
-                        "`/car review target:custom focus on security regressions`.",
+                    await self._send_or_respond_ephemeral(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred,
+                        text=(
+                            "Provide custom review instructions after `custom`, for example: "
+                            "`/car review target:custom focus on security regressions`."
+                        ),
                     )
                     return
                 target_type = "custom"
@@ -11079,28 +11295,25 @@ class DiscordBotService:
         if prompt_commit_picker:
             commits = await self._list_recent_commits_for_picker(workspace_root)
             if not commits:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "No recent commits found. Use `/car review target:commit <sha>`.",
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text="No recent commits found. Use `/car review target:commit <sha>`.",
                 )
                 return
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                "Select a commit to review:",
-                [
+            await self._send_or_respond_with_components_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="Select a commit to review:",
+                components=[
                     build_review_commit_picker(
                         commits, custom_id=REVIEW_COMMIT_SELECT_ID
                     )
                 ],
             )
             return
-
-        await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
 
         prompt_parts: list[str] = ["Please perform a code review."]
         if target_type == "uncommittedChanges":
@@ -11348,31 +11561,38 @@ class DiscordBotService:
             )
             return
 
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         max_bytes = 100000
         try:
             data = path.read_bytes()
         except Exception:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Failed to read file.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="Failed to read file.",
             )
             return
 
         if len(data) > max_bytes:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"File too large (max {max_bytes} bytes).",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=f"File too large (max {max_bytes} bytes).",
             )
             return
 
         null_count = data.count(b"\x00")
         if null_count > 0 and null_count > len(data) * 0.1:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "File appears to be binary; refusing to include it.",
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="File appears to be binary; refusing to include it.",
             )
             return
 
@@ -11384,17 +11604,20 @@ class DiscordBotService:
         if not isinstance(request_arg, str) or not request_arg.strip():
             request_arg = "Please review this file."
 
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"File `{display_path}` ready for mention.\n\n"
-            f"To include it in a request, send a message starting with:\n"
-            f"```\n"
-            f'<file path="{display_path}">\n'
-            f"...\n"
-            f"</file>\n"
-            f"```\n\n"
-            f"Your request: {request_arg}",
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=(
+                f"File `{display_path}` ready for mention.\n\n"
+                f"To include it in a request, send a message starting with:\n"
+                f"```\n"
+                f'<file path="{display_path}">\n'
+                f"...\n"
+                f"</file>\n"
+                f"```\n\n"
+                f"Your request: {request_arg}"
+            ),
         )
 
     async def _handle_car_experimental(
@@ -11851,12 +12074,17 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         client = await self._client_for_workspace(str(workspace_root))
         if client is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                format_discord_message(
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=format_discord_message(
                     "Topic not bound. Use `/car bind path:<workspace>` first."
                 ),
             )
@@ -11871,16 +12099,18 @@ class DiscordBotService:
                 workspace_root=str(workspace_root),
                 exc=exc,
             )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                format_discord_message("Logout failed; check logs for details."),
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=format_discord_message("Logout failed; check logs for details."),
             )
             return
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Logged out.",
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text="Logged out.",
         )
 
     async def _handle_car_feedback(
@@ -11905,12 +12135,17 @@ class DiscordBotService:
             )
             return
 
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         client = await self._client_for_workspace(str(workspace_root))
         if client is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                format_discord_message(
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=format_discord_message(
                     "Topic not bound. Use `/car bind path:<workspace>` first."
                 ),
             )
@@ -11938,10 +12173,11 @@ class DiscordBotService:
                 workspace_root=str(workspace_root),
                 exc=exc,
             )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                format_discord_message(
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=format_discord_message(
                     "Feedback upload failed; check logs for details."
                 ),
             )
@@ -11953,10 +12189,11 @@ class DiscordBotService:
         message_text = "Feedback sent."
         if isinstance(report_id, str):
             message_text = f"Feedback sent (report {report_id})."
-        await self._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            message_text,
+        await self._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=message_text,
         )
 
     async def _handle_car_archive(
