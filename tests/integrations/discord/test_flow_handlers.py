@@ -303,11 +303,11 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 2
-        status_data = rest.interaction_responses[0]["payload"]["data"]
-        status_payload = status_data["content"]
-        runs_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
-        assert "flags" not in status_data
+        assert len(rest.interaction_responses) == 4
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert rest.interaction_responses[2]["payload"]["type"] == 5
+        status_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
+        runs_payload = rest.interaction_responses[3]["payload"]["data"]["content"]
 
         assert f"Run: {paused_run_id}" in status_payload
         assert "Status: paused" in status_payload
@@ -375,11 +375,11 @@ async def test_flow_status_without_run_id_uses_current_run_and_includes_picker(
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        payload = rest.interaction_responses[0]["payload"]["data"]
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        payload = rest.interaction_responses[1]["payload"]["data"]
         content = payload["content"]
         components = payload["components"]
-        assert "flags" not in payload
 
         assert f"Run: {paused_run_id}" in content
         assert "Status: paused" in content
@@ -432,8 +432,9 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        payload = rest.interaction_responses[0]["payload"]["data"]
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        payload = rest.interaction_responses[1]["payload"]["data"]
         content = payload["content"]
         components = payload["components"]
 
@@ -496,7 +497,8 @@ async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> No
 
     try:
         await service.run_forever()
-        content = _latest_status_message(rest)["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
         assert "Status: completed" in content
         assert "Elapsed: 2h 30m" in content
     finally:
@@ -541,8 +543,9 @@ async def test_flow_status_with_missing_explicit_run_id_reports_not_found(
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
         assert content == f"Ticket_flow run {missing_run_id} not found."
     finally:
         await store.close()
@@ -603,10 +606,12 @@ async def test_flow_refresh_button_updates_existing_status_message(
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 2
-        initial_payload = rest.interaction_responses[0]["payload"]
-        refresh_payload = rest.interaction_responses[1]["payload"]
+        assert len(rest.interaction_responses) == 3
+        initial_defer = rest.interaction_responses[0]["payload"]
+        initial_payload = rest.interaction_responses[1]["payload"]
+        refresh_payload = rest.interaction_responses[2]["payload"]
 
+        assert initial_defer["type"] == 5
         assert initial_payload["type"] == 4
         assert "flags" not in initial_payload["data"]
         assert "Status: running" in initial_payload["data"]["content"]
@@ -662,7 +667,8 @@ async def test_flow_issue_seeds_issue_md(
         issue_path = workspace / ".codex-autorunner" / "ISSUE.md"
         assert issue_path.exists()
         assert "Issue 123" in issue_path.read_text(encoding="utf-8")
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
         assert "Seeded ISSUE.md from GitHub issue 123." in content
     finally:
         await store.close()
@@ -744,13 +750,13 @@ async def test_flow_start_reuses_active_or_paused_run(
     try:
         await service.run_forever()
         assert flow_service.ensure_calls == [(paused_run_id, False)]
-        payload = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        payload = rest.interaction_responses[1]["payload"]["data"]
         content = payload["content"]
         assert f"Reusing ticket_flow run {paused_run_id} (paused)." in content
         assert f"Run: {paused_run_id}" in content
         assert "Status: paused" in content
         assert "components" in payload
-        assert "flags" not in payload
     finally:
         await store.close()
 
@@ -821,13 +827,13 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
         assert len(flow_service.start_calls) == 1
         assert flow_service.start_calls[0]["metadata"]["force_new"] is True
         assert flow_service.start_calls[0]["metadata"]["origin"] == "discord"
-        payload = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        payload = rest.interaction_responses[1]["payload"]["data"]
         content = payload["content"]
         assert f"Started new ticket_flow run {new_run_id}." in content
         assert f"Run: {new_run_id}" in content
         assert "Status:" in content
         assert "components" in payload
-        assert "flags" not in payload
     finally:
         await store.close()
 
@@ -877,8 +883,78 @@ async def test_flow_restart_aborts_when_active_run_does_not_terminate(
         await service.run_forever()
         assert flow_service.stop_calls == [running_run_id]
         assert flow_service.start_calls == []
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
         assert "restart aborted to avoid concurrent workers" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_restart_button_uses_component_safe_response_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+    failed_run_id = str(uuid.uuid4())
+    new_run_id = str(uuid.uuid4())
+    _create_run(workspace, failed_run_id, status=FlowRunStatus.FAILED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    flow_service = _FlowServiceStub()
+
+    async def _start_flow_run(
+        _flow_target_id: str,
+        *,
+        input_data: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        run_id: str | None = None,
+    ) -> SimpleNamespace:
+        flow_service.start_calls.append(
+            {
+                "input_data": input_data or {},
+                "metadata": metadata or {},
+                "run_id": run_id,
+            }
+        )
+        _create_run(workspace, new_run_id, status=FlowRunStatus.RUNNING)
+        return SimpleNamespace(run_id=new_run_id, status="running")
+
+    flow_service.start_flow_run = _start_flow_run  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_flow_component_interaction(f"flow:{failed_run_id}:restart")]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(flow_service.start_calls) == 1
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 4
+        assert (
+            f"Started new ticket_flow run {new_run_id}." in payload["data"]["content"]
+        )
     finally:
         await store.close()
 
@@ -926,7 +1002,8 @@ async def test_flow_recover_reconciles_active_run(
     try:
         await service.run_forever()
         assert flow_service.reconcile_calls == [running_run_id]
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
         assert f"Recovered for run {running_run_id}" in content
     finally:
         await store.close()
@@ -984,8 +1061,9 @@ async def test_flow_reply_writes_user_reply_and_resumes(
         )
         assert reply_path.exists()
         assert reply_path.read_text(encoding="utf-8").strip() == "Please continue"
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
         assert paused_run_id in content
         assert "resumed run" in content.lower()
 
@@ -1544,7 +1622,8 @@ async def test_flow_recover_uses_explicit_run_id(
     try:
         await service.run_forever()
         assert flow_service.reconcile_calls == [target_run_id]
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
         assert f"Recovered for run {target_run_id}" in content
     finally:
         await store.close()

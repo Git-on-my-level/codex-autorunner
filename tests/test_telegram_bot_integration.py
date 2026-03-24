@@ -7,12 +7,16 @@ from typing import Optional
 import pytest
 
 from codex_autorunner.integrations.telegram.adapter import (
+    TelegramCallbackQuery,
     TelegramDocument,
     TelegramMessage,
     TelegramMessageEntity,
     TelegramPhotoSize,
 )
 from codex_autorunner.integrations.telegram.config import TelegramBotConfig
+from codex_autorunner.integrations.telegram.handlers import (
+    commands_runtime as telegram_commands_runtime,
+)
 from codex_autorunner.integrations.telegram.service import TelegramBotService
 from codex_autorunner.integrations.telegram.types import PendingQuestion, SelectionState
 
@@ -1484,6 +1488,68 @@ async def test_update_web_target_skips_confirmation_when_turn_active(
         "update_target": "web",
         "reply_to": 21,
     }
+
+
+@pytest.mark.anyio
+async def test_update_callback_acknowledged_before_spawn(tmp_path: Path) -> None:
+    config = make_config(tmp_path, fixture_command("basic"))
+    service = TelegramBotService(config, hub_root=tmp_path)
+    callback = TelegramCallbackQuery(
+        update_id=1,
+        callback_id="cb-1",
+        from_user_id=456,
+        data="update:discord",
+        message_id=22,
+        chat_id=123,
+        thread_id=None,
+    )
+    events: list[tuple[str, str]] = []
+
+    async def _fake_answer_callback(
+        cb: Optional[TelegramCallbackQuery], text: str
+    ) -> None:
+        assert cb == callback
+        events.append(("answer", text))
+
+    async def _fake_finalize_selection(
+        key: str,
+        cb: Optional[TelegramCallbackQuery],
+        text: str,
+    ) -> None:
+        assert key == "topic-key"
+        assert cb == callback
+        events.append(("finalize", text))
+
+    def _fake_spawn_update_process(**kwargs: object) -> None:
+        assert kwargs["update_target"] == "discord"
+        events.append(("spawn", "discord"))
+
+    service._answer_callback = _fake_answer_callback  # type: ignore[assignment]
+    service._finalize_selection = _fake_finalize_selection  # type: ignore[assignment]
+
+    original_spawn = telegram_commands_runtime._spawn_update_process
+    telegram_commands_runtime._spawn_update_process = _fake_spawn_update_process  # type: ignore[assignment]
+
+    try:
+        await service._start_update(
+            chat_id=123,
+            thread_id=None,
+            update_target="discord",
+            callback=callback,
+            selection_key="topic-key",
+        )
+    finally:
+        telegram_commands_runtime._spawn_update_process = original_spawn  # type: ignore[assignment]
+        await service._app_server_supervisor.close_all()
+
+    assert events == [
+        ("answer", "Starting update..."),
+        ("spawn", "discord"),
+        (
+            "finalize",
+            "Update started (Discord only). The selected service(s) will restart.",
+        ),
+    ]
 
 
 @pytest.mark.anyio

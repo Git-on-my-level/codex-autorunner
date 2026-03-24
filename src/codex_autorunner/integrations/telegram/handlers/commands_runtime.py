@@ -2633,6 +2633,10 @@ Summary applied.""",
             reply_to=notify_reply_to,
             include_legacy_telegram_keys=True,
         )
+        callback_answered = False
+        if callback is not None:
+            await self._answer_callback(callback, "Starting update...")
+            callback_answered = True
         try:
             _spawn_update_process(
                 repo_url=repo_url,
@@ -2673,7 +2677,8 @@ Summary applied.""",
                 thread_id=thread_id,
             )
             if callback and selection_key:
-                await self._answer_callback(callback, "Update failed")
+                if not callback_answered:
+                    await self._answer_callback(callback, "Update failed")
                 await self._finalize_selection(selection_key, callback, failure)
             else:
                 await self._send_message(
@@ -2685,7 +2690,8 @@ Summary applied.""",
             f"Update started ({target_label}). The selected service(s) will restart."
         )
         if callback and selection_key:
-            await self._answer_callback(callback, "Update started")
+            if not callback_answered:
+                await self._answer_callback(callback, "Update started")
             await self._finalize_selection(selection_key, callback, message)
         else:
             await self._send_message(

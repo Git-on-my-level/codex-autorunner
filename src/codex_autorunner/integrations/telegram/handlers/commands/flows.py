@@ -643,6 +643,15 @@ class FlowCommands(SharedHelpers):
     async def _handle_flow_callback(
         self, callback: TelegramCallbackQuery, parsed: FlowCallback
     ) -> None:
+        callback_answered = False
+
+        async def _answer_once(text: str) -> None:
+            nonlocal callback_answered
+            if callback_answered:
+                return
+            await self._answer_callback(callback, text)
+            callback_answered = True
+
         if callback.chat_id is None:
             return
         key = await self._resolve_topic_key(callback.chat_id, callback.thread_id)
@@ -658,7 +667,7 @@ class FlowCommands(SharedHelpers):
         if repo_root is None and record and record.workspace_path:
             repo_root = canonicalize_path(Path(record.workspace_path))
         if repo_root is None:
-            await self._answer_callback(callback, "No workspace bound")
+            await _answer_once("No workspace bound")
             await self._edit_callback_message(
                 callback,
                 "No workspace bound. Use /flow <repo-id> <worktree-id>, or /bind to bind this topic to a repo first.",
@@ -670,7 +679,7 @@ class FlowCommands(SharedHelpers):
         run_id_raw = parsed.run_id
 
         if action in {"refresh", "status"}:
-            await self._answer_callback(callback, "Refreshing...")
+            await _answer_once("Refreshing...")
             await self._render_flow_status_callback(
                 callback, repo_root, run_id_raw, repo_id=effective_repo_id
             )
@@ -699,6 +708,7 @@ class FlowCommands(SharedHelpers):
                 store.close()
             if error is None:
                 try:
+                    await _answer_once("Working...")
                     updated = await flow_service.resume_flow_run(record.id)
                 except (KeyError, ValueError) as exc:
                     error = str(exc)
@@ -723,6 +733,7 @@ class FlowCommands(SharedHelpers):
             finally:
                 store.close()
             if error is None:
+                await _answer_once("Working...")
                 await flow_service.stop_flow_run(record.id)
                 notice = "Stopped."
         elif action == "recover":
@@ -740,6 +751,7 @@ class FlowCommands(SharedHelpers):
                 if error is None and record is None:
                     error = "No active ticket flow run found."
                 if error is None:
+                    await _answer_once("Working...")
                     record, updated, locked = flow_service.reconcile_flow_run(record.id)
                     if locked:
                         error = (
@@ -757,7 +769,7 @@ class FlowCommands(SharedHelpers):
             "archive_cancel_prompt",
         }:
             if action == "archive_cancel":
-                await self._answer_callback(callback, "Archive cancelled")
+                await _answer_once("Archive cancelled")
                 await self._render_flow_status_callback(
                     callback,
                     repo_root,
@@ -766,7 +778,7 @@ class FlowCommands(SharedHelpers):
                 )
                 return
             if action == "archive_cancel_prompt":
-                await self._answer_callback(callback, "Archive cancelled")
+                await _answer_once("Archive cancelled")
                 await self._edit_callback_message(
                     callback,
                     "Archive cancelled.",
@@ -789,7 +801,7 @@ class FlowCommands(SharedHelpers):
                         "Stop or pause it before archiving."
                     )
                 elif action == "archive" and archive_mode == "confirm":
-                    await self._answer_callback(callback, "Confirm archive?")
+                    await _answer_once("Confirm archive?")
                     await self._edit_callback_message(
                         callback,
                         self._flow_archive_prompt_text(record),
@@ -802,6 +814,7 @@ class FlowCommands(SharedHelpers):
                     return
                 else:
                     try:
+                        await _answer_once("Working...")
                         summary = flow_service.archive_flow_run(
                             record.id,
                             force=ticket_flow_archive_requires_force(record),
@@ -814,13 +827,13 @@ class FlowCommands(SharedHelpers):
                     except ValueError as exc:
                         error = str(exc)
         else:
-            await self._answer_callback(callback, "Unknown action")
+            await _answer_once("Unknown action")
             return
 
         if error:
-            await self._answer_callback(callback, error)
+            await _answer_once(error)
         elif notice:
-            await self._answer_callback(callback, notice)
+            await _answer_once(notice)
         await self._render_flow_status_callback(
             callback, repo_root, run_id_raw, repo_id=effective_repo_id
         )

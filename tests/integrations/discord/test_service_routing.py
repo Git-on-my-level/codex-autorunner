@@ -2871,11 +2871,12 @@ async def test_car_flow_resume_with_partial_run_id_prompts_filtered_picker(
 
     try:
         await service.run_forever()
-        payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 4
-        content = payload["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        payload = rest.followup_messages[0]["payload"]
+        content = payload["content"].lower()
         assert "matched 2 runs" in content
-        select = payload["data"]["components"][0]["components"][0]
+        select = payload["components"][0]["components"][0]
         values = [option["value"] for option in select["options"]]
         assert values == ["run-alpha", "run-beta"]
     finally:
@@ -2935,11 +2936,12 @@ async def test_car_flow_resume_status_text_prompts_picker_instead_of_auto_resolv
 
     try:
         await service.run_forever()
-        payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 4
-        content = payload["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        payload = rest.followup_messages[0]["payload"]
+        content = payload["content"].lower()
         assert "matched 2 runs" in content
-        select = payload["data"]["components"][0]["components"][0]
+        select = payload["components"][0]["components"][0]
         values = [option["value"] for option in select["options"]]
         assert values == ["run-paused-a", "run-paused-b"]
     finally:
@@ -3441,8 +3443,9 @@ async def test_normalized_interaction_flow_restart_without_run_id_uses_picker(
         *,
         workspace_root: Path,
         action: str,
+        deferred: bool = False,
     ) -> None:
-        _ = interaction_id, interaction_token, workspace_root
+        _ = interaction_id, interaction_token, workspace_root, deferred
         captured["action"] = action
 
     service._prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
@@ -3486,8 +3489,9 @@ async def test_normalized_interaction_flow_reply_without_run_id_sets_pending_tex
         *,
         workspace_root: Path,
         action: str,
+        deferred: bool = False,
     ) -> None:
-        _ = interaction_id, interaction_token, workspace_root, action
+        _ = interaction_id, interaction_token, workspace_root, action, deferred
         return
 
     service._prompt_flow_action_picker = _fake_prompt  # type: ignore[assignment]
@@ -3653,7 +3657,9 @@ async def test_car_review_commit_without_sha_returns_picker(tmp_path: Path) -> N
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        data = rest.followup_messages[0]["payload"]
         components = data.get("components") or []
         assert components
         menu = components[0]["components"][0]
@@ -3708,11 +3714,12 @@ async def test_car_review_partial_commit_value_returns_filtered_picker(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 4
-        content = payload["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        payload = rest.followup_messages[0]["payload"]
+        content = payload["content"].lower()
         assert "matched 2 commits" in content
-        menu = payload["data"]["components"][0]["components"][0]
+        menu = payload["components"][0]["components"][0]
         values = [option["value"] for option in menu["options"]]
         assert values == ["abcdef1234567890", "0123456789abcdef"]
     finally:
@@ -3800,17 +3807,19 @@ async def test_car_review_custom_without_instructions_returns_guidance(
     )
     deferred = False
 
-    async def _fake_defer_ephemeral(*_args: Any, **_kwargs: Any) -> None:
+    async def _fake_defer_ephemeral(*_args: Any, **_kwargs: Any) -> bool:
         nonlocal deferred
         deferred = True
+        return True
 
     service._defer_ephemeral = _fake_defer_ephemeral  # type: ignore[assignment]
 
     try:
         await service.run_forever()
-        assert deferred is False
-        assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert deferred is True
+        assert len(rest.interaction_responses) == 0
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "provide custom review instructions" in content
     finally:
         await store.close()
@@ -4944,7 +4953,9 @@ async def test_car_update_status_reports_absent_status(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "no update status recorded" in content
     finally:
         await store.close()
@@ -4993,7 +5004,9 @@ async def test_car_update_starts_worker_with_explicit_target(
         assert observed["notify_platform"] == "discord"
         assert observed["notify_context"] == {"chat_id": "channel-1"}
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "update started (all)" in content
     finally:
         await store.close()
@@ -5145,7 +5158,9 @@ async def test_car_update_web_target_skips_confirmation_when_sessions_active(
         await service.run_forever()
         assert observed["update_target"] == "web"
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "update started (web only)" in content
     finally:
         await store.close()
