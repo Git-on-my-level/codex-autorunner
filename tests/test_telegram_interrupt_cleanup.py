@@ -6,11 +6,11 @@ from typing import Optional
 import pytest
 
 from codex_autorunner.integrations.telegram.handlers.commands.shared import (
-    SharedHelpers,
+    TelegramCommandSupportMixin,
 )
 
 
-class _InterruptCleanupStub(SharedHelpers):
+class _InterruptCleanupStub(TelegramCommandSupportMixin):
     def __init__(self, *, delete_result: bool) -> None:
         self.delete_result = delete_result
         self.deleted: list[tuple[int, int]] = []

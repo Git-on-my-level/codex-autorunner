@@ -1,11 +1,11 @@
 from types import SimpleNamespace
 
 from codex_autorunner.integrations.telegram.handlers.commands.shared import (
-    SharedHelpers,
+    TelegramCommandSupportMixin,
 )
 
 
-class _HelperStub(SharedHelpers):
+class _HelperStub(TelegramCommandSupportMixin):
     def __init__(self, config: object) -> None:
         self._config = config
 
