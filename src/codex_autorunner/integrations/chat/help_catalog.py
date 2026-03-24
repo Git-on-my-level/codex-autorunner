@@ -380,12 +380,36 @@ def _render_discord_line(command_id: str) -> Optional[str]:
     return f"{_render_path(descriptor.discord_path, descriptor.discord_usage)} - {descriptor.description}"
 
 
+def _discord_file_help_lines() -> list[str]:
+    return [
+        "/car files inbox - List files in inbox",
+        "/car files outbox - List pending outbox files",
+        "/car files clear [target] - Clear inbox/outbox",
+    ]
+
+
+def _telegram_file_help_lines(command_names: Collection[str]) -> list[str]:
+    if "files" not in set(command_names):
+        return []
+    return [
+        "/files - List or manage file inbox/outbox",
+        "/files inbox",
+        "/files outbox",
+        "/files all",
+        "/files send <filename>",
+        "/files clear inbox|outbox|all",
+    ]
+
+
 def build_discord_help_lines() -> list[str]:
     lines: list[str] = []
     for heading, command_ids in _DISCORD_SECTION_ORDER:
         if lines:
             lines.append("")
         lines.append(heading)
+        if heading == "**File Commands:**":
+            lines.extend(_discord_file_help_lines())
+            continue
         for command_id in command_ids:
             line = _render_discord_line(command_id)
             if line is not None:
@@ -448,6 +472,10 @@ def build_telegram_help_text(command_names: Collection[str]) -> str:
         )
         if "reply" in available:
             lines.append("/reply <message> (legacy)")
+
+    file_lines = _telegram_file_help_lines(available)
+    if file_lines:
+        lines.extend(["", "Files:", *file_lines])
 
     lines.extend(
         [

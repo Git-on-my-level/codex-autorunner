@@ -24,6 +24,8 @@ def test_telegram_help_lists_shared_commands_without_discord_only_entries() -> N
 
     assert "/debug - Show debug info for troubleshooting" in text
     assert "/files - List or manage file inbox/outbox" in text
+    assert "/files clear inbox|outbox|all" in text
+    assert "/files send <filename>" in text
     assert "/pma - PMA mode controls (on/off/status)" in text
     assert "/tickets" not in text
 
@@ -33,6 +35,7 @@ def test_discord_help_lists_session_file_and_flow_sections() -> None:
 
     assert "/car tickets [search] - Browse and edit tickets" in text
     assert "/car session resume [thread_id] - Resume a previous chat thread" in text
-    assert "/car files - List or manage file inbox/outbox" in text
+    assert "/car files inbox - List files in inbox" in text
+    assert "/car files clear [target] - Clear inbox/outbox" in text
     assert "/car flow runs [limit]" in text
     assert "/pma on - Enable PMA mode" in text
