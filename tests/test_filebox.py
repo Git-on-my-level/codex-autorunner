@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,35 @@ def test_save_resolve_and_delete(tmp_path: Path) -> None:
     removed = filebox.delete_file(repo, "inbox", "note.md")
     assert removed
     assert filebox.resolve_file(repo, "inbox", "note.md") is None
+
+
+def test_list_regular_files_sorts_newest_first(tmp_path: Path) -> None:
+    folder = tmp_path / "files"
+    older = _write(folder, "older.txt", b"old")
+    newer = _write(folder, "newer.txt", b"new")
+    (folder / "nested").mkdir()
+
+    os.utime(older, (1, 1))
+    os.utime(newer, (2, 2))
+
+    assert [path.name for path in filebox.list_regular_files(folder)] == [
+        "newer.txt",
+        "older.txt",
+    ]
+
+
+def test_delete_regular_files_only_removes_regular_files(tmp_path: Path) -> None:
+    folder = tmp_path / "files"
+    first = _write(folder, "first.txt", b"1")
+    second = _write(folder, "second.txt", b"2")
+    (folder / "nested").mkdir()
+
+    deleted = filebox.delete_regular_files(folder)
+
+    assert deleted == 2
+    assert not first.exists()
+    assert not second.exists()
+    assert (folder / "nested").exists()
 
 
 def test_delete_ignores_legacy_duplicates(tmp_path: Path) -> None:

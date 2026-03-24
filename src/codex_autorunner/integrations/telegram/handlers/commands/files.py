@@ -10,8 +10,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from .....core.filebox import inbox_dir as filebox_inbox_dir
-from .....core.filebox import outbox_dir as filebox_outbox_dir
+from .....core.filebox import (
+    delete_regular_files,
+    list_regular_files,
+)
+from .....core.filebox import (
+    inbox_dir as filebox_inbox_dir,
+)
+from .....core.filebox import (
+    outbox_dir as filebox_outbox_dir,
+)
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
@@ -1304,23 +1312,7 @@ class FilesCommands(SharedHelpers):
         return f"{value:.1f} PB"
 
     def _list_files(self, folder: Path) -> list[Path]:
-        if not folder.exists():
-            return []
-        files: list[Path] = []
-        for path in folder.iterdir():
-            try:
-                if path.is_file():
-                    files.append(path)
-            except OSError:
-                continue
-
-        def _mtime(entry: Path) -> float:
-            try:
-                return entry.stat().st_mtime
-            except OSError:
-                return 0.0
-
-        return sorted(files, key=_mtime, reverse=True)
+        return list_regular_files(folder)
 
     async def _send_outbox_file(
         self,
@@ -1488,17 +1480,7 @@ class FilesCommands(SharedHelpers):
         return "\n".join(lines)
 
     def _delete_files_in_dir(self, folder: Path) -> int:
-        if not folder.exists():
-            return 0
-        deleted = 0
-        for path in folder.iterdir():
-            try:
-                if path.is_file():
-                    path.unlink()
-                    deleted += 1
-            except OSError:
-                continue
-        return deleted
+        return delete_regular_files(folder)
 
     async def _handle_files(
         self, message: TelegramMessage, args: str, _runtime: Any

@@ -178,13 +178,55 @@ def delete_file(repo_root: Path, box: str, filename: str) -> bool:
     return True
 
 
+def list_regular_files(folder: Path) -> List[Path]:
+    if not folder.exists():
+        return []
+    files: List[Path] = []
+    try:
+        for path in folder.iterdir():
+            try:
+                if path.is_file():
+                    files.append(path)
+            except OSError:
+                continue
+    except OSError:
+        return []
+
+    def _mtime(entry: Path) -> float:
+        try:
+            return entry.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return sorted(files, key=_mtime, reverse=True)
+
+
+def delete_regular_files(folder: Path) -> int:
+    if not folder.exists():
+        return 0
+    deleted = 0
+    try:
+        for path in folder.iterdir():
+            try:
+                if path.is_file():
+                    path.unlink()
+                    deleted += 1
+            except OSError:
+                continue
+    except OSError:
+        return deleted
+    return deleted
+
+
 __all__ = [
     "BOXES",
     "FileBoxEntry",
+    "delete_regular_files",
     "delete_file",
     "empty_listing",
     "filebox_root",
     "inbox_dir",
+    "list_regular_files",
     "list_filebox",
     "outbox_dir",
     "outbox_pending_dir",

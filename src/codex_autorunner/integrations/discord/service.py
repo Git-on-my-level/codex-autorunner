@@ -41,7 +41,9 @@ from ...core.config import (
     resolve_env_for_root,
 )
 from ...core.filebox import (
+    delete_regular_files,
     inbox_dir,
+    list_regular_files,
     outbox_dir,
     outbox_pending_dir,
     outbox_sent_dir,
@@ -9016,23 +9018,7 @@ class DiscordBotService:
         return f"{value:.1f} TB"
 
     def _list_paths_in_dir(self, folder: Path) -> list[Path]:
-        if not folder.exists():
-            return []
-        files: list[Path] = []
-        for path in folder.iterdir():
-            try:
-                if path.is_file():
-                    files.append(path)
-            except OSError:
-                continue
-
-        def _mtime(entry: Path) -> float:
-            try:
-                return entry.stat().st_mtime
-            except OSError:
-                return 0.0
-
-        return sorted(files, key=_mtime, reverse=True)
+        return list_regular_files(folder)
 
     def _list_files_in_dir(self, folder: Path) -> list[tuple[str, int, str]]:
         files: list[tuple[str, int, str]] = []
@@ -9175,17 +9161,7 @@ class DiscordBotService:
             )
 
     def _delete_files_in_dir(self, folder: Path) -> int:
-        if not folder.exists():
-            return 0
-        deleted = 0
-        for path in folder.iterdir():
-            try:
-                if path.is_file():
-                    path.unlink()
-                    deleted += 1
-            except OSError:
-                continue
-        return deleted
+        return delete_regular_files(folder)
 
     async def _handle_files_inbox(
         self,
