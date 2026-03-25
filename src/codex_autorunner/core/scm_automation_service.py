@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Protocol
 
+from .config import load_hub_config
 from .pr_binding_resolver import resolve_binding_for_scm_event
 from .pr_bindings import PrBinding
 from .publish_executor import PublishOperationProcessor
@@ -288,6 +289,7 @@ def _default_publish_processor(
     *,
     journal: PublishJournalStore,
 ) -> PublishOperationProcessor:
+    raw_config = load_hub_config(hub_root).raw
     return PublishOperationProcessor(
         journal,
         executors={
@@ -296,6 +298,7 @@ def _default_publish_processor(
             ),
             "notify_chat": build_notify_chat_executor(hub_root=hub_root),
         },
+        mutation_policy_config=raw_config,
     )
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Callable, Optional, Protocol, cast
 
 from ...core.publish_executor import PublishActionExecutor, TerminalPublishError
 from ...core.publish_journal import PublishOperation
@@ -129,6 +129,7 @@ def build_post_pr_comment_executor(
         except GitHubError as exc:
             raise TerminalPublishError(str(exc)) from exc
 
+    cast(Any, executor).mutation_policy_config = raw_config
     return executor
 
 

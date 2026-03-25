@@ -3,9 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
+from .mutation_policy import PolicyDecision
+from .mutation_policy import evaluate as evaluate_mutation_policy
 from .publish_journal import PublishJournalStore, PublishOperation
 
 DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS = (0.0, 30.0, 300.0)
+_EXTERNAL_ACTION_PROVIDERS: dict[str, str] = {
+    "post_pr_comment": "github",
+    "add_labels": "github",
+    "merge_pr": "github",
+}
+_UNSET = object()
 
 
 class PublishActionExecutor(Protocol):
@@ -32,6 +40,16 @@ class RetryablePublishError(PublishExecutionError):
 
 class TerminalPublishError(PublishExecutionError):
     pass
+
+
+class PolicyDeniedPublishError(TerminalPublishError):
+    def __init__(self, decision: PolicyDecision) -> None:
+        self.decision = decision
+        super().__init__(
+            "Mutation policy blocked "
+            f"'{decision.action_type}' with decision '{decision.decision}': "
+            f"{decision.reason}"
+        )
 
 
 def _normalize_action_type(value: str) -> str:
@@ -72,6 +90,38 @@ def _resolve_error_text(exc: Exception) -> str:
     return exc.__class__.__name__
 
 
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else str(value)
+    text = text.strip()
+    return text or None
+
+
+def _normalize_mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _policy_context_for_operation(
+    operation: PublishOperation,
+) -> tuple[Optional[str], Optional[str], Optional[str], Mapping[str, Any]]:
+    payload = _normalize_mapping(operation.payload)
+    scm = _normalize_mapping(payload.get("scm"))
+    action_type = _normalize_action_type(operation.operation_kind)
+    provider = (
+        _normalize_optional_text(payload.get("provider"))
+        or _normalize_optional_text(scm.get("provider"))
+        or _EXTERNAL_ACTION_PROVIDERS.get(action_type)
+    )
+    repo_id = _normalize_optional_text(
+        payload.get("repo_id")
+    ) or _normalize_optional_text(scm.get("repo_id"))
+    binding_id = _normalize_optional_text(
+        payload.get("binding_id")
+    ) or _normalize_optional_text(scm.get("binding_id"))
+    return provider, repo_id, binding_id, payload
+
+
 def _resolve_retry_at(
     operation: PublishOperation,
     exc: Exception,
@@ -99,8 +149,11 @@ class PublishExecutorRegistry:
     def __init__(
         self,
         executors: Optional[Mapping[str, PublishActionExecutor]] = None,
+        *,
+        mutation_policy_config: object = None,
     ) -> None:
         self._executors: dict[str, PublishActionExecutor] = {}
+        self._mutation_policy_config = mutation_policy_config
         if executors is not None:
             for action_type, executor in executors.items():
                 self.register(action_type, executor)
@@ -108,6 +161,12 @@ class PublishExecutorRegistry:
     def register(self, action_type: str, executor: PublishActionExecutor) -> None:
         normalized_action_type = _normalize_action_type(action_type)
         self._executors[normalized_action_type] = executor
+
+    def _policy_config_for_executor(self, executor: PublishActionExecutor) -> object:
+        executor_config = getattr(executor, "mutation_policy_config", _UNSET)
+        if executor_config is _UNSET:
+            return self._mutation_policy_config
+        return executor_config
 
     def dispatch(self, operation: PublishOperation) -> dict[str, Any]:
         # The journal stores the canonical action key as operation_kind.
@@ -117,6 +176,19 @@ class PublishExecutorRegistry:
             raise TerminalPublishError(
                 f"No publish executor registered for action_type '{action_type}'"
             )
+        provider, repo_id, binding_id, payload = _policy_context_for_operation(
+            operation
+        )
+        decision = evaluate_mutation_policy(
+            action_type,
+            provider=provider,
+            repo_id=repo_id,
+            binding_id=binding_id,
+            payload=payload,
+            config=self._policy_config_for_executor(executor),
+        )
+        if not decision.allowed:
+            raise PolicyDeniedPublishError(decision)
         response = executor(operation)
         if response is None:
             return {}
@@ -180,12 +252,16 @@ class PublishOperationProcessor:
         executors: PublishExecutorRegistry | Mapping[str, PublishActionExecutor],
         retry_delays_seconds: Sequence[float] = DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS,
         now_fn: Optional[Callable[[], datetime]] = None,
+        mutation_policy_config: object = None,
     ) -> None:
         self._journal = journal
         if isinstance(executors, PublishExecutorRegistry):
             self._executor_registry = executors
         else:
-            self._executor_registry = PublishExecutorRegistry(executors)
+            self._executor_registry = PublishExecutorRegistry(
+                executors,
+                mutation_policy_config=mutation_policy_config,
+            )
         self._retry_delays_seconds = _normalize_retry_delays(retry_delays_seconds)
         self._now_fn = now_fn
 
@@ -201,6 +277,7 @@ class PublishOperationProcessor:
 
 __all__ = [
     "DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS",
+    "PolicyDeniedPublishError",
     "PublishActionExecutor",
     "PublishExecutionError",
     "PublishExecutorRegistry",

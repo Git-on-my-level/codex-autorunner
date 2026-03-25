@@ -27,6 +27,10 @@ from codex_autorunner.integrations.github.publisher import (
 from codex_autorunner.integrations.github.service import RepoInfo
 from tests.conftest import write_test_config
 
+_ALLOW_PR_COMMENT_POLICY = {
+    "github": {"automation": {"policy": {"post_pr_comment": "allow"}}}
+}
+
 
 def _parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
@@ -160,6 +164,7 @@ def test_process_now_applies_bounded_retry_schedule_for_generic_failures(
             "2026-03-25T00:00:30Z",
             "2026-03-25T00:05:30Z",
         ),
+        mutation_policy_config=_ALLOW_PR_COMMENT_POLICY,
     )
 
     first = processor.process_now(limit=10)
@@ -220,6 +225,7 @@ def test_process_now_marks_terminal_failure_without_retry(
         store,
         executors={"post_pr_comment": terminal_executor},
         now_fn=_QueuedClock("2026-03-25T00:00:00Z", "2026-03-25T00:01:00Z"),
+        mutation_policy_config=_ALLOW_PR_COMMENT_POLICY,
     )
 
     processed = processor.process_now(limit=10)
@@ -232,6 +238,98 @@ def test_process_now_marks_terminal_failure_without_retry(
     repeated = processor.process_now(limit=10)
     assert repeated == []
     assert call_count == 1
+
+
+def test_process_now_denies_post_pr_comment_without_github_side_effect(
+    tmp_path: Path,
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="comment:pr-denied",
+        operation_kind="post_pr_comment",
+        payload={
+            "repo_slug": "acme/widgets",
+            "pr_number": 17,
+            "body": "Automation noted a failing check.",
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    service_roots: list[Path] = []
+
+    class _FakeGitHubService:
+        def repo_info(self) -> RepoInfo:
+            return RepoInfo(
+                name_with_owner="acme/widgets",
+                url="https://github.com/acme/widgets",
+                default_branch="main",
+            )
+
+        def create_issue_comment(
+            self, *, owner: str, repo: str, number: int, body: str, cwd=None
+        ) -> dict[str, object]:
+            raise AssertionError("GitHub side effect should be blocked by policy")
+
+    def _factory(repo_root: Path, raw_config=None) -> _FakeGitHubService:
+        _ = raw_config
+        service_roots.append(repo_root)
+        return _FakeGitHubService()
+
+    processor = PublishOperationProcessor(
+        store,
+        executors={
+            "post_pr_comment": build_post_pr_comment_executor(
+                repo_root=tmp_path,
+                github_service_factory=_factory,
+            )
+        },
+        now_fn=_QueuedClock("2026-03-25T00:00:00Z"),
+    )
+
+    processed = processor.process_now(limit=10)
+    assert [operation.operation_id for operation in processed] == [created.operation_id]
+    assert processed[0].state == "failed"
+    assert processed[0].next_attempt_at is None
+    assert processed[0].last_error_text is not None
+    assert "PolicyDeniedPublishError" in processed[0].last_error_text
+    assert "decision 'deny'" in processed[0].last_error_text
+    assert service_roots == []
+
+    attempts = _attempt_rows(tmp_path, created.operation_id)
+    assert len(attempts) == 1
+    assert attempts[0]["state"] == "failed"
+    assert "PolicyDeniedPublishError" in str(attempts[0]["error_text"])
+
+
+def test_process_now_allows_post_pr_comment_when_policy_allows(
+    tmp_path: Path,
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="comment:pr-allowed",
+        operation_kind="post_pr_comment",
+        payload={"body": "hello"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+
+    calls: list[tuple[str, int, str]] = []
+
+    def executor(operation):
+        calls.append((operation.operation_id, operation.attempt_count, operation.state))
+        return {"delivered": True}
+
+    processor = PublishOperationProcessor(
+        store,
+        executors={"post_pr_comment": executor},
+        now_fn=_QueuedClock("2026-03-25T00:00:00Z"),
+        mutation_policy_config=_ALLOW_PR_COMMENT_POLICY,
+    )
+
+    processed = processor.process_now(limit=10)
+    assert [operation.operation_id for operation in processed] == [created.operation_id]
+    assert processed[0].state == "succeeded"
+    assert processed[0].response == {"delivered": True}
+    assert calls == [(created.operation_id, 1, "running")]
 
 
 def test_process_now_replays_pending_operation_after_processor_restart(
@@ -411,6 +509,7 @@ def test_process_now_runs_first_publish_operation_types(
                 "notify_chat": build_notify_chat_executor(hub_root=hub_root),
                 "post_pr_comment": build_post_pr_comment_executor(
                     repo_root=workspace_root,
+                    raw_config=_ALLOW_PR_COMMENT_POLICY,
                     github_service_factory=_FakeGitHubService,
                 ),
             }
