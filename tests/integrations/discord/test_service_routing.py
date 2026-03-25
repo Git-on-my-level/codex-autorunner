@@ -5025,6 +5025,54 @@ async def test_car_update_status_reports_absent_status(
 
 
 @pytest.mark.anyio
+async def test_car_update_status_defers_before_reading_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "status"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _fake_read_update_status() -> None:
+        observed["deferred_type"] = (
+            rest.interaction_responses[0]["payload"]["type"]
+            if rest.interaction_responses
+            else None
+        )
+        return None
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_read_update_status",
+        _fake_read_update_status,
+    )
+
+    try:
+        await service.run_forever()
+        assert observed["deferred_type"] == 5
+        assert len(rest.followup_messages) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_update_starts_worker_with_explicit_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

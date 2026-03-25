@@ -6828,11 +6828,11 @@ class DiscordBotService:
         interaction_token: str,
         component_response: bool = False,
     ) -> None:
-        status = await asyncio.to_thread(_read_update_status)
-        if not isinstance(status, dict):
-            status = None
-        text = self._format_update_status_message(status)
         if component_response:
+            status = await asyncio.to_thread(_read_update_status)
+            if not isinstance(status, dict):
+                status = None
+            text = self._format_update_status_message(status)
             await self._update_component_message(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
@@ -6844,6 +6844,10 @@ class DiscordBotService:
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
+        status = await asyncio.to_thread(_read_update_status)
+        if not isinstance(status, dict):
+            status = None
+        text = self._format_update_status_message(status)
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
