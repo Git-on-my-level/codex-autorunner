@@ -2370,7 +2370,7 @@ async def test_service_syncs_commands_on_startup(tmp_path: Path) -> None:
         assert sync_call["application_id"] == "app-1"
         assert sync_call["guild_id"] == "guild-1"
         command_names = {cmd.get("name") for cmd in sync_call["commands"]}
-        assert command_names == {"car", "pma"}
+        assert command_names == {"car", "flow", "pma"}
     finally:
         await store.close()
 

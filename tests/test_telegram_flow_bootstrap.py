@@ -177,7 +177,7 @@ async def test_flow_bootstrap_skips_prompt_when_tickets_exist(
     assert outbound_records[-1]["event_type"] == "flow_bootstrap_started_notice"
     assert outbound_records[-1]["kind"] == "notice"
     assert "Started ticket flow run `run-1`." in handler.sent[-1]
-    assert "Run: `run-1`" in handler.sent[-1]
+    assert "Run: run-1" in handler.sent[-1]
     assert "Status: running" in handler.sent[-1]
     assert handler.markups[-1] is not None
 

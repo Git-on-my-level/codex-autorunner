@@ -177,14 +177,19 @@ def _workspace(tmp_path: Path) -> Path:
     return workspace
 
 
-def _flow_interaction(name: str, options: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
-        "id": str(uuid.uuid4()),
-        "token": "token-1",
-        "channel_id": "channel-1",
-        "guild_id": "guild-1",
-        "member": {"user": {"id": "user-1"}},
-        "data": {
+def _flow_interaction(
+    name: str,
+    options: list[dict[str, Any]],
+    *,
+    root: str = "car",
+) -> dict[str, Any]:
+    if root == "flow":
+        data = {
+            "name": "flow",
+            "options": [{"type": 1, "name": name, "options": options}],
+        }
+    else:
+        data = {
             "name": "car",
             "options": [
                 {
@@ -193,7 +198,14 @@ def _flow_interaction(name: str, options: list[dict[str, Any]]) -> dict[str, Any
                     "options": [{"type": 1, "name": name, "options": options}],
                 }
             ],
-        },
+        }
+    return {
+        "id": str(uuid.uuid4()),
+        "token": "token-1",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "member": {"user": {"id": "user-1"}},
+        "data": data,
     }
 
 
@@ -344,7 +356,7 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
 
 
 @pytest.mark.anyio
-async def test_flow_status_without_run_id_uses_current_run_and_includes_picker(
+async def test_flow_status_without_run_id_uses_authoritative_run_and_includes_picker(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
@@ -438,8 +450,9 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
         content = payload["content"]
         components = payload["components"]
 
-        assert "No current ticket_flow run." in content
-        assert "Run: " not in content
+        assert f"Run: {newest_completed_run_id}" in content
+        assert "Status: completed" in content
+        assert "Archive: ready" in content
         picker_rows = [
             row
             for row in components
@@ -451,7 +464,44 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
             newest_completed_run_id,
             older_stopped_run_id,
         ]
-        assert all(option.get("default") is False for option in picker_options)
+        assert picker_options[0]["default"] is True
+        assert picker_options[1]["default"] is False
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_root_alias_routes_to_authoritative_status(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    completed_run_id = str(uuid.uuid4())
+    _create_run(workspace, completed_run_id, status=FlowRunStatus.COMPLETED)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="status", options=[], root="flow")])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        assert f"Run: {completed_run_id}" in content
+        assert "Status: completed" in content
     finally:
         await store.close()
 

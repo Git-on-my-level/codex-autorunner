@@ -419,7 +419,7 @@ def build_discord_help_lines() -> list[str]:
         [
             "",
             "**Flow Commands:**",
-            *flow_help_lines(prefix="/car flow", usage_overrides={"runs": "[limit]"}),
+            *flow_help_lines(prefix="/flow", usage_overrides={"runs": "[limit]"}),
             "",
             "Direct shell:",
             "!<cmd> - run a bash command in the bound workspace",

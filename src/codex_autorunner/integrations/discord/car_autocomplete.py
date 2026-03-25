@@ -315,6 +315,8 @@ async def handle_command_autocomplete(
     focused_value: str,
 ) -> None:
     _ = options
+    if command_path[:1] == ("flow",):
+        command_path = ("car", "flow", *command_path[1:])
     choices: list[dict[str, str]] = []
     if command_path == ("car", "bind") and focused_name == "workspace":
         choices = build_bind_autocomplete_choices(service, focused_value)

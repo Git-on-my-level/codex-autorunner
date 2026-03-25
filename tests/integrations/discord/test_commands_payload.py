@@ -22,9 +22,9 @@ def _find_option(options: list[dict], name: str) -> dict:
 
 def test_build_application_commands_structure_is_stable() -> None:
     commands = build_application_commands()
-    assert len(commands) == 2
+    assert len(commands) == 3
     command_names = {cmd["name"] for cmd in commands}
-    assert command_names == {"car", "pma"}
+    assert command_names == {"car", "flow", "pma"}
 
     car = next(cmd for cmd in commands if cmd["name"] == "car")
     assert car["type"] == 1
@@ -74,6 +74,14 @@ def test_build_application_commands_structure_is_stable() -> None:
     flow_options = flow["options"]
     assert [opt["name"] for opt in flow_options] == list(FLOW_ACTION_NAMES)
     assert [(opt["name"], opt["description"]) for opt in flow_options] == [
+        (spec.name, spec.description) for spec in FLOW_ACTION_SPECS
+    ]
+
+    flow_root = next(cmd for cmd in commands if cmd["name"] == "flow")
+    assert flow_root["type"] == 1
+    flow_root_options = flow_root["options"]
+    assert [opt["name"] for opt in flow_root_options] == list(FLOW_ACTION_NAMES)
+    assert [(opt["name"], opt["description"]) for opt in flow_root_options] == [
         (spec.name, spec.description) for spec in FLOW_ACTION_SPECS
     ]
 
@@ -152,7 +160,13 @@ def test_required_options_are_marked_required() -> None:
     assert run_id_option["required"] is False
     assert run_id_option["autocomplete"] is True
 
-    pma_options = commands[1]["options"]
+    flow_root = next(cmd for cmd in commands if cmd["name"] == "flow")
+    flow_root_status = _find_option(flow_root["options"], "status")
+    flow_root_run_id = _find_option(flow_root_status["options"], "run_id")
+    assert flow_root_run_id["required"] is False
+    assert flow_root_run_id["autocomplete"] is True
+
+    pma_options = next(cmd for cmd in commands if cmd["name"] == "pma")["options"]
     assert [opt["name"] for opt in pma_options] == ["on", "off", "status"]
 
 

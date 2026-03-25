@@ -179,7 +179,7 @@ async def test_pause_bridge_dedupes_by_run_and_dispatch_seq(tmp_path: Path) -> N
         assert f"Ticket flow paused (run {run_id}). Latest dispatch #0001:" in content
         assert f"Source: {workspace}" in content
         assert "Paused: need reply" in content
-        assert "Use `/car flow resume` to continue." in content
+        assert "Use `/flow resume` to continue." in content
         mirror_path = (
             workspace
             / ".codex-autorunner"
@@ -250,7 +250,7 @@ async def test_pause_bridge_chunked_messages_have_no_part_prefix(
             content = str(record.payload_json.get("content", ""))
             assert not content.startswith("Part ")
         assert any(
-            "Use `/car flow resume` to continue."
+            "Use `/flow resume` to continue."
             in str(record.payload_json.get("content", ""))
             for record in queued
         )
@@ -310,7 +310,7 @@ async def test_pause_bridge_prefers_pause_dispatch_over_turn_summary(
         assert f"Source: {workspace}" in content
         assert "Need input" in content
         assert "Please answer the blocker before I continue." in content
-        assert "Use `/car flow resume` to continue." in content
+        assert "Use `/flow resume` to continue." in content
         assert "turn_summary" not in content
         assert "This summary should not be mirrored to Discord." not in content
     finally:
@@ -371,7 +371,7 @@ async def test_dispatch_bridge_sends_notify_then_incremental_pause(
         assert f"Source: {workspace}" in content
         assert "Progress update" in content
         assert "Finished the repo scan and moving to implementation." in content
-        assert "Use `/car flow resume` to continue." not in content
+        assert "Use `/flow resume` to continue." not in content
         assert "turn_summary" not in content
 
         binding = await store.get_binding(channel_id="channel-1")
@@ -397,7 +397,7 @@ async def test_dispatch_bridge_sends_notify_then_incremental_pause(
         assert f"Ticket flow paused (run {run_id}). Latest dispatch #0003:" in content
         assert "Need guidance" in content
         assert "Please confirm the migration target before I continue." in content
-        assert "Use `/car flow resume` to continue." in content
+        assert "Use `/flow resume` to continue." in content
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
@@ -451,7 +451,7 @@ async def test_pause_bridge_surfaces_latest_invalid_dispatch_notice(
             content
         )
         assert "Fix DISPATCH.md for that paused turn before resuming." in content
-        assert "Use `/car flow resume` to continue." not in content
+        assert "Use `/flow resume` to continue." not in content
     finally:
         await store.close()
 
@@ -499,7 +499,7 @@ async def test_pause_bridge_keeps_reason_fallback_when_history_is_empty(
         content = str(queued[0].payload_json.get("content", ""))
         assert f"Ticket flow paused (run {run_id}). Latest dispatch #paused:" in content
         assert "Reason: Waiting for the user to reply." in content
-        assert "Use `/car flow resume` to continue." in content
+        assert "Use `/flow resume` to continue." in content
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
@@ -590,7 +590,7 @@ async def test_pause_bridge_falls_back_when_only_turn_summary_exists(
             "last_method=turn/diff/updated, status=inProgress."
         ) in content
         assert "Summary that should stay out of Discord." not in content
-        assert "Use `/car flow resume` to continue." in content
+        assert "Use `/flow resume` to continue." in content
 
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None

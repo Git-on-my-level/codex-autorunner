@@ -194,7 +194,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "status"),),
+        discord_paths=(("car", "flow", "status"), ("flow", "status")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -203,7 +203,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "runs"),),
+        discord_paths=(("car", "flow", "runs"), ("flow", "runs")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -212,7 +212,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "issue"),),
+        discord_paths=(("car", "flow", "issue"), ("flow", "issue")),
         required_capabilities=("ticket_flow", "github_cli"),
     ),
     CommandContractEntry(
@@ -221,7 +221,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "plan"),),
+        discord_paths=(("car", "flow", "plan"), ("flow", "plan")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -230,7 +230,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "start"),),
+        discord_paths=(("car", "flow", "start"), ("flow", "start")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -239,7 +239,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "restart"),),
+        discord_paths=(("car", "flow", "restart"), ("flow", "restart")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -248,7 +248,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "resume"),),
+        discord_paths=(("car", "flow", "resume"), ("flow", "resume")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -257,7 +257,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "stop"),),
+        discord_paths=(("car", "flow", "stop"), ("flow", "stop")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -266,7 +266,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "archive"),),
+        discord_paths=(("car", "flow", "archive"), ("flow", "archive")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -275,7 +275,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "recover"),),
+        discord_paths=(("car", "flow", "recover"), ("flow", "recover")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -284,7 +284,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow", "reply"),
-        discord_paths=(("car", "flow", "reply"),),
+        discord_paths=(("car", "flow", "reply"), ("flow", "reply")),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(

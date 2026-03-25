@@ -119,7 +119,7 @@ async def test_status_bound_channel_includes_shared_and_discord_specific_details
     assert "Approval policy: never" in content
     assert "Sandbox policy: dangerFullAccess, network=True" in content
     assert "Limits: [5h: 5%]" in content
-    assert "Use /car flow status for ticket flow details." in content
+    assert "Use /flow status for ticket flow details." in content
     service._get_active_flow_info.assert_awaited_once_with(str(workspace))
     service._read_status_rate_limits.assert_awaited_once_with(
         str(workspace), agent="codex"
@@ -152,7 +152,7 @@ async def test_status_unbound_channel_keeps_flow_hint() -> None:
     content = sent_messages[0]
     assert "This channel is not bound." in content
     assert "Agent:" not in content
-    assert "Then use /car flow status once flow commands are enabled." in content
+    assert "Then use /flow status once flow commands are enabled." in content
     service._get_active_flow_info.assert_not_awaited()
     service._read_status_rate_limits.assert_not_awaited()
 

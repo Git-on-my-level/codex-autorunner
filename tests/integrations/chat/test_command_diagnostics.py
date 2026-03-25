@@ -130,7 +130,7 @@ class TestBuildStatusText:
         )
         lines_str = "\n".join(lines)
 
-        assert "Use /car flow status" in lines_str
+        assert "Use /flow status" in lines_str
 
     def test_excludes_flow_hint_when_disabled(self):
         binding = {
@@ -154,7 +154,7 @@ class TestBuildStatusText:
         )
         lines_str = "\n".join(lines)
 
-        assert "Use /car flow status" not in lines_str
+        assert "Use /flow status" not in lines_str
 
 
 class TestBuildDebugText:

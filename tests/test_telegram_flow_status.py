@@ -92,7 +92,7 @@ def test_flow_status_includes_effective_current_ticket(
     handler = FlowCommands()
     lines = handler._format_flow_status_lines(tmp_path, record, store)
 
-    assert any(line == "Current: TICKET-002" for line in lines)
+    assert any(line == "Current ticket: TICKET-002" for line in lines)
     store.close()
 
 
