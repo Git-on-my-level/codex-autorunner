@@ -3,11 +3,13 @@ from __future__ import annotations
 import inspect
 import os
 import sqlite3
+from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ....core.scm_automation_service import ScmAutomationService
 from ....core.scm_events import ScmEvent, ScmEventStore
 from ....integrations.github import GitHubWebhookConfig, normalize_github_webhook
 
@@ -111,10 +113,35 @@ async def _run_drain_callback(
     if not callable(callback):
         callback = route_callback
     if not callable(callback):
-        return
+        config = getattr(request.app.state, "config", None)
+        hub_root = getattr(config, "root", None)
+        if hub_root is None:
+            return
+        raw_config = getattr(config, "raw", {})
+        callback = _default_drain_callback_factory(
+            hub_root=hub_root,
+            raw_config=raw_config,
+        )
     result = callback(request, event)
     if inspect.isawaitable(result):
         await result
+
+
+def _default_drain_callback_factory(
+    *,
+    hub_root: Path,
+    raw_config: object,
+) -> ScmDrainCallback:
+    service = ScmAutomationService(
+        hub_root,
+        reaction_config=_github_automation_config(raw_config),
+    )
+
+    def callback(_request: Request, event: ScmEvent) -> None:
+        service.ingest_event(event)
+        service.process_now()
+
+    return callback
 
 
 def build_scm_webhook_routes(

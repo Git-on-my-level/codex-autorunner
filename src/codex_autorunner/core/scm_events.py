@@ -289,9 +289,28 @@ class ScmEventStore:
             ).fetchall()
         return [_event_from_row(row) for row in rows]
 
+    def get_event(self, event_id: str) -> Optional[ScmEvent]:
+        normalized_event_id = _normalize_text(event_id)
+        if normalized_event_id is None:
+            return None
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_scm_events
+                 WHERE event_id = ?
+                """,
+                (normalized_event_id,),
+            ).fetchone()
+        return _event_from_row(row) if row is not None else None
+
 
 def record_event(hub_root: Path, **kwargs: Any) -> ScmEvent:
     return ScmEventStore(hub_root).record_event(**kwargs)
+
+
+def get_event(hub_root: Path, event_id: str) -> Optional[ScmEvent]:
+    return ScmEventStore(hub_root).get_event(event_id)
 
 
 def list_events(hub_root: Path, **kwargs: Any) -> list[ScmEvent]:
@@ -301,6 +320,7 @@ def list_events(hub_root: Path, **kwargs: Any) -> list[ScmEvent]:
 __all__ = [
     "ScmEvent",
     "ScmEventStore",
+    "get_event",
     "list_events",
     "record_event",
 ]

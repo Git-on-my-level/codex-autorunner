@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
@@ -14,6 +15,7 @@ from tests.conftest import write_test_config
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.scm_events import list_events
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes import scm_webhooks as scm_webhooks_module
 from codex_autorunner.surfaces.web.routes.scm_webhooks import (
     build_scm_webhook_routes,
 )
@@ -216,3 +218,72 @@ def test_scm_webhook_rejects_bad_signature_without_persisting(tmp_path: Path) ->
         "detail": "GitHub webhook signature did not match",
     }
     assert list_events(hub_root, provider="github", limit=10) == []
+
+
+def test_scm_webhook_inline_drain_delegates_to_scm_automation_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_webhooks(_hub_config(), drain_inline=True)
+    calls: list[tuple[str, object]] = []
+
+    class _ServiceStub:
+        def __init__(self, hub_root: Path, *, reaction_config=None) -> None:
+            calls.append(("init", hub_root))
+            calls.append(
+                (
+                    "config",
+                    dict(reaction_config) if isinstance(reaction_config, dict) else {},
+                )
+            )
+
+        def ingest_event(self, event) -> None:
+            calls.append(("ingest_event", event.event_id))
+
+        def process_now(self, limit: int = 10) -> list[object]:
+            calls.append(("process_now", limit))
+            return []
+
+    monkeypatch.setattr(scm_webhooks_module, "ScmAutomationService", _ServiceStub)
+
+    payload = {
+        "action": "closed",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "sender": {"login": "octocat", "id": 7, "type": "User"},
+        "pull_request": {
+            "number": 42,
+            "title": "Wire SCM automation",
+            "state": "closed",
+            "merged": True,
+            "draft": False,
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "created_at": "2026-03-24T10:00:00+00:00",
+            "updated_at": "2026-03-24T10:01:02+00:00",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/scm-automation"},
+            "user": {"login": "octocat"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    app = _build_route_app(hub_root, cfg=cfg)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=_headers(body, event="pull_request"),
+        )
+
+    assert response.status_code == 200
+    assert calls[0] == ("init", hub_root)
+    assert calls[1][0] == "config"
+    assert calls[1][1]["enabled"] is True
+    assert calls[1][1]["drain_inline"] is True
+    assert calls[1][1]["webhook_ingress"]["enabled"] is True
+    assert calls[1][1]["webhook_ingress"]["store_raw_payload"] is False
+    assert calls[1][1]["webhook_ingress"]["secret"] == "topsecret"
+    assert calls[2:] == [
+        ("ingest_event", "github:delivery-1"),
+        ("process_now", 10),
+    ]
