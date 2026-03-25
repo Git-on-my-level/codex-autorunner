@@ -28,6 +28,7 @@
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:138:log_stream",
     "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:171:jsonl_event_stream",
-    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:217:state_stream"
+    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:217:state_stream",
+    "python:function:src/codex_autorunner/integrations/telegram/handlers/commands/flows.py:126:_select_latest_run"
   ]
 }

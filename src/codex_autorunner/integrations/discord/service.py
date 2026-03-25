@@ -185,6 +185,7 @@ from ...integrations.chat.status_diagnostics import (
     build_status_block_lines,
     extract_rate_limits,
 )
+from ...integrations.chat.text_sanitization import collapse_local_markdown_links
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
@@ -686,9 +687,9 @@ class DiscordBotService:
         self._typing_sessions: dict[str, int] = {}
         self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
         self._typing_lock: Optional[asyncio.Lock] = None
-        self._discord_turn_approval_contexts: dict[str, _DiscordTurnApprovalContext] = (
-            {}
-        )
+        self._discord_turn_approval_contexts: dict[
+            str, _DiscordTurnApprovalContext
+        ] = {}
         self._discord_pending_approvals: dict[str, _DiscordPendingApproval] = {}
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="discord",
@@ -3890,6 +3891,14 @@ class DiscordBotService:
         return await self._rest.create_channel_message(
             channel_id=channel_id, payload=payload
         )
+
+    @staticmethod
+    def _sanitize_outgoing_channel_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        sanitized = dict(payload)
+        content = sanitized.get("content")
+        if isinstance(content, str):
+            sanitized["content"] = collapse_local_markdown_links(content)
+        return sanitized
 
     async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
         await self._rest.delete_channel_message(
@@ -8293,8 +8302,7 @@ class DiscordBotService:
                     runs=runs,
                     snapshot=snapshot,
                     prefix=(
-                        "Reusing ticket_flow run "
-                        f"{record.id} ({record.status.value})."
+                        f"Reusing ticket_flow run {record.id} ({record.status.value})."
                     ),
                 )
                 if status_buttons:
@@ -12057,31 +12065,32 @@ class DiscordBotService:
             if not response_text:
                 response_text = "(No summary generated.)"
             try:
-                _had_previous, next_thread_id = (
-                    await self._reset_discord_thread_binding(
-                        channel_id=channel_id,
-                        workspace_root=workspace_root,
-                        agent=agent,
-                        repo_id=(
-                            str(binding.get("repo_id")).strip()
-                            if isinstance(binding.get("repo_id"), str)
-                            and str(binding.get("repo_id")).strip()
-                            else None
-                        ),
-                        resource_kind=(
-                            str(binding.get("resource_kind")).strip()
-                            if isinstance(binding.get("resource_kind"), str)
-                            and str(binding.get("resource_kind")).strip()
-                            else None
-                        ),
-                        resource_id=(
-                            str(binding.get("resource_id")).strip()
-                            if isinstance(binding.get("resource_id"), str)
-                            and str(binding.get("resource_id")).strip()
-                            else None
-                        ),
-                        pma_enabled=pma_enabled,
-                    )
+                (
+                    _had_previous,
+                    next_thread_id,
+                ) = await self._reset_discord_thread_binding(
+                    channel_id=channel_id,
+                    workspace_root=workspace_root,
+                    agent=agent,
+                    repo_id=(
+                        str(binding.get("repo_id")).strip()
+                        if isinstance(binding.get("repo_id"), str)
+                        and str(binding.get("repo_id")).strip()
+                        else None
+                    ),
+                    resource_kind=(
+                        str(binding.get("resource_kind")).strip()
+                        if isinstance(binding.get("resource_kind"), str)
+                        and str(binding.get("resource_kind")).strip()
+                        else None
+                    ),
+                    resource_id=(
+                        str(binding.get("resource_id")).strip()
+                        if isinstance(binding.get("resource_id"), str)
+                        and str(binding.get("resource_id")).strip()
+                        else None
+                    ),
+                    pma_enabled=pma_enabled,
                 )
             except Exception as exc:
                 log_event(

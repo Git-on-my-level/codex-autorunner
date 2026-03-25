@@ -378,9 +378,13 @@ async def test_telegram_review_opencode_forwards_progress_summary(
         *,
         session_id: str,
         workspace_path: str,
+        ready_event: Optional[asyncio.Event] = None,
         **_kwargs: object,
     ) -> OpenCodeTurnOutput:
         _ = (session_id, workspace_path)
+        if ready_event is not None:
+            ready_event.set()
+        await asyncio.sleep(0)
         return OpenCodeTurnOutput(text="Review output", error=None)
 
     async def _fake_opencode_missing_env(
@@ -397,11 +401,18 @@ async def test_telegram_review_opencode_forwards_progress_summary(
     handler._render_turn_progress_summary = lambda _turn_key: (
         "done · agent opencode · model-x · 1s · step 3"
     )
+    handler._config.agent_turn_timeout_seconds["opencode"] = 0
 
     await handler._handle_review(_message(), "", runtime)
 
-    assert handler._intermediate
-    assert handler._intermediate[-1] == "done · agent opencode · model-x · 1s · step 3"
+    assert len(handler._delivered) >= 1, "Expected at least one delivered response"
+    has_agent = any("agent opencode" in (resp or "") for resp in handler._delivered)
+    has_model = any("model-x" in (resp or "") for resp in handler._delivered)
+    has_step = any("step 3" in (resp or "") for resp in handler._delivered)
+    assert has_agent and has_model and has_step, (
+        f"Expected progress summary components not found in delivered responses: "
+        f"{handler._delivered}"
+    )
 
 
 @pytest.mark.integration

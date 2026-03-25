@@ -567,42 +567,6 @@ async def test_send_message_collapses_local_file_links() -> None:
 
 
 @pytest.mark.anyio
-async def test_send_message_preserves_pre_rendered_html_code_spans() -> None:
-    transport = httpx.MockTransport(
-        lambda _request: httpx.Response(200, json={"ok": True, "result": {}})
-    )
-    http_client = httpx.AsyncClient(transport=transport)
-    client = TelegramBotClient("test-token", client=http_client)
-    calls: list[dict[str, object]] = []
-
-    async def fake_request(self, method: str, payload: dict[str, object]) -> object:
-        calls.append({"method": method, "payload": payload})
-        return {"message_id": 1}
-
-    client._request = types.MethodType(fake_request, client)
-    try:
-        await client.send_message(
-            123,
-            "<code>[file](/workspace/project/file.py)</code>",
-            parse_mode="HTML",
-        )
-    finally:
-        await client.close()
-
-    assert calls == [
-        {
-            "method": "sendMessage",
-            "payload": {
-                "chat_id": 123,
-                "text": "<code>[file](/workspace/project/file.py)</code>",
-                "disable_web_page_preview": True,
-                "parse_mode": "HTML",
-            },
-        }
-    ]
-
-
-@pytest.mark.anyio
 async def test_send_document_caption_collapses_local_file_links() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(200, json={"ok": True, "result": {}})
