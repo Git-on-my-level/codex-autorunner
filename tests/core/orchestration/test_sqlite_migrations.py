@@ -277,6 +277,55 @@ def test_apply_orchestration_migrations_adds_pr_binding_table_from_v9(
     assert pr_binding_table is not None
 
 
+def test_apply_orchestration_migrations_adds_reaction_state_table_from_v10(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (10, 'add_pr_binding_store', '2026-03-25T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        reaction_state_table = conn.execute(
+            """
+            SELECT name
+              FROM sqlite_master
+             WHERE type = 'table'
+               AND name = 'orch_reaction_state'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert reaction_state_table is not None
+
+
 def test_apply_orchestration_migrations_backfills_resource_owner_columns(
     tmp_path: Path,
 ) -> None:

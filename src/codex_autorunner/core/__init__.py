@@ -45,6 +45,16 @@ from .publish_operation_executors import (
 )
 from .scm_events import ScmEvent, ScmEventStore
 from .scm_reaction_router import route_scm_reactions
+from .scm_reaction_state import (
+    ScmReactionState,
+    ScmReactionStateStore,
+    compute_reaction_fingerprint,
+    mark_reaction_delivery_failed,
+    mark_reaction_emitted,
+    mark_reaction_resolved,
+    should_emit_reaction,
+    stable_reaction_fingerprint,
+)
 from .scm_reaction_types import (
     ReactionIntent,
     ScmReactionConfig,
@@ -90,21 +100,29 @@ __all__ = [
     "RetryablePublishError",
     "ScmEvent",
     "ScmEventStore",
+    "ScmReactionState",
+    "ScmReactionStateStore",
     "ScmReactionConfig",
     "SSEEvent",
     "TerminalPublishError",
     "archive_worktree_snapshot",
     "build_car_context_bundle",
+    "compute_reaction_fingerprint",
     "build_type_debt_ledger",
     "drain_pending_publish_operations",
     "default_managed_thread_context_profile",
     "format_file_role_addendum",
     "format_sse",
     "ledger_to_dict",
+    "mark_reaction_delivery_failed",
+    "mark_reaction_emitted",
+    "mark_reaction_resolved",
     "parse_sse_lines",
     "route_scm_reactions",
     "render_injected_car_context",
     "render_markdown_report",
     "render_runtime_compat_agents_md",
+    "should_emit_reaction",
+    "stable_reaction_fingerprint",
     "stable_reaction_operation_key",
 ]

@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 10
+ORCHESTRATION_SCHEMA_VERSION = 11
 
 
 @dataclass(frozen=True)
@@ -855,6 +855,45 @@ def _apply_v10(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v11(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_reaction_state (
+            binding_id TEXT NOT NULL,
+            reaction_kind TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            state TEXT NOT NULL,
+            first_event_id TEXT,
+            last_event_id TEXT,
+            last_operation_key TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            first_emitted_at TEXT,
+            last_emitted_at TEXT,
+            last_delivery_failed_at TEXT,
+            resolved_at TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            delivery_failure_count INTEGER NOT NULL DEFAULT 0,
+            last_error_text TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (binding_id, reaction_kind, fingerprint)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_reaction_state_binding_kind_state
+            ON orch_reaction_state(binding_id, reaction_kind, state, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_reaction_state_state_updated
+            ON orch_reaction_state(state, updated_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -870,6 +909,7 @@ _MIGRATIONS = (
     _MigrationStep(8, "add_publish_journal_tables", _apply_v8),
     _MigrationStep(9, "add_scm_event_store", _apply_v9),
     _MigrationStep(10, "add_pr_binding_store", _apply_v10),
+    _MigrationStep(11, "add_scm_reaction_state_store", _apply_v11),
 )
 
 
@@ -938,6 +978,11 @@ _TABLE_DEFINITIONS = (
         name="orch_pr_bindings",
         role="authoritative",
         description="Optional durable PR-to-thread binding records keyed by provider, repo, and PR number.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_reaction_state",
+        role="authoritative",
+        description="Durable reaction fingerprints and delivery state used to suppress repeated SCM follow-ups.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",

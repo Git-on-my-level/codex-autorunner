@@ -7,6 +7,8 @@ from codex_autorunner.core.pr_bindings import PrBinding
 from codex_autorunner.core.publish_journal import PublishOperation
 from codex_autorunner.core.scm_automation_service import ScmAutomationService
 from codex_autorunner.core.scm_events import ScmEvent
+from codex_autorunner.core.scm_reaction_router import route_scm_reactions
+from codex_autorunner.core.scm_reaction_state import ScmReactionStateStore
 from codex_autorunner.core.scm_reaction_types import ReactionIntent, ScmReactionConfig
 
 
@@ -170,6 +172,48 @@ class _ProcessorFake:
         return list(self.processed)
 
 
+class _PermissiveReactionStateFake:
+    def __init__(self) -> None:
+        self.should_calls: list[tuple[str, str, str]] = []
+        self.mark_calls: list[tuple[str, str, str, Optional[str], Optional[str]]] = []
+
+    def compute_reaction_fingerprint(
+        self,
+        event: ScmEvent,
+        *,
+        binding: Optional[PrBinding],
+        intent: ReactionIntent,
+    ) -> str:
+        _ = binding
+        return f"{intent.reaction_kind}:{event.event_id}:{intent.operation_kind}"
+
+    def should_emit_reaction(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+    ) -> bool:
+        self.should_calls.append((binding_id, reaction_kind, fingerprint))
+        return True
+
+    def mark_reaction_emitted(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        operation_key: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = metadata
+        self.mark_calls.append(
+            (binding_id, reaction_kind, fingerprint, event_id, operation_key)
+        )
+        return object()
+
+
 def test_ingest_event_loads_persisted_event_routes_reactions_and_dedupes_publish_operations(
     tmp_path: Path,
 ) -> None:
@@ -186,12 +230,14 @@ def test_ingest_event_loads_persisted_event_routes_reactions_and_dedupes_publish
     )
     journal = _JournalFake()
     processor = _ProcessorFake(processed=[])
+    reaction_state_store = _PermissiveReactionStateFake()
     service = ScmAutomationService(
         tmp_path,
         event_store=event_store,
         binding_resolver=binding_resolver,
         reaction_router=reaction_router,
         reaction_config={"enabled": True, "merged": False},
+        reaction_state_store=reaction_state_store,
         journal=journal,
         publish_processor=processor,
     )
@@ -227,7 +273,55 @@ def test_ingest_event_loads_persisted_event_routes_reactions_and_dedupes_publish
         ("scm:key-1", "enqueue_managed_turn"),
         ("scm:key-2", "notify_chat"),
     ]
+    assert len(reaction_state_store.should_calls) == 6
+    assert len(reaction_state_store.mark_calls) == 4
     assert sorted(journal.operations_by_key) == ["scm:key-1", "scm:key-2"]
+
+
+def test_ingest_event_suppresses_repeated_semantic_reaction_conditions_using_durable_state(
+    tmp_path: Path,
+) -> None:
+    first_event = _event(event_id="github:event-1")
+    second_event = _event(event_id="github:event-2")
+    binding = _binding()
+    journal = _JournalFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(first_event, second_event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=ScmReactionStateStore(tmp_path),
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    first = service.ingest_event("github:event-1")
+    second = service.ingest_event("github:event-2")
+
+    assert len(first.reaction_intents) == 1
+    assert len(first.publish_operations) == 1
+    first_operation_key = first.publish_operations[0].operation_key
+    assert first_operation_key.startswith("scm-reaction:github:changes_requested:")
+    assert len(second.reaction_intents) == 1
+    assert second.publish_operations == ()
+    assert journal.create_calls == [(first_operation_key, "enqueue_managed_turn")]
+
+    state_store = ScmReactionStateStore(tmp_path)
+    fingerprint = state_store.compute_reaction_fingerprint(
+        first_event,
+        binding=binding,
+        intent=first.reaction_intents[0],
+    )
+    stored = state_store.get_reaction_state(
+        binding_id=binding.binding_id,
+        reaction_kind="changes_requested",
+        fingerprint=fingerprint,
+    )
+
+    assert stored is not None
+    assert stored.state == "emitted"
+    assert stored.attempt_count == 1
+    assert stored.last_event_id == "github:event-1"
 
 
 def test_process_now_delegates_to_publish_processor(tmp_path: Path) -> None:

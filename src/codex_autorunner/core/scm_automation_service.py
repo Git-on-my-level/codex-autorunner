@@ -15,6 +15,7 @@ from .publish_operation_executors import (
 )
 from .scm_events import ScmEvent, ScmEventStore
 from .scm_reaction_router import route_scm_reactions
+from .scm_reaction_state import ScmReactionStateStore
 from .scm_reaction_types import ReactionIntent, ScmReactionConfig
 
 
@@ -54,6 +55,35 @@ class PublishJournalWriter(Protocol):
 
 class PublishOperationDrainer(Protocol):
     def process_now(self, limit: int = 10) -> list[PublishOperation]: ...
+
+
+class ScmReactionStateTracker(Protocol):
+    def compute_reaction_fingerprint(
+        self,
+        event: ScmEvent,
+        *,
+        binding: Optional[PrBinding],
+        intent: ReactionIntent,
+    ) -> str: ...
+
+    def should_emit_reaction(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+    ) -> bool: ...
+
+    def mark_reaction_emitted(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        operation_key: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> object: ...
 
 
 def _normalize_event_id(value: object) -> Optional[str]:
@@ -111,6 +141,7 @@ class ScmAutomationService:
         binding_resolver: Optional[ScmBindingResolver] = None,
         reaction_router: Optional[ScmReactionRouter] = None,
         reaction_config: ScmReactionConfig | Mapping[str, Any] | None = None,
+        reaction_state_store: Optional[ScmReactionStateTracker] = None,
         journal: Optional[PublishJournalWriter] = None,
         publish_processor: Optional[PublishOperationDrainer] = None,
     ) -> None:
@@ -121,6 +152,9 @@ class ScmAutomationService:
         )
         self._reaction_router = reaction_router or route_scm_reactions
         self._reaction_config = ScmReactionConfig.from_mapping(reaction_config)
+        self._reaction_state_store = reaction_state_store or ScmReactionStateStore(
+            self._hub_root
+        )
         resolved_journal = journal or PublishJournalStore(self._hub_root)
         self._journal = resolved_journal
         if publish_processor is not None:
@@ -165,6 +199,21 @@ class ScmAutomationService:
         publish_operations: list[PublishOperation] = []
         seen_operation_keys: set[str] = set()
         for intent in reaction_intents:
+            binding_id: Optional[str] = None
+            fingerprint: Optional[str] = None
+            if binding is not None and intent.binding_id is not None:
+                binding_id = intent.binding_id
+                fingerprint = self._reaction_state_store.compute_reaction_fingerprint(
+                    event,
+                    binding=binding,
+                    intent=intent,
+                )
+                if not self._reaction_state_store.should_emit_reaction(
+                    binding_id=binding_id,
+                    reaction_kind=intent.reaction_kind,
+                    fingerprint=fingerprint,
+                ):
+                    continue
             if intent.operation_key in seen_operation_keys:
                 continue
             seen_operation_keys.add(intent.operation_key)
@@ -173,6 +222,19 @@ class ScmAutomationService:
                 operation_kind=intent.operation_kind,
                 payload=intent.payload,
             )
+            if fingerprint is not None and binding_id is not None:
+                self._reaction_state_store.mark_reaction_emitted(
+                    binding_id=binding_id,
+                    reaction_kind=intent.reaction_kind,
+                    fingerprint=fingerprint,
+                    event_id=intent.event_id or event.event_id,
+                    operation_key=intent.operation_key,
+                    metadata={
+                        "event_type": event.event_type,
+                        "operation_kind": intent.operation_kind,
+                        "provider": event.provider,
+                    },
+                )
             publish_operations.append(operation)
 
         return ScmAutomationIngestResult(
@@ -194,4 +256,5 @@ __all__ = [
     "ScmBindingResolver",
     "ScmEventLookup",
     "ScmReactionRouter",
+    "ScmReactionStateTracker",
 ]
