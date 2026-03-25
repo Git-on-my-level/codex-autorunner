@@ -93,7 +93,7 @@ class PmaRuntimeState:
             supervisor = getattr(request.app.state, "hub_supervisor", None)
         if supervisor is not None:
             try:
-                checker = supervisor.get_pma_safety_checker()
+                checker = supervisor.ensure_pma_safety_checker()
                 if isinstance(checker, PmaSafetyChecker):
                     return checker
             except Exception:
