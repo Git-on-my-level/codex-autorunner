@@ -11,6 +11,11 @@ from fastapi.responses import JSONResponse
 
 from ....core.scm_automation_service import ScmAutomationService
 from ....core.scm_events import ScmEvent, ScmEventStore
+from ....core.scm_observability import (
+    SCM_AUDIT_INGEST,
+    ScmAuditRecorder,
+    create_or_preserve_correlation_id,
+)
 from ....integrations.github import GitHubWebhookConfig, normalize_github_webhook
 
 ScmDrainCallback = Callable[[Request, ScmEvent], object]
@@ -220,6 +225,13 @@ def build_scm_webhook_routes(
             raise HTTPException(status_code=500, detail="Normalized SCM event missing")
 
         store = ScmEventStore(hub_root)
+        correlation_id = create_or_preserve_correlation_id(
+            provider=event.provider,
+            event_id=event.event_id,
+            correlation_id=event.correlation_id,
+            headers=request.headers,
+            payload=event.payload,
+        )
         try:
             persisted = store.record_event(
                 event_id=event.event_id,
@@ -231,6 +243,7 @@ def build_scm_webhook_routes(
                 repo_id=event.repo_id,
                 pr_number=event.pr_number,
                 delivery_id=event.delivery_id,
+                correlation_id=correlation_id,
                 payload=event.payload,
                 raw_payload=event.raw_payload if store_raw_payload else None,
                 max_raw_payload_bytes=max_raw_payload_bytes,
@@ -261,6 +274,12 @@ def build_scm_webhook_routes(
                 },
             )
 
+        ScmAuditRecorder(hub_root).record(
+            action_type=SCM_AUDIT_INGEST,
+            correlation_id=correlation_id,
+            event=persisted,
+        )
+
         drained_inline = False
         if _drain_inline_enabled(raw_config):
             await _run_drain_callback(
@@ -280,6 +299,7 @@ def build_scm_webhook_routes(
                 "repo_id": persisted.repo_id,
                 "pr_number": persisted.pr_number,
                 "delivery_id": persisted.delivery_id,
+                "correlation_id": persisted.correlation_id,
                 "drained_inline": drained_inline,
             }
         )

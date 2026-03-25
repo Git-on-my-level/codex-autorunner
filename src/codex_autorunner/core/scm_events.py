@@ -83,6 +83,7 @@ class ScmEvent:
     repo_id: Optional[str] = None
     pr_number: Optional[int] = None
     delivery_id: Optional[str] = None
+    correlation_id: Optional[str] = None
     payload: dict[str, Any] = field(default_factory=dict)
     raw_payload: Optional[dict[str, Any]] = None
 
@@ -102,6 +103,7 @@ def _event_from_row(row: Any) -> ScmEvent:
         repo_id=_normalize_text(row["repo_id"]),
         pr_number=_normalize_int(row["pr_number"], field_name="pr_number"),
         delivery_id=_normalize_text(row["delivery_id"]),
+        correlation_id=_normalize_text(row["correlation_id"]),
         payload=_json_loads_object(row["payload_json"]),
         raw_payload=(
             _json_loads_object(row["raw_payload_json"])
@@ -128,6 +130,7 @@ class ScmEventStore:
         repo_id: Optional[str] = None,
         pr_number: Optional[int] = None,
         delivery_id: Optional[str] = None,
+        correlation_id: Optional[str] = None,
         payload: Optional[dict[str, Any]] = None,
         raw_payload: Optional[dict[str, Any]] = None,
         event_id: Optional[str] = None,
@@ -176,12 +179,13 @@ class ScmEventStore:
                     repo_id,
                     pr_number,
                     delivery_id,
+                    correlation_id,
                     occurred_at,
                     received_at,
                     payload_json,
                     raw_payload_json,
                     created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_event_id,
@@ -191,6 +195,7 @@ class ScmEventStore:
                     _normalize_text(repo_id),
                     normalized_pr_number,
                     _normalize_text(delivery_id),
+                    _normalize_text(correlation_id),
                     resolved_occurred_at,
                     resolved_received_at,
                     _json_dumps(payload_object),

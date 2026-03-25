@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.scm_events import list_events
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import scm_webhooks as scm_webhooks_module
@@ -145,15 +146,29 @@ def test_scm_webhook_persists_event_and_can_drain_inline(tmp_path: Path) -> None
         "repo_id": "99",
         "pr_number": 42,
         "delivery_id": "delivery-1",
+        "correlation_id": "scm:github:delivery-1",
         "drained_inline": True,
     }
 
     events = list_events(hub_root, provider="github", limit=10)
     assert len(events) == 1
     assert events[0].event_id == "github:delivery-1"
+    assert events[0].correlation_id == "scm:github:delivery-1"
     assert events[0].payload["action"] == "opened"
     assert events[0].raw_payload == payload
     assert drained == ["github:delivery-1"]
+    with open_orchestration_sqlite(hub_root) as conn:
+        audit_row = conn.execute(
+            """
+            SELECT action_type, payload_json
+              FROM orch_audit_entries
+             ORDER BY created_at ASC, audit_id ASC
+             LIMIT 1
+            """
+        ).fetchone()
+    assert audit_row is not None
+    assert audit_row["action_type"] == "scm.ingest"
+    assert '"correlation_id":"scm:github:delivery-1"' in str(audit_row["payload_json"])
 
 
 def test_scm_webhook_ignored_requests_return_non_error_without_persisting(
@@ -287,3 +302,44 @@ def test_scm_webhook_inline_drain_delegates_to_scm_automation_service(
         ("ingest_event", "github:delivery-1"),
         ("process_now", 10),
     ]
+
+
+def test_scm_webhook_preserves_explicit_correlation_id_header(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_webhooks(_hub_config(), drain_inline=False)
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "sender": {"login": "octocat", "id": 7, "type": "User"},
+        "pull_request": {
+            "number": 42,
+            "title": "Add explicit correlation",
+            "state": "open",
+            "merged": False,
+            "draft": False,
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "created_at": "2026-03-24T10:00:00+00:00",
+            "updated_at": "2026-03-24T10:01:02+00:00",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/webhooks"},
+            "user": {"login": "octocat"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    headers = _headers(body, event="pull_request")
+    headers["X-Correlation-ID"] = "corr-explicit-123"
+    app = _build_route_app(hub_root, cfg=cfg)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert response.json()["correlation_id"] == "corr-explicit-123"
+    events = list_events(hub_root, provider="github", limit=10)
+    assert len(events) == 1
+    assert events[0].correlation_id == "corr-explicit-123"

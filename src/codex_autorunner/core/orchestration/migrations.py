@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 12
+ORCHESTRATION_SCHEMA_VERSION = 13
 
 
 @dataclass(frozen=True)
@@ -904,6 +904,22 @@ def _apply_v12(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v13(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_scm_events",
+        "correlation_id",
+        "correlation_id TEXT",
+    )
+    if _table_exists(conn, "orch_scm_events"):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_scm_events_correlation_timestamp
+                ON orch_scm_events(correlation_id, occurred_at, created_at)
+            """
+        )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -921,6 +937,7 @@ _MIGRATIONS = (
     _MigrationStep(10, "add_pr_binding_store", _apply_v10),
     _MigrationStep(11, "add_scm_reaction_state_store", _apply_v11),
     _MigrationStep(12, "add_scm_reaction_escalation_tracking", _apply_v12),
+    _MigrationStep(13, "add_scm_event_correlation_ids", _apply_v13),
 )
 
 

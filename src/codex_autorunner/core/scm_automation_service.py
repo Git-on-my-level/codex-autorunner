@@ -18,6 +18,16 @@ from .publish_operation_executors import (
     build_notify_chat_executor,
 )
 from .scm_events import ScmEvent, ScmEventStore
+from .scm_observability import (
+    SCM_AUDIT_BINDING_RESOLVED,
+    SCM_AUDIT_PUBLISH_CREATED,
+    SCM_AUDIT_PUBLISH_FINISHED,
+    SCM_AUDIT_ROUTED_INTENT,
+    ScmAuditRecorder,
+    correlation_id_for_event,
+    correlation_id_for_operation,
+    with_correlation_id,
+)
 from .scm_reaction_router import route_scm_reactions
 from .scm_reaction_state import ScmReactionStateStore
 from .scm_reaction_types import ReactionIntent, ScmReactionConfig
@@ -330,6 +340,7 @@ class ScmAutomationService:
         )
         self._reaction_router = reaction_router or route_scm_reactions
         self._reaction_config = ScmReactionConfig.from_mapping(reaction_config)
+        self._audit_recorder = ScmAuditRecorder(self._hub_root)
         self._reaction_state_store = reaction_state_store or ScmReactionStateStore(
             self._hub_root
         )
@@ -365,7 +376,15 @@ class ScmAutomationService:
         thread_target_id: Optional[str] = None,
     ) -> ScmAutomationIngestResult:
         event = self._resolve_event(event_or_id)
+        correlation_id = correlation_id_for_event(event)
         binding = self._binding_resolver(event, thread_target_id=thread_target_id)
+        self._audit_recorder.record(
+            action_type=SCM_AUDIT_BINDING_RESOLVED,
+            correlation_id=correlation_id,
+            event=event,
+            binding=binding,
+            payload={"binding_found": binding is not None},
+        )
         reaction_intents = tuple(
             self._reaction_router(
                 event,
@@ -377,6 +396,13 @@ class ScmAutomationService:
         publish_operations: list[PublishOperation] = []
         seen_operation_keys: set[str] = set()
         for intent in reaction_intents:
+            self._audit_recorder.record(
+                action_type=SCM_AUDIT_ROUTED_INTENT,
+                correlation_id=correlation_id,
+                event=event,
+                binding=binding,
+                intent=intent,
+            )
             binding_id: Optional[str] = None
             fingerprint: Optional[str] = None
             tracking: dict[str, Any] = {}
@@ -390,6 +416,7 @@ class ScmAutomationService:
                 tracking = _compact_mapping(
                     {
                         "binding_id": binding_id,
+                        "correlation_id": correlation_id,
                         "event_id": intent.event_id or event.event_id,
                         "event_type": event.event_type,
                         "fingerprint": fingerprint,
@@ -461,13 +488,25 @@ class ScmAutomationService:
             if intent.operation_key in seen_operation_keys:
                 continue
             seen_operation_keys.add(intent.operation_key)
-            payload = copy.deepcopy(intent.payload)
+            payload = with_correlation_id(
+                copy.deepcopy(intent.payload),
+                correlation_id=correlation_id,
+            )
             if tracking:
                 payload["scm_reaction"] = tracking
-            operation, _deduped = self._journal.create_operation(
+            operation, deduped = self._journal.create_operation(
                 operation_key=intent.operation_key,
                 operation_kind=intent.operation_kind,
                 payload=payload,
+            )
+            self._audit_recorder.record(
+                action_type=SCM_AUDIT_PUBLISH_CREATED,
+                correlation_id=correlation_id,
+                event=event,
+                binding=binding,
+                intent=intent,
+                operation=operation,
+                payload={"deduped": deduped},
             )
             if fingerprint is not None and binding_id is not None:
                 self._reaction_state_store.mark_reaction_emitted(
@@ -489,11 +528,14 @@ class ScmAutomationService:
 
     def process_now(self, limit: int = 10) -> list[PublishOperation]:
         processed = self._publish_processor.process_now(limit=limit)
+        self._record_publish_finished_audit_entries(processed)
         escalations = self._handle_processed_operations(processed)
         if escalations:
-            processed.extend(
-                self._publish_processor.process_now(limit=len(escalations))
+            escalation_results = self._publish_processor.process_now(
+                limit=len(escalations)
             )
+            self._record_publish_finished_audit_entries(escalation_results)
+            processed.extend(escalation_results)
         return processed
 
     def _create_escalation_operation(
@@ -517,14 +559,31 @@ class ScmAutomationService:
         if operation_key in seen_operation_keys:
             return None
         seen_operation_keys.add(operation_key)
+        correlation_id = _normalize_text(tracking.get("correlation_id"))
+        if correlation_id is None:
+            normalized_event_id = _normalize_text(event_id)
+            if normalized_event_id is not None:
+                correlation_id = f"scm:{normalized_event_id}"
         payload = _resolve_escalation_payload(tracking, message=message)
-        operation, _deduped = self._journal.create_operation(
+        if correlation_id is not None:
+            payload = with_correlation_id(payload, correlation_id=correlation_id)
+        operation, deduped = self._journal.create_operation(
             operation_key=operation_key,
             operation_kind="notify_chat",
             payload=payload,
         )
         escalation_metadata = dict(tracking)
         escalation_metadata["escalation_reason"] = reason
+        if correlation_id is not None:
+            self._audit_recorder.record(
+                action_type=SCM_AUDIT_PUBLISH_CREATED,
+                correlation_id=correlation_id,
+                operation=operation,
+                payload={
+                    "deduped": deduped,
+                    "escalation_reason": reason,
+                },
+            )
         self._reaction_state_store.mark_reaction_escalated(
             binding_id=binding_id,
             reaction_kind=reaction_kind,
@@ -598,6 +657,20 @@ class ScmAutomationService:
             if escalation_operation is not None:
                 escalations.append(escalation_operation)
         return escalations
+
+    def _record_publish_finished_audit_entries(
+        self,
+        operations: list[PublishOperation],
+    ) -> None:
+        for operation in operations:
+            correlation_id = correlation_id_for_operation(operation)
+            if correlation_id is None:
+                continue
+            self._audit_recorder.record(
+                action_type=SCM_AUDIT_PUBLISH_FINISHED,
+                correlation_id=correlation_id,
+                operation=operation,
+            )
 
 
 __all__ = [

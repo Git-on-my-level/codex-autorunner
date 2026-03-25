@@ -92,6 +92,7 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "repo_id",
             "pr_number",
             "delivery_id",
+            "correlation_id",
             "occurred_at",
             "received_at",
             "payload_json",

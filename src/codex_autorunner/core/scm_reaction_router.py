@@ -6,6 +6,7 @@ from typing import Any, Optional
 from ..integrations.github.reaction_prompts import build_reaction_message
 from .pr_bindings import PrBinding
 from .scm_events import ScmEvent
+from .scm_observability import correlation_id_for_event
 from .scm_reaction_types import (
     ReactionIntent,
     ReactionKind,
@@ -62,6 +63,7 @@ def _scm_metadata(
     reaction_kind: ReactionKind,
 ) -> dict[str, Any]:
     metadata = {
+        "correlation_id": correlation_id_for_event(event),
         "event_id": event.event_id,
         "provider": event.provider,
         "event_type": event.event_type,
@@ -116,6 +118,7 @@ def _build_publish_payload(
         if binding is None or binding.thread_target_id is None:
             raise ValueError("enqueue_managed_turn reactions require thread_target_id")
         return {
+            "correlation_id": correlation_id_for_event(event),
             "thread_target_id": binding.thread_target_id,
             "request": {
                 "kind": "message",
@@ -125,6 +128,7 @@ def _build_publish_payload(
         }
 
     payload = {
+        "correlation_id": correlation_id_for_event(event),
         "delivery": "primary_pma",
         "message": message_text,
         "metadata": metadata,

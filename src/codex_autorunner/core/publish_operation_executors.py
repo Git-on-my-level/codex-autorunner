@@ -13,6 +13,7 @@ from .pma_chat_delivery import (
 from .pma_thread_store import PmaThreadStore
 from .publish_executor import PublishActionExecutor, TerminalPublishError
 from .publish_journal import PublishOperation
+from .scm_observability import correlation_id_for_operation, correlation_id_from_payload
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -72,6 +73,11 @@ def _managed_turn_request(
         )
 
     metadata = _normalize_mapping(source.get("metadata"))
+    scm_metadata = _normalize_mapping(metadata.get("scm"))
+    correlation_id = correlation_id_from_payload(payload)
+    if correlation_id is not None:
+        scm_metadata["correlation_id"] = correlation_id
+        metadata["scm"] = scm_metadata
     input_items_raw = source.get("input_items")
     input_items: Optional[list[dict[str, Any]]] = None
     if isinstance(input_items_raw, list):
@@ -101,9 +107,10 @@ def _managed_turn_result(
     client_request_id: str,
     turn: dict[str, Any],
     existed: bool,
+    correlation_id: Optional[str] = None,
 ) -> dict[str, Any]:
     status = _normalize_optional_text(turn.get("status")) or "unknown"
-    return {
+    result = {
         "thread_target_id": thread_target_id,
         "managed_turn_id": _require_text(
             turn.get("managed_turn_id"), field_name="managed_turn_id"
@@ -113,6 +120,9 @@ def _managed_turn_result(
         "client_request_id": client_request_id,
         "deduped": existed,
     }
+    if correlation_id is not None:
+        result["correlation_id"] = correlation_id
+    return result
 
 
 def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecutor:
@@ -120,6 +130,7 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
 
     def executor(operation: PublishOperation) -> dict[str, Any]:
         payload = _normalize_mapping(operation.payload)
+        correlation_id = correlation_id_for_operation(operation)
         thread_target_id = _require_text(
             payload.get("thread_target_id"),
             field_name="thread_target_id",
@@ -132,6 +143,7 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
                 client_request_id=client_request_id,
                 turn=existing,
                 existed=True,
+                correlation_id=correlation_id,
             )
 
         request, sandbox_policy = _managed_turn_request(thread_target_id, payload)
@@ -155,6 +167,7 @@ def build_enqueue_managed_turn_executor(*, hub_root: Path) -> PublishActionExecu
             client_request_id=client_request_id,
             turn=created,
             existed=False,
+            correlation_id=correlation_id,
         )
 
     return executor
@@ -207,7 +220,11 @@ def build_notify_chat_executor(
             )
             or "bound"
         )
-        correlation_id = _operation_digest(operation, prefix="publish-chat")
+        correlation_id = correlation_id_for_operation(operation)
+        delivery_correlation_id = correlation_id or _operation_digest(
+            operation,
+            prefix="publish-chat",
+        )
         repo_id, workspace_root = _resolve_thread_context(store, payload=payload)
 
         if delivery == "primary_pma":
@@ -220,7 +237,7 @@ def build_notify_chat_executor(
                     hub_root=hub_root,
                     repo_id=repo_id,
                     message=message,
-                    correlation_id=correlation_id,
+                    correlation_id=delivery_correlation_id,
                 )
             )
         else:
@@ -234,18 +251,21 @@ def build_notify_chat_executor(
                     workspace_root=workspace_root,
                     repo_id=repo_id,
                     message=message,
-                    correlation_id=correlation_id,
+                    correlation_id=delivery_correlation_id,
                 )
             )
 
         targets = int((outcome or {}).get("targets", 0))
         published = int((outcome or {}).get("published", 0))
-        return {
+        result = {
             "delivery": delivery,
             "repo_id": repo_id,
             "targets": targets,
             "published": published,
         }
+        if correlation_id is not None:
+            result["correlation_id"] = correlation_id
+        return result
 
     return executor
 

@@ -71,6 +71,7 @@ def test_route_scm_reactions_returns_threaded_ci_failure_intent() -> None:
     assert intents[0].reaction_kind == "ci_failed"
     assert intents[0].operation_kind == "enqueue_managed_turn"
     assert intents[0].payload == {
+        "correlation_id": "scm:github:event-1",
         "thread_target_id": "thread-123",
         "request": {
             "kind": "message",
@@ -80,6 +81,7 @@ def test_route_scm_reactions_returns_threaded_ci_failure_intent() -> None:
             ),
             "metadata": {
                 "scm": {
+                    "correlation_id": "scm:github:event-1",
                     "event_id": "github:event-1",
                     "provider": "github",
                     "event_type": "check_run",
@@ -114,6 +116,7 @@ def test_route_scm_reactions_returns_notify_intent_for_changes_requested_without
     assert intents[0].reaction_kind == "changes_requested"
     assert intents[0].operation_kind == "notify_chat"
     assert intents[0].payload == {
+        "correlation_id": "scm:github:event-1",
         "delivery": "primary_pma",
         "message": (
             "Changes requested on acme/widgets#42 by reviewer: "
@@ -121,6 +124,7 @@ def test_route_scm_reactions_returns_notify_intent_for_changes_requested_without
         ),
         "metadata": {
             "scm": {
+                "correlation_id": "scm:github:event-1",
                 "event_id": "github:event-1",
                 "provider": "github",
                 "event_type": "pull_request_review",
