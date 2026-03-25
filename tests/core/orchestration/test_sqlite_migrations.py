@@ -395,6 +395,55 @@ def test_apply_orchestration_migrations_adds_reaction_escalation_column_from_v11
     assert "escalated_at" in columns
 
 
+def test_apply_orchestration_migrations_adds_feedback_report_table_from_v13(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (13, 'add_scm_event_correlation_ids', '2026-03-26T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        feedback_report_table = conn.execute(
+            """
+            SELECT name
+              FROM sqlite_master
+             WHERE type = 'table'
+               AND name = 'orch_feedback_reports'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert feedback_report_table is not None
+
+
 def test_apply_orchestration_migrations_backfills_resource_owner_columns(
     tmp_path: Path,
 ) -> None:

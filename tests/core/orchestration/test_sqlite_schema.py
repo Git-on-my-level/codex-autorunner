@@ -63,6 +63,7 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "orch_scm_events",
             "orch_pr_bindings",
             "orch_reaction_state",
+            "orch_feedback_reports",
         }.issubset(names)
         assert {
             "operation_id",
@@ -133,6 +134,22 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "last_error_text",
             "metadata_json",
         }.issubset(_column_names(conn, "orch_reaction_state"))
+        assert {
+            "report_id",
+            "repo_id",
+            "thread_target_id",
+            "report_kind",
+            "title",
+            "body",
+            "evidence_json",
+            "confidence",
+            "source_kind",
+            "source_id",
+            "dedupe_key",
+            "status",
+            "created_at",
+            "updated_at",
+        }.issubset(_column_names(conn, "orch_feedback_reports"))
 
 
 def test_table_definition_roles_cover_authoritative_mirror_projection_and_ops() -> None:

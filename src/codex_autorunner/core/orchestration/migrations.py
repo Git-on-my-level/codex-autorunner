@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 13
+ORCHESTRATION_SCHEMA_VERSION = 14
 
 
 @dataclass(frozen=True)
@@ -920,6 +920,47 @@ def _apply_v13(conn: sqlite3.Connection) -> None:
         )
 
 
+def _apply_v14(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_feedback_reports (
+            report_id TEXT PRIMARY KEY,
+            repo_id TEXT,
+            thread_target_id TEXT,
+            report_kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            confidence REAL,
+            source_kind TEXT NOT NULL,
+            source_id TEXT,
+            dedupe_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_dedupe_updated
+            ON orch_feedback_reports(dedupe_key, updated_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_repo_thread_updated
+            ON orch_feedback_reports(repo_id, thread_target_id, updated_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_status_updated
+            ON orch_feedback_reports(status, updated_at, created_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -938,6 +979,7 @@ _MIGRATIONS = (
     _MigrationStep(11, "add_scm_reaction_state_store", _apply_v11),
     _MigrationStep(12, "add_scm_reaction_escalation_tracking", _apply_v12),
     _MigrationStep(13, "add_scm_event_correlation_ids", _apply_v13),
+    _MigrationStep(14, "add_feedback_report_store", _apply_v14),
 )
 
 
@@ -1011,6 +1053,11 @@ _TABLE_DEFINITIONS = (
         name="orch_reaction_state",
         role="authoritative",
         description="Durable reaction fingerprints and delivery state used to suppress repeated SCM follow-ups.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_feedback_reports",
+        role="authoritative",
+        description="Durable structured feedback reports keyed by stable content-derived dedupe fingerprints.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",
