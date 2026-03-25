@@ -86,11 +86,17 @@ class _StubClient:
 
 class _StubSupervisor:
     def __init__(
-        self, client: _StubClient, *, session_stall_timeout_seconds: float | None = None
+        self,
+        client: _StubClient,
+        *,
+        session_stall_timeout_seconds: float | None = None,
+        runtime_instance_id: str | None = None,
     ) -> None:
         self._client = client
         self.session_stall_timeout_seconds = session_stall_timeout_seconds
+        self.runtime_instance_id = runtime_instance_id
         self.timeout_workspace_roots: list[Path] = []
+        self.runtime_workspace_roots: list[Path] = []
 
     async def get_client(self, _workspace_root: Path) -> _StubClient:
         return self._client
@@ -100,6 +106,12 @@ class _StubSupervisor:
     ) -> float | None:
         self.timeout_workspace_roots.append(workspace_root)
         return self.session_stall_timeout_seconds
+
+    async def backend_runtime_instance_id_for_workspace(
+        self, workspace_root: Path
+    ) -> str | None:
+        self.runtime_workspace_roots.append(workspace_root)
+        return self.runtime_instance_id
 
 
 @pytest.mark.asyncio
@@ -115,6 +127,38 @@ async def test_opencode_harness_reports_capabilities_from_contract() -> None:
     assert harness.allows_parallel_event_stream() is False
     assert harness.supports("approvals") is False
     assert report.capabilities == harness.capabilities
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_exposes_backend_runtime_instance_id() -> None:
+    workspace_root = Path("/tmp/workspace").resolve()
+    supervisor = _StubSupervisor(
+        _StubClient([]),
+        runtime_instance_id=" opencode:scope=workspace:pid=4242 ",
+    )
+    harness = OpenCodeHarness(supervisor)
+
+    runtime_instance_id = await harness.backend_runtime_instance_id(workspace_root)
+
+    assert runtime_instance_id == "opencode:scope=workspace:pid=4242"
+    assert supervisor.runtime_workspace_roots == [workspace_root]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_backend_runtime_instance_id_is_optional() -> None:
+    class _SupervisorWithoutRuntimeId:
+        async def get_client(self, _workspace_root: Path) -> _StubClient:
+            return _StubClient([])
+
+        async def session_stall_timeout_seconds_for_workspace(
+            self, workspace_root: Path
+        ) -> float | None:
+            _ = workspace_root
+            return None
+
+    harness = OpenCodeHarness(_SupervisorWithoutRuntimeId())
+
+    assert await harness.backend_runtime_instance_id(Path(".")) is None
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,10 @@ from typing import Any, Optional, Protocol, runtime_checkable
 class OpenCodeHarnessSupervisorProtocol(Protocol):
     async def get_client(self, workspace_root: Path) -> Any: ...
 
+    async def backend_runtime_instance_id_for_workspace(
+        self, workspace_root: Path
+    ) -> Optional[str]: ...
+
     async def session_stall_timeout_seconds_for_workspace(
         self, workspace_root: Path
     ) -> Optional[float]: ...

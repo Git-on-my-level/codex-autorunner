@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -207,6 +208,34 @@ class OpenCodeSupervisor:
         if handle.client is None:
             raise OpenCodeSupervisorError("OpenCode client not initialized")
         return handle.client
+
+    async def backend_runtime_instance_id_for_workspace(
+        self, workspace_root: Path
+    ) -> Optional[str]:
+        canonical_root = canonical_workspace_root(workspace_root)
+        workspace_id = workspace_id_for_path(canonical_root)
+        handle_id = (
+            _GLOBAL_HANDLE_ID if self._server_scope == _SCOPE_GLOBAL else workspace_id
+        )
+        handle = await self._ensure_handle(handle_id, canonical_root)
+        await self._ensure_started(handle)
+        handle.last_used_at = time.monotonic()
+
+        record = handle.managed_process_record
+        if record is None:
+            record = self._read_registry_record(canonical_root, handle.workspace_id)
+        if record is not None:
+            runtime_instance_id = self._runtime_instance_id_from_record(record)
+            if runtime_instance_id is not None:
+                return runtime_instance_id
+
+        process = handle.process
+        if process is not None and process.pid is not None:
+            return self._runtime_instance_id_from_pid(process.pid)
+
+        if handle.base_url:
+            return self._runtime_instance_id_from_base_url(handle.base_url)
+        return None
 
     async def close_all(self) -> None:
         async with self._get_lock():
@@ -971,6 +1000,41 @@ class OpenCodeSupervisor:
 
     def _current_record_timestamp(self) -> str:
         return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _read_registry_record(
+        self, workspace_root: Path, workspace_id: str
+    ) -> Optional[ProcessRecord]:
+        try:
+            record = read_process_record(
+                self._registry_root(workspace_root), _PROCESS_KIND, workspace_id
+            )
+        except Exception:
+            return None
+        if record is None or not self._record_is_running(record):
+            return None
+        return record
+
+    def _runtime_instance_id_from_record(self, record: ProcessRecord) -> Optional[str]:
+        if record.pid is not None:
+            started_at = record.started_at.strip() if record.started_at else ""
+            if started_at:
+                return (
+                    "opencode:"
+                    f"scope={self._server_scope}:"
+                    f"pid={record.pid}:"
+                    f"started_at={started_at}"
+                )
+            return self._runtime_instance_id_from_pid(record.pid)
+        if record.base_url:
+            return self._runtime_instance_id_from_base_url(record.base_url)
+        return None
+
+    def _runtime_instance_id_from_pid(self, pid: int) -> str:
+        return f"opencode:scope={self._server_scope}:pid={pid}"
+
+    def _runtime_instance_id_from_base_url(self, base_url: str) -> str:
+        digest = hashlib.sha256(base_url.encode("utf-8")).hexdigest()[:16]
+        return f"opencode:scope={self._server_scope}:url_sha256={digest}"
 
     def _record_metadata(
         self,

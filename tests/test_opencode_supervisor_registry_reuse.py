@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,78 @@ def _handle(workspace_root: Path, workspace_id: str = "ws-1") -> OpenCodeHandle:
 def _expected_registry_lock_path(registry_root: Path, handle_id: str) -> Path:
     return (
         registry_root / ".codex-autorunner" / "locks" / "opencode" / f"{handle_id}.lock"
+    )
+
+
+@pytest.mark.anyio
+async def test_backend_runtime_instance_id_prefers_process_record_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+    handle.managed_process_record = ProcessRecord(
+        kind="opencode",
+        workspace_id="ws-1",
+        pid=4242,
+        pgid=4242,
+        base_url="http://127.0.0.1:9001",
+        command=["opencode", "serve"],
+        owner_pid=111,
+        started_at="2026-02-15T00:00:00Z",
+        metadata={},
+    )
+    handle.started = True
+
+    async def _fake_ensure_handle(
+        _handle_id: str, _workspace_root: Path
+    ) -> OpenCodeHandle:
+        return handle
+
+    async def _fake_ensure_started(_handle: OpenCodeHandle) -> None:
+        return
+
+    monkeypatch.setattr(supervisor, "_ensure_handle", _fake_ensure_handle)
+    monkeypatch.setattr(supervisor, "_ensure_started", _fake_ensure_started)
+
+    runtime_instance_id = await supervisor.backend_runtime_instance_id_for_workspace(
+        tmp_path
+    )
+
+    assert (
+        runtime_instance_id
+        == "opencode:scope=workspace:pid=4242:started_at=2026-02-15T00:00:00Z"
+    )
+
+
+@pytest.mark.anyio
+async def test_backend_runtime_instance_id_hashes_external_base_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+    handle.base_url = "https://example.com/opencode"
+    handle.started = True
+
+    async def _fake_ensure_handle(
+        _handle_id: str, _workspace_root: Path
+    ) -> OpenCodeHandle:
+        return handle
+
+    async def _fake_ensure_started(_handle: OpenCodeHandle) -> None:
+        return
+
+    monkeypatch.setattr(supervisor, "_ensure_handle", _fake_ensure_handle)
+    monkeypatch.setattr(supervisor, "_ensure_started", _fake_ensure_started)
+
+    runtime_instance_id = await supervisor.backend_runtime_instance_id_for_workspace(
+        tmp_path
+    )
+
+    expected_digest = hashlib.sha256(
+        "https://example.com/opencode".encode("utf-8")
+    ).hexdigest()[:16]
+    assert (
+        runtime_instance_id == f"opencode:scope=workspace:url_sha256={expected_digest}"
     )
 
 

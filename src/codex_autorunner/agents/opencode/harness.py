@@ -627,6 +627,20 @@ class OpenCodeHarness(AgentHarness):
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.get_client(workspace_root)
 
+    async def backend_runtime_instance_id(self, workspace_root: Path) -> Optional[str]:
+        resolver = getattr(
+            self._supervisor,
+            "backend_runtime_instance_id_for_workspace",
+            None,
+        )
+        if not callable(resolver):
+            return None
+        runtime_instance_id = await resolver(workspace_root)
+        if not isinstance(runtime_instance_id, str):
+            return None
+        normalized = runtime_instance_id.strip()
+        return normalized or None
+
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
         client = await self._supervisor.get_client(workspace_root)
         payload = await client.providers(directory=str(workspace_root))

@@ -520,6 +520,26 @@ class _DiscordOpenCodeSupervisorAdapter:
             raise RuntimeError("OpenCode supervisor unavailable")
         return await supervisor.get_client(canonical_root)
 
+    async def backend_runtime_instance_id_for_workspace(
+        self, workspace_root: Path
+    ) -> Optional[str]:
+        canonical_root = canonicalize_path(Path(workspace_root))
+        supervisor = await self._service._opencode_supervisor_for_workspace(
+            canonical_root
+        )
+        if supervisor is None:
+            return None
+        resolver = getattr(
+            supervisor, "backend_runtime_instance_id_for_workspace", None
+        )
+        if not callable(resolver):
+            return None
+        runtime_instance_id = await resolver(canonical_root)
+        if not isinstance(runtime_instance_id, str):
+            return None
+        normalized = runtime_instance_id.strip()
+        return normalized or None
+
     async def session_stall_timeout_seconds_for_workspace(
         self, workspace_root: Path
     ) -> Optional[float]:
