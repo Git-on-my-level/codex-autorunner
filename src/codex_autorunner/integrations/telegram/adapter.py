@@ -27,7 +27,6 @@ from ..chat.collaboration_policy import (
     evaluate_collaboration_admission,
 )
 from ..chat.text_chunking import chunk_text
-from ..chat.text_sanitization import collapse_local_markdown_links
 from .api_schemas import (
     TelegramAudioSchema,
     TelegramDocumentSchema,
