@@ -26,6 +26,16 @@ from .pma_automation_store import (
     PmaAutomationWakeup,
     PmaLifecycleSubscription,
 )
+from .publish_executor import (
+    DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS,
+    PublishActionExecutor,
+    PublishExecutionError,
+    PublishExecutorRegistry,
+    PublishOperationProcessor,
+    RetryablePublishError,
+    TerminalPublishError,
+    drain_pending_publish_operations,
+)
 from .publish_journal import PublishJournalStore, PublishOperation
 from .sse import SSEEvent, format_sse, parse_sse_lines
 from .type_debt_ledger import (
@@ -51,12 +61,20 @@ __all__ = [
     "PmaAutomationTimer",
     "PmaAutomationWakeup",
     "PmaLifecycleSubscription",
+    "DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS",
+    "PublishActionExecutor",
+    "PublishExecutionError",
+    "PublishExecutorRegistry",
     "PublishJournalStore",
     "PublishOperation",
+    "PublishOperationProcessor",
+    "RetryablePublishError",
     "SSEEvent",
+    "TerminalPublishError",
     "archive_worktree_snapshot",
     "build_car_context_bundle",
     "build_type_debt_ledger",
+    "drain_pending_publish_operations",
     "default_managed_thread_context_profile",
     "format_file_role_addendum",
     "format_sse",
