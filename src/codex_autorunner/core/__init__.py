@@ -37,6 +37,10 @@ from .publish_executor import (
     drain_pending_publish_operations,
 )
 from .publish_journal import PublishJournalStore, PublishOperation
+from .publish_operation_executors import (
+    build_enqueue_managed_turn_executor,
+    build_notify_chat_executor,
+)
 from .sse import SSEEvent, format_sse, parse_sse_lines
 from .type_debt_ledger import (
     build_type_debt_ledger,
@@ -61,6 +65,8 @@ __all__ = [
     "PmaAutomationTimer",
     "PmaAutomationWakeup",
     "PmaLifecycleSubscription",
+    "build_enqueue_managed_turn_executor",
+    "build_notify_chat_executor",
     "DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS",
     "PublishActionExecutor",
     "PublishExecutionError",

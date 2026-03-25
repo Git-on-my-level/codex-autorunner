@@ -236,6 +236,31 @@ def test_create_turn_can_queue_behind_running_turn(tmp_path: Path) -> None:
     assert queued_items[0]["request_kind"] == "review"
 
 
+def test_get_turn_by_client_turn_id_prefers_current_execution(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    running_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="first",
+        client_turn_id="publish-turn-1",
+    )
+    store.mark_turn_finished(running_turn["managed_turn_id"], status="ok")
+
+    newer_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second",
+        client_turn_id="publish-turn-1",
+    )
+
+    fetched = store.get_turn_by_client_turn_id(
+        thread["managed_thread_id"], "publish-turn-1"
+    )
+    assert fetched is not None
+    assert fetched["managed_turn_id"] == newer_turn["managed_turn_id"]
+    assert fetched["status"] == "running"
+
+
 def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> None:
     store = PmaThreadStore(tmp_path / "hub")
     thread = store.create_thread("codex", tmp_path / "workspace")

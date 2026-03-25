@@ -748,7 +748,7 @@ class GitHubService:
         number: int,
         body: str,
         cwd: Optional[Path] = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         args = [
             "api",
             "-X",
@@ -757,7 +757,14 @@ class GitHubService:
             "-f",
             f"body={body}",
         ]
-        self._gh(args, cwd=cwd or self.repo_root, check=True, timeout_seconds=20)
+        proc = self._gh(args, cwd=cwd or self.repo_root, check=True, timeout_seconds=20)
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise GitHubError(
+                "Unable to parse gh comment creation output", status_code=500
+            ) from exc
+        return payload if isinstance(payload, dict) else {}
 
     def build_context_file_from_url(
         self, url: str, *, allow_cross_repo: bool = False
