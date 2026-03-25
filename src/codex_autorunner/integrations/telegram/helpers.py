@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,8 +33,11 @@ from ...integrations.chat.status_diagnostics import (
 )
 from ...integrations.chat.thread_summaries import (  # noqa: F401
     _coerce_thread_list,
+    _extract_text_payload,
     _extract_thread_list_cursor,
     _extract_thread_preview_parts,
+    _iter_role_texts,
+    _tail_text_lines,
 )
 from ...integrations.chat.turn_metrics import (  # noqa: F401
     _extract_context_usage_percent,
@@ -1279,28 +1281,6 @@ def _coerce_preview_field_raw(
     return None
 
 
-def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
-    if max_lines <= 0:
-        return []
-    try:
-        with path.open("rb") as handle:
-            handle.seek(0, os.SEEK_END)
-            position = handle.tell()
-            buffer = b""
-            lines: list[bytes] = []
-            while position > 0 and len(lines) <= max_lines:
-                read_size = min(4096, position)
-                position -= read_size
-                handle.seek(position)
-                buffer = handle.read(read_size) + buffer
-                lines = buffer.splitlines()
-            return [
-                line.decode("utf-8", errors="replace") for line in lines[-max_lines:]
-            ]
-    except OSError:
-        return []
-
-
 def _head_text_lines(path: Path, max_lines: int) -> list[str]:
     if max_lines <= 0:
         return []
@@ -1315,107 +1295,6 @@ def _head_text_lines(path: Path, max_lines: int) -> list[str]:
         return lines
     except OSError:
         return []
-
-
-def _extract_text_payload(payload: Any) -> Optional[str]:
-    if isinstance(payload, str):
-        text = payload.strip()
-        return text if text else None
-    if isinstance(payload, list):
-        parts = []
-        for item in payload:
-            part_text = _extract_text_payload(item)
-            if part_text:
-                parts.append(part_text)
-        if parts:
-            return " ".join(parts)
-        return None
-    if isinstance(payload, dict):
-        for key in ("text", "input_text", "output_text", "message", "value", "delta"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                text = value.strip()
-                if text:
-                    return text
-        content = payload.get("content")
-        if content is not None:
-            return _extract_text_payload(content)
-    return None
-
-
-def _iter_role_texts(
-    payload: Any,
-    *,
-    default_role: Optional[str] = None,
-    depth: int = 0,
-) -> Iterable[tuple[str, str]]:
-    if depth > 5:
-        return
-    if isinstance(payload, list):
-        for item in payload:
-            yield from _iter_role_texts(
-                item, default_role=default_role, depth=depth + 1
-            )
-        return
-    if not isinstance(payload, dict):
-        return
-    role = payload.get("role") if isinstance(payload.get("role"), str) else None
-    type_value = payload.get("type") if isinstance(payload.get("type"), str) else None
-    role_hint = role or default_role
-    if not role_hint and type_value:
-        lowered = type_value.lower()
-        if lowered in (
-            "user",
-            "user_message",
-            "input",
-            "input_text",
-            "prompt",
-            "request",
-        ):
-            role_hint = "user"
-        elif lowered in (
-            "assistant",
-            "assistant_message",
-            "output",
-            "output_text",
-            "response",
-        ):
-            role_hint = "assistant"
-        else:
-            tokens = [token for token in re.split(r"[._]+", lowered) if token]
-            if any(token in ("user", "input", "prompt", "request") for token in tokens):
-                role_hint = "user"
-            elif any(
-                token in ("assistant", "output", "response", "completion")
-                for token in tokens
-            ):
-                role_hint = "assistant"
-    text = _extract_text_payload(payload)
-    if role_hint in ("user", "assistant") and text:
-        yield role_hint, text
-    nested_payload = payload.get("payload")
-    if nested_payload is not None:
-        yield from _iter_role_texts(
-            nested_payload, default_role=role_hint, depth=depth + 1
-        )
-    for key in ("input", "output", "messages", "items", "events"):
-        if key in payload:
-            yield from _iter_role_texts(
-                payload[key],
-                default_role="user" if key == "input" else "assistant",
-                depth=depth + 1,
-            )
-    for key in ("request", "response", "message", "item", "turn", "event", "data"):
-        if key in payload:
-            next_role = role_hint
-            if next_role is None:
-                if key == "request":
-                    next_role = "user"
-                elif key == "response":
-                    next_role = "assistant"
-            yield from _iter_role_texts(
-                payload[key], default_role=next_role, depth=depth + 1
-            )
 
 
 def _extract_rollout_preview(path: Path) -> tuple[Optional[str], Optional[str]]:
