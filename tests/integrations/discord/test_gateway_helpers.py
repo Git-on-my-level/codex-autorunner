@@ -434,6 +434,69 @@ async def test_run_connection_reads_later_frames_while_dispatch_worker_is_busy()
 
 
 @pytest.mark.anyio
+async def test_run_connection_backpressures_when_dispatch_queue_is_full() -> None:
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+
+    class _FakeWebSocket:
+        def __init__(self) -> None:
+            self.third_frame_read = asyncio.Event()
+            self.fourth_frame_read = asyncio.Event()
+            self._frames = iter(
+                [
+                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "first"}},
+                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "second"}},
+                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "third"}},
+                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "fourth"}},
+                ]
+            )
+
+        async def recv(self) -> dict[str, object]:
+            return {"op": 10, "d": {"heartbeat_interval": 1000}}
+
+        async def send(self, _payload: object) -> None:
+            return None
+
+        def __aiter__(self) -> "_FakeWebSocket":
+            return self
+
+        async def __anext__(self) -> dict[str, object]:
+            try:
+                frame = next(self._frames)
+                if frame["d"]["id"] == "third":
+                    self.third_frame_read.set()
+                if frame["d"]["id"] == "fourth":
+                    self.fourth_frame_read.set()
+                return frame
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    release_first = asyncio.Event()
+    first_started = asyncio.Event()
+
+    async def _dispatch(_event_type: str, payload: dict[str, object]) -> None:
+        if payload["id"] == "first":
+            first_started.set()
+            await release_first.wait()
+
+    websocket = _FakeWebSocket()
+    run_task = asyncio.create_task(client._run_connection(websocket, _dispatch))
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+    await asyncio.wait_for(websocket.third_frame_read.wait(), timeout=1.0)
+    await asyncio.sleep(0)
+
+    assert websocket.fourth_frame_read.is_set() is False
+
+    release_first.set()
+    await asyncio.wait_for(run_task, timeout=1.0)
+
+    assert websocket.fourth_frame_read.is_set()
+
+
+@pytest.mark.anyio
 async def test_stop_cancels_outstanding_dispatch_worker() -> None:
     client = DiscordGatewayClient(
         bot_token="token",

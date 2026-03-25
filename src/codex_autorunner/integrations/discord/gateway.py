@@ -27,6 +27,9 @@ else:
 
 
 FATAL_GATEWAY_CLOSE_CODES = {4004, 4010, 4011, 4012, 4013, 4014}
+# Allow one queued dispatch in addition to the active worker item so later
+# frames can start flowing without letting backlog grow unbounded.
+DISCORD_DISPATCH_QUEUE_MAXSIZE = 1
 
 
 @dataclass(frozen=True)
@@ -237,7 +240,9 @@ class DiscordGatewayClient:
             )
         )
         established_session = False
-        dispatch_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+        dispatch_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue(
+            maxsize=DISCORD_DISPATCH_QUEUE_MAXSIZE
+        )
         self._dispatch_queue = dispatch_queue
         self._dispatch_worker_task = asyncio.create_task(
             self._dispatch_loop(dispatch_queue, on_dispatch)
@@ -258,7 +263,11 @@ class DiscordGatewayClient:
                         established_session = True
                         self._ready_in_connection = True
                     if frame.t and isinstance(frame.d, dict):
-                        dispatch_queue.put_nowait((frame.t, frame.d))
+                        enqueued = await self._enqueue_dispatch(
+                            dispatch_queue, frame.t, frame.d
+                        )
+                        if not enqueued:
+                            return established_session
                     continue
                 if frame.op == 1:
                     await websocket.send(
@@ -361,6 +370,40 @@ class DiscordGatewayClient:
             return message_task.result()
         except StopAsyncIteration:
             return None
+
+    async def _enqueue_dispatch(
+        self,
+        queue: asyncio.Queue[tuple[str, dict[str, Any]]],
+        event_type: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        dispatch_task = self._dispatch_worker_task
+        if dispatch_task is None:
+            raise RuntimeError("Discord dispatch worker is not running")
+
+        queue_put_task = asyncio.create_task(queue.put((event_type, payload)))
+        try:
+            done, _pending = await asyncio.wait(
+                {queue_put_task, dispatch_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except Exception:
+            queue_put_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await queue_put_task
+            raise
+
+        if dispatch_task in done:
+            queue_put_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await queue_put_task
+            if self._dispatch_worker_cancelled_for_shutdown(dispatch_task):
+                return False
+            self._raise_if_dispatch_worker_failed(dispatch_task)
+            raise RuntimeError("Discord dispatch worker exited unexpectedly")
+
+        await queue_put_task
+        return True
 
     async def _wait_for_dispatch_queue(
         self,
