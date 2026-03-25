@@ -44,6 +44,12 @@ from .publish_operation_executors import (
     build_notify_chat_executor,
 )
 from .scm_events import ScmEvent, ScmEventStore
+from .scm_reaction_router import route_scm_reactions
+from .scm_reaction_types import (
+    ReactionIntent,
+    ScmReactionConfig,
+    stable_reaction_operation_key,
+)
 from .sse import SSEEvent, format_sse, parse_sse_lines
 from .type_debt_ledger import (
     build_type_debt_ledger,
@@ -80,9 +86,11 @@ __all__ = [
     "PublishJournalStore",
     "PublishOperation",
     "PublishOperationProcessor",
+    "ReactionIntent",
     "RetryablePublishError",
     "ScmEvent",
     "ScmEventStore",
+    "ScmReactionConfig",
     "SSEEvent",
     "TerminalPublishError",
     "archive_worktree_snapshot",
@@ -94,7 +102,9 @@ __all__ = [
     "format_sse",
     "ledger_to_dict",
     "parse_sse_lines",
+    "route_scm_reactions",
     "render_injected_car_context",
     "render_markdown_report",
     "render_runtime_compat_agents_md",
+    "stable_reaction_operation_key",
 ]
