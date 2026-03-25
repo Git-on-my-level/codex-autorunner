@@ -327,7 +327,7 @@ class TelegramTicketFlowBridge:
         """Best-effort resume + worker spawn; failures are logged only."""
         try:
             if self._runtime_services is not None:
-                controller = self._runtime_services.get_ticket_flow_controller(
+                controller = self._runtime_services.ensure_ticket_flow_controller(
                     workspace_root
                 )
             else:

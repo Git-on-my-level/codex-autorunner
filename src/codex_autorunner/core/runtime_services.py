@@ -35,7 +35,7 @@ class RuntimeServices:
         self._lock = asyncio.Lock()
         self._closed = False
 
-    def get_ticket_flow_controller(self, repo_root: Path) -> FlowController:
+    def ensure_ticket_flow_controller(self, repo_root: Path) -> FlowController:
         repo_root = repo_root.resolve()
         cached = self._flow_runtimes.get(repo_root)
         if cached is not None:
@@ -45,6 +45,9 @@ class RuntimeServices:
         resources = self._flow_runtime_builder(repo_root)
         self._flow_runtimes[repo_root] = resources
         return resources.controller
+
+    def get_ticket_flow_controller(self, repo_root: Path) -> FlowController:
+        return self.ensure_ticket_flow_controller(repo_root)
 
     async def close(self) -> None:
         async with self._lock:

@@ -2339,22 +2339,28 @@ class HubSupervisor:
     def lifecycle_store(self) -> LifecycleEventStore:
         return self._lifecycle_emitter._store
 
-    def get_pma_automation_store(self) -> PmaAutomationStore:
+    def ensure_pma_automation_store(self) -> PmaAutomationStore:
         if self._pma_automation_store is not None:
             return self._pma_automation_store
         self._pma_automation_store = PmaAutomationStore(self.hub_config.root)
         return self._pma_automation_store
 
+    def ensure_automation_store(self) -> PmaAutomationStore:
+        return self.ensure_pma_automation_store()
+
+    def get_pma_automation_store(self) -> PmaAutomationStore:
+        return self.ensure_pma_automation_store()
+
     def get_automation_store(self) -> PmaAutomationStore:
-        return self.get_pma_automation_store()
+        return self.ensure_automation_store()
 
     @property
     def pma_automation_store(self) -> PmaAutomationStore:
-        return self.get_pma_automation_store()
+        return self.ensure_pma_automation_store()
 
     @property
     def automation_store(self) -> PmaAutomationStore:
-        return self.get_pma_automation_store()
+        return self.ensure_automation_store()
 
     def set_pma_lane_worker_starter(
         self, starter: Optional[Callable[[str], None]]
@@ -2553,7 +2559,7 @@ class HubSupervisor:
     ) -> int:
         transition = self._lifecycle_transition_payload(event)
         try:
-            store = self.get_pma_automation_store()
+            store = self.ensure_pma_automation_store()
             matches = store.match_lifecycle_subscriptions(
                 event_type=event.event_type.value,
                 repo_id=transition.get("repo_id"),
@@ -2612,7 +2618,7 @@ class HubSupervisor:
         if take <= 0:
             return 0
 
-        store = self.get_pma_automation_store()
+        store = self.ensure_pma_automation_store()
         dequeue_due_timers = getattr(store, "dequeue_due_timers", None)
         if not callable(dequeue_due_timers):
             return 0
@@ -2737,7 +2743,7 @@ class HubSupervisor:
         if not self.hub_config.pma.enabled:
             return 0
 
-        store = self.get_pma_automation_store()
+        store = self.ensure_pma_automation_store()
         list_pending_wakeups = getattr(store, "list_pending_wakeups", None)
         mark_wakeup_dispatched = getattr(store, "mark_wakeup_dispatched", None)
         if not callable(list_pending_wakeups) or not callable(mark_wakeup_dispatched):
@@ -2905,7 +2911,7 @@ class HubSupervisor:
             max_backoff_seconds=max_backoff_seconds,
         )
 
-    def get_pma_safety_checker(self) -> PmaSafetyChecker:
+    def ensure_pma_safety_checker(self) -> PmaSafetyChecker:
         if self._pma_safety_checker is not None:
             return self._pma_safety_checker
 
@@ -2940,6 +2946,9 @@ class HubSupervisor:
         )
         return self._pma_safety_checker
 
+    def get_pma_safety_checker(self) -> PmaSafetyChecker:
+        return self.ensure_pma_safety_checker()
+
     def _pma_reactive_gate(self, event: LifecycleEvent) -> tuple[bool, str]:
         pma = self.hub_config.pma
         reactive_enabled = getattr(pma, "reactive_enabled", True)
@@ -2970,7 +2979,7 @@ class HubSupervisor:
             if not store.check_and_update(key, debounce_seconds):
                 return False, "reactive_debounced"
 
-        safety_checker = self.get_pma_safety_checker()
+        safety_checker = self.ensure_pma_safety_checker()
         safety_check = safety_checker.check_reactive_turn()
         if not safety_check.allowed:
             logger.info(

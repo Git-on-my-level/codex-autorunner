@@ -2691,7 +2691,7 @@ def _snapshot_pma_automation(
         },
     }
     try:
-        store = supervisor.get_pma_automation_store()
+        store = supervisor.ensure_pma_automation_store()
     except Exception:
         return out
 
