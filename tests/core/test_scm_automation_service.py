@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 from codex_autorunner.core.pr_bindings import PrBinding
@@ -12,7 +13,11 @@ from codex_autorunner.core.scm_reaction_state import ScmReactionStateStore
 from codex_autorunner.core.scm_reaction_types import ReactionIntent, ScmReactionConfig
 
 
-def _event(*, event_id: str = "github:event-1") -> ScmEvent:
+def _event(
+    *,
+    event_id: str = "github:event-1",
+    payload: dict[str, object] | None = None,
+) -> ScmEvent:
     return ScmEvent(
         event_id=event_id,
         provider="github",
@@ -24,7 +29,7 @@ def _event(*, event_id: str = "github:event-1") -> ScmEvent:
         repo_id="repo-1",
         pr_number=42,
         delivery_id="delivery-1",
-        payload={"action": "submitted", "review_state": "changes_requested"},
+        payload=payload or {"action": "submitted", "review_state": "changes_requested"},
         raw_payload=None,
     )
 
@@ -148,7 +153,7 @@ class _JournalFake:
         payload: Optional[dict] = None,
         next_attempt_at: Optional[str] = None,
     ) -> tuple[PublishOperation, bool]:
-        _ = payload, next_attempt_at
+        _ = next_attempt_at
         self.create_calls.append((operation_key, operation_kind))
         existing = self.operations_by_key.get(operation_key)
         if existing is not None:
@@ -157,6 +162,9 @@ class _JournalFake:
             operation_id=f"op-{len(self.operations_by_key) + 1}",
             operation_key=operation_key,
             operation_kind=operation_kind,
+        )
+        created = PublishOperation(
+            **{**created.to_dict(), "payload": dict(payload or {})}
         )
         self.operations_by_key[operation_key] = created
         return created, False
@@ -212,6 +220,91 @@ class _PermissiveReactionStateFake:
             (binding_id, reaction_kind, fingerprint, event_id, operation_key)
         )
         return object()
+
+    def get_reaction_state(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+    ) -> object | None:
+        _ = binding_id, reaction_kind, fingerprint
+        return None
+
+    def mark_reaction_suppressed(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = binding_id, reaction_kind, fingerprint, event_id, metadata
+        return object()
+
+    def mark_reaction_escalated(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        operation_key: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = binding_id, reaction_kind, fingerprint, event_id, operation_key, metadata
+        return object()
+
+    def mark_reaction_delivery_failed(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        error_text: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = binding_id, reaction_kind, fingerprint, event_id, error_text, metadata
+        return SimpleNamespace(escalated_at=None, delivery_failure_count=1)
+
+    def mark_reaction_delivery_succeeded(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        operation_key: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = binding_id, reaction_kind, fingerprint, event_id, operation_key, metadata
+        return object()
+
+    def resolve_other_active_reactions(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        keep_fingerprint: str,
+        event_id: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> int:
+        _ = binding_id, reaction_kind, keep_fingerprint, event_id, metadata
+        return 0
+
+
+class _ProcessorSequenceFake:
+    def __init__(self, *batches: list[PublishOperation]) -> None:
+        self._batches = list(batches)
+        self.calls: list[int] = []
+
+    def process_now(self, limit: int = 10) -> list[PublishOperation]:
+        self.calls.append(limit)
+        if not self._batches:
+            return []
+        return list(self._batches.pop(0))
 
 
 def test_ingest_event_loads_persisted_event_routes_reactions_and_dedupes_publish_operations(
@@ -320,8 +413,8 @@ def test_ingest_event_suppresses_repeated_semantic_reaction_conditions_using_dur
 
     assert stored is not None
     assert stored.state == "emitted"
-    assert stored.attempt_count == 1
-    assert stored.last_event_id == "github:event-1"
+    assert stored.attempt_count == 2
+    assert stored.last_event_id == "github:event-2"
 
 
 def test_process_now_delegates_to_publish_processor(tmp_path: Path) -> None:
@@ -347,3 +440,250 @@ def test_process_now_delegates_to_publish_processor(tmp_path: Path) -> None:
 
     assert processor.calls == [7]
     assert result == processed
+
+
+def test_ingest_event_escalates_after_duplicate_threshold_without_requeueing_same_reaction(
+    tmp_path: Path,
+) -> None:
+    first_event = _event(
+        event_id="github:event-1",
+        payload={
+            "action": "submitted",
+            "review_state": "changes_requested",
+            "author_login": "reviewer",
+            "body": "Please add webhook coverage.",
+        },
+    )
+    second_event = _event(
+        event_id="github:event-2",
+        payload=dict(first_event.payload),
+    )
+    third_event = _event(
+        event_id="github:event-3",
+        payload=dict(first_event.payload),
+    )
+    binding = _binding()
+    journal = _JournalFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(first_event, second_event, third_event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=ScmReactionStateStore(tmp_path),
+        reaction_config={"duplicate_escalation_threshold": 3},
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    first = service.ingest_event("github:event-1")
+    second = service.ingest_event("github:event-2")
+    third = service.ingest_event("github:event-3")
+
+    assert len(first.publish_operations) == 1
+    assert second.publish_operations == ()
+    assert len(third.publish_operations) == 1
+    assert first.publish_operations[0].operation_kind == "enqueue_managed_turn"
+    assert third.publish_operations[0].operation_kind == "notify_chat"
+    assert "escalation" in third.publish_operations[0].payload["message"].lower()
+    assert journal.create_calls == [
+        (first.publish_operations[0].operation_key, "enqueue_managed_turn"),
+        (third.publish_operations[0].operation_key, "notify_chat"),
+    ]
+
+    state_store = ScmReactionStateStore(tmp_path)
+    fingerprint = state_store.compute_reaction_fingerprint(
+        first_event,
+        binding=binding,
+        intent=first.reaction_intents[0],
+    )
+    stored = state_store.get_reaction_state(
+        binding_id=binding.binding_id,
+        reaction_kind="changes_requested",
+        fingerprint=fingerprint,
+    )
+
+    assert stored is not None
+    assert stored.state == "emitted"
+    assert stored.attempt_count == 3
+    assert stored.escalated_at is not None
+    assert stored.last_operation_key == third.publish_operations[0].operation_key
+
+
+def test_ingest_event_resolves_previous_fingerprint_and_allows_reemit_after_condition_changes(
+    tmp_path: Path,
+) -> None:
+    first_event = _event(
+        event_id="github:event-1",
+        payload={
+            "action": "submitted",
+            "review_state": "changes_requested",
+            "author_login": "reviewer",
+            "body": "Please add webhook coverage.",
+        },
+    )
+    changed_event = _event(
+        event_id="github:event-2",
+        payload={
+            "action": "submitted",
+            "review_state": "changes_requested",
+            "author_login": "reviewer",
+            "body": "Please add migration coverage.",
+        },
+    )
+    recurring_event = _event(
+        event_id="github:event-3",
+        payload=dict(first_event.payload),
+    )
+    binding = _binding()
+    journal = _JournalFake()
+    state_store = ScmReactionStateStore(tmp_path)
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(first_event, changed_event, recurring_event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=state_store,
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    first = service.ingest_event("github:event-1")
+    second = service.ingest_event("github:event-2")
+    third = service.ingest_event("github:event-3")
+
+    assert len(first.publish_operations) == 1
+    assert len(second.publish_operations) == 1
+    assert len(third.publish_operations) == 1
+
+    first_fingerprint = state_store.compute_reaction_fingerprint(
+        first_event,
+        binding=binding,
+        intent=first.reaction_intents[0],
+    )
+    changed_fingerprint = state_store.compute_reaction_fingerprint(
+        changed_event,
+        binding=binding,
+        intent=second.reaction_intents[0],
+    )
+    first_state = state_store.get_reaction_state(
+        binding_id=binding.binding_id,
+        reaction_kind="changes_requested",
+        fingerprint=first_fingerprint,
+    )
+    changed_state = state_store.get_reaction_state(
+        binding_id=binding.binding_id,
+        reaction_kind="changes_requested",
+        fingerprint=changed_fingerprint,
+    )
+
+    assert first_state is not None
+    assert first_state.state == "emitted"
+    assert first_state.resolved_at is None
+    assert changed_state is not None
+    assert changed_state.state == "resolved"
+    assert changed_state.resolved_at is not None
+
+
+def test_process_now_escalates_after_repeated_publish_failures_and_marks_recovery(
+    tmp_path: Path,
+) -> None:
+    event = _event(
+        payload={
+            "action": "submitted",
+            "review_state": "changes_requested",
+            "author_login": "reviewer",
+            "body": "Please add webhook coverage.",
+        }
+    )
+    binding = _binding()
+    journal = _JournalFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=ScmReactionStateStore(tmp_path),
+        reaction_config={"delivery_failure_escalation_threshold": 2},
+        journal=journal,
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    ingested = service.ingest_event(event)
+    original = ingested.publish_operations[0]
+
+    first_failed = _operation(
+        operation_id=original.operation_id,
+        operation_key=original.operation_key,
+        operation_kind=original.operation_kind,
+        state="pending",
+    )
+    first_failed = PublishOperation(
+        **{
+            **first_failed.to_dict(),
+            "payload": dict(original.payload),
+            "last_error_text": "RuntimeError: temporary outage",
+            "attempt_count": 1,
+        }
+    )
+    second_failed = PublishOperation(
+        **{
+            **first_failed.to_dict(),
+            "state": "failed",
+            "attempt_count": 2,
+        }
+    )
+    recovered = PublishOperation(
+        **{
+            **first_failed.to_dict(),
+            "state": "succeeded",
+            "last_error_text": None,
+            "attempt_count": 3,
+        }
+    )
+    processor = _ProcessorSequenceFake(
+        [first_failed],
+        [second_failed],
+        [],
+        [recovered],
+    )
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=ScmReactionStateStore(tmp_path),
+        reaction_config={"delivery_failure_escalation_threshold": 2},
+        journal=journal,
+        publish_processor=processor,
+    )
+
+    first_result = service.process_now(limit=10)
+    second_result = service.process_now(limit=10)
+    third_result = service.process_now(limit=10)
+
+    assert [operation.state for operation in first_result] == ["pending"]
+    assert [operation.state for operation in second_result] == ["failed"]
+    assert processor.calls == [10, 10, 1, 10]
+    escalation_ops = [
+        operation
+        for operation in journal.operations_by_key.values()
+        if operation.operation_kind == "notify_chat"
+        and operation.operation_key != original.operation_key
+    ]
+    assert len(escalation_ops) == 1
+    assert "failed delivery 2 times" in escalation_ops[0].payload["message"]
+    assert [operation.state for operation in third_result] == ["succeeded"]
+
+    state_store = ScmReactionStateStore(tmp_path)
+    tracking = original.payload["scm_reaction"]
+    stored = state_store.get_reaction_state(
+        binding_id=tracking["binding_id"],
+        reaction_kind=tracking["reaction_kind"],
+        fingerprint=tracking["fingerprint"],
+    )
+
+    assert stored is not None
+    assert stored.state == "emitted"
+    assert stored.delivery_failure_count == 2
+    assert stored.escalated_at is not None
+    assert stored.last_error_text is None

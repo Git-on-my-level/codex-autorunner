@@ -118,6 +118,15 @@
   "github": {
     "automation": {
       "enabled": false,
+      "reactions": {
+        "approved_and_green": true,
+        "changes_requested": true,
+        "ci_failed": true,
+        "delivery_failure_escalation_threshold": 3,
+        "duplicate_escalation_threshold": 3,
+        "enabled": true,
+        "merged": true
+      },
       "webhook_ingress": {
         "enabled": false,
         "max_payload_bytes": 262144,

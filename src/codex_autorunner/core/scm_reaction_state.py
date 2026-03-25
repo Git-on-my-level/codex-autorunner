@@ -14,7 +14,7 @@ from .scm_events import ScmEvent
 from .scm_reaction_types import ReactionIntent, ReactionKind
 from .time_utils import now_iso
 
-_RESOLVED_STATES_ALLOW_REEMIT = frozenset({"delivery_failed", "resolved"})
+_RESOLVED_STATES_ALLOW_REEMIT = frozenset({"resolved"})
 
 
 def _normalize_text(value: Any) -> Optional[str]:
@@ -210,6 +210,7 @@ class ScmReactionState:
     first_emitted_at: Optional[str] = None
     last_emitted_at: Optional[str] = None
     last_delivery_failed_at: Optional[str] = None
+    escalated_at: Optional[str] = None
     resolved_at: Optional[str] = None
     attempt_count: int = 0
     delivery_failure_count: int = 0
@@ -234,6 +235,7 @@ def _state_from_row(row: sqlite3.Row) -> ScmReactionState:
         first_emitted_at=_normalize_text(row["first_emitted_at"]),
         last_emitted_at=_normalize_text(row["last_emitted_at"]),
         last_delivery_failed_at=_normalize_text(row["last_delivery_failed_at"]),
+        escalated_at=_normalize_text(row["escalated_at"]),
         resolved_at=_normalize_text(row["resolved_at"]),
         attempt_count=_normalize_int(
             row["attempt_count"] or 0, field_name="attempt_count"
@@ -348,12 +350,13 @@ class ScmReactionStateStore:
                         first_emitted_at,
                         last_emitted_at,
                         last_delivery_failed_at,
+                        escalated_at,
                         resolved_at,
                         attempt_count,
                         delivery_failure_count,
                         last_error_text,
                         metadata_json
-                    ) VALUES (?, ?, ?, 'emitted', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 1, 0, NULL, ?)
+                    ) VALUES (?, ?, ?, 'emitted', ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, 0, NULL, ?)
                     """,
                     (
                         normalized_binding_id,
@@ -381,6 +384,7 @@ class ScmReactionStateStore:
                            updated_at = ?,
                            first_emitted_at = COALESCE(first_emitted_at, ?),
                            last_emitted_at = ?,
+                           escalated_at = NULL,
                            resolved_at = NULL,
                            attempt_count = attempt_count + 1,
                            last_error_text = NULL,
@@ -457,12 +461,13 @@ class ScmReactionStateStore:
                         first_emitted_at,
                         last_emitted_at,
                         last_delivery_failed_at,
+                        escalated_at,
                         resolved_at,
                         attempt_count,
                         delivery_failure_count,
                         last_error_text,
                         metadata_json
-                    ) VALUES (?, ?, ?, 'delivery_failed', ?, ?, NULL, ?, ?, NULL, NULL, ?, NULL, 0, 1, ?, ?)
+                    ) VALUES (?, ?, ?, 'delivery_failed', ?, ?, NULL, ?, ?, NULL, NULL, ?, NULL, NULL, 0, 1, ?, ?)
                     """,
                     (
                         normalized_binding_id,
@@ -518,6 +523,78 @@ class ScmReactionStateStore:
             )
         return _state_from_row(refreshed)
 
+    def mark_reaction_delivery_succeeded(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: ReactionKind | str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        operation_key: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> ScmReactionState:
+        normalized_binding_id, normalized_reaction_kind, normalized_fingerprint = (
+            self._normalize_identity(
+                binding_id=binding_id,
+                reaction_kind=reaction_kind,
+                fingerprint=fingerprint,
+            )
+        )
+        normalized_event_id = _normalize_text(event_id)
+        normalized_operation_key = _normalize_text(operation_key)
+        metadata_object = _normalize_json_object(metadata, field_name="metadata")
+        timestamp = now_iso()
+
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = self._load_reaction_state_row(
+                conn,
+                binding_id=normalized_binding_id,
+                reaction_kind=normalized_reaction_kind,
+                fingerprint=normalized_fingerprint,
+            )
+            if row is None:
+                raise RuntimeError("reaction state row missing before delivery success")
+            merged_metadata = self._merge_metadata(row, metadata_object)
+            conn.execute(
+                """
+                UPDATE orch_reaction_state
+                   SET state = 'emitted',
+                       last_event_id = COALESCE(?, last_event_id),
+                       last_operation_key = COALESCE(?, last_operation_key),
+                       updated_at = ?,
+                       first_emitted_at = COALESCE(first_emitted_at, ?),
+                       last_emitted_at = ?,
+                       resolved_at = NULL,
+                       last_error_text = NULL,
+                       metadata_json = ?
+                 WHERE binding_id = ?
+                   AND reaction_kind = ?
+                   AND fingerprint = ?
+                """,
+                (
+                    normalized_event_id,
+                    normalized_operation_key,
+                    timestamp,
+                    timestamp,
+                    timestamp,
+                    _json_dumps(merged_metadata),
+                    normalized_binding_id,
+                    normalized_reaction_kind,
+                    normalized_fingerprint,
+                ),
+            )
+            refreshed = self._load_reaction_state_row(
+                conn,
+                binding_id=normalized_binding_id,
+                reaction_kind=normalized_reaction_kind,
+                fingerprint=normalized_fingerprint,
+            )
+        if refreshed is None:
+            raise RuntimeError(
+                "reaction state row missing after mark_reaction_delivery_succeeded"
+            )
+        return _state_from_row(refreshed)
+
     def mark_reaction_resolved(
         self,
         *,
@@ -561,12 +638,13 @@ class ScmReactionStateStore:
                         first_emitted_at,
                         last_emitted_at,
                         last_delivery_failed_at,
+                        escalated_at,
                         resolved_at,
                         attempt_count,
                         delivery_failure_count,
                         last_error_text,
                         metadata_json
-                    ) VALUES (?, ?, ?, 'resolved', ?, ?, NULL, ?, ?, NULL, NULL, NULL, ?, 0, 0, NULL, ?)
+                    ) VALUES (?, ?, ?, 'resolved', ?, ?, NULL, ?, ?, NULL, NULL, NULL, NULL, ?, 0, 0, NULL, ?)
                     """,
                     (
                         normalized_binding_id,
@@ -617,6 +695,207 @@ class ScmReactionStateStore:
                 "reaction state row missing after mark_reaction_resolved"
             )
         return _state_from_row(refreshed)
+
+    def mark_reaction_suppressed(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: ReactionKind | str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> ScmReactionState:
+        normalized_binding_id, normalized_reaction_kind, normalized_fingerprint = (
+            self._normalize_identity(
+                binding_id=binding_id,
+                reaction_kind=reaction_kind,
+                fingerprint=fingerprint,
+            )
+        )
+        normalized_event_id = _normalize_text(event_id)
+        metadata_object = _normalize_json_object(metadata, field_name="metadata")
+        timestamp = now_iso()
+
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = self._load_reaction_state_row(
+                conn,
+                binding_id=normalized_binding_id,
+                reaction_kind=normalized_reaction_kind,
+                fingerprint=normalized_fingerprint,
+            )
+            if row is None:
+                raise RuntimeError("reaction state row missing before suppression")
+            merged_metadata = self._merge_metadata(row, metadata_object)
+            conn.execute(
+                """
+                UPDATE orch_reaction_state
+                   SET last_event_id = COALESCE(?, last_event_id),
+                       updated_at = ?,
+                       attempt_count = attempt_count + 1,
+                       metadata_json = ?
+                 WHERE binding_id = ?
+                   AND reaction_kind = ?
+                   AND fingerprint = ?
+                """,
+                (
+                    normalized_event_id,
+                    timestamp,
+                    _json_dumps(merged_metadata),
+                    normalized_binding_id,
+                    normalized_reaction_kind,
+                    normalized_fingerprint,
+                ),
+            )
+            refreshed = self._load_reaction_state_row(
+                conn,
+                binding_id=normalized_binding_id,
+                reaction_kind=normalized_reaction_kind,
+                fingerprint=normalized_fingerprint,
+            )
+        if refreshed is None:
+            raise RuntimeError(
+                "reaction state row missing after mark_reaction_suppressed"
+            )
+        return _state_from_row(refreshed)
+
+    def mark_reaction_escalated(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: ReactionKind | str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        operation_key: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> ScmReactionState:
+        normalized_binding_id, normalized_reaction_kind, normalized_fingerprint = (
+            self._normalize_identity(
+                binding_id=binding_id,
+                reaction_kind=reaction_kind,
+                fingerprint=fingerprint,
+            )
+        )
+        normalized_event_id = _normalize_text(event_id)
+        normalized_operation_key = _normalize_text(operation_key)
+        metadata_object = _normalize_json_object(metadata, field_name="metadata")
+        timestamp = now_iso()
+
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = self._load_reaction_state_row(
+                conn,
+                binding_id=normalized_binding_id,
+                reaction_kind=normalized_reaction_kind,
+                fingerprint=normalized_fingerprint,
+            )
+            if row is None:
+                raise RuntimeError("reaction state row missing before escalation")
+            merged_metadata = self._merge_metadata(row, metadata_object)
+            conn.execute(
+                """
+                UPDATE orch_reaction_state
+                   SET last_event_id = COALESCE(?, last_event_id),
+                       last_operation_key = COALESCE(?, last_operation_key),
+                       updated_at = ?,
+                       escalated_at = COALESCE(escalated_at, ?),
+                       attempt_count = attempt_count + 1,
+                       metadata_json = ?
+                 WHERE binding_id = ?
+                   AND reaction_kind = ?
+                   AND fingerprint = ?
+                """,
+                (
+                    normalized_event_id,
+                    normalized_operation_key,
+                    timestamp,
+                    timestamp,
+                    _json_dumps(merged_metadata),
+                    normalized_binding_id,
+                    normalized_reaction_kind,
+                    normalized_fingerprint,
+                ),
+            )
+            refreshed = self._load_reaction_state_row(
+                conn,
+                binding_id=normalized_binding_id,
+                reaction_kind=normalized_reaction_kind,
+                fingerprint=normalized_fingerprint,
+            )
+        if refreshed is None:
+            raise RuntimeError(
+                "reaction state row missing after mark_reaction_escalated"
+            )
+        return _state_from_row(refreshed)
+
+    def resolve_other_active_reactions(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: ReactionKind | str,
+        keep_fingerprint: str,
+        event_id: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> int:
+        normalized_binding_id = _normalize_text(binding_id)
+        normalized_reaction_kind = _normalize_text(reaction_kind)
+        normalized_keep_fingerprint = _normalize_text(keep_fingerprint)
+        if (
+            normalized_binding_id is None
+            or normalized_reaction_kind is None
+            or normalized_keep_fingerprint is None
+        ):
+            return 0
+        normalized_event_id = _normalize_text(event_id)
+        metadata_object = _normalize_json_object(metadata, field_name="metadata")
+        timestamp = now_iso()
+
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT fingerprint, metadata_json
+                  FROM orch_reaction_state
+                 WHERE binding_id = ?
+                   AND reaction_kind = ?
+                   AND fingerprint != ?
+                   AND state IN ('delivery_failed', 'emitted')
+                """,
+                (
+                    normalized_binding_id,
+                    normalized_reaction_kind,
+                    normalized_keep_fingerprint,
+                ),
+            ).fetchall()
+            resolved = 0
+            for row in rows:
+                fingerprint = _normalize_text(row["fingerprint"])
+                if fingerprint is None:
+                    continue
+                merged_metadata = _json_loads_object(row["metadata_json"])
+                merged_metadata.update(metadata_object)
+                cursor = conn.execute(
+                    """
+                    UPDATE orch_reaction_state
+                       SET state = 'resolved',
+                           last_event_id = COALESCE(?, last_event_id),
+                           updated_at = ?,
+                           resolved_at = ?,
+                           metadata_json = ?
+                     WHERE binding_id = ?
+                       AND reaction_kind = ?
+                       AND fingerprint = ?
+                       AND state IN ('delivery_failed', 'emitted')
+                    """,
+                    (
+                        normalized_event_id,
+                        timestamp,
+                        timestamp,
+                        _json_dumps(merged_metadata),
+                        normalized_binding_id,
+                        normalized_reaction_kind,
+                        fingerprint,
+                    ),
+                )
+                resolved += int(cursor.rowcount or 0)
+        return resolved
 
     def _normalize_identity(
         self,

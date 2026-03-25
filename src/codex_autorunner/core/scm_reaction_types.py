@@ -28,12 +28,35 @@ def _bool_from_mapping(
     return default if value is None else value
 
 
+def _int_from_mapping(
+    mapping: Mapping[str, Any],
+    key: str,
+    *,
+    default: int,
+    minimum: int = 0,
+) -> int:
+    value = mapping.get(key)
+    if isinstance(value, bool):
+        return max(int(value), minimum)
+    if isinstance(value, int):
+        return max(value, minimum)
+    if not isinstance(value, str):
+        return default
+    try:
+        normalized = int(value)
+    except ValueError:
+        return default
+    return max(normalized, minimum)
+
+
 @dataclass(frozen=True)
 class ScmReactionConfig:
     ci_failed: bool = True
     changes_requested: bool = True
     approved_and_green: bool = True
     merged: bool = True
+    duplicate_escalation_threshold: int = 3
+    delivery_failure_escalation_threshold: int = 3
 
     @classmethod
     def from_mapping(
@@ -43,6 +66,9 @@ class ScmReactionConfig:
         if isinstance(value, cls):
             return value
         mapping = value if isinstance(value, Mapping) else {}
+        reactions = mapping.get("reactions")
+        if isinstance(reactions, Mapping):
+            mapping = reactions
         default_enabled = _normalize_optional_bool(mapping.get("enabled"))
         default_value = True if default_enabled is None else default_enabled
         return cls(
@@ -62,6 +88,16 @@ class ScmReactionConfig:
                 default=default_value,
             ),
             merged=_bool_from_mapping(mapping, "merged", default=default_value),
+            duplicate_escalation_threshold=_int_from_mapping(
+                mapping,
+                "duplicate_escalation_threshold",
+                default=3,
+            ),
+            delivery_failure_escalation_threshold=_int_from_mapping(
+                mapping,
+                "delivery_failure_escalation_threshold",
+                default=3,
+            ),
         )
 
     def is_enabled(self, reaction_kind: ReactionKind) -> bool:

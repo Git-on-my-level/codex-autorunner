@@ -125,6 +125,7 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "first_emitted_at",
             "last_emitted_at",
             "last_delivery_failed_at",
+            "escalated_at",
             "resolved_at",
             "attempt_count",
             "delivery_failure_count",

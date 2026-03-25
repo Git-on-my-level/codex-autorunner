@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 11
+ORCHESTRATION_SCHEMA_VERSION = 12
 
 
 @dataclass(frozen=True)
@@ -871,6 +871,7 @@ def _apply_v11(conn: sqlite3.Connection) -> None:
             first_emitted_at TEXT,
             last_emitted_at TEXT,
             last_delivery_failed_at TEXT,
+            escalated_at TEXT,
             resolved_at TEXT,
             attempt_count INTEGER NOT NULL DEFAULT 0,
             delivery_failure_count INTEGER NOT NULL DEFAULT 0,
@@ -894,6 +895,15 @@ def _apply_v11(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v12(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_reaction_state",
+        "escalated_at",
+        "escalated_at TEXT",
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -910,6 +920,7 @@ _MIGRATIONS = (
     _MigrationStep(9, "add_scm_event_store", _apply_v9),
     _MigrationStep(10, "add_pr_binding_store", _apply_v10),
     _MigrationStep(11, "add_scm_reaction_state_store", _apply_v11),
+    _MigrationStep(12, "add_scm_reaction_escalation_tracking", _apply_v12),
 )
 
 

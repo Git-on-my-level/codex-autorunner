@@ -326,6 +326,75 @@ def test_apply_orchestration_migrations_adds_reaction_state_table_from_v10(
     assert reaction_state_table is not None
 
 
+def test_apply_orchestration_migrations_adds_reaction_escalation_column_from_v11(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_reaction_state (
+                binding_id TEXT NOT NULL,
+                reaction_kind TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                state TEXT NOT NULL,
+                first_event_id TEXT,
+                last_event_id TEXT,
+                last_operation_key TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                first_emitted_at TEXT,
+                last_emitted_at TEXT,
+                last_delivery_failed_at TEXT,
+                resolved_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                delivery_failure_count INTEGER NOT NULL DEFAULT 0,
+                last_error_text TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                PRIMARY KEY (binding_id, reaction_kind, fingerprint)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (11, 'add_scm_reaction_state_store', '2026-03-25T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(orch_reaction_state)").fetchall()
+        }
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert "escalated_at" in columns
+
+
 def test_apply_orchestration_migrations_backfills_resource_owner_columns(
     tmp_path: Path,
 ) -> None:

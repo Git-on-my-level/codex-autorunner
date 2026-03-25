@@ -332,6 +332,15 @@ def _default_github_automation_section() -> Dict[str, Any]:
     """Build the additive GitHub automation section."""
     return {
         "enabled": False,
+        "reactions": {
+            "enabled": True,
+            "ci_failed": True,
+            "changes_requested": True,
+            "approved_and_green": True,
+            "merged": True,
+            "duplicate_escalation_threshold": 3,
+            "delivery_failure_escalation_threshold": 3,
+        },
         "webhook_ingress": {
             "enabled": False,
             "max_payload_bytes": 262_144,

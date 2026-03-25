@@ -171,10 +171,18 @@ def test_reaction_state_store_tracks_failure_and_resolution_transitions(
             reaction_kind="changes_requested",
             fingerprint=fingerprint,
         )
-        is True
+        is False
     )
 
-    emitted = store.mark_reaction_emitted(
+    suppressed = store.mark_reaction_suppressed(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint=fingerprint,
+        event_id="github:event-1b",
+    )
+    assert suppressed.attempt_count == 1
+
+    recovered = store.mark_reaction_delivery_succeeded(
         binding_id="binding-1",
         reaction_kind="changes_requested",
         fingerprint=fingerprint,
@@ -182,10 +190,20 @@ def test_reaction_state_store_tracks_failure_and_resolution_transitions(
         operation_key="scm:key-2",
     )
 
-    assert emitted.state == "emitted"
-    assert emitted.attempt_count == 1
-    assert emitted.delivery_failure_count == 1
-    assert emitted.last_error_text is None
+    assert recovered.state == "emitted"
+    assert recovered.attempt_count == 1
+    assert recovered.delivery_failure_count == 1
+    assert recovered.last_error_text is None
+
+    escalated = store.mark_reaction_escalated(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint=fingerprint,
+        event_id="github:event-2b",
+        operation_key="scm:escalation",
+    )
+    assert escalated.escalated_at is not None
+    assert escalated.attempt_count == 2
 
     resolved = store.mark_reaction_resolved(
         binding_id="binding-1",
@@ -214,6 +232,54 @@ def test_reaction_state_store_tracks_failure_and_resolution_transitions(
     )
 
     assert re_emitted.state == "emitted"
-    assert re_emitted.attempt_count == 2
+    assert re_emitted.attempt_count == 3
     assert re_emitted.last_event_id == "github:event-4"
     assert re_emitted.last_operation_key == "scm:key-3"
+    assert re_emitted.escalated_at is None
+
+
+def test_reaction_state_store_resolves_other_active_fingerprints(
+    tmp_path: Path,
+) -> None:
+    store = ScmReactionStateStore(tmp_path)
+    first = store.mark_reaction_emitted(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-1",
+        event_id="github:event-1",
+        operation_key="scm:key-1",
+    )
+    second = store.mark_reaction_emitted(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-2",
+        event_id="github:event-2",
+        operation_key="scm:key-2",
+    )
+
+    assert first.state == "emitted"
+    assert second.state == "emitted"
+
+    resolved = store.resolve_other_active_reactions(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        keep_fingerprint="fp-2",
+        event_id="github:event-3",
+    )
+
+    assert resolved == 1
+    resolved_first = store.get_reaction_state(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-1",
+    )
+    kept_second = store.get_reaction_state(
+        binding_id="binding-1",
+        reaction_kind="changes_requested",
+        fingerprint="fp-2",
+    )
+
+    assert resolved_first is not None
+    assert resolved_first.state == "resolved"
+    assert kept_second is not None
+    assert kept_second.state == "emitted"
