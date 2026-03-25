@@ -12,6 +12,11 @@ from .config_contract import (
     CONFIG_VERSION,
     ConfigError,
 )
+from .mutation_policy import (
+    MUTATION_POLICY_ACTION_TYPES,
+    MUTATION_POLICY_ALLOWED_VALUES,
+    normalize_mutation_policy_value,
+)
 from .path_utils import ConfigPathError, resolve_config_path
 
 
@@ -657,6 +662,25 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                 automation.get("enabled"), bool
             ):
                 raise ConfigError("github.automation.enabled must be boolean")
+            policy = automation.get("policy")
+            if policy is not None and not isinstance(policy, dict):
+                raise ConfigError(
+                    "github.automation.policy must be a mapping if provided"
+                )
+            if isinstance(policy, dict):
+                for action_type, value in policy.items():
+                    if action_type not in MUTATION_POLICY_ACTION_TYPES:
+                        allowed = ", ".join(MUTATION_POLICY_ACTION_TYPES)
+                        raise ConfigError(
+                            f"github.automation.policy.{action_type} is not supported; "
+                            f"expected one of: {allowed}"
+                        )
+                    if normalize_mutation_policy_value(value) is None:
+                        allowed_values = ", ".join(MUTATION_POLICY_ALLOWED_VALUES)
+                        raise ConfigError(
+                            f"github.automation.policy.{action_type} must be boolean or "
+                            f"one of: {allowed_values}"
+                        )
             webhook_ingress = automation.get("webhook_ingress")
             if webhook_ingress is not None and not isinstance(webhook_ingress, dict):
                 raise ConfigError(

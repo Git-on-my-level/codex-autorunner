@@ -118,6 +118,13 @@
   "github": {
     "automation": {
       "enabled": false,
+      "policy": {
+        "add_labels": "deny",
+        "enqueue_managed_turn": "allow",
+        "merge_pr": "deny",
+        "notify_chat": "allow",
+        "post_pr_comment": "deny"
+      },
       "reactions": {
         "approved_and_green": true,
         "changes_requested": true,

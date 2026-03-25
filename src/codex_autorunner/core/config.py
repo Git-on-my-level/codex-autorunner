@@ -332,6 +332,13 @@ def _default_github_automation_section() -> Dict[str, Any]:
     """Build the additive GitHub automation section."""
     return {
         "enabled": False,
+        "policy": {
+            "enqueue_managed_turn": "allow",
+            "notify_chat": "allow",
+            "post_pr_comment": "deny",
+            "add_labels": "deny",
+            "merge_pr": "deny",
+        },
         "reactions": {
             "enabled": True,
             "ci_failed": True,
