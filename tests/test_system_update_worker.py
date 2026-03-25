@@ -35,9 +35,8 @@ def test_normalize_update_target(raw: str | None, expected: str) -> None:
     assert system._normalize_update_target(raw) == expected
 
 
-def test_normalize_update_target_rejects_legacy_both_alias() -> None:
-    with pytest.raises(ValueError, match="Unsupported update target"):
-        system._normalize_update_target("both")
+def test_normalize_update_target_accepts_legacy_both_alias() -> None:
+    assert system._normalize_update_target("both") == "all"
 
 
 def test_available_update_target_options_web_only_when_no_chat_available(

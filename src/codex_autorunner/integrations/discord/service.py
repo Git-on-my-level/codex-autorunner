@@ -6503,26 +6503,38 @@ class DiscordBotService:
         *,
         channel_id: str,
         options: dict[str, Any],
+        response_mode: str = "command",
     ) -> None:
+        component_response = response_mode == "component"
         raw_target = options.get("target")
         confirmed = bool(options.get("confirmed"))
         if not isinstance(raw_target, str) or not raw_target.strip():
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                "Select update target:",
-                [
-                    build_update_target_picker(
-                        custom_id=UPDATE_TARGET_SELECT_ID,
-                        target_definitions=self._dynamic_update_target_definitions(),
-                    )
-                ],
-            )
+            components = [
+                build_update_target_picker(
+                    custom_id=UPDATE_TARGET_SELECT_ID,
+                    target_definitions=self._dynamic_update_target_definitions(),
+                )
+            ]
+            if component_response:
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text="Select update target:",
+                    components=components,
+                )
+            else:
+                await self._respond_with_components(
+                    interaction_id,
+                    interaction_token,
+                    "Select update target:",
+                    components,
+                )
             return
         if isinstance(raw_target, str) and raw_target.strip().lower() == "status":
             await self._handle_car_update_status(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
+                component_response=component_response,
             )
             return
 
@@ -6531,17 +6543,27 @@ class DiscordBotService:
                 raw_target if isinstance(raw_target, str) else None
             )
         except ValueError as exc:
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                f"{exc} Select update target:",
-                [
-                    build_update_target_picker(
-                        custom_id=UPDATE_TARGET_SELECT_ID,
-                        target_definitions=self._dynamic_update_target_definitions(),
-                    )
-                ],
-            )
+            components = [
+                build_update_target_picker(
+                    custom_id=UPDATE_TARGET_SELECT_ID,
+                    target_definitions=self._dynamic_update_target_definitions(),
+                )
+            ]
+            text = f"{exc} Select update target:"
+            if component_response:
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text=text,
+                    components=components,
+                )
+            else:
+                await self._respond_with_components(
+                    interaction_id,
+                    interaction_token,
+                    text,
+                    components,
+                )
             return
         if not confirmed and _update_target_restarts_surface(
             update_target, surface="discord"
@@ -6551,19 +6573,36 @@ class DiscordBotService:
                 singular_label="Codex session",
             )
             if warning:
-                await self._respond_with_components(
-                    interaction_id,
-                    interaction_token,
-                    format_discord_message(warning),
-                    self._build_update_confirmation_components(
-                        update_target=update_target
-                    ),
+                warning_text = format_discord_message(warning)
+                components = self._build_update_confirmation_components(
+                    update_target=update_target
                 )
+                if component_response:
+                    await self._update_component_message(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        text=warning_text,
+                        components=components,
+                    )
+                else:
+                    await self._respond_with_components(
+                        interaction_id,
+                        interaction_token,
+                        warning_text,
+                        components,
+                    )
                 return
 
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        deferred = (
+            await self._defer_component_update(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+            if component_response
+            else await self._defer_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
         )
         repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
         if not repo_url:
@@ -6610,12 +6649,20 @@ class DiscordBotService:
             text = format_discord_message(
                 f"{exc} Use `/car update target:status` for current state."
             )
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
+            if component_response:
+                await self._send_or_update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
+            else:
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
             return
         except Exception as exc:
             log_event(
@@ -6625,12 +6672,20 @@ class DiscordBotService:
                 update_target=update_target,
                 exc=exc,
             )
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="Update failed to start. Check logs for details.",
-            )
+            if component_response:
+                await self._send_or_update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text="Update failed to start. Check logs for details.",
+                )
+            else:
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text="Update failed to start. Check logs for details.",
+                )
             return
 
         target_label = get_update_target_label(update_target)
@@ -6639,12 +6694,20 @@ class DiscordBotService:
             "I will post completion status in this channel. "
             "Use `/car update target:status` for progress."
         )
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
-        )
+        if component_response:
+            await self._send_or_update_component_message(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
+        else:
+            await self._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=text,
+            )
         self._update_status_notifier.schedule_watch({"chat_id": channel_id})
 
     def _active_update_session_count(self) -> int:
@@ -6763,19 +6826,29 @@ class DiscordBotService:
         *,
         interaction_id: str,
         interaction_token: str,
+        component_response: bool = False,
     ) -> None:
+        status = await asyncio.to_thread(_read_update_status)
+        if not isinstance(status, dict):
+            status = None
+        text = self._format_update_status_message(status)
+        if component_response:
+            await self._update_component_message(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                text=text,
+                components=[],
+            )
+            return
         deferred = await self._defer_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
-        status = await asyncio.to_thread(_read_update_status)
-        if not isinstance(status, dict):
-            status = None
         await self._send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             deferred=deferred,
-            text=self._format_update_status_message(status),
+            text=text,
         )
 
     VALID_AGENT_VALUES = VALID_CHAT_AGENT_VALUES
@@ -9620,6 +9693,39 @@ class DiscordBotService:
             interaction_id, interaction_token, text, components
         )
 
+    async def _send_or_update_component_message(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        deferred: bool,
+        text: str,
+        components: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        if deferred:
+            updated = await self._edit_original_component_message(
+                interaction_token=interaction_token,
+                text=text,
+                components=components,
+            )
+            if updated:
+                return
+            max_len = max(int(self._config.max_message_length), 32)
+            sent = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=truncate_for_discord(text, max_len=max_len),
+                components=components,
+            )
+            if sent:
+                return
+            return
+        await self._update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            text=text,
+            components=components or [],
+        )
+
     async def _respond_with_components(
         self,
         interaction_id: str,
@@ -10145,6 +10251,34 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     options={"target": values[0]},
+                    response_mode="component",
+                )
+                return
+
+            if custom_id.startswith(f"{UPDATE_CONFIRM_PREFIX}:"):
+                raw_target = custom_id.split(":", 1)[1].strip()
+                if not raw_target:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select an update target and try again.",
+                    )
+                    return
+                await self._handle_car_update(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    options={"target": raw_target, "confirmed": True},
+                    response_mode="component",
+                )
+                return
+
+            if custom_id.startswith(f"{UPDATE_CANCEL_PREFIX}:"):
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text="Update cancelled.",
+                    components=[],
                 )
                 return
 
@@ -10500,6 +10634,7 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     options={"target": values[0]},
+                    response_mode="component",
                 )
                 return
 
@@ -10517,14 +10652,16 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     options={"target": raw_target, "confirmed": True},
+                    response_mode="component",
                 )
                 return
 
             if custom_id.startswith(f"{UPDATE_CANCEL_PREFIX}:"):
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Update cancelled.",
+                await self._update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    text="Update cancelled.",
+                    components=[],
                 )
                 return
 

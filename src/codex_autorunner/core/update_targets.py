@@ -55,6 +55,8 @@ _UPDATE_TARGET_DEFINITIONS = {
 _UPDATE_TARGET_ALIASES = {
     "": _DEFAULT_UPDATE_TARGET,
     "all": "all",
+    # Backward compatibility for stale Discord slash-command registrations.
+    "both": "all",
     "web": "web",
     "hub": "web",
     "server": "web",
