@@ -124,11 +124,14 @@ class DiscordGatewayClient:
         self._ready_in_connection = False
         self._stop_event = asyncio.Event()
         self._heartbeat_task: Optional[asyncio.Task[None]] = None
+        self._dispatch_queue: Optional[asyncio.Queue[tuple[str, dict[str, Any]]]] = None
+        self._dispatch_worker_task: Optional[asyncio.Task[None]] = None
         self._websocket: Any = None
 
     async def stop(self) -> None:
         self._stop_event.set()
         await self._cancel_heartbeat()
+        await self._cancel_dispatch_worker()
         if self._websocket is not None:
             with contextlib.suppress(Exception):
                 await self._websocket.close()
@@ -179,6 +182,7 @@ class DiscordGatewayClient:
             finally:
                 self._websocket = None
                 await self._cancel_heartbeat()
+                await self._cancel_dispatch_worker()
 
             if self._stop_event.is_set():
                 break
@@ -233,35 +237,51 @@ class DiscordGatewayClient:
             )
         )
         established_session = False
+        dispatch_queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
+        self._dispatch_queue = dispatch_queue
+        self._dispatch_worker_task = asyncio.create_task(
+            self._dispatch_loop(dispatch_queue, on_dispatch)
+        )
+        websocket_iter = websocket.__aiter__()
 
-        async for raw_message in websocket:
-            frame = parse_gateway_frame(raw_message)
-            if frame.s is not None:
-                self._sequence = frame.s
+        try:
+            while True:
+                raw_message = await self._recv_gateway_message(websocket_iter)
+                if raw_message is None:
+                    break
+                frame = parse_gateway_frame(raw_message)
+                if frame.s is not None:
+                    self._sequence = frame.s
 
-            if frame.op == 0:
-                if frame.t == "READY":
-                    established_session = True
-                    self._ready_in_connection = True
-                if frame.t and isinstance(frame.d, dict):
-                    await on_dispatch(frame.t, frame.d)
-                continue
-            if frame.op == 1:
-                await websocket.send(
-                    json.dumps({"op": 1, "d": self._sequence})
-                )  # heartbeat request
-                continue
-            if frame.op == 11:
-                self._last_heartbeat_ack = asyncio.get_running_loop().time()
-                continue
-            if frame.op == 7:
-                self._logger.info("Discord gateway requested reconnect")
-                return established_session
-            if frame.op == 9:
-                self._logger.warning("Discord gateway reported invalid session")
-                return established_session
+                if frame.op == 0:
+                    if frame.t == "READY":
+                        established_session = True
+                        self._ready_in_connection = True
+                    if frame.t and isinstance(frame.d, dict):
+                        dispatch_queue.put_nowait((frame.t, frame.d))
+                    continue
+                if frame.op == 1:
+                    await websocket.send(
+                        json.dumps({"op": 1, "d": self._sequence})
+                    )  # heartbeat request
+                    continue
+                if frame.op == 11:
+                    self._last_heartbeat_ack = asyncio.get_running_loop().time()
+                    continue
+                if frame.op == 7:
+                    self._logger.info("Discord gateway requested reconnect")
+                    return established_session
+                if frame.op == 9:
+                    self._logger.warning("Discord gateway reported invalid session")
+                    return established_session
 
-        return established_session
+            return established_session
+        finally:
+            try:
+                await self._wait_for_dispatch_queue(dispatch_queue)
+            finally:
+                self._dispatch_queue = None
+                await self._cancel_dispatch_worker()
 
     async def _heartbeat_loop(self, websocket: Any, interval_seconds: float) -> None:
         try:
@@ -286,3 +306,127 @@ class DiscordGatewayClient:
             # Heartbeat failures can happen after websocket disconnects; do not let
             # them abort reconnect/shutdown paths.
             self._logger.debug("Discord heartbeat task ended with error: %s", exc)
+
+    async def _dispatch_loop(
+        self,
+        queue: asyncio.Queue[tuple[str, dict[str, Any]]],
+        on_dispatch: Callable[[str, dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        try:
+            while True:
+                event_type, payload = await queue.get()
+                try:
+                    await on_dispatch(event_type, payload)
+                finally:
+                    queue.task_done()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            while True:
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                else:
+                    queue.task_done()
+            raise
+
+    async def _recv_gateway_message(self, websocket_iter: Any) -> Any | None:
+        dispatch_task = self._dispatch_worker_task
+        if dispatch_task is None:
+            raise RuntimeError("Discord dispatch worker is not running")
+
+        message_task = asyncio.create_task(websocket_iter.__anext__())
+        try:
+            done, _pending = await asyncio.wait(
+                {message_task, dispatch_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except Exception:
+            message_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await message_task
+            raise
+
+        if dispatch_task in done:
+            message_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await message_task
+            if self._dispatch_worker_cancelled_for_shutdown(dispatch_task):
+                return None
+            self._raise_if_dispatch_worker_failed(dispatch_task)
+            raise RuntimeError("Discord dispatch worker exited unexpectedly")
+
+        try:
+            return message_task.result()
+        except StopAsyncIteration:
+            return None
+
+    async def _wait_for_dispatch_queue(
+        self,
+        queue: asyncio.Queue[tuple[str, dict[str, Any]]],
+    ) -> None:
+        dispatch_task = self._dispatch_worker_task
+        if dispatch_task is None:
+            return
+
+        join_task = asyncio.create_task(queue.join())
+        try:
+            done, _pending = await asyncio.wait(
+                {join_task, dispatch_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except Exception:
+            join_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await join_task
+            raise
+
+        if dispatch_task in done:
+            join_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await join_task
+            if self._dispatch_worker_cancelled_for_shutdown(dispatch_task):
+                return
+            self._raise_if_dispatch_worker_failed(dispatch_task)
+            raise RuntimeError("Discord dispatch worker exited unexpectedly")
+
+        await join_task
+        self._raise_if_dispatch_worker_failed(dispatch_task)
+
+    async def _cancel_dispatch_worker(self) -> None:
+        queue = self._dispatch_queue
+        if self._dispatch_worker_task is None:
+            if queue is not None:
+                self._drain_dispatch_queue(queue)
+            return
+        task = self._dispatch_worker_task
+        self._dispatch_worker_task = None
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        if queue is not None:
+            self._drain_dispatch_queue(queue)
+
+    @staticmethod
+    def _drain_dispatch_queue(
+        queue: asyncio.Queue[tuple[str, dict[str, Any]]],
+    ) -> None:
+        while True:
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
+                queue.task_done()
+
+    def _dispatch_worker_cancelled_for_shutdown(self, task: asyncio.Task[None]) -> bool:
+        return self._stop_event.is_set() and task.cancelled()
+
+    def _raise_if_dispatch_worker_failed(self, task: asyncio.Task[None]) -> None:
+        if not task.done():
+            return
+        if self._dispatch_worker_cancelled_for_shutdown(task):
+            return
+        task.result()

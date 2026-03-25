@@ -367,3 +367,237 @@ async def test_cancel_heartbeat_does_not_propagate_task_errors() -> None:
     await client._cancel_heartbeat()
 
     assert client._heartbeat_task is None
+
+
+@pytest.mark.anyio
+async def test_run_connection_reads_later_frames_while_dispatch_worker_is_busy() -> (
+    None
+):
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+
+    class _FakeWebSocket:
+        def __init__(self) -> None:
+            self.sent: list[object] = []
+            self.second_frame_read = asyncio.Event()
+            self._frames = iter(
+                [
+                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "first"}},
+                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "second"}},
+                ]
+            )
+
+        async def recv(self) -> dict[str, object]:
+            return {"op": 10, "d": {"heartbeat_interval": 1000}}
+
+        async def send(self, payload: object) -> None:
+            self.sent.append(payload)
+
+        def __aiter__(self) -> "_FakeWebSocket":
+            return self
+
+        async def __anext__(self) -> dict[str, object]:
+            try:
+                frame = next(self._frames)
+                if frame["d"]["id"] == "second":
+                    self.second_frame_read.set()
+                return frame
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    release_first = asyncio.Event()
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+
+    async def _dispatch(event_type: str, payload: dict[str, object]) -> None:
+        assert event_type == "INTERACTION_CREATE"
+        if payload["id"] == "first":
+            first_started.set()
+            await release_first.wait()
+        elif payload["id"] == "second":
+            second_started.set()
+
+    websocket = _FakeWebSocket()
+    run_task = asyncio.create_task(client._run_connection(websocket, _dispatch))
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+    await asyncio.wait_for(websocket.second_frame_read.wait(), timeout=1.0)
+
+    assert second_started.is_set() is False
+
+    release_first.set()
+    await asyncio.wait_for(run_task, timeout=1.0)
+
+    assert second_started.is_set()
+
+
+@pytest.mark.anyio
+async def test_stop_cancels_outstanding_dispatch_worker() -> None:
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+    cancelled = asyncio.Event()
+    queue: asyncio.Queue[tuple[str, dict[str, object]]] = asyncio.Queue()
+
+    async def _dispatch(_event_type: str, _payload: dict[str, object]) -> None:
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    client._dispatch_worker_task = asyncio.create_task(  # type: ignore[assignment]
+        client._dispatch_loop(
+            queue,  # type: ignore[arg-type]
+            _dispatch,
+        )
+    )
+    queue.put_nowait(("INTERACTION_CREATE", {"id": "slow"}))
+    await asyncio.sleep(0)
+
+    await client.stop()
+
+    assert cancelled.is_set()
+    assert client._dispatch_worker_task is None
+
+
+@pytest.mark.anyio
+async def test_run_connection_propagates_dispatch_failures_while_waiting_for_next_frame() -> (
+    None
+):
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+
+    class _FakeWebSocket:
+        def __init__(self) -> None:
+            self._yielded_first = False
+
+        async def recv(self) -> dict[str, object]:
+            return {"op": 10, "d": {"heartbeat_interval": 1000}}
+
+        async def send(self, _payload: object) -> None:
+            return None
+
+        def __aiter__(self) -> "_FakeWebSocket":
+            return self
+
+        async def __anext__(self) -> dict[str, object]:
+            if not self._yielded_first:
+                self._yielded_first = True
+                return {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "first"}}
+            await asyncio.Future()
+            raise StopAsyncIteration
+
+    async def _dispatch(_event_type: str, _payload: dict[str, object]) -> None:
+        raise RuntimeError("dispatch failed")
+
+    with pytest.raises(RuntimeError, match="dispatch failed"):
+        await asyncio.wait_for(
+            client._run_connection(_FakeWebSocket(), _dispatch),
+            timeout=1.0,
+        )
+
+
+@pytest.mark.anyio
+async def test_run_connection_propagates_dispatch_failures_during_queue_drain() -> None:
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+
+    class _FakeWebSocket:
+        def __init__(self) -> None:
+            self._frames = iter(
+                [
+                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "first"}},
+                    {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "second"}},
+                ]
+            )
+
+        async def recv(self) -> dict[str, object]:
+            return {"op": 10, "d": {"heartbeat_interval": 1000}}
+
+        async def send(self, _payload: object) -> None:
+            return None
+
+        def __aiter__(self) -> "_FakeWebSocket":
+            return self
+
+        async def __anext__(self) -> dict[str, object]:
+            try:
+                return next(self._frames)
+            except StopIteration as exc:
+                raise StopAsyncIteration from exc
+
+    release_first = asyncio.Event()
+    first_started = asyncio.Event()
+
+    async def _dispatch(_event_type: str, payload: dict[str, object]) -> None:
+        if payload["id"] == "first":
+            first_started.set()
+            await release_first.wait()
+            raise RuntimeError("dispatch failed")
+
+    run_task = asyncio.create_task(client._run_connection(_FakeWebSocket(), _dispatch))
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+    release_first.set()
+
+    with pytest.raises(RuntimeError, match="dispatch failed"):
+        await asyncio.wait_for(run_task, timeout=1.0)
+
+
+@pytest.mark.anyio
+async def test_stop_does_not_turn_dispatch_worker_cancellation_into_gateway_error() -> (
+    None
+):
+    client = DiscordGatewayClient(
+        bot_token="token",
+        intents=0,
+        logger=logging.getLogger("test.gateway"),
+    )
+    first_started = asyncio.Event()
+
+    class _FakeWebSocket:
+        def __init__(self) -> None:
+            self._closed = asyncio.Event()
+            self._yielded_first = False
+
+        async def recv(self) -> dict[str, object]:
+            return {"op": 10, "d": {"heartbeat_interval": 1000}}
+
+        async def send(self, _payload: object) -> None:
+            return None
+
+        async def close(self) -> None:
+            self._closed.set()
+
+        def __aiter__(self) -> "_FakeWebSocket":
+            return self
+
+        async def __anext__(self) -> dict[str, object]:
+            if not self._yielded_first:
+                self._yielded_first = True
+                return {"op": 0, "t": "INTERACTION_CREATE", "d": {"id": "first"}}
+            await self._closed.wait()
+            raise StopAsyncIteration
+
+    async def _dispatch(_event_type: str, _payload: dict[str, object]) -> None:
+        first_started.set()
+        await asyncio.Future()
+
+    websocket = _FakeWebSocket()
+    run_task = asyncio.create_task(client._run_connection(websocket, _dispatch))
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+    await client.stop()
+
+    assert await asyncio.wait_for(run_task, timeout=1.0) is False

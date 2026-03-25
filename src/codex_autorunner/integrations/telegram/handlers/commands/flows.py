@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from .....core.config import ConfigError, load_repo_config
 from .....core.flows import (
@@ -122,15 +122,6 @@ def _worktree_suffix(repo_id: str) -> Optional[str]:
     if len(parts) <= 1:
         return None
     return parts[-1]
-
-
-def _select_latest_run(
-    store: FlowStore, predicate: Callable[[object], bool]
-) -> Optional[object]:
-    for record in store.list_flow_runs(flow_type="ticket_flow"):
-        if predicate(record):
-            return record
-    return None
 
 
 class FlowCommands(TelegramCommandSupportMixin):
