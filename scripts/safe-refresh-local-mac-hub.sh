@@ -1614,6 +1614,14 @@ echo "Switching ${CURRENT_VENV_LINK} -> ${next_venv}"
 ln -sfn "${next_venv}" "${CURRENT_VENV_LINK}"
 swap_completed=true
 
+if [[ -z "${HUB_ROOT}" ]]; then
+  fail "Unable to determine HUB_ROOT from ${PLIST_PATH}."
+fi
+
+echo "Refreshing hub-managed repo artifacts under ${HUB_ROOT}..."
+HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${CURRENT_VENV_LINK}/bin/python" \
+  bash "${PACKAGE_SRC}/scripts/update-hub-managed-repos.sh"
+
 if [[ "${should_reload_hub}" == "true" ]]; then
   echo "Restarting launchd service ${LABEL}..."
   _ensure_plist_uses_current_venv

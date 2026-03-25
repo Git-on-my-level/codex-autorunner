@@ -33,6 +33,7 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
 HELPER_PYTHON="${HELPER_PYTHON:-}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
+HUB_ROOT="${HUB_ROOT:-}"
 
 write_status() {
   local status message
@@ -132,6 +133,31 @@ normalize_update_target() {
   esac
 }
 
+_systemd_arg_value() {
+  local service_name key
+  service_name="$1"
+  key="$2"
+  if [[ -z "${service_name}" || -z "${key}" ]]; then
+    return 0
+  fi
+  systemctl --user cat "${service_name}" 2>/dev/null | "${HELPER_PYTHON}" - "${key}" <<'PY'
+import re
+import sys
+
+key = sys.argv[1]
+text = sys.stdin.read()
+pattern = re.compile(
+    r"(?:--%s(?:=|\s+))(\"[^\"]+\"|'[^']+'|[^\s;]+)" % re.escape(key)
+)
+match = pattern.search(text)
+if not match:
+    raise SystemExit(0)
+value = match.group(1).strip().strip("\"'")
+if value:
+    sys.stdout.write(value)
+PY
+}
+
 if [[ -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
   if command -v python3 >/dev/null 2>&1; then
     HELPER_PYTHON="$(command -v python3)"
@@ -159,6 +185,9 @@ if [[ ! -f "${PACKAGE_SRC}/pyproject.toml" ]]; then
 fi
 
 target="$(normalize_update_target "${UPDATE_TARGET}")"
+if [[ -z "${HUB_ROOT}" ]]; then
+  HUB_ROOT="$(_systemd_arg_value "${UPDATE_HUB_SERVICE_NAME}" path)"
+fi
 
 service_load_state() {
   local service_name="$1"
@@ -235,6 +264,14 @@ echo "Installing codex-autorunner from ${PACKAGE_SRC}..."
 "${HELPER_PYTHON}" -m pip -q install --upgrade "${PACKAGE_SRC}[browser]"
 ensure_playwright_chromium "${HELPER_PYTHON}"
 ensure_login_shell_path "${LOCAL_BIN}"
+
+if [[ -z "${HUB_ROOT}" ]]; then
+  fail "Unable to determine HUB_ROOT from ${UPDATE_HUB_SERVICE_NAME}; set HUB_ROOT explicitly."
+fi
+
+echo "Refreshing hub-managed repo artifacts under ${HUB_ROOT}..."
+HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${HELPER_PYTHON}" \
+  bash "${PACKAGE_SRC}/scripts/update-hub-managed-repos.sh"
 
 echo "Reloading systemd user manager..."
 systemctl --user daemon-reload
