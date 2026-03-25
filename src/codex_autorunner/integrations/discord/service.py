@@ -6728,8 +6728,8 @@ class DiscordBotService:
         )
         if restarts_discord:
             text = format_discord_message(
-                f"Starting update ({target_label}). The selected service(s) will restart shortly. "
-                "I will post completion status in this channel. "
+                f"Preparing update ({target_label}). Checking whether the update can start now. "
+                "If it does, the selected service(s) will restart shortly and I will post completion status in this channel. "
                 "Use `/car update target:status` for progress."
             )
             if component_response:
