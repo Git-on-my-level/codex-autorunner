@@ -126,6 +126,8 @@ def _telegram_status_base_lines(
     workspace_label = record.workspace_path or (
         "hub" if record.pma_enabled else "unbound"
     )
+    queue = getattr(runtime, "queue", None) if runtime is not None else None
+    pending_queue = queue.pending() if queue is not None else 0
     lines: list[str] = []
     if record.pma_enabled:
         lines.append("Mode: PMA (hub)")
@@ -141,6 +143,7 @@ def _telegram_status_base_lines(
             f"Workspace ID: {record.workspace_id or 'unknown'}",
             f"Active thread: {record.active_thread_id or 'none'}",
             f"Active turn: {runtime.current_turn_id or 'none'}",
+            f"Queued requests: {pending_queue}",
             *collaboration_summary_lines(
                 message,
                 command_result=command_policy,
@@ -148,6 +151,8 @@ def _telegram_status_base_lines(
             ),
         ]
     )
+    if pending_queue:
+        lines.append("Queued messages include Cancel and Interrupt + Send buttons.")
     return lines
 
 

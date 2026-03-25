@@ -102,6 +102,12 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
         if key:
             if parsed.kind == "interrupt":
                 await handlers._handle_interrupt_callback(callback)
+            elif parsed.kind.startswith("queue_cancel:"):
+                await handlers._handle_queue_cancel_callback(callback, parsed.kind)
+            elif parsed.kind.startswith("queue_interrupt_send:"):
+                await handlers._handle_queue_interrupt_send_callback(
+                    callback, parsed.kind
+                )
             else:
                 await handlers._handle_selection_cancel(key, parsed, callback)
     elif isinstance(parsed, CompactCallback):

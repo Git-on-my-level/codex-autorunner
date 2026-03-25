@@ -460,3 +460,23 @@ def build_cancel_turn_button(
             )
         ]
     )
+
+
+def build_queue_notice_buttons(source_message_id: str) -> dict[str, Any]:
+    source = str(source_message_id or "").strip()
+    if not source:
+        raise ValueError("source_message_id required")
+    return build_action_row(
+        [
+            build_button(
+                "Cancel",
+                f"queue_cancel:{source}",
+                style=DISCORD_BUTTON_STYLE_DANGER,
+            ),
+            build_button(
+                "Interrupt + Send",
+                f"queue_interrupt_send:{source}",
+                style=DISCORD_BUTTON_STYLE_PRIMARY,
+            ),
+        ]
+    )

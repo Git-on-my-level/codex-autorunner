@@ -3,6 +3,7 @@ import pytest
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramCallbackQuery,
     encode_bind_callback,
+    encode_cancel_callback,
     encode_flow_callback,
     encode_flow_run_callback,
     encode_question_custom_callback,
@@ -63,6 +64,16 @@ class _HandlerStub:
         self, key: str, _callback: TelegramCallbackQuery, parsed: object
     ) -> None:
         self.calls.append(("flow-run", key, parsed))
+
+    async def _handle_queue_cancel_callback(
+        self, _callback: TelegramCallbackQuery, kind: str
+    ) -> None:
+        self.calls.append(("queue-cancel", kind))
+
+    async def _handle_queue_interrupt_send_callback(
+        self, _callback: TelegramCallbackQuery, kind: str
+    ) -> None:
+        self.calls.append(("queue-interrupt-send", kind))
 
 
 @pytest.mark.anyio
@@ -286,3 +297,35 @@ async def test_handle_callback_flow_run_action() -> None:
     await handle_callback(handlers, callback)
     assert handlers.calls
     assert handlers.calls[0][0] == "flow-run"
+
+
+@pytest.mark.anyio
+async def test_handle_callback_queue_cancel_action() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=10,
+        callback_id="cb10",
+        from_user_id=10,
+        data=encode_cancel_callback("queue_cancel:123"),
+        message_id=14,
+        chat_id=42,
+        thread_id=None,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls == [("queue-cancel", "queue_cancel:123")]
+
+
+@pytest.mark.anyio
+async def test_handle_callback_queue_interrupt_send_action() -> None:
+    handlers = _HandlerStub()
+    callback = TelegramCallbackQuery(
+        update_id=11,
+        callback_id="cb11",
+        from_user_id=10,
+        data=encode_cancel_callback("queue_interrupt_send:123"),
+        message_id=15,
+        chat_id=42,
+        thread_id=None,
+    )
+    await handle_callback(handlers, callback)
+    assert handlers.calls == [("queue-interrupt-send", "queue_interrupt_send:123")]

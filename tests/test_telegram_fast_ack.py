@@ -41,6 +41,7 @@ class _BotStub:
                 "text": text,
                 "thread_id": message_thread_id,
                 "reply_to": reply_to_message_id,
+                "reply_markup": reply_markup,
             }
         )
         return message
@@ -90,6 +91,7 @@ class _ServiceStub:
             thread_id=message.thread_id,
             reply_to=message.message_id,
             text=QUEUED_PLACEHOLDER_TEXT,
+            reply_markup={"inline_keyboard": [[{"text": "Cancel"}]]},
         )
         if placeholder_id is not None:
             self._set_queued_placeholder(
@@ -122,6 +124,7 @@ class _ServiceStub:
             text,
             message_thread_id=thread_id,
             reply_to_message_id=reply_to,
+            reply_markup=reply_markup,
         )
         return response["message_id"]
 
@@ -138,13 +141,20 @@ class _ServiceStub:
     async def _handle_message(self, _message: TelegramMessage) -> None:
         pass
 
-    def _enqueue_topic_work(self, key: str, work, *, force_queue: bool = False) -> None:
+    def _enqueue_topic_work(
+        self,
+        key: str,
+        work,
+        *,
+        force_queue: bool = False,
+        item_id: Optional[str] = None,
+    ) -> Optional[str]:
         runtime = self._router.runtime_for(key)
         wrapped = self._wrap_topic_work(key, work)
         if force_queue:
-            self._spawn_task(runtime.queue.enqueue(wrapped))
-        else:
-            self._spawn_task(wrapped())
+            return runtime.queue.enqueue_detached(wrapped, item_id=item_id)
+        self._spawn_task(wrapped())
+        return None
 
     def _wrap_topic_work(self, key: str, work):
         async def wrapped():
@@ -204,6 +214,7 @@ async def test_fast_ack_sent_when_topic_has_current_turn() -> None:
     assert sent["text"] == QUEUED_PLACEHOLDER_TEXT
     assert sent["chat_id"] == 10
     assert sent["reply_to"] == 1
+    assert sent["reply_markup"] is not None
 
     assert handler._queued_placeholder_map.get((10, 1)) == 1000
 
@@ -240,6 +251,7 @@ async def test_fast_ack_sent_when_topic_queue_has_depth(
     assert sent["text"] == QUEUED_PLACEHOLDER_TEXT
     assert sent["chat_id"] == 10
     assert sent["reply_to"] == 1
+    assert sent["reply_markup"] is not None
 
     assert handler._queued_placeholder_map.get((10, 1)) == 1000
 

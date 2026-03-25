@@ -55,6 +55,7 @@ from ..chat.service import ChatBotServiceCore
 from ..chat.turn_policy import PlainTextTurnContext
 from ..chat.update_notifier import ChatUpdateStatusNotifier
 from .adapter import (
+    InlineButton,
     TelegramBotClient,
     TelegramCallbackQuery,
     TelegramDocument,
@@ -62,6 +63,8 @@ from .adapter import (
     TelegramPhotoSize,
     TelegramUpdate,
     TelegramUpdatePoller,
+    build_inline_keyboard,
+    encode_cancel_callback,
 )
 from .chat_adapter import TelegramChatAdapter
 from .chat_state_store import TelegramChatStateStore
@@ -1658,14 +1661,36 @@ class TelegramBotService(
         await callback_handlers.handle_callback(self, callback)
 
     def _enqueue_topic_work(
-        self, key: str, work: Any, *, force_queue: bool = False
-    ) -> None:
+        self,
+        key: str,
+        work: Any,
+        *,
+        force_queue: bool = False,
+        item_id: Optional[str] = None,
+    ) -> Optional[str]:
         runtime = self._router.runtime_for(key)
         wrapped = self._wrap_topic_work(key, work)
         if force_queue or self._config.concurrency.per_topic_queue:
-            self._spawn_task(runtime.queue.enqueue(wrapped))
-        else:
-            self._spawn_task(wrapped())
+            return runtime.queue.enqueue_detached(wrapped, item_id=item_id)
+        self._spawn_task(wrapped())
+        return None
+
+    def _queued_placeholder_keyboard(self, source_message_id: int) -> dict[str, Any]:
+        source = str(source_message_id)
+        return build_inline_keyboard(
+            [
+                [
+                    InlineButton(
+                        "Cancel",
+                        encode_cancel_callback(f"queue_cancel:{source}"),
+                    ),
+                    InlineButton(
+                        "Interrupt + Send",
+                        encode_cancel_callback(f"queue_interrupt_send:{source}"),
+                    ),
+                ]
+            ]
+        )
 
     async def _maybe_send_queued_placeholder(
         self, message: TelegramMessage, *, topic_key: str
@@ -1679,6 +1704,7 @@ class TelegramBotService(
             thread_id=message.thread_id,
             reply_to=message.message_id,
             text=QUEUED_PLACEHOLDER_TEXT,
+            reply_markup=self._queued_placeholder_keyboard(message.message_id),
         )
         if placeholder_id is None:
             return None

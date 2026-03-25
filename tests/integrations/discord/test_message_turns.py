@@ -58,6 +58,9 @@ from codex_autorunner.integrations.discord.config import (
     DiscordCommandRegistration,
 )
 from codex_autorunner.integrations.discord.service import (
+    DISCORD_QUEUED_PLACEHOLDER_TEXT as QUEUED_PLACEHOLDER_TEXT,
+)
+from codex_autorunner.integrations.discord.service import (
     DiscordBotService,
     DiscordMessageTurnResult,
 )
@@ -5756,6 +5759,21 @@ async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
     release_task = asyncio.create_task(_release_later())
     try:
         await asyncio.wait_for(service.run_forever(), timeout=5)
+        queued_notice = next(
+            (
+                msg["payload"]
+                for msg in rest.channel_messages
+                if QUEUED_PLACEHOLDER_TEXT in msg["payload"].get("content", "")
+            ),
+            None,
+        )
+        assert queued_notice is not None
+        assert queued_notice.get("components")
+        buttons = queued_notice["components"][0]["components"]
+        assert [button["custom_id"] for button in buttons] == [
+            "queue_cancel:m-2",
+            "queue_interrupt_send:m-2",
+        ]
         contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
         assert any(
             "Queued (waiting for available worker...)" in content

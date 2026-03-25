@@ -168,7 +168,14 @@ async def _dispatch_callback(
             QuestionCustomCallback,
             QuestionCancelCallback,
         ),
-    ) or (isinstance(parsed, CancelCallback) and parsed.kind == "interrupt")
+    ) or (
+        isinstance(parsed, CancelCallback)
+        and (
+            parsed.kind == "interrupt"
+            or parsed.kind.startswith("queue_cancel:")
+            or parsed.kind.startswith("queue_interrupt_send:")
+        )
+    )
     if context.topic_key:
         if not should_bypass_queue:
             handlers._enqueue_topic_work(
@@ -221,6 +228,7 @@ async def _dispatch_message(
                 work=_handle,
             ),
             force_queue=True,
+            item_id=str(message.message_id),
         )
         return
     await _run_with_typing_indicator(

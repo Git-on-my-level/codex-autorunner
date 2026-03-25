@@ -244,7 +244,6 @@ async def handle_car_command(
             channel_id=channel_id,
         )
         return
-
     if command_path[:2] == ("car", "session"):
         if command_path == ("car", "session", "resume"):
             await service._handle_car_resume(
