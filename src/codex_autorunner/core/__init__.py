@@ -26,6 +26,7 @@ from .pma_automation_store import (
     PmaAutomationWakeup,
     PmaLifecycleSubscription,
 )
+from .pr_binding_resolver import resolve_binding_for_scm_event
 from .pr_bindings import PrBinding, PrBindingStore
 from .publish_executor import (
     DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS,
@@ -67,6 +68,7 @@ __all__ = [
     "PmaAutomationTimer",
     "PmaAutomationWakeup",
     "PmaLifecycleSubscription",
+    "resolve_binding_for_scm_event",
     "PrBinding",
     "PrBindingStore",
     "build_enqueue_managed_turn_executor",
