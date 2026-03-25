@@ -28,21 +28,21 @@ Recommended during development: use guild-scoped command registration so command
 
 ## Flow Commands
 
-Use `/car flow ...` for ticket flow actions:
+Use `/flow ...` for ticket flow actions:
 
-- `/car flow status [run_id]`
-- `/car flow runs [limit]`
-- `/car flow issue issue_ref:<issue#|url>`
-- `/car flow plan text:<plan>`
-- `/car flow start [force_new]`
-- `/car flow restart [run_id]`
-- `/car flow resume [run_id]`
-- `/car flow stop [run_id]`
-- `/car flow recover [run_id]`
-- `/car flow archive [run_id]`
-- `/car flow reply text:<message> [run_id]`
+- `/flow status [run_id]`
+- `/flow runs [limit]`
+- `/flow issue issue_ref:<issue#|url>`
+- `/flow plan text:<plan>`
+- `/flow start [force_new]`
+- `/flow restart [run_id]`
+- `/flow resume [run_id]`
+- `/flow stop [run_id]`
+- `/flow recover [run_id]`
+- `/flow archive [run_id]`
+- `/flow reply text:<message> [run_id]`
 
-In PMA mode (or when unbound), `/car flow status` and `/car flow runs` default to a hub-wide overview.
+In PMA mode (or when unbound), `/flow status` and `/flow runs` default to a hub-wide overview.
 
 ## Common Failure Mode: Slash Works, Messages Do Not
 
@@ -53,7 +53,7 @@ Discord permissions and CAR collaboration state:
 2. Use permissions integer `2322563695115328`.
 3. Ensure channel permissions allow `View Channels`, `Send Messages`, and `Read Message History`.
 4. Run `/car status` to confirm the channel is bound or PMA-enabled.
-5. Run `/car ids` to inspect the effective collaboration mode and generate a
+5. Run `/car admin ids` to inspect the effective collaboration mode and generate a
    copy-paste `collaboration_policy.discord` snippet.
 6. Restart the Discord bot process and retest.
 
@@ -68,7 +68,7 @@ collaboration-allowed and ready to execute through a bound workspace or PMA.
 - Shared guilds should migrate to `collaboration_policy.discord` when operators
   want explicit `active`, `command_only`, and `silent` channels.
 - The recommended migration pattern is `default_mode: command_only` plus explicit
-  destinations captured from `/car ids`.
+  destinations captured from `/car admin ids`.
 
 ## Example config
 

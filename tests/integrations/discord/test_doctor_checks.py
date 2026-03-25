@@ -113,7 +113,7 @@ def test_discord_doctor_reports_collaboration_policy_summary(
     assert by_id["discord.collaboration_policy"].passed is True
     assert "destinations" in by_id["discord.collaboration_policy"].message
     assert by_id["discord.collaboration_migration"].passed is True
-    assert "/car ids" in by_id["discord.collaboration_migration"].message
+    assert "/car admin ids" in by_id["discord.collaboration_migration"].message
 
 
 def test_discord_doctor_reports_legacy_collaboration_migration_guidance(

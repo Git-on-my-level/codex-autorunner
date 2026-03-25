@@ -59,7 +59,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="stable",
         telegram_commands=("debug",),
-        discord_paths=(("car", "debug"),),
+        discord_paths=(("car", "admin", "debug"),),
     ),
     CommandContractEntry(
         id="car.agent",
@@ -94,7 +94,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="stable",
         telegram_commands=("help",),
-        discord_paths=(("car", "help"),),
+        discord_paths=(("car", "admin", "help"),),
     ),
     CommandContractEntry(
         id="car.ids",
@@ -102,7 +102,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="stable",
         telegram_commands=("ids",),
-        discord_paths=(("car", "ids"),),
+        discord_paths=(("car", "admin", "ids"),),
     ),
     CommandContractEntry(
         id="car.diff",
@@ -134,7 +134,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="stable",
         telegram_commands=("mcp",),
-        discord_paths=(("car", "mcp"),),
+        discord_paths=(("car", "admin", "mcp"),),
     ),
     CommandContractEntry(
         id="car.init",
@@ -142,7 +142,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="stable",
         telegram_commands=("init",),
-        discord_paths=(("car", "init"),),
+        discord_paths=(("car", "admin", "init"),),
     ),
     CommandContractEntry(
         id="car.repos",
@@ -150,7 +150,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="stable",
         telegram_commands=("repos",),
-        discord_paths=(("car", "repos"),),
+        discord_paths=(("car", "admin", "repos"),),
     ),
     CommandContractEntry(
         id="car.archive",
@@ -194,7 +194,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "status"), ("flow", "status")),
+        discord_paths=(("flow", "status"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -203,7 +203,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "runs"), ("flow", "runs")),
+        discord_paths=(("flow", "runs"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -212,7 +212,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "issue"), ("flow", "issue")),
+        discord_paths=(("flow", "issue"),),
         required_capabilities=("ticket_flow", "github_cli"),
     ),
     CommandContractEntry(
@@ -221,7 +221,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "plan"), ("flow", "plan")),
+        discord_paths=(("flow", "plan"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -230,7 +230,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "start"), ("flow", "start")),
+        discord_paths=(("flow", "start"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -239,7 +239,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "restart"), ("flow", "restart")),
+        discord_paths=(("flow", "restart"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -248,7 +248,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "resume"), ("flow", "resume")),
+        discord_paths=(("flow", "resume"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -257,7 +257,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "stop"), ("flow", "stop")),
+        discord_paths=(("flow", "stop"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -266,7 +266,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "archive"), ("flow", "archive")),
+        discord_paths=(("flow", "archive"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -275,7 +275,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow",),
-        discord_paths=(("car", "flow", "recover"), ("flow", "recover")),
+        discord_paths=(("flow", "recover"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -284,7 +284,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("flow", "reply"),
-        discord_paths=(("car", "flow", "reply"), ("flow", "reply")),
+        discord_paths=(("flow", "reply"),),
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -365,7 +365,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("experimental",),
-        discord_paths=(("car", "experimental"),),
+        discord_paths=(("car", "admin", "experimental"),),
         required_capabilities=("feature_flags",),
     ),
     CommandContractEntry(
@@ -383,7 +383,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("rollout",),
-        discord_paths=(("car", "rollout"),),
+        discord_paths=(("car", "admin", "rollout"),),
     ),
     CommandContractEntry(
         id="car.logout",
@@ -400,7 +400,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=False,
         status="partial",
         telegram_commands=("feedback",),
-        discord_paths=(("car", "feedback"),),
+        discord_paths=(("car", "admin", "feedback"),),
         required_capabilities=("feedback_reporting",),
     ),
     CommandContractEntry(

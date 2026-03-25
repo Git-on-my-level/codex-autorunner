@@ -35,30 +35,22 @@ def test_build_application_commands_structure_is_stable() -> None:
         "status",
         "new",
         "newt",
-        "debug",
         "agent",
         "model",
         "update",
-        "help",
-        "ids",
         "diff",
         "skills",
         "tickets",
-        "mcp",
-        "init",
-        "repos",
         "review",
         "approvals",
         "mention",
-        "experimental",
-        "rollout",
-        "feedback",
         "archive",
         "session",
         "files",
-        "flow",
+        "admin",
     ]
     assert [opt["name"] for opt in options] == expected_subcommands
+    assert len(options) <= 25
 
     session = _find_option(options, "session")
     session_options = session["options"]
@@ -70,11 +62,18 @@ def test_build_application_commands_structure_is_stable() -> None:
         "logout",
     ]
 
-    flow = _find_option(options, "flow")
-    flow_options = flow["options"]
-    assert [opt["name"] for opt in flow_options] == list(FLOW_ACTION_NAMES)
-    assert [(opt["name"], opt["description"]) for opt in flow_options] == [
-        (spec.name, spec.description) for spec in FLOW_ACTION_SPECS
+    admin = _find_option(options, "admin")
+    admin_options = admin["options"]
+    assert [opt["name"] for opt in admin_options] == [
+        "help",
+        "debug",
+        "ids",
+        "mcp",
+        "init",
+        "repos",
+        "experimental",
+        "rollout",
+        "feedback",
     ]
 
     flow_root = next(cmd for cmd in commands if cmd["name"] == "flow")
@@ -125,46 +124,42 @@ def test_required_options_are_marked_required() -> None:
     update_target = _find_option(update["options"], "target")
     assert update_target["required"] is False
 
-    flow = _find_option(car_options, "flow")
-    for flow_name in ("status", "restart", "resume", "stop", "archive", "recover"):
-        flow_command = _find_option(flow["options"], flow_name)
-        flow_run_id = _find_option(flow_command["options"], "run_id")
-        assert flow_run_id["required"] is False
-        assert flow_run_id["autocomplete"] is True
-
-    flow_issue = _find_option(flow["options"], "issue")
-    flow_issue_ref = _find_option(flow_issue["options"], "issue_ref")
-    assert flow_issue_ref["required"] is True
-
-    flow_plan = _find_option(flow["options"], "plan")
-    flow_plan_text = _find_option(flow_plan["options"], "text")
-    assert flow_plan_text["required"] is True
-
-    flow_start = _find_option(flow["options"], "start")
-    flow_start_force_new = _find_option(flow_start["options"], "force_new")
-    assert flow_start_force_new["required"] is False
-
-    flow_restart = _find_option(flow["options"], "restart")
-    flow_restart_run_id = _find_option(flow_restart["options"], "run_id")
-    assert flow_restart_run_id["required"] is False
-
-    flow_recover = _find_option(flow["options"], "recover")
-    flow_recover_run_id = _find_option(flow_recover["options"], "run_id")
-    assert flow_recover_run_id["required"] is False
-
-    flow_reply = _find_option(flow["options"], "reply")
-    text_option = _find_option(flow_reply["options"], "text")
-    run_id_option = _find_option(flow_reply["options"], "run_id")
-
-    assert text_option["required"] is True
-    assert run_id_option["required"] is False
-    assert run_id_option["autocomplete"] is True
+    admin = _find_option(car_options, "admin")
+    admin_feedback = _find_option(admin["options"], "feedback")
+    admin_feedback_reason = _find_option(admin_feedback["options"], "reason")
+    assert admin_feedback_reason["required"] is True
 
     flow_root = next(cmd for cmd in commands if cmd["name"] == "flow")
     flow_root_status = _find_option(flow_root["options"], "status")
     flow_root_run_id = _find_option(flow_root_status["options"], "run_id")
     assert flow_root_run_id["required"] is False
     assert flow_root_run_id["autocomplete"] is True
+
+    for flow_name in ("restart", "resume", "stop", "archive", "recover"):
+        flow_command = _find_option(flow_root["options"], flow_name)
+        flow_run_id = _find_option(flow_command["options"], "run_id")
+        assert flow_run_id["required"] is False
+        assert flow_run_id["autocomplete"] is True
+
+    flow_issue = _find_option(flow_root["options"], "issue")
+    flow_issue_ref = _find_option(flow_issue["options"], "issue_ref")
+    assert flow_issue_ref["required"] is True
+
+    flow_plan = _find_option(flow_root["options"], "plan")
+    flow_plan_text = _find_option(flow_plan["options"], "text")
+    assert flow_plan_text["required"] is True
+
+    flow_start = _find_option(flow_root["options"], "start")
+    flow_start_force_new = _find_option(flow_start["options"], "force_new")
+    assert flow_start_force_new["required"] is False
+
+    flow_reply = _find_option(flow_root["options"], "reply")
+    text_option = _find_option(flow_reply["options"], "text")
+    run_id_option = _find_option(flow_reply["options"], "run_id")
+
+    assert text_option["required"] is True
+    assert run_id_option["required"] is False
+    assert run_id_option["autocomplete"] is True
 
     pma_options = next(cmd for cmd in commands if cmd["name"] == "pma")["options"]
     assert [opt["name"] for opt in pma_options] == ["on", "off", "status"]
@@ -196,7 +191,8 @@ def test_agent_and_effort_options_include_choices() -> None:
         update_target_command_choices(include_status=True)
     )
 
-    experimental = _find_option(car_options, "experimental")
+    admin = _find_option(car_options, "admin")
+    experimental = _find_option(admin["options"], "experimental")
     experimental_action = _find_option(experimental["options"], "action")
     action_choices = {
         choice["value"] for choice in experimental_action.get("choices", [])
