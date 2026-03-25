@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 9
+ORCHESTRATION_SCHEMA_VERSION = 10
 
 
 @dataclass(frozen=True)
@@ -802,6 +802,59 @@ def _apply_v9(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v10(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_pr_bindings (
+            binding_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            repo_slug TEXT NOT NULL,
+            repo_id TEXT,
+            pr_number INTEGER NOT NULL,
+            pr_state TEXT NOT NULL,
+            head_branch TEXT,
+            base_branch TEXT,
+            thread_target_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            closed_at TEXT,
+            FOREIGN KEY (thread_target_id) REFERENCES orch_thread_targets(thread_target_id)
+                ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_pr_bindings_provider_repo_pr
+            ON orch_pr_bindings(provider, repo_slug, pr_number)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_repo_state_updated
+            ON orch_pr_bindings(provider, repo_slug, pr_state, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_branch_state_updated
+            ON orch_pr_bindings(provider, repo_slug, head_branch, pr_state, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_repo_id_updated
+            ON orch_pr_bindings(repo_id, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_thread_updated
+            ON orch_pr_bindings(thread_target_id, updated_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -816,6 +869,7 @@ _MIGRATIONS = (
     ),
     _MigrationStep(8, "add_publish_journal_tables", _apply_v8),
     _MigrationStep(9, "add_scm_event_store", _apply_v9),
+    _MigrationStep(10, "add_pr_binding_store", _apply_v10),
 )
 
 
@@ -879,6 +933,11 @@ _TABLE_DEFINITIONS = (
         name="orch_scm_events",
         role="authoritative",
         description="Canonical normalized SCM events captured before provider-specific reaction handling.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_pr_bindings",
+        role="authoritative",
+        description="Optional durable PR-to-thread binding records keyed by provider, repo, and PR number.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",

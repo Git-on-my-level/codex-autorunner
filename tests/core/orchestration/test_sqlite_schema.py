@@ -61,6 +61,7 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "orch_publish_operations",
             "orch_publish_attempts",
             "orch_scm_events",
+            "orch_pr_bindings",
         }.issubset(names)
         assert {
             "operation_id",
@@ -96,6 +97,20 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "raw_payload_json",
             "created_at",
         }.issubset(_column_names(conn, "orch_scm_events"))
+        assert {
+            "binding_id",
+            "provider",
+            "repo_slug",
+            "repo_id",
+            "pr_number",
+            "pr_state",
+            "head_branch",
+            "base_branch",
+            "thread_target_id",
+            "created_at",
+            "updated_at",
+            "closed_at",
+        }.issubset(_column_names(conn, "orch_pr_bindings"))
 
 
 def test_table_definition_roles_cover_authoritative_mirror_projection_and_ops() -> None:

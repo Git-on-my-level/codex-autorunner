@@ -228,6 +228,55 @@ def test_apply_orchestration_migrations_adds_scm_event_table_from_v8(
     assert scm_event_table is not None
 
 
+def test_apply_orchestration_migrations_adds_pr_binding_table_from_v9(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "orchestration.sqlite3"
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE orch_schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE orch_migration_runs (
+                run_id TEXT PRIMARY KEY,
+                from_version INTEGER NOT NULL,
+                target_version INTEGER NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL,
+                error_text TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO orch_schema_migrations (version, name, applied_at)
+            VALUES (9, 'add_scm_event_store', '2026-03-25T00:00:00Z')
+            """
+        )
+
+        version_after = apply_orchestration_migrations(conn)
+        pr_binding_table = conn.execute(
+            """
+            SELECT name
+              FROM sqlite_master
+             WHERE type = 'table'
+               AND name = 'orch_pr_bindings'
+            """
+        ).fetchone()
+
+    assert version_after == ORCHESTRATION_SCHEMA_VERSION
+    assert pr_binding_table is not None
+
+
 def test_apply_orchestration_migrations_backfills_resource_owner_columns(
     tmp_path: Path,
 ) -> None:
