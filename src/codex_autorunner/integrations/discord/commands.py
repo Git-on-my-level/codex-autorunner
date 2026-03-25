@@ -501,4 +501,10 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
             ],
         },
+        {
+            "type": 1,
+            "name": "flow",
+            "description": "Ticket flow commands",
+            "options": _build_flow_subcommand_options(),
+        },
     ]

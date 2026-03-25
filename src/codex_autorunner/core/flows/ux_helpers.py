@@ -11,7 +11,13 @@ from ..ticket_flow_projection import (
     build_canonical_state_v1,
     select_authoritative_run_record,
 )
-from .models import FlowEventType, FlowRunRecord, FlowRunStatus
+from .models import (
+    FlowEventType,
+    FlowRunRecord,
+    FlowRunStatus,
+    flow_run_duration_seconds,
+    format_flow_duration,
+)
 from .store import FlowStore
 from .worker_process import (
     check_worker_health,
@@ -340,6 +346,90 @@ def summarize_flow_freshness(payload: Any) -> Optional[str]:
     return " · ".join(parts)
 
 
+def _format_ticket_flow_archive_status(record: FlowRunRecord) -> str:
+    mode = resolve_ticket_flow_archive_mode(record)
+    if mode == "ready":
+        return "ready"
+    if mode == "confirm":
+        return "confirm required"
+    return "blocked until run stops"
+
+
+def _flow_status_current_step(record: FlowRunRecord) -> Optional[str]:
+    current_step = getattr(record, "current_step", None)
+    if isinstance(current_step, str) and current_step.strip():
+        return current_step.strip()
+    if isinstance(current_step, int):
+        return str(current_step)
+
+    state = record.state if isinstance(record.state, Mapping) else {}
+    ticket_engine = state.get("ticket_engine") if isinstance(state, Mapping) else {}
+    if not isinstance(ticket_engine, Mapping):
+        return None
+
+    for key in ("total_turns", "current_step", "step"):
+        value = ticket_engine.get(key)
+        if isinstance(value, int):
+            return str(value)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def format_ticket_flow_status_lines(
+    record: FlowRunRecord,
+    snapshot: Mapping[str, Any],
+) -> list[str]:
+    worker = snapshot.get("worker_health")
+    worker_status = getattr(worker, "status", "unknown")
+    worker_pid = getattr(worker, "pid", None)
+    worker_text = (
+        f"{worker_status} (pid={worker_pid})"
+        if isinstance(worker_pid, int)
+        else str(worker_status)
+    )
+    last_event_seq = snapshot.get("last_event_seq")
+    last_event_at = snapshot.get("last_event_at")
+    current_ticket = snapshot.get("effective_current_ticket")
+    ticket_progress_payload = snapshot.get("ticket_progress")
+    progress_label = None
+    if isinstance(ticket_progress_payload, Mapping):
+        done = ticket_progress_payload.get("done")
+        total = ticket_progress_payload.get("total")
+        if isinstance(done, int) and isinstance(total, int) and total >= 0:
+            progress_label = f"{done}/{total}"
+
+    lines = [
+        f"Run: {record.id}",
+        f"Status: {record.status.value}",
+    ]
+    if progress_label:
+        lines.append(f"Tickets: {progress_label}")
+
+    current_step = _flow_status_current_step(record)
+    if current_step:
+        lines.append(f"Step: {current_step}")
+
+    duration_label = format_flow_duration(flow_run_duration_seconds(record))
+    if duration_label:
+        lines.append(f"Elapsed: {duration_label}")
+
+    lines.extend(
+        [
+            f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
+            f"Worker: {worker_text}",
+            f"Current ticket: {current_ticket or '-'}",
+        ]
+    )
+
+    freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
+    if freshness_summary:
+        lines.append(f"Freshness: {freshness_summary}")
+
+    lines.append(f"Archive: {_format_ticket_flow_archive_status(record)}")
+    return lines
+
+
 def build_flow_status_snapshot(
     repo_root: Path, record: FlowRunRecord, store: Optional[FlowStore]
 ) -> dict:
@@ -422,6 +512,7 @@ __all__ = [
     "bootstrap_check",
     "build_flow_status_snapshot",
     "ensure_worker",
+    "format_ticket_flow_status_lines",
     "format_issue_as_markdown",
     "issue_md_has_content",
     "issue_md_path",

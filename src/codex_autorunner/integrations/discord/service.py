@@ -69,6 +69,7 @@ from ...core.flows.ux_helpers import (
     GitHubServiceProtocol,
     build_flow_status_snapshot,
     ensure_worker,
+    format_ticket_flow_status_lines,
     issue_md_path,
     resolve_ticket_flow_archive_mode,
     seed_issue_from_github,
@@ -86,7 +87,6 @@ from ...core.managed_processes import reap_managed_processes
 from ...core.orchestration import build_ticket_flow_orchestration_service
 from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
-from ...core.ticket_flow_projection import select_authoritative_run_record
 from ...core.ticket_flow_summary import build_ticket_flow_display
 from ...core.update import (
     UpdateInProgressError,
@@ -1292,6 +1292,11 @@ class DiscordBotService:
                 "I could not parse this interaction. Please retry the command.",
             )
             return
+
+        ingress = replace(
+            ingress,
+            command_path=self._normalize_discord_command_path(ingress.command_path),
+        )
 
         try:
             if ingress.command_path[:1] == ("car",):
@@ -3643,7 +3648,7 @@ class DiscordBotService:
                 dispatch_seq=dispatch_seq,
                 content=content,
                 source=source,
-                resume_hint="`/car flow resume`" if allow_resume_hint else "",
+                resume_hint="`/flow resume`" if allow_resume_hint else "",
             )
         body = content.strip() or "(no dispatch message)"
         header_lines = [
@@ -4177,6 +4182,11 @@ class DiscordBotService:
                 "I could not parse this interaction. Please retry the command.",
             )
             return
+
+        ingress = replace(
+            ingress,
+            command_path=self._normalize_discord_command_path(ingress.command_path),
+        )
 
         try:
             if ingress.command_path[:1] == ("car",):
@@ -4940,6 +4950,7 @@ class DiscordBotService:
         focused_name: Optional[str],
         focused_value: str,
     ) -> None:
+        command_path = self._normalize_discord_command_path(command_path)
         await handle_car_command_autocomplete(
             self,
             interaction_id,
@@ -4950,6 +4961,14 @@ class DiscordBotService:
             focused_name=focused_name,
             focused_value=focused_value,
         )
+
+    @staticmethod
+    def _normalize_discord_command_path(
+        command_path: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if command_path[:1] != ("flow",):
+            return command_path
+        return ("car", "flow", *command_path[1:])
 
     async def _bind_with_path(
         self,
@@ -5123,7 +5142,7 @@ class DiscordBotService:
             rate_limits=rate_limits,
         )
         lines.extend(build_status_block_lines(status_block))
-        lines.append("Use /car flow status for ticket flow details.")
+        lines.append("Use /flow status for ticket flow details.")
         await self._respond_ephemeral(
             interaction_id, interaction_token, "\n".join(lines)
         )
@@ -7610,15 +7629,7 @@ class DiscordBotService:
     ) -> Optional[FlowRunRecord]:
         if not records:
             return None
-        live_records = [
-            record
-            for record in records
-            if not record.status.is_terminal()
-            and record.status != FlowRunStatus.SUPERSEDED
-        ]
-        if not live_records:
-            return None
-        return select_authoritative_run_record(live_records)
+        return select_ticket_flow_run_record(records, selection="authoritative")
 
     @staticmethod
     def _build_historical_runs_picker(
@@ -7660,47 +7671,7 @@ class DiscordBotService:
         record: FlowRunRecord,
         snapshot: dict[str, Any],
     ) -> str:
-        worker = snapshot.get("worker_health")
-        worker_status = getattr(worker, "status", "unknown")
-        worker_pid = getattr(worker, "pid", None)
-        worker_text = (
-            f"{worker_status} (pid={worker_pid})"
-            if isinstance(worker_pid, int)
-            else str(worker_status)
-        )
-        last_event_seq = snapshot.get("last_event_seq")
-        last_event_at = snapshot.get("last_event_at")
-        current_ticket = snapshot.get("effective_current_ticket")
-        ticket_progress = snapshot.get("ticket_progress")
-        progress_label = None
-        if isinstance(ticket_progress, dict):
-            done = ticket_progress.get("done")
-            total = ticket_progress.get("total")
-            if isinstance(done, int) and isinstance(total, int) and total >= 0:
-                progress_label = f"{done}/{total}"
-        lines = [
-            f"Run: {record.id}",
-            f"Status: {record.status.value}",
-        ]
-        if progress_label:
-            lines.append(f"Tickets: {progress_label}")
-        duration_label = format_flow_duration(flow_run_duration_seconds(record))
-        if duration_label:
-            lines.append(f"Elapsed: {duration_label}")
-        freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
-        freshness_line = (
-            f"Freshness: {freshness_summary}" if freshness_summary else None
-        )
-        lines.extend(
-            [
-                f"Last event: {last_event_seq if last_event_seq is not None else '-'} at {last_event_at or '-'}",
-                f"Worker: {worker_text}",
-                f"Current ticket: {current_ticket or '-'}",
-            ]
-        )
-        if freshness_line:
-            lines.append(freshness_line)
-        return "\n".join(lines)
+        return "\n".join(format_ticket_flow_status_lines(record, snapshot))
 
     def _build_flow_status_message(
         self,
@@ -7799,7 +7770,7 @@ class DiscordBotService:
             if record is None:
                 if runs and not explicit_run_requested:
                     content = (
-                        "No current ticket_flow run.\n\n"
+                        "No ticket_flow run found.\n\n"
                         "Use the picker below to inspect historical runs."
                     )
                     components = self._build_historical_runs_picker(runs)
@@ -7883,7 +7854,7 @@ class DiscordBotService:
             event_type="flow_status_command",
             kind="command",
             actor="user",
-            text="/car flow status",
+            text="/flow status",
             chat_id=channel_id,
             thread_id=guild_id,
             message_id=interaction_id,
@@ -8021,7 +7992,7 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Provide an issue reference: `/car flow issue issue_ref:<issue#|url>`",
+                "Provide an issue reference: `/flow issue issue_ref:<issue#|url>`",
             )
             return
         issue_ref = issue_ref.strip()
@@ -8092,7 +8063,7 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Provide a plan: `/car flow plan text:<plan>`",
+                "Provide a plan: `/flow plan text:<plan>`",
             )
             return
         content = seed_issue_from_text(plan_text.strip())
@@ -8718,7 +8689,7 @@ class DiscordBotService:
             event_type="flow_resume_command",
             kind="command",
             actor="user",
-            text="/car flow resume",
+            text="/flow resume",
             chat_id=channel_id,
             thread_id=guild_id,
             message_id=interaction_id,
@@ -8844,7 +8815,7 @@ class DiscordBotService:
             event_type="flow_stop_command",
             kind="command",
             actor="user",
-            text="/car flow stop",
+            text="/flow stop",
             chat_id=channel_id,
             thread_id=guild_id,
             message_id=interaction_id,
@@ -8993,7 +8964,7 @@ class DiscordBotService:
             event_type="flow_archive_command",
             kind="command",
             actor="user",
-            text="/car flow archive",
+            text="/flow archive",
             chat_id=channel_id,
             thread_id=guild_id,
             message_id=interaction_id,
@@ -9017,7 +8988,7 @@ class DiscordBotService:
                 deferred=deferred,
                 text=(
                     f"Run {target.id} no longer exists. "
-                    "Use /car flow status or /car flow runs to inspect historical runs."
+                    "Use /flow status or /flow runs to inspect historical runs."
                 ),
             )
             return
@@ -10401,7 +10372,7 @@ class DiscordBotService:
                         await self._respond_ephemeral(
                             interaction_id,
                             interaction_token,
-                            "Reply selection expired. Re-run `/car flow reply text:<...>`.",
+                            "Reply selection expired. Re-run `/flow reply text:<...>`.",
                         )
                         return
                     await self._handle_flow_reply(
@@ -10782,7 +10753,7 @@ class DiscordBotService:
                         await self._respond_ephemeral(
                             interaction_id,
                             interaction_token,
-                            "Reply selection expired. Re-run `/car flow reply text:<...>`.",
+                            "Reply selection expired. Re-run `/flow reply text:<...>`.",
                         )
                         return
                     await self._handle_flow_reply(
@@ -11103,7 +11074,7 @@ class DiscordBotService:
             if target is None:
                 stale_text = (
                     f"Run {run_id} no longer exists. "
-                    "Use /car flow status or /car flow runs to inspect historical runs."
+                    "Use /flow status or /flow runs to inspect historical runs."
                 )
                 await self._respond_ephemeral(
                     interaction_id, interaction_token, stale_text
@@ -11154,7 +11125,7 @@ class DiscordBotService:
             except KeyError:
                 stale_text = (
                     f"Run {run_id} no longer exists. "
-                    "Use /car flow status or /car flow runs to inspect historical runs."
+                    "Use /flow status or /flow runs to inspect historical runs."
                 )
                 if deferred:
                     updated = await self._edit_original_component_message(
@@ -11182,7 +11153,7 @@ class DiscordBotService:
                 f"(tickets={summary['archived_tickets']}, "
                 f"runs_archived={summary['archived_runs']}, "
                 f"contextspace={summary['archived_contextspace']}).\n\n"
-                "Use /car flow status or /car flow runs to inspect historical runs."
+                "Use /flow status or /flow runs to inspect historical runs."
             )
             if deferred:
                 updated = await self._edit_original_component_message(

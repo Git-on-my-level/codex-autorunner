@@ -26,7 +26,7 @@ def build_status_text(
         ]
         if collaboration_summary_lines:
             lines.extend(collaboration_summary_lines)
-        lines.append("Then use /car flow status once flow commands are enabled.")
+        lines.append("Then use /flow status once flow commands are enabled.")
         return lines
 
     lines = []
@@ -63,7 +63,7 @@ def build_status_text(
         lines.extend(collaboration_summary_lines)
 
     if include_flow_hint:
-        lines.append("Use /car flow status for ticket flow details.")
+        lines.append("Use /flow status for ticket flow details.")
 
     return lines
 

@@ -37,5 +37,5 @@ def test_discord_help_lists_session_file_and_flow_sections() -> None:
     assert "/car session resume [thread_id] - Resume a previous chat thread" in text
     assert "/car files inbox - List files in inbox" in text
     assert "/car files clear [target] - Clear inbox/outbox" in text
-    assert "/car flow runs [limit]" in text
+    assert "/flow runs [limit]" in text
     assert "/pma on - Enable PMA mode" in text

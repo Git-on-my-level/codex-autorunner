@@ -23,6 +23,7 @@ from .....core.flows.surface_defaults import should_route_flow_read_to_hub_overv
 from .....core.flows.ux_helpers import (
     bootstrap_check,
     build_flow_status_snapshot,
+    format_ticket_flow_status_lines,
     issue_md_has_content,
     issue_md_path,
     resolve_ticket_flow_archive_mode,
@@ -885,19 +886,7 @@ class FlowCommands(SharedHelpers):
         run = record
         status = getattr(run, "status", None)
         status_value = status.value if status else "unknown"
-        progress = snapshot.get("ticket_progress") if snapshot else None
-        progress_label = None
-        if isinstance(progress, dict):
-            done = progress.get("done")
-            total = progress.get("total")
-            if isinstance(done, int) and isinstance(total, int) and total >= 0:
-                progress_label = f"{done}/{total}"
-        lines = [f"Run: {_code(run.id)}", f"Status: {status_value}"]
-        if progress_label:
-            lines.append(f"Tickets: {progress_label}")
-        flow_type = getattr(run, "flow_type", None)
-        if flow_type:
-            lines.append(f"Flow: {flow_type}")
+        lines = format_ticket_flow_status_lines(run, snapshot)
         created_at = getattr(run, "created_at", None)
         if created_at:
             lines.append(f"Created: {created_at}")
@@ -911,16 +900,12 @@ class FlowCommands(SharedHelpers):
             flow_duration_seconds(started_at, finished_at, status_value)
         )
         if duration_label:
-            lines.append(f"Elapsed: {duration_label}")
-        current_step = getattr(run, "current_step", None)
-        if current_step:
-            lines.append(f"Step: {current_step}")
+            elapsed_line = f"Elapsed: {duration_label}"
+            if elapsed_line not in lines:
+                lines.append(elapsed_line)
         state = run.state or {}
         engine = state.get("ticket_engine") if isinstance(state, dict) else None
         engine = engine if isinstance(engine, dict) else {}
-        current = snapshot.get("effective_current_ticket") if snapshot else None
-        if isinstance(current, str) and current.strip():
-            lines.append(f"Current: {current.strip()}")
         reason_summary = None
         if isinstance(state, dict):
             value = state.get("reason_summary")
@@ -937,16 +922,6 @@ class FlowCommands(SharedHelpers):
         error_message = getattr(run, "error_message", None)
         if isinstance(error_message, str) and error_message.strip():
             lines.append(f"Error: {_truncate_text(error_message.strip(), 300)}")
-        if snapshot:
-            last_seq = snapshot.get("last_event_seq")
-            last_at = snapshot.get("last_event_at")
-            if last_seq or last_at:
-                seq_label = str(last_seq) if last_seq is not None else "?"
-                at_label = last_at or "unknown time"
-                lines.append(f"Last event: {seq_label} @ {at_label}")
-            freshness_summary = summarize_flow_freshness(snapshot.get("freshness"))
-            if freshness_summary:
-                lines.append(f"Freshness: {freshness_summary}")
         if health is None:
             health = snapshot.get("worker_health") if snapshot else None
         if health is None:
@@ -958,12 +933,6 @@ class FlowCommands(SharedHelpers):
                     health = None
         if health is None:
             return lines
-        worker_line = f"Worker: {health.status}"
-        if health.pid:
-            worker_line += f" (pid {health.pid})"
-        if health.message and health.status not in {"alive"}:
-            worker_line += f" - {health.message}"
-        lines.append(worker_line)
         if status == FlowRunStatus.PAUSED:
             lines.append(
                 "Paused: use `/flow reply <message>` (or send a message in chat) to resume."
