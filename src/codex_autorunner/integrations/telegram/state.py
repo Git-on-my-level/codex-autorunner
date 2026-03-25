@@ -2157,7 +2157,10 @@ class TopicQueue:
                     continue
                 entry = cast(_TopicQueueEntry, item)
                 future = entry.future
-                if future is not None and not future.done():
+                if future is None:
+                    cancelled += 1
+                    continue
+                if not future.done():
                     future.cancel()
                     cancelled += 1
             finally:

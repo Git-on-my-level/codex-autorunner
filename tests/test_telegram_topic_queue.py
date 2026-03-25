@@ -60,6 +60,35 @@ async def test_topic_queue_cancel_pending_item_removes_selected_entry() -> None:
 
 
 @pytest.mark.anyio
+async def test_topic_queue_cancel_pending_counts_detached_entries() -> None:
+    queue = TopicQueue()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[str] = []
+
+    async def work(label: str) -> str:
+        observed.append(label)
+        if label == "first":
+            started.set()
+            await release.wait()
+        return label
+
+    first_task = asyncio.create_task(queue.enqueue(lambda: work("first")))
+    await started.wait()
+    queue.enqueue_detached(lambda: work("second"), item_id="m-2")
+    queue.enqueue_detached(lambda: work("third"), item_id="m-3")
+
+    assert queue.cancel_pending() == 2
+
+    release.set()
+    assert await first_task == "first"
+    await asyncio.sleep(0)
+
+    assert observed == ["first"]
+    await queue.close()
+
+
+@pytest.mark.anyio
 async def test_topic_queue_promote_pending_item_moves_selected_entry_to_front() -> None:
     queue = TopicQueue()
     started = asyncio.Event()
