@@ -491,6 +491,67 @@ class TelegramCommandHandlers(
             [[InlineButton("Cancel", encode_cancel_callback("interrupt"))]]
         )
 
+    async def _handle_queue_cancel_callback(
+        self, callback: TelegramCallbackQuery, kind: str
+    ) -> None:
+        if callback.chat_id is None:
+            await self._answer_callback(callback, "Queue item unavailable")
+            return
+        _prefix, _sep, source_message_id_raw = kind.partition(":")
+        try:
+            source_message_id = int(source_message_id_raw)
+        except (TypeError, ValueError):
+            await self._answer_callback(callback, "Queue item unavailable")
+            return
+        key = await self._resolve_topic_key(callback.chat_id, callback.thread_id)
+        runtime = self._router.runtime_for(key)
+        cancelled = runtime.queue.cancel_pending_item(str(source_message_id))
+        if not cancelled:
+            await self._answer_callback(callback, "Queue item is no longer pending")
+            return
+        placeholder_id = self._get_queued_placeholder(
+            callback.chat_id, source_message_id
+        )
+        self._clear_queued_placeholder(callback.chat_id, source_message_id)
+        if placeholder_id is not None:
+            await self._delete_message(
+                callback.chat_id,
+                placeholder_id,
+                callback.thread_id,
+            )
+        await self._answer_callback(callback, "Queued message cancelled")
+
+    async def _handle_queue_interrupt_send_callback(
+        self, callback: TelegramCallbackQuery, kind: str
+    ) -> None:
+        if callback.chat_id is None:
+            await self._answer_callback(callback, "Queue item unavailable")
+            return
+        _prefix, _sep, source_message_id_raw = kind.partition(":")
+        try:
+            source_message_id = int(source_message_id_raw)
+        except (TypeError, ValueError):
+            await self._answer_callback(callback, "Queue item unavailable")
+            return
+        key = await self._resolve_topic_key(callback.chat_id, callback.thread_id)
+        runtime = self._router.runtime_for(key)
+        promoted = runtime.queue.promote_pending_item(str(source_message_id))
+        if not promoted:
+            await self._answer_callback(callback, "Queue item is no longer pending")
+            return
+        if runtime.current_turn_id is None:
+            await self._answer_callback(callback, "Queued message moved to front")
+            return
+        await self._answer_callback(callback, "Interrupting current turn...")
+        await self._process_interrupt(
+            chat_id=callback.chat_id,
+            thread_id=callback.thread_id,
+            reply_to=callback.message_id,
+            runtime=runtime,
+            message_id=callback.message_id,
+            preserve_queue=True,
+        )
+
     async def _handle_interrupt(self, message: TelegramMessage, runtime: Any) -> None:
         await self._process_interrupt(
             chat_id=message.chat_id,
@@ -524,6 +585,7 @@ class TelegramCommandHandlers(
         reply_to: Optional[int],
         runtime: Any,
         message_id: Optional[int],
+        preserve_queue: bool = False,
     ) -> None:
         turn_id = runtime.current_turn_id
         key = await self._resolve_topic_key(chat_id, thread_id)
@@ -650,12 +712,13 @@ class TelegramCommandHandlers(
             runtime.pending_request_id = None
         queued_turn_cancelled = False
         if (
-            runtime.queued_turn_cancel is not None
+            not preserve_queue
+            and runtime.queued_turn_cancel is not None
             and not runtime.queued_turn_cancel.is_set()
         ):
             runtime.queued_turn_cancel.set()
             queued_turn_cancelled = True
-        queued_cancelled = runtime.queue.cancel_pending()
+        queued_cancelled = 0 if preserve_queue else runtime.queue.cancel_pending()
         if not turn_id:
             active_cancelled = runtime.queue.cancel_active()
             pending_records = await self._store.pending_approvals_for_key(key)

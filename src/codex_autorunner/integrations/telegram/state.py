@@ -2117,6 +2117,13 @@ T = TypeVar("T")
 _QUEUE_STOP = object()
 
 
+@dataclass
+class _TopicQueueEntry:
+    work: Callable[[], Awaitable[Any]]
+    future: Optional[asyncio.Future[Any]] = None
+    item_id: Optional[str] = None
+
+
 class TopicQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[object] = asyncio.Queue()
@@ -2148,10 +2155,9 @@ class TopicQueue:
                 if item is _QUEUE_STOP:
                     requeue_stop = True
                     continue
-                work, future = cast(
-                    tuple[Callable[[], Awaitable[Any]], asyncio.Future[Any]], item
-                )
-                if not future.done():
+                entry = cast(_TopicQueueEntry, item)
+                future = entry.future
+                if future is not None and not future.done():
                     future.cancel()
                     cancelled += 1
             finally:
@@ -2163,12 +2169,85 @@ class TopicQueue:
                 pass
         return cancelled
 
+    def cancel_pending_item(self, item_id: str) -> bool:
+        if not isinstance(item_id, str) or not item_id:
+            return False
+        entries: list[_TopicQueueEntry] = []
+        cancelled = False
+        requeue_stop = False
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                if item is _QUEUE_STOP:
+                    requeue_stop = True
+                    continue
+                entry = cast(_TopicQueueEntry, item)
+                if entry.item_id == item_id and not cancelled:
+                    future = entry.future
+                    if future is not None and not future.done():
+                        future.cancel()
+                    cancelled = True
+                    continue
+                entries.append(entry)
+            finally:
+                self._queue.task_done()
+        for entry in entries:
+            self._queue.put_nowait(entry)
+        if requeue_stop:
+            self._queue.put_nowait(_QUEUE_STOP)
+        return cancelled
+
+    def promote_pending_item(self, item_id: str) -> bool:
+        if not isinstance(item_id, str) or not item_id:
+            return False
+        entries: list[_TopicQueueEntry] = []
+        target: Optional[_TopicQueueEntry] = None
+        requeue_stop = False
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            try:
+                if item is _QUEUE_STOP:
+                    requeue_stop = True
+                    continue
+                entry = cast(_TopicQueueEntry, item)
+                if target is None and entry.item_id == item_id:
+                    target = entry
+                    continue
+                entries.append(entry)
+            finally:
+                self._queue.task_done()
+        if target is not None:
+            self._queue.put_nowait(target)
+        for entry in entries:
+            self._queue.put_nowait(entry)
+        if requeue_stop:
+            self._queue.put_nowait(_QUEUE_STOP)
+        return target is not None
+
+    def enqueue_detached(
+        self,
+        work: Callable[[], Awaitable[Any]],
+        *,
+        item_id: Optional[str] = None,
+    ) -> Optional[str]:
+        if self._closed:
+            raise RuntimeError("topic queue is closed")
+        self._queue.put_nowait(_TopicQueueEntry(work=work, item_id=item_id))
+        self._ensure_worker()
+        return item_id
+
     async def enqueue(self, work: Callable[[], Awaitable[T]]) -> T:
         if self._closed:
             raise RuntimeError("topic queue is closed")
         loop = asyncio.get_running_loop()
         future: asyncio.Future[T] = loop.create_future()
-        await self._queue.put((work, future))
+        await self._queue.put(_TopicQueueEntry(work=work, future=future))
         self._ensure_worker()
         return await future
 
@@ -2189,18 +2268,17 @@ class TopicQueue:
             try:
                 if item is _QUEUE_STOP:
                     return
-                work, future = cast(
-                    tuple[Callable[[], Awaitable[Any]], asyncio.Future[Any]], item
-                )
-                if future.cancelled():
+                entry = cast(_TopicQueueEntry, item)
+                future = entry.future
+                if future is not None and future.cancelled():
                     continue
                 try:
-                    self._current_task = asyncio.create_task(work())
+                    self._current_task = asyncio.create_task(entry.work())
                     result: Any = await self._current_task
                 except asyncio.CancelledError:
                     if self._cancel_active_requested:
                         self._cancel_active_requested = False
-                        if not future.cancelled():
+                        if future is not None and not future.cancelled():
                             future.cancel()
                     else:
                         if (
@@ -2210,10 +2288,14 @@ class TopicQueue:
                             self._current_task.cancel()
                         raise
                 except Exception as exc:
-                    if not future.cancelled():
+                    if future is None:
+                        logger.warning(
+                            "telegram detached topic queue entry failed", exc_info=exc
+                        )
+                    elif not future.cancelled():
                         future.set_exception(exc)
                 else:
-                    if not future.cancelled():
+                    if future is not None and not future.cancelled():
                         future.set_result(result)
             finally:
                 self._current_task = None

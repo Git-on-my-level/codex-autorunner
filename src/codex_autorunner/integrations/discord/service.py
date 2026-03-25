@@ -143,6 +143,7 @@ from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
     DispatchResult,
+    conversation_id_for,
 )
 from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.handlers.approvals import (
@@ -252,6 +253,7 @@ from .components import (
     build_flow_status_buttons,
     build_model_effort_picker,
     build_model_picker,
+    build_queue_notice_buttons,
     build_review_commit_picker,
     build_session_threads_picker,
     build_ticket_filter_picker,
@@ -679,6 +681,7 @@ class DiscordBotService:
         self._pending_ticket_context: dict[str, dict[str, str]] = {}
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
+        self._queued_notice_messages: dict[tuple[str, str], str] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._typing_sessions: dict[str, int] = {}
         self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -777,8 +780,19 @@ class DiscordBotService:
                 await self._dispatch_chat_event(event)
 
     async def _dispatch_chat_event(self, event: ChatEvent) -> None:
+        async def _handle_dispatched_event(
+            queued_event: ChatEvent, context: DispatchContext
+        ) -> None:
+            if isinstance(queued_event, ChatMessageEvent):
+                await self._clear_queued_notice(
+                    conversation_id=context.conversation_id,
+                    source_message_id=queued_event.message.message_id,
+                    channel_id=context.chat_id,
+                )
+            await self._handle_chat_event(queued_event, context)
+
         dispatch_result = await self._dispatcher.dispatch(
-            event, self._handle_chat_event
+            event, _handle_dispatched_event
         )
         await self._maybe_send_queued_notice(event, dispatch_result)
 
@@ -972,6 +986,28 @@ class DiscordBotService:
         )
         return binding is not None and workspace_root is not None
 
+    def _dispatcher_conversation_id(
+        self, *, channel_id: str, guild_id: Optional[str]
+    ) -> str:
+        return conversation_id_for("discord", channel_id, guild_id)
+
+    async def _clear_queued_notice(
+        self,
+        *,
+        conversation_id: str,
+        source_message_id: str,
+        channel_id: str,
+    ) -> None:
+        key = (conversation_id, source_message_id)
+        notice_message_id = self._queued_notice_messages.pop(key, None)
+        if not notice_message_id:
+            return
+        await self._delete_channel_message_safe(
+            channel_id,
+            notice_message_id,
+            record_id=f"queue-notice-delete:{channel_id}:{source_message_id}",
+        )
+
     async def _maybe_send_queued_notice(
         self, event: ChatEvent, dispatch_result: DispatchResult
     ) -> None:
@@ -982,11 +1018,26 @@ class DiscordBotService:
         if not await self._can_start_message_turn_in_channel(event):
             return
         channel_id = dispatch_result.context.chat_id
-        await self._send_channel_message_safe(
-            channel_id,
-            {"content": format_discord_message(DISCORD_QUEUED_PLACEHOLDER_TEXT)},
-            record_id=f"queue-notice:{channel_id}:{dispatch_result.context.update_id}",
-        )
+        source_message_id = event.message.message_id
+        try:
+            response = await self._send_channel_message(
+                channel_id,
+                {
+                    "content": format_discord_message(DISCORD_QUEUED_PLACEHOLDER_TEXT),
+                    "components": [build_queue_notice_buttons(source_message_id)],
+                },
+            )
+            notice_message_id = response.get("id")
+            if isinstance(notice_message_id, str) and notice_message_id:
+                self._queued_notice_messages[
+                    (dispatch_result.context.conversation_id, source_message_id)
+                ] = notice_message_id
+        except Exception:
+            await self._send_channel_message_safe(
+                channel_id,
+                {"content": format_discord_message(DISCORD_QUEUED_PLACEHOLDER_TEXT)},
+                record_id=f"queue-notice:{channel_id}:{dispatch_result.context.update_id}",
+            )
         log_event(
             self._logger,
             logging.INFO,
@@ -5112,6 +5163,19 @@ class DiscordBotService:
             sandbox_policy = explicit_sandbox_policy
         model_label = self._status_model_label(binding)
         effort_label = self._status_effort_label(binding, agent)
+        dispatcher = getattr(self, "_dispatcher", None)
+        pending_queue = 0
+        if dispatcher is not None:
+            pending_queue = await dispatcher.pending(
+                self._dispatcher_conversation_id(
+                    channel_id=channel_id, guild_id=guild_id
+                )
+            )
+        extra_lines = [f"Queued requests: {pending_queue}"]
+        if pending_queue:
+            extra_lines.append(
+                "Queued messages include Cancel and Interrupt + Send buttons."
+            )
         status_block = StatusBlockContext(
             agent=agent,
             resume="supported" if self._agent_supports_resume(agent) else "unsupported",
@@ -5121,6 +5185,7 @@ class DiscordBotService:
             approval_policy=approval_policy or "default",
             sandbox_policy=sandbox_policy,
             rate_limits=rate_limits,
+            extra_lines=tuple(extra_lines),
         )
         lines.extend(build_status_block_lines(status_block))
         lines.append("Use /car flow status for ticket flow details.")
@@ -10301,6 +10366,29 @@ class DiscordBotService:
                 )
                 return
 
+            if custom_id.startswith("queue_cancel:"):
+                await self._handle_queue_cancel_button(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    custom_id=custom_id,
+                    message_id=interaction_message_id,
+                    guild_id=extract_guild_id(interaction_payload),
+                )
+                return
+
+            if custom_id.startswith("queue_interrupt_send:"):
+                await self._handle_queue_interrupt_send_button(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    custom_id=custom_id,
+                    message_id=interaction_message_id,
+                    guild_id=extract_guild_id(interaction_payload),
+                    user_id=user_id,
+                )
+                return
+
             if custom_id == "cancel_turn":
                 await self._handle_cancel_turn_button(
                     interaction_id,
@@ -10676,6 +10764,29 @@ class DiscordBotService:
                     interaction_id,
                     interaction_token,
                     custom_id=custom_id,
+                )
+                return
+
+            if custom_id.startswith("queue_cancel:"):
+                await self._handle_queue_cancel_button(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    custom_id=custom_id,
+                    message_id=message_id,
+                    guild_id=guild_id,
+                )
+                return
+
+            if custom_id.startswith("queue_interrupt_send:"):
+                await self._handle_queue_interrupt_send_button(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    custom_id=custom_id,
+                    message_id=message_id,
+                    guild_id=guild_id,
+                    user_id=user_id,
                 )
                 return
 
@@ -12479,6 +12590,109 @@ class DiscordBotService:
         message_id: Optional[str] = None,
         custom_id: str = "cancel_turn",
     ) -> None:
+        await self._handle_car_interrupt(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            source="component",
+            source_custom_id=custom_id,
+            source_message_id=message_id,
+            source_user_id=user_id,
+        )
+
+    async def _handle_queue_cancel_button(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        custom_id: str,
+        guild_id: Optional[str],
+        message_id: Optional[str] = None,
+    ) -> None:
+        source_message_id = custom_id.split(":", 1)[1].strip()
+        if not source_message_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is unavailable.",
+            )
+            return
+        conversation_id = self._dispatcher_conversation_id(
+            channel_id=channel_id,
+            guild_id=guild_id,
+        )
+        cancelled = await self._dispatcher.cancel_pending_message(
+            conversation_id,
+            source_message_id,
+        )
+        if not cancelled:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is no longer pending.",
+            )
+            return
+        await self._clear_queued_notice(
+            conversation_id=conversation_id,
+            source_message_id=source_message_id,
+            channel_id=channel_id,
+        )
+        if message_id:
+            self._queued_notice_messages.pop((conversation_id, source_message_id), None)
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Queued request cancelled.",
+        )
+
+    async def _handle_queue_interrupt_send_button(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        custom_id: str,
+        guild_id: Optional[str],
+        user_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+    ) -> None:
+        source_message_id = custom_id.split(":", 1)[1].strip()
+        if not source_message_id:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is unavailable.",
+            )
+            return
+        conversation_id = self._dispatcher_conversation_id(
+            channel_id=channel_id,
+            guild_id=guild_id,
+        )
+        promoted = await self._dispatcher.promote_pending_message(
+            conversation_id,
+            source_message_id,
+        )
+        if not promoted:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request is no longer pending.",
+            )
+            return
+        binding = await self._store.get_binding(channel_id=channel_id)
+        pma_enabled = bool(binding.get("pma_enabled", False)) if binding else False
+        mode = "pma" if pma_enabled else "repo"
+        _orchestration_service, _binding_row, current_thread = (
+            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
+        )
+        if current_thread is None:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Queued request moved to the front.",
+            )
+            return
         await self._handle_car_interrupt(
             interaction_id,
             interaction_token,

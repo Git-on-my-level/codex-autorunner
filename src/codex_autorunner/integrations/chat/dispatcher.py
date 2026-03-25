@@ -254,6 +254,75 @@ class ChatDispatcher:
 
         await self._idle_event.wait()
 
+    async def pending(self, conversation_id: str) -> int:
+        """Return queued item count for one conversation."""
+
+        async with self._lock:
+            queue = self._queues.get(conversation_id)
+            return len(queue) if queue is not None else 0
+
+    async def clear_pending(self, conversation_id: str) -> int:
+        """Cancel queued items for one conversation without interrupting active work."""
+
+        async with self._lock:
+            queue = self._queues.get(conversation_id)
+            if not queue:
+                return 0
+            cancelled = len(queue)
+            queue.clear()
+            if conversation_id not in self._workers:
+                self._queues.pop(conversation_id, None)
+            if not self._workers and self._active_handlers == 0:
+                self._idle_event.set()
+            return cancelled
+
+    async def cancel_pending_message(
+        self, conversation_id: str, message_id: str
+    ) -> bool:
+        """Cancel one pending message for a conversation."""
+
+        if not isinstance(message_id, str) or not message_id:
+            return False
+        async with self._lock:
+            queue = self._queues.get(conversation_id)
+            if not queue:
+                return False
+            for index, (event, _context, _handler) in enumerate(queue):
+                if not isinstance(event, ChatMessageEvent):
+                    continue
+                if event.message.message_id != message_id:
+                    continue
+                del queue[index]
+                if not queue and conversation_id not in self._workers:
+                    self._queues.pop(conversation_id, None)
+                if not self._workers and self._active_handlers == 0:
+                    self._idle_event.set()
+                return True
+            return False
+
+    async def promote_pending_message(
+        self, conversation_id: str, message_id: str
+    ) -> bool:
+        """Move one pending message to the front of the queue."""
+
+        if not isinstance(message_id, str) or not message_id:
+            return False
+        async with self._lock:
+            queue = self._queues.get(conversation_id)
+            if not queue:
+                return False
+            for index, (event, context, handler) in enumerate(queue):
+                if not isinstance(event, ChatMessageEvent):
+                    continue
+                if event.message.message_id != message_id:
+                    continue
+                if index == 0:
+                    return True
+                del queue[index]
+                queue.appendleft((event, context, handler))
+                return True
+            return False
+
     async def close(self) -> None:
         """Cancel worker tasks and clear queued work."""
 

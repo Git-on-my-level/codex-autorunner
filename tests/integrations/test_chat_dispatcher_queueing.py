@@ -208,6 +208,92 @@ async def test_dispatcher_close_cancels_workers_and_queued_events() -> None:
     assert observed == ["normal-1"]
 
 
+@pytest.mark.anyio
+async def test_dispatcher_clear_pending_keeps_active_handler_running() -> None:
+    dispatcher = ChatDispatcher()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+        if event.update_id == "normal-1":
+            entered.set()
+            await release.wait()
+
+    await dispatcher.dispatch(_message_event("normal-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2"), handler)
+    await dispatcher.dispatch(_message_event("normal-3"), handler)
+
+    assert await dispatcher.pending("fake:chat-1:thread-1") == 2
+    assert await dispatcher.clear_pending("fake:chat-1:thread-1") == 2
+    assert await dispatcher.pending("fake:chat-1:thread-1") == 0
+
+    release.set()
+    await dispatcher.wait_idle()
+
+    assert observed == ["normal-1"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_cancel_pending_message_removes_only_selected_item() -> None:
+    dispatcher = ChatDispatcher()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+        if event.update_id == "normal-1":
+            entered.set()
+            await release.wait()
+
+    await dispatcher.dispatch(_message_event("normal-1", message_id="m-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2", message_id="m-2"), handler)
+    await dispatcher.dispatch(_message_event("normal-3", message_id="m-3"), handler)
+
+    assert (
+        await dispatcher.cancel_pending_message("fake:chat-1:thread-1", "m-2") is True
+    )
+
+    release.set()
+    await dispatcher.wait_idle()
+
+    assert observed == ["normal-1", "normal-3"]
+
+
+@pytest.mark.anyio
+async def test_dispatcher_promote_pending_message_moves_selected_item_to_front() -> (
+    None
+):
+    dispatcher = ChatDispatcher()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(event.update_id)
+        if event.update_id == "normal-1":
+            entered.set()
+            await release.wait()
+
+    await dispatcher.dispatch(_message_event("normal-1", message_id="m-1"), handler)
+    await entered.wait()
+    await dispatcher.dispatch(_message_event("normal-2", message_id="m-2"), handler)
+    await dispatcher.dispatch(_message_event("normal-3", message_id="m-3"), handler)
+
+    assert (
+        await dispatcher.promote_pending_message("fake:chat-1:thread-1", "m-3") is True
+    )
+
+    release.set()
+    await dispatcher.wait_idle()
+
+    assert observed == ["normal-1", "normal-3", "normal-2"]
+
+
 @pytest.mark.parametrize(
     ("kwargs", "expected_param"),
     [

@@ -2150,6 +2150,117 @@ async def test_component_interaction_with_empty_values_returns_error(
 
 
 @pytest.mark.anyio
+async def test_component_interaction_queue_cancel_cancels_selected_pending_message(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        conversation_id = service._dispatcher_conversation_id(
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+        service._queued_notice_messages[(conversation_id, "m-2")] = "notice-1"
+
+        async def _cancel_pending_message(
+            _conversation_id: str, message_id: str
+        ) -> bool:
+            assert _conversation_id == conversation_id
+            assert message_id == "m-2"
+            return True
+
+        service._dispatcher.cancel_pending_message = _cancel_pending_message  # type: ignore[method-assign]
+
+        await service._handle_component_interaction_normalized(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id="queue_cancel:m-2",
+            values=None,
+            guild_id="guild-1",
+            user_id="user-1",
+            message_id="notice-1",
+        )
+
+        assert rest.deleted_channel_messages == [
+            {"channel_id": "channel-1", "message_id": "notice-1"}
+        ]
+        assert (
+            rest.interaction_responses[-1]["payload"]["data"]["content"]
+            == "Queued request cancelled."
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_interaction_queue_interrupt_send_promotes_and_interrupts(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    calls: list[tuple[str, str]] = []
+
+    try:
+        conversation_id = service._dispatcher_conversation_id(
+            channel_id="channel-1",
+            guild_id="guild-1",
+        )
+
+        async def _promote_pending_message(
+            _conversation_id: str, message_id: str
+        ) -> bool:
+            assert _conversation_id == conversation_id
+            assert message_id == "m-2"
+            return True
+
+        async def _handle_interrupt(*args, **kwargs) -> None:
+            calls.append((kwargs["source_custom_id"], kwargs["channel_id"]))
+
+        service._dispatcher.promote_pending_message = _promote_pending_message  # type: ignore[method-assign]
+        service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
+            None,
+            None,
+            SimpleNamespace(thread_target_id="thread-1"),
+        )
+        service._handle_car_interrupt = _handle_interrupt  # type: ignore[method-assign]
+
+        await service._handle_component_interaction_normalized(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            custom_id="queue_interrupt_send:m-2",
+            values=None,
+            guild_id="guild-1",
+            user_id="user-1",
+            message_id="notice-1",
+        )
+
+        assert calls == [("queue_interrupt_send:m-2", "channel-1")]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_service_malformed_direct_payload_returns_parse_error(
     tmp_path: Path,
 ) -> None:
