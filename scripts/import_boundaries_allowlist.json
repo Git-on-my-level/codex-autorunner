@@ -15,6 +15,11 @@
       "importer": "src/codex_autorunner/core/pma_chat_delivery.py",
       "imported": "codex_autorunner.integrations.telegram.state",
       "reason": "PMA dispatch mirroring enqueues Telegram outbox records when Telegram is the selected target."
+    },
+    {
+      "importer": "src/codex_autorunner/core/scm_reaction_router.py",
+      "imported": "codex_autorunner.integrations.github.reaction_prompts",
+      "reason": "SCM reaction routing is provider-neutral, but v1 prompt text is GitHub-specific and kept in the GitHub integration module."
     }
   ]
 }

@@ -74,7 +74,10 @@ def test_route_scm_reactions_returns_threaded_ci_failure_intent() -> None:
         "thread_target_id": "thread-123",
         "request": {
             "kind": "message",
-            "message_text": "CI failed for acme/widgets#42: ci / test (failure).",
+            "message_text": (
+                "CI failed for acme/widgets#42: ci / test (failure). "
+                "Inspect the failing check and push a fix."
+            ),
             "metadata": {
                 "scm": {
                     "event_id": "github:event-1",
@@ -101,6 +104,7 @@ def test_route_scm_reactions_returns_notify_intent_for_changes_requested_without
             "action": "submitted",
             "review_state": "changes_requested",
             "author_login": "reviewer",
+            "body": "Please add coverage for the webhook branch handling.",
         },
     )
 
@@ -111,7 +115,10 @@ def test_route_scm_reactions_returns_notify_intent_for_changes_requested_without
     assert intents[0].operation_kind == "notify_chat"
     assert intents[0].payload == {
         "delivery": "primary_pma",
-        "message": "Changes requested on acme/widgets#42 by reviewer.",
+        "message": (
+            "Changes requested on acme/widgets#42 by reviewer: "
+            "Please add coverage for the webhook branch handling."
+        ),
         "metadata": {
             "scm": {
                 "event_id": "github:event-1",
@@ -156,7 +163,9 @@ def test_route_scm_reactions_returns_notify_intent_for_approved_review_and_is_de
     )
 
 
-def test_route_scm_reactions_returns_merged_intent_for_closed_merged_pr() -> None:
+def test_route_scm_reactions_returns_notify_intent_for_merged_pr_even_with_thread() -> (
+    None
+):
     event = _event(
         "pull_request",
         event_id="github:event-merged",
@@ -173,10 +182,40 @@ def test_route_scm_reactions_returns_merged_intent_for_closed_merged_pr() -> Non
 
     assert len(intents) == 1
     assert intents[0].reaction_kind == "merged"
+    assert intents[0].operation_kind == "notify_chat"
+    assert intents[0].payload["message"] == "acme/widgets#42 was merged."
+    assert intents[0].payload["repo_id"] == "repo-1"
+
+
+def test_route_scm_reactions_returns_threaded_changes_requested_prompt_with_next_step() -> (
+    None
+):
+    event = _event(
+        "pull_request_review",
+        event_id="github:event-thread-review",
+        payload={
+            "action": "submitted",
+            "review_state": "changes_requested",
+            "author_login": "reviewer",
+            "body": "Split the router text builders into a separate module and add tests.",
+            "html_url": "https://example.invalid/review/1",
+        },
+    )
+
+    intents = route_scm_reactions(
+        event, binding=_binding(thread_target_id="thread-555")
+    )
+
+    assert len(intents) == 1
     assert intents[0].operation_kind == "enqueue_managed_turn"
-    assert intents[0].payload["thread_target_id"] == "thread-789"
+    assert intents[0].payload["request"]["message_text"] == (
+        "Changes requested on acme/widgets#42 by reviewer: "
+        "Split the router text builders into a separate module and add tests. "
+        "Address the feedback and reply after updating the PR."
+    )
     assert (
-        intents[0].payload["request"]["message_text"] == "acme/widgets#42 was merged."
+        "https://example.invalid/review/1"
+        not in intents[0].payload["request"]["message_text"]
     )
 
 

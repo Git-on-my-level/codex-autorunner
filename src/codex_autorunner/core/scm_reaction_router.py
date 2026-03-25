@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Optional
 
+from ..integrations.github.reaction_prompts import build_reaction_message
 from .pr_bindings import PrBinding
 from .scm_events import ScmEvent
 from .scm_reaction_types import (
@@ -75,57 +76,18 @@ def _scm_metadata(
     return {key: value for key, value in metadata.items() if value is not None}
 
 
-def _reaction_subject(event: ScmEvent, binding: Optional[PrBinding]) -> str:
-    repo_slug = _resolved_repo_slug(event, binding) or event.provider
-    pr_number = _resolved_pr_number(event, binding)
-    if pr_number is None:
-        return repo_slug
-    return f"{repo_slug}#{pr_number}"
-
-
-def _build_message_text(
+def _resolve_operation_kind(
     *,
     reaction_kind: ReactionKind,
     event: ScmEvent,
     binding: Optional[PrBinding],
-) -> str:
-    payload = _event_payload(event)
-    subject = _reaction_subject(event, binding)
-
-    if reaction_kind == "ci_failed":
-        check_name = _normalize_text(payload.get("name"))
-        conclusion = _normalize_lower_text(payload.get("conclusion"))
-        detail = None
-        if check_name and conclusion:
-            detail = f"{check_name} ({conclusion})"
-        elif check_name:
-            detail = check_name
-        elif conclusion:
-            detail = conclusion
-        if detail is not None:
-            return f"CI failed for {subject}: {detail}."
-        return f"CI failed for {subject}."
-
-    if reaction_kind == "changes_requested":
-        reviewer = _normalize_text(payload.get("author_login"))
-        if reviewer is not None:
-            return f"Changes requested on {subject} by {reviewer}."
-        return f"Changes requested on {subject}."
-
-    if reaction_kind == "approved_and_green":
-        reviewer = _normalize_text(payload.get("author_login"))
-        if reviewer is not None:
-            return f"{subject} is approved and ready to land ({reviewer})."
-        return f"{subject} is approved and ready to land."
-
-    return f"{subject} was merged."
-
-
-def _resolve_operation_kind(
-    *,
-    event: ScmEvent,
-    binding: Optional[PrBinding],
 ) -> Optional[ReactionOperationKind]:
+    if reaction_kind in {"approved_and_green", "merged"}:
+        if _resolved_repo_id(event, binding) is not None:
+            return "notify_chat"
+        if binding is not None and binding.thread_target_id is not None:
+            return "enqueue_managed_turn"
+        return None
     if binding is not None and binding.thread_target_id is not None:
         return "enqueue_managed_turn"
     if _resolved_repo_id(event, binding) is not None:
@@ -140,10 +102,11 @@ def _build_publish_payload(
     event: ScmEvent,
     binding: Optional[PrBinding],
 ) -> dict[str, Any]:
-    message_text = _build_message_text(
+    message_text = build_reaction_message(
         reaction_kind=reaction_kind,
         event=event,
         binding=binding,
+        operation_kind=operation_kind,
     )
     metadata = {
         "scm": _scm_metadata(event=event, binding=binding, reaction_kind=reaction_kind)
@@ -225,7 +188,11 @@ def route_scm_reactions(
     if reaction_kind is None or not resolved_config.is_enabled(reaction_kind):
         return []
 
-    operation_kind = _resolve_operation_kind(event=event, binding=binding)
+    operation_kind = _resolve_operation_kind(
+        reaction_kind=reaction_kind,
+        event=event,
+        binding=binding,
+    )
     if operation_kind is None:
         return []
 
