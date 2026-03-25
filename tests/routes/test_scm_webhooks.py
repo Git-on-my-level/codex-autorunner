@@ -14,7 +14,10 @@ from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.pr_bindings import PrBindingStore
+from codex_autorunner.core.publish_journal import PublishJournalStore
 from codex_autorunner.core.scm_events import list_events
+from codex_autorunner.core.scm_reaction_state import ScmReactionStateStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes import scm_webhooks as scm_webhooks_module
 from codex_autorunner.surfaces.web.routes.scm_webhooks import (
@@ -45,6 +48,11 @@ def _enable_github_webhooks(
         "store_raw_payload"
     ] = store_raw_payload
     cfg["github"]["automation"]["webhook_ingress"]["secret"] = secret
+    return cfg
+
+
+def _enable_github_automation(cfg: dict) -> dict:
+    cfg["github"]["automation"]["enabled"] = True
     return cfg
 
 
@@ -93,6 +101,120 @@ def test_scm_webhook_route_is_not_registered_when_disabled(tmp_path: Path) -> No
         response = client.post("/hub/scm/webhooks/github", content=b"{}")
 
     assert response.status_code == 404
+
+
+def test_scm_inspect_endpoints_list_recent_rows(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_automation(_hub_config())
+
+    event = scm_webhooks_module.ScmEventStore(hub_root).record_event(
+        event_id="github:delivery-123",
+        provider="github",
+        event_type="pull_request",
+        occurred_at="2026-03-25T10:00:00Z",
+        received_at="2026-03-25T10:00:01Z",
+        repo_slug="acme/widgets",
+        repo_id="99",
+        pr_number=42,
+        delivery_id="delivery-123",
+        correlation_id="scm:github:delivery-123",
+        payload={"action": "opened"},
+    )
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="99",
+        pr_number=42,
+        pr_state="open",
+        head_branch="feature/inspect",
+        base_branch="main",
+    )
+    reaction = ScmReactionStateStore(hub_root).mark_reaction_delivery_failed(
+        binding_id=binding.binding_id,
+        reaction_kind="ci_failed",
+        fingerprint="fingerprint-1",
+        event_id=event.event_id,
+        error_text="delivery failed",
+        metadata={"repo_slug": "acme/widgets", "pr_number": 42},
+    )
+    operation, deduped = PublishJournalStore(hub_root).create_operation(
+        operation_key="github:comment:inspect",
+        operation_kind="github_comment",
+        payload={"body": "Inspect output"},
+    )
+    assert deduped is False
+
+    app = _build_route_app(hub_root, cfg=cfg)
+
+    with TestClient(app) as client:
+        events_response = client.get(
+            "/hub/scm/inspect/events",
+            params={"provider": "github", "repo_slug": "acme/widgets", "limit": 5},
+        )
+        bindings_response = client.get(
+            "/hub/scm/inspect/bindings",
+            params={"repo_slug": "acme/widgets", "pr_state": "open"},
+        )
+        reactions_response = client.get(
+            "/hub/scm/inspect/reactions",
+            params={
+                "binding_id": binding.binding_id,
+                "reaction_kind": "ci_failed",
+                "state": "delivery_failed",
+            },
+        )
+        operations_response = client.get(
+            "/hub/scm/inspect/publish-operations",
+            params={"operation_kind": "github_comment", "limit": 5},
+        )
+
+    assert events_response.status_code == 200
+    assert events_response.json() == {
+        "events": [event.to_dict()],
+        "limit": 5,
+    }
+
+    assert bindings_response.status_code == 200
+    assert bindings_response.json() == {
+        "bindings": [binding.to_dict()],
+        "limit": 50,
+    }
+
+    assert reactions_response.status_code == 200
+    assert reactions_response.json() == {
+        "reactions": [reaction.to_dict()],
+        "limit": 50,
+    }
+
+    assert operations_response.status_code == 200
+    assert operations_response.json() == {
+        "operations": [operation.to_dict()],
+        "limit": 5,
+    }
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/hub/scm/inspect/events",
+        "/hub/scm/inspect/bindings",
+        "/hub/scm/inspect/reactions",
+        "/hub/scm/inspect/publish-operations",
+    ],
+)
+def test_scm_inspect_endpoints_return_disabled_when_automation_off(
+    tmp_path: Path, path: str
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = _hub_config()
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    with TestClient(create_hub_app(hub_root)) as client:
+        response = client.get(path)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "SCM automation disabled"}
 
 
 def test_scm_webhook_persists_event_and_can_drain_inline(tmp_path: Path) -> None:

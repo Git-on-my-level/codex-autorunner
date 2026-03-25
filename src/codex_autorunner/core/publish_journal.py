@@ -476,6 +476,7 @@ class PublishJournalStore:
         state: Optional[str] = None,
         operation_kind: Optional[str] = None,
         limit: Optional[int] = None,
+        newest_first: bool = False,
     ) -> list[PublishOperation]:
         where_clauses: list[str] = []
         params: list[Any] = []
@@ -502,7 +503,8 @@ class PublishJournalStore:
                 SELECT *
                   FROM orch_publish_operations
                   {where_sql}
-                 ORDER BY created_at ASC, operation_id ASC
+                 ORDER BY created_at {'DESC' if newest_first else 'ASC'},
+                          operation_id {'DESC' if newest_first else 'ASC'}
                   {limit_sql}
                 """,
                 params,

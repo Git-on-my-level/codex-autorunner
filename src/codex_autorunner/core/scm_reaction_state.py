@@ -39,6 +39,15 @@ def _normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
     raise ValueError(f"{field_name} must be a JSON object")
 
 
+def _normalize_limit(value: Any, *, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _json_dumps(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
 
@@ -288,6 +297,61 @@ class ScmReactionStateStore:
                 fingerprint=normalized_fingerprint,
             )
         return _state_from_row(row) if row is not None else None
+
+    def list_reaction_states(
+        self,
+        *,
+        binding_id: Optional[str] = None,
+        reaction_kind: Optional[ReactionKind | str] = None,
+        state: Optional[str] = None,
+        last_event_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[ScmReactionState]:
+        resolved_limit = _normalize_limit(limit, default=50)
+        if resolved_limit <= 0:
+            return []
+
+        where_clauses = ["1 = 1"]
+        params: list[Any] = []
+
+        normalized_binding_id = _normalize_text(binding_id)
+        if normalized_binding_id is not None:
+            where_clauses.append("binding_id = ?")
+            params.append(normalized_binding_id)
+
+        normalized_reaction_kind = _normalize_text(reaction_kind)
+        if normalized_reaction_kind is not None:
+            where_clauses.append("reaction_kind = ?")
+            params.append(normalized_reaction_kind)
+
+        normalized_state = _normalize_text(state)
+        if normalized_state is not None:
+            where_clauses.append("state = ?")
+            params.append(normalized_state)
+
+        normalized_last_event_id = _normalize_text(last_event_id)
+        if normalized_last_event_id is not None:
+            where_clauses.append("last_event_id = ?")
+            params.append(normalized_last_event_id)
+
+        params.append(resolved_limit)
+
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT *
+                  FROM orch_reaction_state
+                 WHERE {' AND '.join(where_clauses)}
+                 ORDER BY updated_at DESC,
+                          created_at DESC,
+                          binding_id DESC,
+                          reaction_kind DESC,
+                          fingerprint DESC
+                 LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_state_from_row(row) for row in rows]
 
     def should_emit_reaction(
         self,
@@ -963,6 +1027,10 @@ def get_reaction_state(
     )
 
 
+def list_reaction_states(hub_root: Path, **kwargs: Any) -> list[ScmReactionState]:
+    return ScmReactionStateStore(hub_root).list_reaction_states(**kwargs)
+
+
 def should_emit_reaction(
     hub_root: Path,
     *,
@@ -994,6 +1062,7 @@ __all__ = [
     "ScmReactionStateStore",
     "compute_reaction_fingerprint",
     "get_reaction_state",
+    "list_reaction_states",
     "mark_reaction_delivery_failed",
     "mark_reaction_emitted",
     "mark_reaction_resolved",

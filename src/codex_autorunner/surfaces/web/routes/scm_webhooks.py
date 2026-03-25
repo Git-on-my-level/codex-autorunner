@@ -9,6 +9,8 @@ from typing import Any, Callable, Mapping, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ....core.pr_bindings import PrBindingStore
+from ....core.publish_journal import PublishJournalStore
 from ....core.scm_automation_service import ScmAutomationService
 from ....core.scm_events import ScmEvent, ScmEventStore
 from ....core.scm_observability import (
@@ -16,9 +18,12 @@ from ....core.scm_observability import (
     ScmAuditRecorder,
     create_or_preserve_correlation_id,
 )
+from ....core.scm_reaction_state import ScmReactionStateStore
 from ....integrations.github import GitHubWebhookConfig, normalize_github_webhook
 
 ScmDrainCallback = Callable[[Request, ScmEvent], object]
+_DEFAULT_INSPECT_LIMIT = 50
+_MAX_INSPECT_LIMIT = 200
 _DEFAULT_MAX_PAYLOAD_BYTES = 262_144
 _DEFAULT_MAX_RAW_PAYLOAD_BYTES = 65_536
 
@@ -38,16 +43,24 @@ def _github_webhook_ingress_config(raw_config: object) -> Mapping[str, Any]:
     return _mapping(ingress)
 
 
+def github_automation_enabled(raw_config: object) -> bool:
+    return bool(_github_automation_config(raw_config).get("enabled"))
+
+
 def github_webhook_ingress_enabled(raw_config: object) -> bool:
-    automation = _github_automation_config(raw_config)
     ingress = _github_webhook_ingress_config(raw_config)
-    return bool(automation.get("enabled")) and bool(ingress.get("enabled"))
+    return github_automation_enabled(raw_config) and bool(ingress.get("enabled"))
 
 
 def _resolve_int(value: object, *, default: int) -> int:
     if isinstance(value, int) and value > 0:
         return value
     return default
+
+
+def _resolve_limit(value: object, *, default: int) -> int:
+    resolved = _resolve_int(value, default=default)
+    return min(resolved, _MAX_INSPECT_LIMIT)
 
 
 def _resolve_bool(value: object, *, default: bool) -> bool:
@@ -108,6 +121,33 @@ def _rejection_status_code(reason: Optional[str]) -> int:
     return 400
 
 
+def _require_hub_root(request: Request) -> Path:
+    config = getattr(request.app.state, "config", None)
+    hub_root = getattr(config, "root", None)
+    if hub_root is None:
+        raise HTTPException(status_code=503, detail="Hub config unavailable")
+    return Path(hub_root)
+
+
+def _request_raw_config(request: Request) -> object:
+    config = getattr(request.app.state, "config", None)
+    return getattr(config, "raw", {})
+
+
+def _require_scm_automation_enabled(raw_config: object) -> None:
+    if not github_automation_enabled(raw_config):
+        raise HTTPException(status_code=404, detail="SCM automation disabled")
+
+
+def _serialize_items(items: list[Any]) -> list[dict[str, Any]]:
+    serialized: list[dict[str, Any]] = []
+    for item in items:
+        to_dict = getattr(item, "to_dict", None)
+        if callable(to_dict):
+            serialized.append(to_dict())
+    return serialized
+
+
 async def _run_drain_callback(
     *,
     request: Request,
@@ -152,19 +192,119 @@ def _default_drain_callback_factory(
 def build_scm_webhook_routes(
     *, drain_callback: Optional[ScmDrainCallback] = None
 ) -> APIRouter:
-    router = APIRouter(prefix="/hub/scm/webhooks", tags=["scm"])
+    router = APIRouter(prefix="/hub/scm", tags=["scm"])
 
-    @router.post("/github")
+    @router.get("/inspect/events")
+    def list_scm_events(
+        request: Request,
+        provider: Optional[str] = None,
+        event_type: Optional[str] = None,
+        repo_slug: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        pr_number: Optional[int] = None,
+        delivery_id: Optional[str] = None,
+        occurred_after: Optional[str] = None,
+        occurred_before: Optional[str] = None,
+        limit: int = _DEFAULT_INSPECT_LIMIT,
+    ) -> dict[str, Any]:
+        raw_config = _request_raw_config(request)
+        _require_scm_automation_enabled(raw_config)
+        hub_root = _require_hub_root(request)
+        resolved_limit = _resolve_limit(limit, default=_DEFAULT_INSPECT_LIMIT)
+        try:
+            events = ScmEventStore(hub_root).list_events(
+                provider=provider,
+                event_type=event_type,
+                repo_slug=repo_slug,
+                repo_id=repo_id,
+                pr_number=pr_number,
+                delivery_id=delivery_id,
+                occurred_after=occurred_after,
+                occurred_before=occurred_before,
+                limit=resolved_limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"events": _serialize_items(events), "limit": resolved_limit}
+
+    @router.get("/inspect/bindings")
+    def list_pr_bindings(
+        request: Request,
+        provider: Optional[str] = None,
+        repo_slug: Optional[str] = None,
+        repo_id: Optional[str] = None,
+        pr_state: Optional[str] = None,
+        head_branch: Optional[str] = None,
+        thread_target_id: Optional[str] = None,
+        limit: int = _DEFAULT_INSPECT_LIMIT,
+    ) -> dict[str, Any]:
+        raw_config = _request_raw_config(request)
+        _require_scm_automation_enabled(raw_config)
+        hub_root = _require_hub_root(request)
+        resolved_limit = _resolve_limit(limit, default=_DEFAULT_INSPECT_LIMIT)
+        try:
+            bindings = PrBindingStore(hub_root).list_bindings(
+                provider=provider,
+                repo_slug=repo_slug,
+                repo_id=repo_id,
+                pr_state=pr_state,
+                head_branch=head_branch,
+                thread_target_id=thread_target_id,
+                limit=resolved_limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"bindings": _serialize_items(bindings), "limit": resolved_limit}
+
+    @router.get("/inspect/reactions")
+    def list_scm_reaction_states(
+        request: Request,
+        binding_id: Optional[str] = None,
+        reaction_kind: Optional[str] = None,
+        state: Optional[str] = None,
+        last_event_id: Optional[str] = None,
+        limit: int = _DEFAULT_INSPECT_LIMIT,
+    ) -> dict[str, Any]:
+        raw_config = _request_raw_config(request)
+        _require_scm_automation_enabled(raw_config)
+        hub_root = _require_hub_root(request)
+        resolved_limit = _resolve_limit(limit, default=_DEFAULT_INSPECT_LIMIT)
+        reactions = ScmReactionStateStore(hub_root).list_reaction_states(
+            binding_id=binding_id,
+            reaction_kind=reaction_kind,
+            state=state,
+            last_event_id=last_event_id,
+            limit=resolved_limit,
+        )
+        return {"reactions": _serialize_items(reactions), "limit": resolved_limit}
+
+    @router.get("/inspect/publish-operations")
+    def list_publish_operations(
+        request: Request,
+        state: Optional[str] = None,
+        operation_kind: Optional[str] = None,
+        limit: int = _DEFAULT_INSPECT_LIMIT,
+    ) -> dict[str, Any]:
+        raw_config = _request_raw_config(request)
+        _require_scm_automation_enabled(raw_config)
+        hub_root = _require_hub_root(request)
+        resolved_limit = _resolve_limit(limit, default=_DEFAULT_INSPECT_LIMIT)
+        operations = PublishJournalStore(hub_root).list_operations(
+            state=state,
+            operation_kind=operation_kind,
+            limit=resolved_limit,
+            newest_first=True,
+        )
+        return {"operations": _serialize_items(operations), "limit": resolved_limit}
+
+    @router.post("/webhooks/github")
     async def ingest_github_webhook(request: Request):
-        config = getattr(request.app.state, "config", None)
-        raw_config = getattr(config, "raw", {})
+        raw_config = _request_raw_config(request)
         if not github_webhook_ingress_enabled(raw_config):
             raise HTTPException(
                 status_code=404, detail="GitHub webhook ingress disabled"
             )
-        hub_root = getattr(config, "root", None)
-        if hub_root is None:
-            raise HTTPException(status_code=503, detail="Hub config unavailable")
+        hub_root = _require_hub_root(request)
 
         ingress = _github_webhook_ingress_config(raw_config)
         max_payload_bytes = _resolve_int(
@@ -307,4 +447,8 @@ def build_scm_webhook_routes(
     return router
 
 
-__all__ = ["build_scm_webhook_routes", "github_webhook_ingress_enabled"]
+__all__ = [
+    "build_scm_webhook_routes",
+    "github_automation_enabled",
+    "github_webhook_ingress_enabled",
+]
