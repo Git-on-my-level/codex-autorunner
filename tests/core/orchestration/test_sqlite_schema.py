@@ -60,6 +60,7 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
         assert {
             "orch_publish_operations",
             "orch_publish_attempts",
+            "orch_scm_events",
         }.issubset(names)
         assert {
             "operation_id",
@@ -81,6 +82,20 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "started_at",
             "finished_at",
         }.issubset(_column_names(conn, "orch_publish_attempts"))
+        assert {
+            "event_id",
+            "provider",
+            "event_type",
+            "repo_slug",
+            "repo_id",
+            "pr_number",
+            "delivery_id",
+            "occurred_at",
+            "received_at",
+            "payload_json",
+            "raw_payload_json",
+            "created_at",
+        }.issubset(_column_names(conn, "orch_scm_events"))
 
 
 def test_table_definition_roles_cover_authoritative_mirror_projection_and_ops() -> None:

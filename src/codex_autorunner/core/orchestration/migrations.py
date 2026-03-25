@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 8
+ORCHESTRATION_SCHEMA_VERSION = 9
 
 
 @dataclass(frozen=True)
@@ -751,6 +751,57 @@ def _apply_v8(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v9(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_scm_events (
+            event_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            repo_slug TEXT,
+            repo_id TEXT,
+            pr_number INTEGER,
+            delivery_id TEXT,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            raw_payload_json TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_provider_type_timestamp
+            ON orch_scm_events(provider, event_type, occurred_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_repo_slug_timestamp
+            ON orch_scm_events(repo_slug, occurred_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_repo_id_timestamp
+            ON orch_scm_events(repo_id, occurred_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_pr_timestamp
+            ON orch_scm_events(pr_number, occurred_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_delivery_timestamp
+            ON orch_scm_events(delivery_id, occurred_at, created_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -764,6 +815,7 @@ _MIGRATIONS = (
         _apply_v7,
     ),
     _MigrationStep(8, "add_publish_journal_tables", _apply_v8),
+    _MigrationStep(9, "add_scm_event_store", _apply_v9),
 )
 
 
@@ -822,6 +874,11 @@ _TABLE_DEFINITIONS = (
         name="orch_publish_attempts",
         role="authoritative",
         description="Per-attempt publish execution metadata for retry and outcome tracking.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_scm_events",
+        role="authoritative",
+        description="Canonical normalized SCM events captured before provider-specific reaction handling.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",

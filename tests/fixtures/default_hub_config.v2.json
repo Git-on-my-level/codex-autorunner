@@ -261,6 +261,15 @@
       "commit_message_template": "[codex] run #{run_id}"
     },
     "github": {
+      "automation": {
+        "enabled": false,
+        "webhook_ingress": {
+          "enabled": false,
+          "max_payload_bytes": 262144,
+          "max_raw_payload_bytes": 65536,
+          "store_raw_payload": false
+        }
+      },
       "enabled": true,
       "pr_draft_default": true,
       "sync_agent_timeout_seconds": 1800,

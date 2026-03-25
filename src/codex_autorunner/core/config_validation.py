@@ -649,6 +649,65 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             github.get("sync_agent_timeout_seconds"), int
         ):
             raise ConfigError("github.sync_agent_timeout_seconds must be an integer")
+        automation = github.get("automation")
+        if automation is not None and not isinstance(automation, dict):
+            raise ConfigError("github.automation must be a mapping if provided")
+        if isinstance(automation, dict):
+            if "enabled" in automation and not isinstance(
+                automation.get("enabled"), bool
+            ):
+                raise ConfigError("github.automation.enabled must be boolean")
+            webhook_ingress = automation.get("webhook_ingress")
+            if webhook_ingress is not None and not isinstance(webhook_ingress, dict):
+                raise ConfigError(
+                    "github.automation.webhook_ingress must be a mapping if provided"
+                )
+            if isinstance(webhook_ingress, dict):
+                if "enabled" in webhook_ingress and not isinstance(
+                    webhook_ingress.get("enabled"), bool
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.enabled must be boolean"
+                    )
+                if "store_raw_payload" in webhook_ingress and not isinstance(
+                    webhook_ingress.get("store_raw_payload"), bool
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.store_raw_payload must be boolean"
+                    )
+                max_payload_bytes = webhook_ingress.get("max_payload_bytes")
+                if max_payload_bytes is not None and not isinstance(
+                    max_payload_bytes, int
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_payload_bytes must be an integer"
+                    )
+                if isinstance(max_payload_bytes, int) and max_payload_bytes <= 0:
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_payload_bytes must be > 0"
+                    )
+                max_raw_payload_bytes = webhook_ingress.get("max_raw_payload_bytes")
+                if max_raw_payload_bytes is not None and not isinstance(
+                    max_raw_payload_bytes, int
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_raw_payload_bytes must be an integer"
+                    )
+                if (
+                    isinstance(max_raw_payload_bytes, int)
+                    and max_raw_payload_bytes <= 0
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_raw_payload_bytes must be > 0"
+                    )
+                if (
+                    isinstance(max_payload_bytes, int)
+                    and isinstance(max_raw_payload_bytes, int)
+                    and max_raw_payload_bytes > max_payload_bytes
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_raw_payload_bytes must be <= max_payload_bytes"
+                    )
 
     server = cfg.get("server")
     if not isinstance(server, dict):
