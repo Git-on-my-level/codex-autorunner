@@ -707,9 +707,9 @@ class DiscordBotService:
         self._typing_sessions: dict[str, int] = {}
         self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
         self._typing_lock: Optional[asyncio.Lock] = None
-        self._discord_turn_approval_contexts: dict[
-            str, _DiscordTurnApprovalContext
-        ] = {}
+        self._discord_turn_approval_contexts: dict[str, _DiscordTurnApprovalContext] = (
+            {}
+        )
         self._discord_pending_approvals: dict[str, _DiscordPendingApproval] = {}
         self._update_status_notifier = ChatUpdateStatusNotifier(
             platform="discord",

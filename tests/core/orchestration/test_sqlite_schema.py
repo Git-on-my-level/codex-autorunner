@@ -23,6 +23,11 @@ def _table_names(conn: sqlite3.Connection) -> set[str]:
     return {str(row["name"]) for row in rows}
 
 
+def _column_names(conn: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
 def test_orchestration_sqlite_path_uses_hub_state_root(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     expected = resolve_hub_state_root(hub_root) / ORCHESTRATION_DB_FILENAME
@@ -52,6 +57,30 @@ def test_initialize_orchestration_sqlite_creates_canonical_tables(
             "SELECT MAX(version) AS version FROM orch_schema_migrations"
         ).fetchone()
         assert int(version["version"] or 0) == ORCHESTRATION_SCHEMA_VERSION
+        assert {
+            "orch_publish_operations",
+            "orch_publish_attempts",
+        }.issubset(names)
+        assert {
+            "operation_id",
+            "operation_key",
+            "operation_kind",
+            "state",
+            "payload_json",
+            "response_json",
+            "next_attempt_at",
+            "attempt_count",
+        }.issubset(_column_names(conn, "orch_publish_operations"))
+        assert {
+            "attempt_id",
+            "operation_id",
+            "attempt_number",
+            "state",
+            "response_json",
+            "claimed_at",
+            "started_at",
+            "finished_at",
+        }.issubset(_column_names(conn, "orch_publish_attempts"))
 
 
 def test_table_definition_roles_cover_authoritative_mirror_projection_and_ops() -> None:

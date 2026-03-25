@@ -26,6 +26,7 @@ from .pma_automation_store import (
     PmaAutomationWakeup,
     PmaLifecycleSubscription,
 )
+from .publish_journal import PublishJournalStore, PublishOperation
 from .sse import SSEEvent, format_sse, parse_sse_lines
 from .type_debt_ledger import (
     build_type_debt_ledger,
@@ -50,6 +51,8 @@ __all__ = [
     "PmaAutomationTimer",
     "PmaAutomationWakeup",
     "PmaLifecycleSubscription",
+    "PublishJournalStore",
+    "PublishOperation",
     "SSEEvent",
     "archive_worktree_snapshot",
     "build_car_context_bundle",

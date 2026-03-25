@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 7
+ORCHESTRATION_SCHEMA_VERSION = 8
 
 
 @dataclass(frozen=True)
@@ -689,6 +689,68 @@ def _apply_v7(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v8(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_publish_operations (
+            operation_id TEXT PRIMARY KEY,
+            operation_key TEXT NOT NULL,
+            operation_kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            response_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            claimed_at TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            next_attempt_at TEXT,
+            last_error_text TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_publish_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            operation_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            response_json TEXT NOT NULL DEFAULT '{}',
+            error_text TEXT,
+            claimed_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (operation_id) REFERENCES orch_publish_operations(operation_id)
+                ON DELETE CASCADE,
+            UNIQUE (operation_id, attempt_number)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_publish_operations_active_key
+            ON orch_publish_operations(operation_key)
+         WHERE state IN ('pending', 'running', 'succeeded')
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_publish_operations_state_next_attempt
+            ON orch_publish_operations(state, next_attempt_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_publish_attempts_operation_attempt
+            ON orch_publish_attempts(operation_id, attempt_number)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -701,6 +763,7 @@ _MIGRATIONS = (
         "backfill_thread_target_metadata_and_resource_ownership",
         _apply_v7,
     ),
+    _MigrationStep(8, "add_publish_journal_tables", _apply_v8),
 )
 
 
@@ -749,6 +812,16 @@ _TABLE_DEFINITIONS = (
         name="orch_bindings",
         role="authoritative",
         description="Authoritative transport-agnostic bindings from surface context to thread target.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_publish_operations",
+        role="authoritative",
+        description="Publish journal operations queued before external automation side effects run.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_publish_attempts",
+        role="authoritative",
+        description="Per-attempt publish execution metadata for retry and outcome tracking.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",
