@@ -140,7 +140,8 @@ _systemd_arg_value() {
   if [[ -z "${service_name}" || -z "${key}" ]]; then
     return 0
   fi
-  systemctl --user cat "${service_name}" 2>/dev/null | "${HELPER_PYTHON}" - "${key}" <<'PY'
+  systemctl --user cat "${service_name}" 2>/dev/null | "${HELPER_PYTHON}" -c "$(
+    cat <<'PY'
 import re
 import sys
 
@@ -156,6 +157,7 @@ value = match.group(1).strip().strip("\"'")
 if value:
     sys.stdout.write(value)
 PY
+  )" "${key}"
 }
 
 if [[ -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
