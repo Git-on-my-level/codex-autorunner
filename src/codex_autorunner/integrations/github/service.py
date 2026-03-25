@@ -309,6 +309,37 @@ def _repo_slug_dirname(slug: str) -> str:
     return f"{safe_base[:80]}-{digest}"
 
 
+def _normalize_optional_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _normalize_positive_int(value: Any) -> Optional[int]:
+    if isinstance(value, bool):
+        return None
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _normalize_binding_pr_state(state: Any, *, is_draft: Any = False) -> Optional[str]:
+    normalized = _normalize_optional_text(state)
+    if normalized is None:
+        return None
+    lowered = normalized.lower()
+    if lowered == "open":
+        return "draft" if bool(is_draft) else "open"
+    if lowered == "closed":
+        return "closed"
+    if lowered == "merged":
+        return "merged"
+    return None
+
+
 class GitHubService:
     def __init__(self, repo_root: Path, raw_config: Optional[dict] = None):
         self.repo_root = repo_root
@@ -431,6 +462,49 @@ class GitHubService:
         except json.JSONDecodeError:
             return None
         return arr[0] if arr else None
+
+    def normalize_pr_binding_summary(
+        self, *, pr: dict[str, Any], repo_slug: str
+    ) -> Optional[dict[str, Any]]:
+        normalized_repo_slug = _normalize_optional_text(repo_slug)
+        if normalized_repo_slug is None:
+            return None
+
+        pr_number = _normalize_positive_int(pr.get("number"))
+        pr_state = _normalize_binding_pr_state(
+            pr.get("state"), is_draft=pr.get("isDraft")
+        )
+        if pr_number is None or pr_state is None:
+            return None
+
+        summary: dict[str, Any] = {
+            "repo_slug": normalized_repo_slug,
+            "pr_number": pr_number,
+            "pr_state": pr_state,
+        }
+        head_branch = _normalize_optional_text(pr.get("headRefName"))
+        if head_branch is not None:
+            summary["head_branch"] = head_branch
+        base_branch = _normalize_optional_text(pr.get("baseRefName"))
+        if base_branch is not None:
+            summary["base_branch"] = base_branch
+        return summary
+
+    def discover_pr_binding_summary(
+        self, *, branch: Optional[str] = None, cwd: Optional[Path] = None
+    ) -> Optional[dict[str, Any]]:
+        resolved_branch = _normalize_optional_text(branch) or self.current_branch(
+            cwd=cwd
+        )
+        if not resolved_branch or resolved_branch == "HEAD":
+            return None
+
+        pr = self.pr_for_branch(branch=resolved_branch, cwd=cwd)
+        if not isinstance(pr, dict):
+            return None
+
+        repo = self.repo_info()
+        return self.normalize_pr_binding_summary(pr=pr, repo_slug=repo.name_with_owner)
 
     def list_open_issues(
         self, *, limit: int = 10, cwd: Optional[Path] = None
