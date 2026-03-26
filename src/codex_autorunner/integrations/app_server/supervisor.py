@@ -238,3 +238,9 @@ class WorkspaceAppServerSupervisor:
             "app_server",
             last_used_at_getter=lambda h: h.last_used_at or 0.0,
         )
+
+    def active_workspace_ids(self) -> set[str]:
+        return set(self._handles.keys())
+
+    def state_root(self) -> Path:
+        return self._state_root
