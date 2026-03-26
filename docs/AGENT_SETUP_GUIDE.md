@@ -10,6 +10,8 @@ Use these only after base setup is complete:
 
 - Telegram interactive bot onboarding: `docs/AGENT_SETUP_TELEGRAM_GUIDE.md`
 - Discord interactive bot onboarding: `docs/AGENT_SETUP_DISCORD_GUIDE.md`
+- GitHub SCM automation: auto-address PR review feedback and CI failures on
+  bound PRs via webhook ingress and managed-thread follow-up.
 
 These are optional integrations, not required for baseline CAR setup.
 
@@ -42,6 +44,13 @@ Recommend hub mode unless the user is explicitly working on CAR development or h
 If they also want Telegram or Discord, make sure you separately capture whether
 that chat surface is personal or collaborative. Do not assume a shared group or
 guild should behave like a personal DM/channel.
+
+If they also want GitHub SCM automation, ask whether they want:
+
+1. **Auto-address feedback**: automatically turn PR review comments and CI
+   failures into follow-up work on a bound managed thread.
+2. **Notifications only**: keep GitHub events visible, but do not enqueue
+   automatic follow-up work.
 
 ### Step 2: Check Prerequisites
 
