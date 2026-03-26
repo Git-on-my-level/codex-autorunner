@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import os
 import sqlite3
 from pathlib import Path
@@ -425,13 +426,25 @@ def build_scm_webhook_routes(
         )
 
         drained_inline = False
+        drain_error: Optional[str] = None
         if _drain_inline_enabled(raw_config):
-            await _run_drain_callback(
-                request=request,
-                event=persisted,
-                route_callback=drain_callback,
-            )
-            drained_inline = True
+            try:
+                await _run_drain_callback(
+                    request=request,
+                    event=persisted,
+                    route_callback=drain_callback,
+                )
+                drained_inline = True
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger = getattr(request.app.state, "logger", None)
+                if isinstance(logger, logging.Logger):
+                    logger.warning(
+                        "SCM inline drain failed for %s: %s",
+                        persisted.event_id,
+                        exc,
+                        exc_info=True,
+                    )
+                drain_error = "inline_drain_failed"
 
         return _compact(
             {
@@ -445,6 +458,7 @@ def build_scm_webhook_routes(
                 "delivery_id": persisted.delivery_id,
                 "correlation_id": persisted.correlation_id,
                 "drained_inline": drained_inline,
+                "drain_error": drain_error,
             }
         )
 

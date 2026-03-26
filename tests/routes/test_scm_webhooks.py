@@ -293,6 +293,63 @@ def test_scm_webhook_persists_event_and_can_drain_inline(tmp_path: Path) -> None
     assert '"correlation_id":"scm:github:delivery-1"' in str(audit_row["payload_json"])
 
 
+def test_scm_webhook_accepts_persisted_event_when_inline_drain_fails(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_webhooks(_hub_config(), drain_inline=True)
+
+    def _drain_callback(_request, _event) -> None:
+        raise RuntimeError("transient drain failure")
+
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "sender": {"login": "octocat", "id": 7, "type": "User"},
+        "pull_request": {
+            "number": 42,
+            "title": "Add webhook route",
+            "state": "open",
+            "merged": False,
+            "draft": False,
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "created_at": "2026-03-24T10:00:00+00:00",
+            "updated_at": "2026-03-24T10:01:02+00:00",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/webhooks"},
+            "user": {"login": "octocat"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    app = _build_route_app(hub_root, cfg=cfg, drain_callback=_drain_callback)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=_headers(body, event="pull_request"),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "accepted",
+        "event_id": "github:delivery-1",
+        "provider": "github",
+        "event_type": "pull_request",
+        "repo_slug": "acme/widgets",
+        "repo_id": "99",
+        "pr_number": 42,
+        "delivery_id": "delivery-1",
+        "correlation_id": "scm:github:delivery-1",
+        "drained_inline": False,
+        "drain_error": "inline_drain_failed",
+    }
+    events = list_events(hub_root, provider="github", limit=10)
+    assert len(events) == 1
+    assert events[0].event_id == "github:delivery-1"
+
+
 def test_scm_webhook_ignored_requests_return_non_error_without_persisting(
     tmp_path: Path,
 ) -> None:
