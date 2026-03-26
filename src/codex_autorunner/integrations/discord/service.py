@@ -1380,6 +1380,7 @@ class DiscordBotService:
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             command_path=ingress.command_path,
+            timing="dispatch",
         )
 
         try:
@@ -4283,6 +4284,7 @@ class DiscordBotService:
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             command_path=ingress.command_path,
+            timing="dispatch",
         )
 
         try:
@@ -5116,9 +5118,12 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
         command_path: tuple[str, ...],
+        timing: str = "dispatch",
     ) -> bool:
         entry = command_contract_entry_for_path(command_path)
         if entry is None or entry.discord_ack_policy in (None, "immediate"):
+            return False
+        if entry.discord_ack_timing != timing:
             return False
         if entry.discord_ack_policy == "defer_public":
             return await self._defer_public(

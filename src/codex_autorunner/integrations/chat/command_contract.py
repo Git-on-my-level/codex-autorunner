@@ -12,6 +12,7 @@ DiscordAckPolicy = Literal[
     "defer_public",
     "defer_component_update",
 ]
+DiscordAckTiming = Literal["dispatch", "post_private_preflight"]
 DiscordExposure = Literal["public", "operator"]
 
 
@@ -24,6 +25,7 @@ class CommandContractEntry:
     telegram_commands: tuple[str, ...] = ()
     discord_paths: tuple[tuple[str, ...], ...] = ()
     discord_ack_policy: Optional[DiscordAckPolicy] = None
+    discord_ack_timing: DiscordAckTiming = "dispatch"
     discord_exposure: Optional[DiscordExposure] = None
     required_capabilities: tuple[str, ...] = ()
 
@@ -242,6 +244,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         telegram_commands=("flow",),
         discord_paths=(("flow", "status"),),
         discord_ack_policy="defer_public",
+        discord_ack_timing="post_private_preflight",
         discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
@@ -286,6 +289,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         telegram_commands=("flow",),
         discord_paths=(("flow", "start"),),
         discord_ack_policy="defer_public",
+        discord_ack_timing="post_private_preflight",
         discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
@@ -297,6 +301,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         telegram_commands=("flow",),
         discord_paths=(("flow", "restart"),),
         discord_ack_policy="defer_public",
+        discord_ack_timing="post_private_preflight",
         discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),

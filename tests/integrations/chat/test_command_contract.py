@@ -113,4 +113,10 @@ def test_command_contract_discord_metadata_is_present_for_registered_paths() -> 
             "defer_public",
             "defer_component_update",
         }
+        assert entry.discord_ack_timing in {"dispatch", "post_private_preflight"}
         assert entry.discord_exposure in {"public", "operator"}
+
+    by_id = {entry.id: entry for entry in COMMAND_CONTRACT}
+    assert by_id["car.flow.status"].discord_ack_timing == "post_private_preflight"
+    assert by_id["car.flow.start"].discord_ack_timing == "post_private_preflight"
+    assert by_id["car.flow.restart"].discord_ack_timing == "post_private_preflight"

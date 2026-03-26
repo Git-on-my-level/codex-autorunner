@@ -307,6 +307,12 @@ async def handle_car_command(
             )
             if workspace_root is None:
                 return
+            await service._prepare_command_interaction(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                command_path=command_path,
+                timing="post_private_preflight",
+            )
             if action == "status":
                 await service._handle_flow_status(
                     interaction_id,
@@ -327,6 +333,12 @@ async def handle_car_command(
         )
         if workspace_root is None:
             return
+        await service._prepare_command_interaction(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            command_path=command_path,
+            timing="post_private_preflight",
+        )
         if command_path == ("car", "flow", "issue"):
             await service._handle_flow_issue(
                 interaction_id,

@@ -1279,8 +1279,8 @@ async def test_flow_status_in_pma_mode_without_manifest_reports_missing_manifest
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 4
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Hub manifest not configured." in content
     finally:
         await store.close()
@@ -1331,8 +1331,8 @@ async def test_flow_status_in_pma_mode_shows_hub_overview(tmp_path: Path) -> Non
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 4
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Hub Flow Overview:" in content
         assert "workspace:" in content
         assert paused_run_id in content
@@ -1395,8 +1395,8 @@ async def test_flow_status_in_pma_mode_uses_manifest_display_name(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 4
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Friendly Workspace" in content
     finally:
         await store.close()
@@ -1477,8 +1477,8 @@ async def test_flow_status_in_pma_mode_shows_only_active_chat_bound_worktrees(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 4
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "wt-visible" in content
         assert "wt-hidden" not in content
         assert "\n  -> " in content
@@ -1561,8 +1561,8 @@ async def test_flow_status_in_pma_mode_includes_manifest_worktree_with_active_fl
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 4
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "wt-hidden" in content
         assert "wt-visible" not in content
         assert "\n  -> " in content
@@ -1667,8 +1667,8 @@ async def test_flow_status_with_run_id_in_pma_mode_still_shows_hub_overview(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.followup_messages[0]["payload"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 4
+        content = rest.interaction_responses[0]["payload"]["data"]["content"]
         assert "Hub Flow Overview:" in content
         assert "Run: " not in content
     finally:
