@@ -74,10 +74,6 @@ def step_wants_emit(
     return decorator
 
 
-def _step_accepts_emit_by_marker(fn: Any) -> Optional[bool]:
-    return getattr(fn, STEP_WANTS_EMIT_ATTR, None)
-
-
 class FlowDefinition:
     def __init__(
         self,
