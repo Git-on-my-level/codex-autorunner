@@ -9,6 +9,9 @@ from codex_autorunner.integrations.telegram.adapter import (
 from codex_autorunner.integrations.telegram.commands_registry import (
     build_command_payloads,
 )
+from codex_autorunner.integrations.telegram.handlers.commands_spec import (
+    build_command_specs,
+)
 from tests.fixtures.telegram_command_helpers import (
     README_REVISIT_GUIDANCE_MIN_MODULE_THRESHOLD,
     bot_command_entity,
@@ -17,6 +20,14 @@ from tests.fixtures.telegram_command_helpers import (
 
 # Helper usage: this file owns cross-cutting Telegram command invariants, so use
 # shared helpers for setup and keep assertions focused on behavior contracts.
+
+
+class _HandlerStub:
+    def __getattr__(self, _name: str):
+        async def _noop(*_args, **_kwargs):
+            return None
+
+        return _noop
 
 
 def test_contract_runtime_entity_and_fallback_parity_for_mention_validation() -> None:
@@ -52,6 +63,16 @@ def test_contract_registration_rejects_invalid_names() -> None:
     commands, invalid = build_command_payloads(specs)
     assert commands == []
     assert invalid == ["foo-bar", "foo bar", "foo@codexbot", "a" * 33]
+
+
+def test_contract_build_command_specs_applies_shared_surface_policy() -> None:
+    specs = build_command_specs(_HandlerStub())
+
+    assert specs["status"].allow_during_turn is True
+    assert specs["new"].allow_during_turn is False
+    assert specs["mcp"].exposed is False
+    assert specs["experimental"].exposed is False
+    assert specs["reply"].legacy_alias is True
 
 
 def test_contract_readme_revisit_threshold_policy_minimum() -> None:

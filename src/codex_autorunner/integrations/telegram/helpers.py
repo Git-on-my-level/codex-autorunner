@@ -342,7 +342,12 @@ def _format_token_row(label: str, usage: dict[str, Any]) -> Optional[str]:
 
 
 def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
-    return build_telegram_help_text(command_specs.keys())
+    return build_telegram_help_text(
+        [name for name, spec in command_specs.items() if spec.exposed],
+        legacy_command_names=[
+            name for name, spec in command_specs.items() if spec.legacy_alias
+        ],
+    )
 
 
 def _should_trace_message(text: str) -> bool:

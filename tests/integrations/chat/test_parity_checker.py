@@ -81,6 +81,27 @@ def test_parity_checker_fails_when_registered_discord_metadata_is_missing() -> N
     assert "car.future" in metadata_check.metadata["missing_exposure"]
 
 
+def test_parity_checker_fails_when_registered_telegram_metadata_is_missing() -> None:
+    contract = (
+        CommandContractEntry(
+            id="car.future",
+            path=("car", "future"),
+            requires_bound_workspace=False,
+            status="partial",
+            telegram_commands=("future",),
+        ),
+    )
+    results_by_id = {
+        result.id: result for result in run_parity_checks(contract=contract)
+    }
+
+    metadata_check = results_by_id["contract.telegram_metadata_complete"]
+    assert not metadata_check.passed
+    assert "future" in metadata_check.metadata["missing_exposure"]
+    assert "future" in metadata_check.metadata["missing_response_policy"]
+    assert "future" in metadata_check.metadata["missing_allow_during_turn"]
+
+
 def test_parity_checker_fails_when_contract_route_is_missing(tmp_path: Path) -> None:
     repo_root = _write_fixture_repo(tmp_path, include_car_model_route=False)
 

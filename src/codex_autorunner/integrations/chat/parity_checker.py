@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from .command_contract import COMMAND_CONTRACT, CommandContractEntry
+from .command_contract import (
+    COMMAND_CONTRACT,
+    CommandContractEntry,
+    telegram_command_metadata_for_name,
+    telegram_runtime_command_names_from_contract,
+)
 
 _DISCORD_SERVICE_PATH = Path("src/codex_autorunner/integrations/discord/service.py")
 _DISCORD_CAR_DISPATCH_PATH = Path(
@@ -89,6 +94,7 @@ def run_parity_checks(
 
     return (
         _check_contract_discord_metadata_complete(contract=contract),
+        _check_contract_telegram_metadata_complete(contract=contract),
         _check_contract_registry_entries_cataloged(
             contract=contract,
             discord_commands_ast=discord_commands_ast,
@@ -178,6 +184,12 @@ def _source_unavailable_results(
             metadata=metadata,
         ),
         ParityCheckResult(
+            id="contract.telegram_metadata_complete",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
             id="contract.registry_entries_cataloged",
             passed=True,
             message=message,
@@ -246,6 +258,47 @@ def _check_contract_discord_metadata_complete(
         metadata={
             "missing_ack_policy": missing_ack_policy,
             "missing_exposure": missing_exposure,
+        },
+    )
+
+
+def _check_contract_telegram_metadata_complete(
+    *,
+    contract: Sequence[CommandContractEntry],
+) -> ParityCheckResult:
+    missing_exposure: list[str] = []
+    missing_response_policy: list[str] = []
+    missing_allow_during_turn: list[str] = []
+    for name in telegram_runtime_command_names_from_contract(tuple(contract)):
+        metadata = telegram_command_metadata_for_name(name)
+        if metadata is None:
+            missing_exposure.append(name)
+            missing_response_policy.append(name)
+            missing_allow_during_turn.append(name)
+            continue
+        if not metadata.exposure:
+            missing_exposure.append(name)
+        if not metadata.response_policy:
+            missing_response_policy.append(name)
+        if not isinstance(metadata.allow_during_turn, bool):
+            missing_allow_during_turn.append(name)
+    passed = (
+        not missing_exposure
+        and not missing_response_policy
+        and not missing_allow_during_turn
+    )
+    if passed:
+        message = "Registered Telegram commands declare exposure, response, and turn policy metadata."
+    else:
+        message = "One or more Telegram commands are missing contract metadata."
+    return ParityCheckResult(
+        id="contract.telegram_metadata_complete",
+        passed=passed,
+        message=message,
+        metadata={
+            "missing_exposure": missing_exposure,
+            "missing_response_policy": missing_response_policy,
+            "missing_allow_during_turn": missing_allow_during_turn,
         },
     )
 

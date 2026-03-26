@@ -31,6 +31,8 @@ def build_command_payloads(
     commands: list[dict[str, str]] = []
     invalid: list[str] = []
     for spec in command_specs.values():
+        if not spec.exposed:
+            continue
         name = _validate_command_name(spec.name)
         if not name:
             invalid.append(spec.name)

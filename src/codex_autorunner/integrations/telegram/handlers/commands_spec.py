@@ -5,6 +5,10 @@ from typing import Any, Awaitable, Callable
 
 from ....core.flows import flow_action_summary
 from ....core.update_targets import update_target_values
+from ...chat.command_contract import (
+    TelegramResponsePolicy,
+    telegram_command_metadata_for_name,
+)
 from ..adapter import TelegramMessage
 
 
@@ -14,154 +18,162 @@ class CommandSpec:
     description: str
     handler: Callable[[TelegramMessage, str, Any], Awaitable[None]]
     allow_during_turn: bool = False
+    exposed: bool = True
+    legacy_alias: bool = False
+    response_policy: TelegramResponsePolicy = "typing"
 
 
 def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
+    def _spec(
+        name: str,
+        description: str,
+        handler: Callable[[TelegramMessage, str, Any], Awaitable[None]],
+    ) -> CommandSpec:
+        policy = telegram_command_metadata_for_name(name)
+        if policy is None:
+            raise ValueError(f"missing Telegram command metadata for {name}")
+        return CommandSpec(
+            name=name,
+            description=description,
+            handler=handler,
+            allow_during_turn=policy.allow_during_turn,
+            exposed=policy.exposure == "public",
+            legacy_alias=policy.exposure == "legacy_alias",
+            response_policy=policy.response_policy,
+        )
+
     return {
-        "repos": CommandSpec(
+        "repos": _spec(
             "repos",
             "list available repositories in the hub",
             handlers._handle_repos,
-            allow_during_turn=True,
         ),
-        "bind": CommandSpec(
+        "bind": _spec(
             "bind",
             "bind this topic to a workspace",
             lambda message, args, _runtime: handlers._handle_bind(message, args),
         ),
-        "new": CommandSpec(
+        "new": _spec(
             "new",
             "start a new PMA session",
             lambda message, _args, _runtime: handlers._handle_new(message),
         ),
-        "newt": CommandSpec(
+        "newt": _spec(
             "newt",
             "reset current workspace branch from origin default branch and start a new session",
             lambda message, _args, _runtime: handlers._handle_newt(message),
         ),
-        "archive": CommandSpec(
+        "archive": _spec(
             "archive",
             "archive workspace state for a fresh start",
             lambda message, _args, _runtime: handlers._handle_archive(message),
         ),
-        "reset": CommandSpec(
+        "reset": _spec(
             "reset",
             "reset PMA thread state (clear volatile state)",
             lambda message, _args, _runtime: handlers._handle_reset(message),
         ),
-        "resume": CommandSpec(
+        "resume": _spec(
             "resume",
             "list or resume a previous session",
             lambda message, args, _runtime: handlers._handle_resume(message, args),
         ),
-        "review": CommandSpec(
+        "review": _spec(
             "review",
             "run a code review",
             handlers._handle_review,
         ),
-        "flow": CommandSpec(
+        "flow": _spec(
             "flow",
             f"ticket flow controls ({flow_action_summary()})",
             lambda message, args, _runtime: handlers._handle_flow(message, args),
-            allow_during_turn=True,
         ),
-        "reply": CommandSpec(
+        "reply": _spec(
             "reply",
             "reply to a paused ticket flow dispatch (prefer /flow reply)",
             lambda message, args, _runtime: handlers._handle_reply(message, args),
-            allow_during_turn=True,
         ),
-        "agent": CommandSpec(
+        "agent": _spec(
             "agent",
             "show or set the active agent",
             handlers._handle_agent,
         ),
-        "model": CommandSpec(
+        "model": _spec(
             "model",
             "list or set the model",
             handlers._handle_model,
         ),
-        "approvals": CommandSpec(
+        "approvals": _spec(
             "approvals",
             "set approval and sandbox policy",
             handlers._handle_approvals,
         ),
-        "pma": CommandSpec(
+        "pma": _spec(
             "pma",
             "PMA mode controls (on/off/status)",
             handlers._handle_pma,
-            allow_during_turn=True,
         ),
-        "status": CommandSpec(
+        "status": _spec(
             "status",
             "show current binding, thread, and collaboration status",
             handlers._handle_status,
-            allow_during_turn=True,
         ),
-        "files": CommandSpec(
+        "files": _spec(
             "files",
             "list or manage Telegram file inbox/outbox",
             handlers._handle_files,
-            allow_during_turn=True,
         ),
-        "debug": CommandSpec(
+        "debug": _spec(
             "debug",
             "show topic debug info and effective collaboration policy",
             handlers._handle_debug,
-            allow_during_turn=True,
         ),
-        "ids": CommandSpec(
+        "ids": _spec(
             "ids",
             "show chat/user/thread IDs and collaboration snippets",
             handlers._handle_ids,
-            allow_during_turn=True,
         ),
-        "diff": CommandSpec(
+        "diff": _spec(
             "diff",
             "show git diff for the bound workspace",
             handlers._handle_diff,
-            allow_during_turn=True,
         ),
-        "mention": CommandSpec(
+        "mention": _spec(
             "mention",
             "include a file in a new request",
             handlers._handle_mention,
-            allow_during_turn=True,
         ),
-        "skills": CommandSpec(
+        "skills": _spec(
             "skills",
             "list available skills",
             handlers._handle_skills,
-            allow_during_turn=True,
         ),
-        "mcp": CommandSpec(
+        "mcp": _spec(
             "mcp",
             "list MCP server status",
             handlers._handle_mcp,
-            allow_during_turn=True,
         ),
-        "experimental": CommandSpec(
+        "experimental": _spec(
             "experimental",
             "toggle experimental features",
             handlers._handle_experimental,
         ),
-        "init": CommandSpec(
+        "init": _spec(
             "init",
             "generate AGENTS.md guidance",
             handlers._handle_init,
         ),
-        "compact": CommandSpec(
+        "compact": _spec(
             "compact",
             "compact the conversation (summary)",
             handlers._handle_compact,
         ),
-        "rollout": CommandSpec(
+        "rollout": _spec(
             "rollout",
             "show current thread rollout path",
             handlers._handle_rollout,
-            allow_during_turn=True,
         ),
-        "update": CommandSpec(
+        "update": _spec(
             "update",
             (
                 "update CAR (prompt or "
@@ -169,29 +181,26 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
             ),
             handlers._handle_update,
         ),
-        "logout": CommandSpec(
+        "logout": _spec(
             "logout",
             "log out of the Codex account",
             handlers._handle_logout,
         ),
-        "feedback": CommandSpec(
+        "feedback": _spec(
             "feedback",
             "send feedback and logs",
             handlers._handle_feedback,
-            allow_during_turn=True,
         ),
-        "interrupt": CommandSpec(
+        "interrupt": _spec(
             "interrupt",
             "stop the active turn",
             lambda message, _args, runtime: handlers._handle_interrupt(
                 message, runtime
             ),
-            allow_during_turn=True,
         ),
-        "help": CommandSpec(
+        "help": _spec(
             "help",
             "show this help message",
             handlers._handle_help,
-            allow_during_turn=True,
         ),
     }
