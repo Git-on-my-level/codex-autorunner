@@ -195,7 +195,7 @@ Recommended starting point for shared servers:
 - `default_mode: command_only` keeps slash commands usable in other allowlisted channels without passive replies.
 - Use `mode: active` for channels or threads where CAR should answer plain-text messages.
 - Use `mode: silent` for human-only channels where CAR should ignore both plain text and commands.
-- Run `/car ids` inside a channel to get exact IDs plus a copy-paste collaboration snippet.
+- Run `/car admin ids` inside a channel to get exact IDs plus a copy-paste collaboration snippet.
 
 Migration notes:
 - Existing dedicated-channel installs do not need to migrate if the current
@@ -240,16 +240,16 @@ In an allowed Discord channel:
 2. Bind the channel to the repo workspace root with
    `/car bind path:<workspace-path>`.
 3. Run flow commands:
-   - `/car flow status [run_id]`
-   - `/car flow runs [limit]`
-   - `/car flow issue issue_ref:<issue#|url>`
-   - `/car flow plan text:<plan>`
-   - `/car flow resume [run_id]`
-   - `/car flow stop [run_id]`
-   - `/car flow recover [run_id]`
-   - `/car flow archive [run_id]`
-   - `/car flow reply text:<message> [run_id]`
-4. In PMA mode (or unbound channel), `/car flow status` and `/car flow runs` show a hub-wide flow overview.
+   - `/flow status [run_id]`
+   - `/flow runs [limit]`
+   - `/flow issue issue_ref:<issue#|url>`
+   - `/flow plan text:<plan>`
+   - `/flow resume [run_id]`
+   - `/flow stop [run_id]`
+   - `/flow recover [run_id]`
+   - `/flow archive [run_id]`
+   - `/flow reply text:<message> [run_id]`
+4. In PMA mode (or unbound channel), `/flow status` and `/flow runs` show a hub-wide flow overview.
 
 Note: `/car` and `/pma` responses are ephemeral (visible only to the invoking user).
 
@@ -294,7 +294,7 @@ For repo/workspace mode:
 1. Run `/car bind path:<workspace-path>` to select the repo workspace root CAR
    should use for this channel.
 2. Optional: set agent/model with `/car agent ...` and `/car model ...`.
-3. Confirm the effective collaboration policy with `/car status` or `/car ids`.
+3. Confirm the effective collaboration policy with `/car status` or `/car admin ids`.
 4. Send a normal channel message (do not start with `/`) only in a destination whose collaboration mode is `active`.
 5. The bot routes the message to this channel's current durable CAR thread under
    that resource and replies in-channel (non-ephemeral).
@@ -308,7 +308,7 @@ For PMA mode:
 
 Notes:
 - Slash command responses remain ephemeral.
-- In PMA mode, `/car flow status` and `/car flow runs` report hub-wide flow status (manifest-driven) without requiring `/pma off`.
+- In PMA mode, `/flow status` and `/flow runs` report hub-wide flow status (manifest-driven) without requiring `/pma off`.
 - If a ticket flow run is paused in repo mode, the next free-text message is treated as the flow reply and resumes that run.
 - If PMA itself answers a paused ticket-flow dispatch, CAR mirrors that PMA reply back into the repo's bound Discord/Telegram chat so the user can see that no manual reply is needed.
 - If PMA must escalate instead, CAR sends that escalation to a single PMA-bound chat for the repo. The selection rule is: freshest matching PMA Discord binding first, Telegram only as fallback.
@@ -356,7 +356,7 @@ If PMA is disabled globally in hub config, `/pma` commands will return an action
    - `allowed_channel_ids`
    - `allowed_user_ids`
 2. Remember all non-empty allowlists must match the interaction.
-3. If you use `collaboration_policy.discord`, check `/car status` or `/car ids` in the channel to see the effective mode and trigger behavior.
+3. If you use `collaboration_policy.discord`, check `/car status` or `/car admin ids` in the channel to see the effective mode and trigger behavior.
 
 ### Bot running but no useful flow output
 
@@ -371,7 +371,7 @@ Use this when a legacy Discord install worked for one operator but now needs to
 support a shared guild safely:
 
 1. Keep the existing `discord_bot.allowed_*` filters; they remain the admission gate.
-2. Run `/car ids` in each channel or thread you care about and collect the exact IDs.
+2. Run `/car admin ids` in each channel or thread you care about and collect the exact IDs.
 3. Add `collaboration_policy.discord` with:
    - `default_mode: command_only`
    - explicit `mode: active` destinations for collaboration channels
@@ -400,7 +400,7 @@ This usually means one of three things:
 4. Restart Discord bot process after re-invite/permission changes.
 5. Re-test with:
    - `/car status` (slash path)
-   - `/car ids` (effective IDs + suggested collaboration snippet)
+   - `/car admin ids` (effective IDs + suggested collaboration snippet)
    - plain text message (non-slash turn path)
 
 High-signal diagnostics for this failure mode:

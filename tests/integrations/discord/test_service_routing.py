@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from codex_autorunner.core.flows import FlowRunStatus
+from codex_autorunner.core.update import UpdateInProgressError
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
 from codex_autorunner.integrations.chat.collaboration_policy import (
     CollaborationPolicy,
@@ -738,6 +739,24 @@ def _pma_interaction(*, name: str, user_id: str = "user-1") -> dict[str, Any]:
     }
 
 
+def test_normalize_discord_command_path_preserves_compatibility_aliases() -> None:
+    assert DiscordBotService._normalize_discord_command_path(("flow", "status")) == (
+        "car",
+        "flow",
+        "status",
+    )
+    assert DiscordBotService._normalize_discord_command_path(
+        ("car", "admin", "ids")
+    ) == ("car", "ids")
+    assert DiscordBotService._normalize_discord_command_path(
+        ("car", "admin", "experimental")
+    ) == ("car", "experimental")
+    assert DiscordBotService._normalize_discord_command_path(("car", "status")) == (
+        "car",
+        "status",
+    )
+
+
 def _bind_select_interaction(
     *, selected_value: str = "repo-1", user_id: str = "user-1"
 ) -> dict[str, Any]:
@@ -1133,7 +1152,9 @@ async def test_service_ids_reports_collaboration_snippet(tmp_path: Path) -> None
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
     await store.initialize()
     rest = _FakeRest()
-    gateway = _FakeGateway([_interaction(name="ids", options=[])])
+    gateway = _FakeGateway(
+        [_interaction_path(command_path=("car", "admin", "ids"), options=[])]
+    )
     policy = build_discord_collaboration_policy(
         allowed_guild_ids=("guild-1",),
         allowed_channel_ids=(),
@@ -5229,7 +5250,7 @@ async def test_car_update_starts_worker_with_explicit_target(
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "update started (all)" in content
+        assert "preparing update (all)" in content
     finally:
         await store.close()
 
@@ -5276,7 +5297,7 @@ async def test_car_update_accepts_legacy_both_target_alias(
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "update started (all)" in content
+        assert "preparing update (all)" in content
     finally:
         await store.close()
 
@@ -5457,7 +5478,96 @@ async def test_component_interaction_update_target_uses_component_defer(
         content = rest.edited_original_interaction_responses[0]["payload"][
             "content"
         ].lower()
-        assert "update started (all)" in content
+        assert "preparing update (all)" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_acknowledges_before_spawning_restart_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "discord"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _fake_spawn_update_process(**kwargs: Any) -> None:
+        observed.update(kwargs)
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "preparing update (discord only)" in content
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    try:
+        await service.run_forever()
+        assert observed["update_target"] == "discord"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_update_acknowledges_before_spawning_restart_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_component_interaction(custom_id="update_target_select", values=["discord"])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _fake_spawn_update_process(**kwargs: Any) -> None:
+        observed.update(kwargs)
+        assert len(rest.edited_original_interaction_responses) == 1
+        content = rest.edited_original_interaction_responses[0]["payload"][
+            "content"
+        ].lower()
+        assert "preparing update (discord only)" in content
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    try:
+        await service.run_forever()
+        assert observed["update_target"] == "discord"
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
     finally:
         await store.close()
 
@@ -5506,6 +5616,51 @@ async def test_car_update_web_target_skips_confirmation_when_sessions_active(
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "update started (web only)" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_restart_target_reports_lock_error_after_neutral_prep_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction(
+                name="update",
+                options=[{"type": 3, "name": "target", "value": "discord"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    def _fake_spawn_update_process(**_kwargs: Any) -> None:
+        raise UpdateInProgressError("Update already in progress.")
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.followup_messages) == 2
+        prep_text = rest.followup_messages[0]["payload"]["content"].lower()
+        error_text = rest.followup_messages[1]["payload"]["content"].lower()
+        assert "preparing update (discord only)" in prep_text
+        assert "starting update" not in prep_text
+        assert "update already in progress" in error_text
     finally:
         await store.close()
 
@@ -5611,8 +5766,8 @@ async def test_car_experimental_enable_without_feature_returns_usage(
     rest = _FakeRest()
     gateway = _FakeGateway(
         [
-            _interaction(
-                name="experimental",
+            _interaction_path(
+                command_path=("car", "admin", "experimental"),
                 options=[{"type": 3, "name": "action", "value": "enable"}],
             )
         ]
@@ -5631,7 +5786,7 @@ async def test_car_experimental_enable_without_feature_returns_usage(
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "missing feature for `enable`" in content
-        assert "/car experimental action:list" in content
+        assert "/car admin experimental action:list" in content
     finally:
         await store.close()
 
@@ -5674,6 +5829,7 @@ async def test_car_experimental_unknown_action_returns_guidance(
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "unknown action: toggle" in content
         assert "valid actions: list, enable, disable" in content
+        assert "/car admin experimental action:list" in content
     finally:
         await store.close()
 

@@ -5046,9 +5046,23 @@ class DiscordBotService:
     def _normalize_discord_command_path(
         command_path: tuple[str, ...],
     ) -> tuple[str, ...]:
-        if command_path[:1] != ("flow",):
-            return command_path
-        return ("car", "flow", *command_path[1:])
+        if command_path[:1] == ("flow",):
+            return ("car", "flow", *command_path[1:])
+        if len(command_path) == 3 and command_path[:2] == ("car", "admin"):
+            admin_aliases = {
+                "help",
+                "debug",
+                "ids",
+                "mcp",
+                "init",
+                "repos",
+                "experimental",
+                "rollout",
+                "feedback",
+            }
+            if command_path[2] in admin_aliases:
+                return ("car", command_path[2])
+        return command_path
 
     async def _bind_with_path(
         self,
@@ -6706,6 +6720,10 @@ class DiscordBotService:
                     )
                 return
 
+        target_label = get_update_target_label(update_target)
+        restarts_discord = _update_target_restarts_surface(
+            update_target, surface="discord"
+        )
         deferred = (
             await self._defer_component_update(
                 interaction_id=interaction_id,
@@ -6717,6 +6735,26 @@ class DiscordBotService:
                 interaction_token=interaction_token,
             )
         )
+        if restarts_discord:
+            text = format_discord_message(
+                f"Preparing update ({target_label}). Checking whether the update can start now. "
+                "If it does, the selected service(s) will restart shortly and I will post completion status in this channel. "
+                "Use `/car update target:status` for progress."
+            )
+            if component_response:
+                await self._send_or_update_component_message(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
+            else:
+                await self._send_or_respond_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                )
         repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
         if not repo_url:
             repo_url = DEFAULT_UPDATE_REPO_URL
@@ -6801,7 +6839,9 @@ class DiscordBotService:
                 )
             return
 
-        target_label = get_update_target_label(update_target)
+        if restarts_discord:
+            self._update_status_notifier.schedule_watch({"chat_id": channel_id})
+            return
         text = format_discord_message(
             f"Update started ({target_label}). The selected service(s) will restart. "
             "I will post completion status in this channel. "
@@ -11897,9 +11937,9 @@ class DiscordBotService:
 
         usage_text = (
             "Usage:\n"
-            "- `/car experimental action:list`\n"
-            "- `/car experimental action:enable feature:<feature>`\n"
-            "- `/car experimental action:disable feature:<feature>`"
+            "- `/car admin experimental action:list`\n"
+            "- `/car admin experimental action:enable feature:<feature>`\n"
+            "- `/car admin experimental action:disable feature:<feature>`"
         )
 
         if not action or action in ("list", "ls", "all"):
@@ -12388,7 +12428,7 @@ class DiscordBotService:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                "Usage: /car feedback reason:<description>",
+                "Usage: /car admin feedback reason:<description>",
             )
             return
 

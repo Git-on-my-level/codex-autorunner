@@ -208,7 +208,7 @@ Operators should migrate only when they need intentional shared-chat behavior:
   some topics should be `active`, `command_only`, or `silent`.
 - Add `collaboration_policy.discord` with `default_mode: command_only` and
   explicit destinations for shared Discord guilds.
-- Use `/ids` in Telegram or `/car ids` in Discord to capture exact IDs and copy
+- Use `/ids` in Telegram or `/car admin ids` in Discord to capture exact IDs and copy
   a starter snippet.
 - Re-run `car doctor` after changes to confirm the compiled collaboration policy
   and any root-chat or default-mode warnings.

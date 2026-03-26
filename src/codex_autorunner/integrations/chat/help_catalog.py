@@ -12,7 +12,7 @@ HelpSurface = Literal["discord", "telegram"]
 class HelpCommandDescriptor:
     id: str
     description: str
-    section: Literal["core", "session", "files", "pma"]
+    section: Literal["core", "admin", "session", "files", "pma"]
     telegram_command: Optional[str] = None
     discord_path: Optional[tuple[str, ...]] = None
     telegram_usage: str = ""
@@ -59,16 +59,16 @@ _HELP_COMMANDS: tuple[HelpCommandDescriptor, ...] = (
     HelpCommandDescriptor(
         id="car.debug",
         description="Show debug info for troubleshooting",
-        section="core",
+        section="admin",
         telegram_command="debug",
-        discord_path=("car", "debug"),
+        discord_path=("car", "admin", "debug"),
     ),
     HelpCommandDescriptor(
         id="car.ids",
         description="Show chat/user IDs for debugging",
-        section="core",
+        section="admin",
         telegram_command="ids",
-        discord_path=("car", "ids"),
+        discord_path=("car", "admin", "ids"),
     ),
     HelpCommandDescriptor(
         id="car.diff",
@@ -97,23 +97,23 @@ _HELP_COMMANDS: tuple[HelpCommandDescriptor, ...] = (
     HelpCommandDescriptor(
         id="car.mcp",
         description="Show MCP server status",
-        section="core",
+        section="admin",
         telegram_command="mcp",
-        discord_path=("car", "mcp"),
+        discord_path=("car", "admin", "mcp"),
     ),
     HelpCommandDescriptor(
         id="car.init",
         description="Generate AGENTS.md guidance",
-        section="core",
+        section="admin",
         telegram_command="init",
-        discord_path=("car", "init"),
+        discord_path=("car", "admin", "init"),
     ),
     HelpCommandDescriptor(
         id="car.repos",
         description="List available repositories",
-        section="core",
+        section="admin",
         telegram_command="repos",
-        discord_path=("car", "repos"),
+        discord_path=("car", "admin", "repos"),
     ),
     HelpCommandDescriptor(
         id="car.agent",
@@ -172,34 +172,34 @@ _HELP_COMMANDS: tuple[HelpCommandDescriptor, ...] = (
     HelpCommandDescriptor(
         id="car.experimental",
         description="Toggle experimental features",
-        section="core",
+        section="admin",
         telegram_command="experimental",
-        discord_path=("car", "experimental"),
+        discord_path=("car", "admin", "experimental"),
         telegram_usage="[action] [feature]",
         discord_usage="[action] [feature]",
     ),
     HelpCommandDescriptor(
         id="car.rollout",
         description="Show current thread rollout path",
-        section="core",
+        section="admin",
         telegram_command="rollout",
-        discord_path=("car", "rollout"),
+        discord_path=("car", "admin", "rollout"),
     ),
     HelpCommandDescriptor(
         id="car.feedback",
         description="Send feedback and logs",
-        section="core",
+        section="admin",
         telegram_command="feedback",
-        discord_path=("car", "feedback"),
+        discord_path=("car", "admin", "feedback"),
         telegram_usage="<reason>",
         discord_usage="<reason>",
     ),
     HelpCommandDescriptor(
         id="car.help",
         description="Show this help",
-        section="core",
+        section="admin",
         telegram_command="help",
-        discord_path=("car", "help"),
+        discord_path=("car", "admin", "help"),
     ),
     HelpCommandDescriptor(
         id="car.resume",
@@ -313,25 +313,30 @@ _DISCORD_SECTION_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
             "car.status",
             "car.new",
             "car.newt",
-            "car.debug",
-            "car.help",
-            "car.ids",
             "car.diff",
             "car.skills",
             "car.tickets",
-            "car.mcp",
-            "car.init",
-            "car.repos",
             "car.agent",
             "car.model",
             "car.update",
             "car.review",
             "car.approvals",
             "car.mention",
+            "car.archive",
+        ),
+    ),
+    (
+        "**Admin Commands:**",
+        (
+            "car.help",
+            "car.debug",
+            "car.ids",
+            "car.mcp",
+            "car.init",
+            "car.repos",
             "car.experimental",
             "car.rollout",
             "car.feedback",
-            "car.archive",
         ),
     ),
     (

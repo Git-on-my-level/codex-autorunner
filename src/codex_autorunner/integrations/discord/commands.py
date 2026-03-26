@@ -147,6 +147,83 @@ def _build_flow_subcommand_options() -> list[dict[str, Any]]:
     return options
 
 
+def _build_admin_subcommand_options() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": SUB_COMMAND,
+            "name": "help",
+            "description": "Show available commands",
+        },
+        {
+            "type": SUB_COMMAND,
+            "name": "debug",
+            "description": "Show debug info for troubleshooting",
+        },
+        {
+            "type": SUB_COMMAND,
+            "name": "ids",
+            "description": "Show channel/user IDs for debugging",
+        },
+        {
+            "type": SUB_COMMAND,
+            "name": "mcp",
+            "description": "Show MCP server status",
+        },
+        {
+            "type": SUB_COMMAND,
+            "name": "init",
+            "description": "Generate AGENTS.md",
+        },
+        {
+            "type": SUB_COMMAND,
+            "name": "repos",
+            "description": "List hub repositories",
+        },
+        {
+            "type": SUB_COMMAND,
+            "name": "experimental",
+            "description": "Toggle experimental features",
+            "options": [
+                {
+                    "type": STRING,
+                    "name": "action",
+                    "description": "list, enable, or disable",
+                    "required": False,
+                    "choices": [
+                        {"name": "list", "value": "list"},
+                        {"name": "enable", "value": "enable"},
+                        {"name": "disable", "value": "disable"},
+                    ],
+                },
+                {
+                    "type": STRING,
+                    "name": "feature",
+                    "description": "Feature name (for enable/disable)",
+                    "required": False,
+                },
+            ],
+        },
+        {
+            "type": SUB_COMMAND,
+            "name": "rollout",
+            "description": "Show current thread rollout path",
+        },
+        {
+            "type": SUB_COMMAND,
+            "name": "feedback",
+            "description": "Send feedback and logs",
+            "options": [
+                {
+                    "type": STRING,
+                    "name": "reason",
+                    "description": "Feedback reason/description",
+                    "required": True,
+                }
+            ],
+        },
+    ]
+
+
 def build_application_commands() -> list[dict[str, Any]]:
     return [
         {
@@ -182,11 +259,6 @@ def build_application_commands() -> list[dict[str, Any]]:
                     "type": SUB_COMMAND,
                     "name": "newt",
                     "description": "Reset branch from origin default branch and start a fresh chat session",
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "debug",
-                    "description": "Show debug info for troubleshooting",
                 },
                 {
                     "type": SUB_COMMAND,
@@ -244,16 +316,6 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND,
-                    "name": "help",
-                    "description": "Show available commands",
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "ids",
-                    "description": "Show channel/user IDs for debugging",
-                },
-                {
-                    "type": SUB_COMMAND,
                     "name": "diff",
                     "description": "Show git diff",
                     "options": [
@@ -292,21 +354,6 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "autocomplete": True,
                         }
                     ],
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "mcp",
-                    "description": "Show MCP server status",
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "init",
-                    "description": "Generate AGENTS.md",
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "repos",
-                    "description": "List hub repositories",
                 },
                 {
                     "type": SUB_COMMAND,
@@ -351,48 +398,6 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "description": "Optional request text",
                             "required": False,
                         },
-                    ],
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "experimental",
-                    "description": "Toggle experimental features",
-                    "options": [
-                        {
-                            "type": STRING,
-                            "name": "action",
-                            "description": "list, enable, or disable",
-                            "required": False,
-                            "choices": [
-                                {"name": "list", "value": "list"},
-                                {"name": "enable", "value": "enable"},
-                                {"name": "disable", "value": "disable"},
-                            ],
-                        },
-                        {
-                            "type": STRING,
-                            "name": "feature",
-                            "description": "Feature name (for enable/disable)",
-                            "required": False,
-                        },
-                    ],
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "rollout",
-                    "description": "Show current thread rollout path",
-                },
-                {
-                    "type": SUB_COMMAND,
-                    "name": "feedback",
-                    "description": "Send feedback and logs",
-                    "options": [
-                        {
-                            "type": STRING,
-                            "name": "reason",
-                            "description": "Feedback reason/description",
-                            "required": True,
-                        }
                     ],
                 },
                 {
@@ -473,9 +478,9 @@ def build_application_commands() -> list[dict[str, Any]]:
                 },
                 {
                     "type": SUB_COMMAND_GROUP,
-                    "name": "flow",
-                    "description": "Manage flow runs",
-                    "options": _build_flow_subcommand_options(),
+                    "name": "admin",
+                    "description": "Admin and operator commands",
+                    "options": _build_admin_subcommand_options(),
                 },
             ],
         },

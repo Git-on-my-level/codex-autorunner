@@ -361,9 +361,9 @@ def discord_doctor_checks(config: HubConfig) -> list[DoctorCheck]:
                     passed=True,
                     message=(
                         "Explicit Discord collaboration destinations are configured. "
-                        "Use /car ids to copy exact guild/channel IDs and /car status "
-                        "to verify the effective mode and plain-text trigger in each "
-                        "channel."
+                        "Use /car admin ids to copy exact guild/channel IDs and "
+                        "/car status to verify the effective mode and plain-text "
+                        "trigger in each channel."
                     ),
                     check_id="discord.collaboration_migration",
                     severity="info",

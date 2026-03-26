@@ -98,6 +98,44 @@ async def test_service_startup_reaps_managed_processes(
 
 
 @pytest.mark.anyio
+async def test_service_startup_syncs_commands_before_gateway_loop(
+    tmp_path: Path,
+) -> None:
+    order: list[str] = []
+
+    class _OrderedGateway(_FakeGateway):
+        async def run(self, _on_dispatch) -> None:
+            order.append("gateway")
+            await super().run(_on_dispatch)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    gateway = _OrderedGateway()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.startup.sync"),
+        rest_client=_FakeRest(),
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_sync_commands() -> None:
+        order.append("sync")
+
+    service._sync_application_commands_on_startup = (  # type: ignore[method-assign]
+        _fake_sync_commands
+    )
+
+    try:
+        await service.run_forever()
+        assert order == ["sync", "gateway"]
+        assert gateway.ran is True
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_service_exposes_app_server_event_buffer_context(
     tmp_path: Path, monkeypatch
 ) -> None:
