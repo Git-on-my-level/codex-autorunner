@@ -879,7 +879,7 @@ def test_hub_messages_do_not_hint_from_provider_only_repo_defaults(
         assert not any(item.get("item_type") == "capability_hint" for item in items)
 
 
-def test_hub_messages_resolve_requires_scope_key_for_capability_hint(
+def test_hub_messages_resolve_allows_unscoped_capability_hint_dismissals(
     hub_env, monkeypatch
 ) -> None:
     _update_repo_config(
@@ -899,8 +899,32 @@ def test_hub_messages_resolve_requires_scope_key_for_capability_hint(
                 "action": "dismiss",
             },
         )
-        assert response.status_code == 400
-        assert response.json() == {"detail": "Missing scope_key"}
+        assert response.status_code == 200
+        resolved = response.json()["resolved"]
+        assert resolved["hint_id"] == "voice_enablement"
+        assert "scope_key" not in resolved
+
+        scoped_items = client.get(
+            "/hub/messages", params={"scope_key": "scope-a"}
+        ).json()["items"]
+        assert not any(
+            item.get("item_type") == "capability_hint"
+            and item.get("hint_id") == "voice_enablement"
+            for item in scoped_items
+        )
+
+    dismissals_path = (
+        hub_env.repo_root / ".codex-autorunner" / "hub_inbox_dismissals.json"
+    )
+    data = json.loads(dismissals_path.read_text(encoding="utf-8"))
+    assert (
+        message_resolution_key(
+            "capability_hint:voice_enablement",
+            item_type="capability_hint",
+            hint_id="voice_enablement",
+        )
+        in data["items"]
+    )
 
 
 class TestIssue975CharacterizationHubMessageFreshness:

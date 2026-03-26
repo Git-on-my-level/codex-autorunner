@@ -48,3 +48,15 @@ test("browser-scope fallback stays runtime-scoped without localStorage", () => {
     globalThis.localStorage.setItem = originalSetItem;
   }
 });
+
+test("capability hint lookup prefers the matching repo", () => {
+  const match = __notificationsTest.findCapabilityHint(
+    [
+      { itemType: "capability_hint", hintId: "voice_enablement", repoId: "repo-a" },
+      { itemType: "capability_hint", hintId: "voice_enablement", repoId: "repo-b" },
+    ],
+    { hintId: "voice_enablement", repoId: "repo-b" }
+  );
+
+  assert.equal(match?.repoId, "repo-b");
+});

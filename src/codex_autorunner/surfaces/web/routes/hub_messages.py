@@ -190,8 +190,6 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                 hint_id = capability_hint_id_from_run_id(run_id)
             if hint_id is None:
                 raise HTTPException(status_code=400, detail="Missing hint_id")
-            if scope_key is None:
-                raise HTTPException(status_code=400, detail="Missing scope_key")
 
         resolution_root: Optional[Path] = None
         resolved_repo_id = repo_id

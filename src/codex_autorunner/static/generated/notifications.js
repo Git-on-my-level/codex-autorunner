@@ -594,15 +594,28 @@ function attachRoot(root) {
         window.location.href = resolvePath(item.openUrl);
     });
 }
-async function openCapabilityHintById(hintId) {
+function findCapabilityHint(items, locator) {
+    const normalizedHintId = locator.hintId.trim();
+    const normalizedRepoId = typeof locator.repoId === "string" ? locator.repoId.trim() : "";
+    if (normalizedRepoId) {
+        const repoMatch = items.find((item) => item.itemType === "capability_hint" &&
+            item.hintId === normalizedHintId &&
+            item.repoId === normalizedRepoId);
+        if (repoMatch)
+            return repoMatch;
+    }
+    return items.find((item) => item.itemType === "capability_hint" && item.hintId === normalizedHintId);
+}
+async function openCapabilityHintByLocator(locator) {
+    const hintId = locator.hintId.trim();
     if (!hintId)
         return false;
     let items = getItemsForRoot("hub");
-    let match = items.find((item) => item.itemType === "capability_hint" && item.hintId === hintId);
+    let match = findCapabilityHint(items, locator);
     if (!match) {
         await refreshNotifications();
         items = getItemsForRoot("hub");
-        match = items.find((item) => item.itemType === "capability_hint" && item.hintId === hintId);
+        match = findCapabilityHint(items, locator);
     }
     if (!match) {
         return false;
@@ -614,9 +627,10 @@ function attachCapabilityHintListener() {
     window.addEventListener(HUB_HINT_SCOPE_EVENT, (event) => {
         const detail = event.detail;
         const hintId = typeof detail?.hintId === "string" ? detail.hintId.trim() : "";
+        const repoId = typeof detail?.repoId === "string" ? detail.repoId.trim() : "";
         if (!hintId)
             return;
-        void openCapabilityHintById(hintId).then((opened) => {
+        void openCapabilityHintByLocator({ hintId, repoId }).then((opened) => {
             if (!opened) {
                 flash("Feature hint unavailable right now", "error");
             }
@@ -655,5 +669,6 @@ export function initNotifications() {
     notificationsInitialized = true;
 }
 export const __notificationsTest = {
+    findCapabilityHint,
     getHubHintScopeKey,
 };

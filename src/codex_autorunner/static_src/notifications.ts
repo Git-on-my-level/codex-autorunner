@@ -105,6 +105,11 @@ interface ModalElements {
   closeBtn: HTMLButtonElement;
 }
 
+interface CapabilityHintEventDetail {
+  hintId?: string;
+  repoId?: string | null;
+}
+
 let notificationsInitialized = false;
 const notificationItemsByRoot: Record<string, NormalizedNotification[]> = {};
 let activeRoot: NotificationRoot | null = null;
@@ -734,14 +739,38 @@ function attachRoot(root: NotificationRoot): void {
   });
 }
 
-async function openCapabilityHintById(hintId: string): Promise<boolean> {
+function findCapabilityHint(
+  items: NormalizedNotification[],
+  locator: { hintId: string; repoId?: string | null }
+): NormalizedNotification | undefined {
+  const normalizedHintId = locator.hintId.trim();
+  const normalizedRepoId = typeof locator.repoId === "string" ? locator.repoId.trim() : "";
+  if (normalizedRepoId) {
+    const repoMatch = items.find(
+      (item) =>
+        item.itemType === "capability_hint" &&
+        item.hintId === normalizedHintId &&
+        item.repoId === normalizedRepoId
+    );
+    if (repoMatch) return repoMatch;
+  }
+  return items.find(
+    (item) => item.itemType === "capability_hint" && item.hintId === normalizedHintId
+  );
+}
+
+async function openCapabilityHintByLocator(locator: {
+  hintId: string;
+  repoId?: string | null;
+}): Promise<boolean> {
+  const hintId = locator.hintId.trim();
   if (!hintId) return false;
   let items = getItemsForRoot("hub");
-  let match = items.find((item) => item.itemType === "capability_hint" && item.hintId === hintId);
+  let match = findCapabilityHint(items, locator);
   if (!match) {
     await refreshNotifications();
     items = getItemsForRoot("hub");
-    match = items.find((item) => item.itemType === "capability_hint" && item.hintId === hintId);
+    match = findCapabilityHint(items, locator);
   }
   if (!match) {
     return false;
@@ -752,10 +781,11 @@ async function openCapabilityHintById(hintId: string): Promise<boolean> {
 
 function attachCapabilityHintListener(): void {
   window.addEventListener(HUB_HINT_SCOPE_EVENT, (event: Event) => {
-    const detail = (event as CustomEvent<{ hintId?: string }>).detail;
+    const detail = (event as CustomEvent<CapabilityHintEventDetail>).detail;
     const hintId = typeof detail?.hintId === "string" ? detail.hintId.trim() : "";
+    const repoId = typeof detail?.repoId === "string" ? detail.repoId.trim() : "";
     if (!hintId) return;
-    void openCapabilityHintById(hintId).then((opened) => {
+    void openCapabilityHintByLocator({ hintId, repoId }).then((opened) => {
       if (!opened) {
         flash("Feature hint unavailable right now", "error");
       }
@@ -797,5 +827,6 @@ export function initNotifications(): void {
 }
 
 export const __notificationsTest = {
+  findCapabilityHint,
   getHubHintScopeKey,
 };
