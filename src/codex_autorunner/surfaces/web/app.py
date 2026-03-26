@@ -31,6 +31,7 @@ from .middleware import (
     RequestIdMiddleware,
     SecurityHeadersMiddleware,
 )
+from .routes.feedback_reports import build_feedback_report_routes
 from .routes.filebox import build_hub_filebox_routes
 from .routes.hub_messages import build_hub_messages_routes
 from .routes.hub_repos import HubMountManager, build_hub_repo_routes
@@ -39,6 +40,7 @@ from .routes.pma_routes.managed_thread_runtime import (
     recover_orphaned_managed_thread_executions,
     restart_managed_thread_queue_workers,
 )
+from .routes.scm_webhooks import build_scm_webhook_routes
 from .routes.system import build_system_routes
 from .static_assets import (
     index_response_headers,
@@ -96,6 +98,8 @@ def create_hub_app(
         app.state.pma_lane_worker_stop_all = getattr(
             pma_router, "_pma_stop_all_lane_workers", None
         )
+    app.include_router(build_feedback_report_routes())
+    app.include_router(build_scm_webhook_routes())
     app.include_router(build_hub_filebox_routes())
 
     app.state.hub_started = False

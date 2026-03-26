@@ -116,6 +116,31 @@
     "commit_message_template": "[codex] run #{run_id}"
   },
   "github": {
+    "automation": {
+      "enabled": false,
+      "policy": {
+        "add_labels": "deny",
+        "enqueue_managed_turn": "allow",
+        "merge_pr": "deny",
+        "notify_chat": "allow",
+        "post_pr_comment": "deny"
+      },
+      "reactions": {
+        "approved_and_green": true,
+        "changes_requested": true,
+        "ci_failed": true,
+        "delivery_failure_escalation_threshold": 3,
+        "duplicate_escalation_threshold": 3,
+        "enabled": true,
+        "merged": true
+      },
+      "webhook_ingress": {
+        "enabled": false,
+        "max_payload_bytes": 262144,
+        "max_raw_payload_bytes": 65536,
+        "store_raw_payload": false
+      }
+    },
     "enabled": true,
     "pr_draft_default": true,
     "sync_agent_timeout_seconds": 1800,

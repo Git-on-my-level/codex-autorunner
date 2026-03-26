@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Optional
+
+from ..manifest import ManifestError, load_manifest
+from .pma_thread_store import PmaThreadStore
+from .pr_bindings import PrBinding, PrBindingStore
+
+_BRANCH_METADATA_KEYS = ("head_branch", "branch", "git_branch")
+_THREAD_TARGET_ID_KEYS = ("thread_target_id", "managed_thread_id")
+_CONTEXT_MAPPING_KEYS = ("manual_context", "scm", "scm_context", "context")
+
+
+def _normalize_text(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _mapping(value: Any) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def find_hub_binding_context(repo_root: Path) -> tuple[Optional[Path], Optional[str]]:
+    current = repo_root.resolve()
+    while True:
+        manifest_path = current / ".codex-autorunner" / "manifest.yml"
+        if manifest_path.exists():
+            try:
+                manifest = load_manifest(manifest_path, current)
+            except ManifestError:
+                return current, None
+            entry = manifest.get_by_path(current, repo_root.resolve())
+            repo_id = entry.id.strip() if entry and isinstance(entry.id, str) else None
+            return current, repo_id
+        parent = current.parent
+        if parent == current:
+            return None, None
+        current = parent
+
+
+def thread_contexts(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    contexts: list[Mapping[str, Any]] = [payload]
+    for key in _CONTEXT_MAPPING_KEYS:
+        nested = _mapping(payload.get(key))
+        if nested:
+            contexts.append(nested)
+    return tuple(contexts)
+
+
+def thread_matches_branch(thread: Mapping[str, Any], *, head_branch: str) -> bool:
+    metadata = _mapping(thread.get("metadata"))
+    for context in thread_contexts(metadata):
+        for key in _BRANCH_METADATA_KEYS:
+            candidate = _normalize_text(context.get(key))
+            if candidate == head_branch:
+                return True
+    return False
+
+
+def explicit_thread_target_id(payload: Mapping[str, Any]) -> Optional[str]:
+    for context in thread_contexts(payload):
+        for key in _THREAD_TARGET_ID_KEYS:
+            candidate = _normalize_text(context.get(key))
+            if candidate is not None:
+                return candidate
+    return None
+
+
+def binding_summary(binding: PrBinding) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "repo_slug": binding.repo_slug,
+        "pr_number": binding.pr_number,
+        "pr_state": binding.pr_state,
+    }
+    if binding.head_branch is not None:
+        summary["head_branch"] = binding.head_branch
+    if binding.base_branch is not None:
+        summary["base_branch"] = binding.base_branch
+    return summary
+
+
+def resolve_thread_target_id(
+    *,
+    hub_root: Path,
+    repo_id: Optional[str],
+    head_branch: Optional[str],
+    existing_binding: Optional[PrBinding] = None,
+    thread_target_id: Optional[str] = None,
+) -> Optional[str]:
+    store = PmaThreadStore(hub_root)
+    explicit = _normalize_text(thread_target_id)
+    if explicit is not None and store.get_thread(explicit) is not None:
+        return explicit
+    if existing_binding is not None and existing_binding.thread_target_id is not None:
+        return existing_binding.thread_target_id
+    if repo_id is None or head_branch is None:
+        return None
+
+    for thread in store.list_threads(status="active", repo_id=repo_id, limit=100):
+        candidate_thread_id = _normalize_text(thread.get("managed_thread_id"))
+        if candidate_thread_id is None:
+            continue
+        if thread_matches_branch(thread, head_branch=head_branch):
+            return candidate_thread_id
+    return None
+
+
+def upsert_pr_binding(
+    hub_root: Path,
+    *,
+    provider: str,
+    repo_slug: str,
+    repo_id: Optional[str],
+    pr_number: int,
+    pr_state: str,
+    head_branch: Optional[str] = None,
+    base_branch: Optional[str] = None,
+    existing_binding: Optional[PrBinding] = None,
+    thread_target_id: Optional[str] = None,
+) -> PrBinding:
+    store = PrBindingStore(hub_root)
+    durable_binding = store.get_binding_by_pr(
+        provider=provider,
+        repo_slug=repo_slug,
+        pr_number=pr_number,
+    )
+    resolved_binding = durable_binding or existing_binding
+    resolved_repo_id = repo_id
+    if resolved_repo_id is None and resolved_binding is not None:
+        resolved_repo_id = resolved_binding.repo_id
+    if head_branch is None and resolved_binding is not None:
+        head_branch = resolved_binding.head_branch
+    if base_branch is None and resolved_binding is not None:
+        base_branch = resolved_binding.base_branch
+    resolved_thread_target_id = resolve_thread_target_id(
+        hub_root=hub_root,
+        repo_id=resolved_repo_id,
+        head_branch=head_branch,
+        existing_binding=resolved_binding,
+        thread_target_id=thread_target_id,
+    )
+    return store.upsert_binding(
+        provider=provider,
+        repo_slug=repo_slug,
+        repo_id=resolved_repo_id,
+        pr_number=pr_number,
+        pr_state=pr_state,
+        head_branch=head_branch,
+        base_branch=base_branch,
+        thread_target_id=resolved_thread_target_id,
+    )
+
+
+__all__ = [
+    "binding_summary",
+    "explicit_thread_target_id",
+    "find_hub_binding_context",
+    "resolve_thread_target_id",
+    "thread_contexts",
+    "thread_matches_branch",
+    "upsert_pr_binding",
+]

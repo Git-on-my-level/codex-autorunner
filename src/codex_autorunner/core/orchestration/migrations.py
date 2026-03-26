@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 7
+ORCHESTRATION_SCHEMA_VERSION = 14
 
 
 @dataclass(frozen=True)
@@ -689,6 +689,278 @@ def _apply_v7(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v8(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_publish_operations (
+            operation_id TEXT PRIMARY KEY,
+            operation_key TEXT NOT NULL,
+            operation_kind TEXT NOT NULL,
+            state TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            response_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            claimed_at TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            next_attempt_at TEXT,
+            last_error_text TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_publish_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            operation_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            response_json TEXT NOT NULL DEFAULT '{}',
+            error_text TEXT,
+            claimed_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (operation_id) REFERENCES orch_publish_operations(operation_id)
+                ON DELETE CASCADE,
+            UNIQUE (operation_id, attempt_number)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_publish_operations_active_key
+            ON orch_publish_operations(operation_key)
+         WHERE state IN ('pending', 'running', 'succeeded')
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_publish_operations_state_next_attempt
+            ON orch_publish_operations(state, next_attempt_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_publish_attempts_operation_attempt
+            ON orch_publish_attempts(operation_id, attempt_number)
+        """
+    )
+
+
+def _apply_v9(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_scm_events (
+            event_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            repo_slug TEXT,
+            repo_id TEXT,
+            pr_number INTEGER,
+            delivery_id TEXT,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            raw_payload_json TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_provider_type_timestamp
+            ON orch_scm_events(provider, event_type, occurred_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_repo_slug_timestamp
+            ON orch_scm_events(repo_slug, occurred_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_repo_id_timestamp
+            ON orch_scm_events(repo_id, occurred_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_pr_timestamp
+            ON orch_scm_events(pr_number, occurred_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_events_delivery_timestamp
+            ON orch_scm_events(delivery_id, occurred_at, created_at)
+        """
+    )
+
+
+def _apply_v10(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_pr_bindings (
+            binding_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            repo_slug TEXT NOT NULL,
+            repo_id TEXT,
+            pr_number INTEGER NOT NULL,
+            pr_state TEXT NOT NULL,
+            head_branch TEXT,
+            base_branch TEXT,
+            thread_target_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            closed_at TEXT,
+            FOREIGN KEY (thread_target_id) REFERENCES orch_thread_targets(thread_target_id)
+                ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_pr_bindings_provider_repo_pr
+            ON orch_pr_bindings(provider, repo_slug, pr_number)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_repo_state_updated
+            ON orch_pr_bindings(provider, repo_slug, pr_state, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_branch_state_updated
+            ON orch_pr_bindings(provider, repo_slug, head_branch, pr_state, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_repo_id_updated
+            ON orch_pr_bindings(repo_id, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_pr_bindings_thread_updated
+            ON orch_pr_bindings(thread_target_id, updated_at)
+        """
+    )
+
+
+def _apply_v11(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_reaction_state (
+            binding_id TEXT NOT NULL,
+            reaction_kind TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            state TEXT NOT NULL,
+            first_event_id TEXT,
+            last_event_id TEXT,
+            last_operation_key TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            first_emitted_at TEXT,
+            last_emitted_at TEXT,
+            last_delivery_failed_at TEXT,
+            escalated_at TEXT,
+            resolved_at TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            delivery_failure_count INTEGER NOT NULL DEFAULT 0,
+            last_error_text TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            PRIMARY KEY (binding_id, reaction_kind, fingerprint)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_reaction_state_binding_kind_state
+            ON orch_reaction_state(binding_id, reaction_kind, state, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_reaction_state_state_updated
+            ON orch_reaction_state(state, updated_at)
+        """
+    )
+
+
+def _apply_v12(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_reaction_state",
+        "escalated_at",
+        "escalated_at TEXT",
+    )
+
+
+def _apply_v13(conn: sqlite3.Connection) -> None:
+    _ensure_column(
+        conn,
+        "orch_scm_events",
+        "correlation_id",
+        "correlation_id TEXT",
+    )
+    if _table_exists(conn, "orch_scm_events"):
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_orch_scm_events_correlation_timestamp
+                ON orch_scm_events(correlation_id, occurred_at, created_at)
+            """
+        )
+
+
+def _apply_v14(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_feedback_reports (
+            report_id TEXT PRIMARY KEY,
+            repo_id TEXT,
+            thread_target_id TEXT,
+            report_kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            confidence REAL,
+            source_kind TEXT NOT NULL,
+            source_id TEXT,
+            dedupe_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_dedupe_updated
+            ON orch_feedback_reports(dedupe_key, updated_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_repo_thread_updated
+            ON orch_feedback_reports(repo_id, thread_target_id, updated_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_feedback_reports_status_updated
+            ON orch_feedback_reports(status, updated_at, created_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -701,6 +973,13 @@ _MIGRATIONS = (
         "backfill_thread_target_metadata_and_resource_ownership",
         _apply_v7,
     ),
+    _MigrationStep(8, "add_publish_journal_tables", _apply_v8),
+    _MigrationStep(9, "add_scm_event_store", _apply_v9),
+    _MigrationStep(10, "add_pr_binding_store", _apply_v10),
+    _MigrationStep(11, "add_scm_reaction_state_store", _apply_v11),
+    _MigrationStep(12, "add_scm_reaction_escalation_tracking", _apply_v12),
+    _MigrationStep(13, "add_scm_event_correlation_ids", _apply_v13),
+    _MigrationStep(14, "add_feedback_report_store", _apply_v14),
 )
 
 
@@ -749,6 +1028,36 @@ _TABLE_DEFINITIONS = (
         name="orch_bindings",
         role="authoritative",
         description="Authoritative transport-agnostic bindings from surface context to thread target.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_publish_operations",
+        role="authoritative",
+        description="Publish journal operations queued before external automation side effects run.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_publish_attempts",
+        role="authoritative",
+        description="Per-attempt publish execution metadata for retry and outcome tracking.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_scm_events",
+        role="authoritative",
+        description="Canonical normalized SCM events captured before provider-specific reaction handling.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_pr_bindings",
+        role="authoritative",
+        description="Optional durable PR-to-thread binding records keyed by provider, repo, and PR number.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_reaction_state",
+        role="authoritative",
+        description="Durable reaction fingerprints and delivery state used to suppress repeated SCM follow-ups.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_feedback_reports",
+        role="authoritative",
+        description="Durable structured feedback reports keyed by stable content-derived dedupe fingerprints.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",

@@ -1303,6 +1303,35 @@ class PmaThreadStore:
             return None
         return self._execution_row_to_record(row)
 
+    def get_turn_by_client_turn_id(
+        self, managed_thread_id: str, client_turn_id: str
+    ) -> Optional[dict[str, Any]]:
+        normalized_client_turn_id = _coerce_text(client_turn_id)
+        if normalized_client_turn_id is None:
+            return None
+        with self._read_conn() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                  FROM orch_thread_executions
+                 WHERE thread_target_id = ?
+                   AND client_request_id = ?
+                 ORDER BY
+                       CASE status
+                           WHEN 'running' THEN 0
+                           WHEN 'queued' THEN 1
+                           ELSE 2
+                       END,
+                       COALESCE(started_at, created_at) DESC,
+                       execution_id DESC
+                 LIMIT 1
+                """,
+                (managed_thread_id, normalized_client_turn_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._execution_row_to_record(row)
+
     def list_queued_turns(
         self, managed_thread_id: str, *, limit: int = 200
     ) -> list[dict[str, Any]]:

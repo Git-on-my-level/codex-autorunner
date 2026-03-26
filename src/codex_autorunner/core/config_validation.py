@@ -12,6 +12,11 @@ from .config_contract import (
     CONFIG_VERSION,
     ConfigError,
 )
+from .mutation_policy import (
+    MUTATION_POLICY_ACTION_TYPES,
+    MUTATION_POLICY_ALLOWED_VALUES,
+    normalize_mutation_policy_value,
+)
 from .path_utils import ConfigPathError, resolve_config_path
 
 
@@ -39,6 +44,10 @@ def _is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _is_strict_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _validate_server_security(server: Dict[str, Any]) -> None:
@@ -649,6 +658,95 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             github.get("sync_agent_timeout_seconds"), int
         ):
             raise ConfigError("github.sync_agent_timeout_seconds must be an integer")
+        automation = github.get("automation")
+        if automation is not None and not isinstance(automation, dict):
+            raise ConfigError("github.automation must be a mapping if provided")
+        if isinstance(automation, dict):
+            if "enabled" in automation and not isinstance(
+                automation.get("enabled"), bool
+            ):
+                raise ConfigError("github.automation.enabled must be boolean")
+            policy = automation.get("policy")
+            if policy is not None and not isinstance(policy, dict):
+                raise ConfigError(
+                    "github.automation.policy must be a mapping if provided"
+                )
+            if isinstance(policy, dict):
+                for action_type, value in policy.items():
+                    if action_type not in MUTATION_POLICY_ACTION_TYPES:
+                        allowed = ", ".join(MUTATION_POLICY_ACTION_TYPES)
+                        raise ConfigError(
+                            f"github.automation.policy.{action_type} is not supported; "
+                            f"expected one of: {allowed}"
+                        )
+                    if normalize_mutation_policy_value(value) is None:
+                        allowed_values = ", ".join(MUTATION_POLICY_ALLOWED_VALUES)
+                        raise ConfigError(
+                            f"github.automation.policy.{action_type} must be boolean or "
+                            f"one of: {allowed_values}"
+                        )
+            webhook_ingress = automation.get("webhook_ingress")
+            if webhook_ingress is not None and not isinstance(webhook_ingress, dict):
+                raise ConfigError(
+                    "github.automation.webhook_ingress must be a mapping if provided"
+                )
+            if isinstance(webhook_ingress, dict):
+                if "enabled" in webhook_ingress and not isinstance(
+                    webhook_ingress.get("enabled"), bool
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.enabled must be boolean"
+                    )
+                if "store_raw_payload" in webhook_ingress and not isinstance(
+                    webhook_ingress.get("store_raw_payload"), bool
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.store_raw_payload must be boolean"
+                    )
+                max_payload_bytes = webhook_ingress.get("max_payload_bytes")
+                if max_payload_bytes is not None and not _is_strict_int(
+                    max_payload_bytes
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_payload_bytes must be an integer"
+                    )
+                resolved_max_payload_bytes = (
+                    max_payload_bytes if _is_strict_int(max_payload_bytes) else None
+                )
+                if (
+                    resolved_max_payload_bytes is not None
+                    and resolved_max_payload_bytes <= 0
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_payload_bytes must be > 0"
+                    )
+                max_raw_payload_bytes = webhook_ingress.get("max_raw_payload_bytes")
+                if max_raw_payload_bytes is not None and not _is_strict_int(
+                    max_raw_payload_bytes
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_raw_payload_bytes must be an integer"
+                    )
+                resolved_max_raw_payload_bytes = (
+                    max_raw_payload_bytes
+                    if _is_strict_int(max_raw_payload_bytes)
+                    else None
+                )
+                if (
+                    resolved_max_raw_payload_bytes is not None
+                    and resolved_max_raw_payload_bytes <= 0
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_raw_payload_bytes must be > 0"
+                    )
+                if (
+                    resolved_max_payload_bytes is not None
+                    and resolved_max_raw_payload_bytes is not None
+                    and resolved_max_raw_payload_bytes > resolved_max_payload_bytes
+                ):
+                    raise ConfigError(
+                        "github.automation.webhook_ingress.max_raw_payload_bytes must be <= max_payload_bytes"
+                    )
 
     server = cfg.get("server")
     if not isinstance(server, dict):

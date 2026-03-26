@@ -328,6 +328,35 @@ def _default_update_linux_service_names() -> Dict[str, str]:
     }
 
 
+def _default_github_automation_section() -> Dict[str, Any]:
+    """Build the additive GitHub automation section."""
+    return {
+        "enabled": False,
+        "policy": {
+            "enqueue_managed_turn": "allow",
+            "notify_chat": "allow",
+            "post_pr_comment": "deny",
+            "add_labels": "deny",
+            "merge_pr": "deny",
+        },
+        "reactions": {
+            "enabled": True,
+            "ci_failed": True,
+            "changes_requested": True,
+            "approved_and_green": True,
+            "merged": True,
+            "duplicate_escalation_threshold": 3,
+            "delivery_failure_escalation_threshold": 3,
+        },
+        "webhook_ingress": {
+            "enabled": False,
+            "max_payload_bytes": 262_144,
+            "store_raw_payload": False,
+            "max_raw_payload_bytes": 65_536,
+        },
+    }
+
+
 def _parse_update_backend(update_cfg: Mapping[str, Any]) -> str:
     raw = update_cfg.get("backend")
     if raw is None:
@@ -561,6 +590,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "sync_commit_mode": "auto",  # none|auto|always
         # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
         "sync_agent_timeout_seconds": 1800,
+        "automation": _default_github_automation_section(),
     },
     "update": _default_update_section(),
     "app_server": _default_app_server_section(),
