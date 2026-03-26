@@ -1,17 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, Sequence
 
-from ...core.coercion import coerce_int
 from ...core.injected_context import strip_injected_context_blocks
 from ...core.redaction import redact_text
-from ...core.state_roots import resolve_global_state_root
 from ...core.utils import (
     RepoNotFoundError,
     canonicalize_path,
@@ -46,10 +43,7 @@ from ...integrations.chat.turn_metrics import (  # noqa: F401
 )
 from ...integrations.github.service import find_github_links, parse_github_url
 from .constants import (
-    DEFAULT_MODEL_LIST_LIMIT,
     DEFAULT_PAGE_SIZE,
-    DEFAULT_SKILLS_LIST_LIMIT,
-    REASONING_EFFORT_VALUES,
     RESUME_PREVIEW_ASSISTANT_LIMIT,
     RESUME_PREVIEW_SCAN_LINES,
     RESUME_PREVIEW_USER_LIMIT,
@@ -59,15 +53,37 @@ from .constants import (
     TRACE_MESSAGE_TOKENS,
 )
 from .handlers.commands_spec import CommandSpec
+from .lock_utils import (  # noqa: F401
+    _lock_payload_summary,
+    _read_lock_payload,
+    _telegram_lock_path,
+)
+from .model_formatting import (  # noqa: F401
+    ModelOption,
+    _coerce_model_entries,
+    _coerce_model_options,
+    _display_name_is_model_alias,
+    _format_feature_flags,
+    _format_mcp_list,
+    _format_model_list,
+    _format_skills_list,
+    _normalize_model_name,
+)
+from .rate_limit_utils import (  # noqa: F401
+    _coerce_number,
+    _compute_used_percent,
+    _format_percent,
+    _format_rate_limit_window,
+    _rate_limit_window_minutes,
+)
 from .state import TelegramState, TelegramTopicRecord, ThreadSummary, topic_key
-
-
-@dataclass(frozen=True)
-class ModelOption:
-    model_id: str
-    label: str
-    efforts: tuple[str, ...]
-    default_effort: Optional[str] = None
+from .time_utils import (  # noqa: F401
+    _approval_age_seconds,
+    _coerce_datetime,
+    _format_friendly_time,
+    _format_future_time,
+    _parse_iso_timestamp,
+)
 
 
 @dataclass(frozen=True)
@@ -78,12 +94,6 @@ class CodexFeatureRow:
 
 
 def derive_codex_features_command(app_server_command: Sequence[str]) -> list[str]:
-    """
-    Build a Codex CLI invocation for `features list` that mirrors the configured app-server command.
-
-    We strip a trailing \"app-server\" subcommand (plus keep any preceding flags/binary),
-    so custom binaries or wrapper scripts stay aligned with the running app server.
-    """
     base = list(app_server_command or [])
     if base and base[-1] == "app-server":
         base = base[:-1]
@@ -360,44 +370,6 @@ def _extract_rate_limits(payload: Any) -> Optional[dict[str, Any]]:
     return extract_rate_limits(payload)
 
 
-def _rate_limit_window_minutes(
-    entry: dict[str, Any],
-    section: Optional[str] = None,
-) -> Optional[int]:
-    window_minutes = coerce_int(entry.get("window_minutes", entry.get("windowMinutes")))
-    if window_minutes is None:
-        for candidate in (
-            "window",
-            "window_mins",
-            "windowMins",
-            "period_minutes",
-            "periodMinutes",
-            "duration_minutes",
-            "durationMinutes",
-        ):
-            window_minutes = coerce_int(entry.get(candidate))
-            if window_minutes is not None:
-                break
-    if window_minutes is None:
-        window_seconds = coerce_int(
-            entry.get("window_seconds", entry.get("windowSeconds"))
-        )
-        if window_seconds is not None:
-            window_minutes = max(int(round(window_seconds / 60)), 1)
-    if window_minutes is None and section in ("primary", "secondary"):
-        window_minutes = 300 if section == "primary" else 10080
-    return window_minutes
-
-
-def _compute_used_percent(entry: dict[str, Any]) -> Optional[float]:
-    remaining = _coerce_number(entry.get("remaining"))
-    limit = _coerce_number(entry.get("limit"))
-    if remaining is None or limit is None or limit <= 0:
-        return None
-    used = (limit - remaining) / limit * 100
-    return max(min(used, 100.0), 0.0)
-
-
 def _coerce_id(value: Any) -> Optional[str]:
     if isinstance(value, (str, int)) and not isinstance(value, bool):
         text = str(value).strip()
@@ -423,40 +395,6 @@ def _extract_turn_thread_id(payload: Any) -> Optional[str]:
             if thread_id:
                 return thread_id
     return None
-
-
-def _coerce_number(value: Any) -> Optional[float]:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _format_percent(value: Any) -> Optional[str]:
-    number = _coerce_number(value)
-    if number is None:
-        return None
-    if number.is_integer():
-        return f"{int(number)}%"
-    return f"{number:.1f}%"
-
-
-def _format_rate_limit_window(window_minutes: Optional[int]) -> Optional[str]:
-    if not isinstance(window_minutes, int) or window_minutes <= 0:
-        return None
-    if window_minutes == 300:
-        return "5h"
-    if window_minutes % 1440 == 0:
-        return f"{window_minutes // 1440}d"
-    if window_minutes % 60 == 0:
-        return f"{window_minutes // 60}h"
-    return f"{window_minutes}m"
 
 
 def _format_rate_limit_refresh(rate_limits: dict[str, Any]) -> Optional[str]:
@@ -506,63 +444,6 @@ def _extract_rate_limit_timestamp(rate_limits: dict[str, Any]) -> Optional[datet
     return None
 
 
-def _coerce_datetime(value: Any) -> Optional[datetime]:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        seconds = float(value)
-        if seconds > 1e12:
-            seconds /= 1000.0
-        try:
-            return datetime.fromtimestamp(seconds, tz=timezone.utc)
-        except Exception:
-            return None
-    if isinstance(value, str):
-        dt = _parse_iso_timestamp(value)
-        if dt is not None:
-            return dt
-        try:
-            return _coerce_datetime(float(value))
-        except Exception:
-            return None
-    return None
-
-
-def _format_friendly_time(value: datetime) -> str:
-    month = value.strftime("%b")
-    day = value.day
-    hour = value.strftime("%I").lstrip("0") or "12"
-    minute = value.strftime("%M")
-    ampm = value.strftime("%p").lower()
-    return f"{month} {day}, {hour}:{minute}{ampm}"
-
-
-def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-def _format_future_time(delay_seconds: float) -> Optional[str]:
-    if delay_seconds <= 0:
-        return None
-    dt = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _approval_age_seconds(created_at: Optional[str]) -> Optional[int]:
-    dt = _parse_iso_timestamp(created_at)
-    if dt is None:
-        return None
-    return max(int((datetime.now(timezone.utc) - dt).total_seconds()), 0)
-
-
 def _format_token_row(label: str, usage: dict[str, Any]) -> Optional[str]:
     total_tokens = usage.get("totalTokens")
     input_tokens = usage.get("inputTokens")
@@ -585,213 +466,6 @@ def _format_token_row(label: str, usage: dict[str, Any]) -> Optional[str]:
     if not parts:
         return None
     return f"{label}: " + " ".join(parts)
-
-
-def _coerce_model_entries(result: Any) -> list[dict[str, Any]]:
-    if isinstance(result, list):
-        return [entry for entry in result if isinstance(entry, dict)]
-    if isinstance(result, dict):
-        for key in ("data", "models", "items", "results"):
-            value = result.get(key)
-            if isinstance(value, list):
-                return [entry for entry in value if isinstance(entry, dict)]
-    return []
-
-
-def _normalize_model_name(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", value.lower())
-
-
-def _display_name_is_model_alias(model: str, display_name: Any) -> bool:
-    if not isinstance(display_name, str) or not display_name:
-        return False
-    return _normalize_model_name(display_name) == _normalize_model_name(model)
-
-
-def _coerce_model_options(
-    result: Any, *, include_efforts: bool = True
-) -> list[ModelOption]:
-    entries = _coerce_model_entries(result)
-    options: list[ModelOption] = []
-    for entry in entries:
-        model = entry.get("model") or entry.get("id")
-        if not isinstance(model, str) or not model:
-            continue
-        display_name = entry.get("displayName")
-        label = model
-        if (
-            isinstance(display_name, str)
-            and display_name
-            and not _display_name_is_model_alias(model, display_name)
-        ):
-            label = f"{model} ({display_name})"
-        default_effort = None
-        efforts: list[str] = []
-        if include_efforts:
-            default_effort = entry.get("defaultReasoningEffort")
-            if not isinstance(default_effort, str):
-                default_effort = None
-            efforts_raw = entry.get("supportedReasoningEfforts")
-            if isinstance(efforts_raw, list):
-                for effort in efforts_raw:
-                    if isinstance(effort, dict):
-                        value = effort.get("reasoningEffort")
-                        if isinstance(value, str):
-                            efforts.append(value)
-                    elif isinstance(effort, str):
-                        efforts.append(effort)
-            if default_effort and default_effort not in efforts:
-                efforts.append(default_effort)
-            efforts = [effort for effort in efforts if effort]
-            if not efforts:
-                efforts = list(REASONING_EFFORT_VALUES)
-            efforts = list(dict.fromkeys(efforts))
-            if default_effort:
-                label = f"{label} (default {default_effort})"
-        options.append(
-            ModelOption(
-                model_id=model,
-                label=label,
-                efforts=tuple(efforts),
-                default_effort=default_effort,
-            )
-        )
-    return options
-
-
-def _format_model_list(
-    result: Any,
-    *,
-    include_efforts: bool = True,
-    set_hint: Optional[str] = None,
-) -> str:
-    entries = _coerce_model_entries(result)
-    if not entries:
-        return "No models found."
-    lines = ["Available models:"]
-    for entry in entries[:DEFAULT_MODEL_LIST_LIMIT]:
-        model = entry.get("model") or entry.get("id") or "(unknown)"
-        display_name = entry.get("displayName")
-        label = str(model)
-        if (
-            isinstance(display_name, str)
-            and display_name
-            and not _display_name_is_model_alias(label, display_name)
-        ):
-            label = f"{model} ({display_name})"
-        if include_efforts:
-            efforts = entry.get("supportedReasoningEfforts")
-            effort_values: list[str] = []
-            if isinstance(efforts, list):
-                for effort in efforts:
-                    if isinstance(effort, dict):
-                        value = effort.get("reasoningEffort")
-                        if isinstance(value, str):
-                            effort_values.append(value)
-                    elif isinstance(effort, str):
-                        effort_values.append(effort)
-            if effort_values:
-                label = f"{label} [effort: {', '.join(effort_values)}]"
-            default_effort = entry.get("defaultReasoningEffort")
-            if isinstance(default_effort, str):
-                label = f"{label} (default {default_effort})"
-        lines.append(label)
-    if len(entries) > DEFAULT_MODEL_LIST_LIMIT:
-        lines.append(f"...and {len(entries) - DEFAULT_MODEL_LIST_LIMIT} more.")
-    if set_hint is None:
-        set_hint = "Use /model <id> [effort] to set." if include_efforts else None
-    if set_hint:
-        lines.append(set_hint)
-    return "\n".join(lines)
-
-
-def _format_feature_flags(result: Any) -> str:
-    config = result.get("config") if isinstance(result, dict) else None
-    if config is None and isinstance(result, dict):
-        config = result
-    if not isinstance(config, dict):
-        return "No feature flags found."
-    features = config.get("features")
-    if not isinstance(features, dict) or not features:
-        return "No feature flags found."
-    lines = ["Feature flags:"]
-    for key in sorted(features.keys()):
-        value = features.get(key)
-        lines.append(f"{key}: {value}")
-    return "\n".join(lines)
-
-
-def _format_skills_list(result: Any, workspace_path: Optional[str]) -> str:
-    entries: list[dict[str, Any]] = []
-    if isinstance(result, dict):
-        data = result.get("data")
-        if isinstance(data, list):
-            entries = [entry for entry in data if isinstance(entry, dict)]
-    elif isinstance(result, list):
-        entries = [entry for entry in result if isinstance(entry, dict)]
-    skills: list[tuple[str, str]] = []
-    for entry in entries:
-        cwd = entry.get("cwd")
-        if isinstance(workspace_path, str) and isinstance(cwd, str):
-            if (
-                Path(cwd).expanduser().resolve()
-                != Path(workspace_path).expanduser().resolve()
-            ):
-                continue
-        items = entry.get("skills")
-        if isinstance(items, list):
-            for skill in items:
-                if not isinstance(skill, dict):
-                    continue
-                name = skill.get("name")
-                if not isinstance(name, str) or not name:
-                    continue
-                description = skill.get("shortDescription") or skill.get("description")
-                desc_text = (
-                    description.strip()
-                    if isinstance(description, str) and description
-                    else ""
-                )
-                skills.append((name, desc_text))
-    if not skills:
-        return "No skills found."
-    lines = ["Skills:"]
-    for name, desc in skills[:DEFAULT_SKILLS_LIST_LIMIT]:
-        if desc:
-            lines.append(f"{name} - {desc}")
-        else:
-            lines.append(name)
-    if len(skills) > DEFAULT_SKILLS_LIST_LIMIT:
-        lines.append(f"...and {len(skills) - DEFAULT_SKILLS_LIST_LIMIT} more.")
-    lines.append("Use $<SkillName> in your next message to invoke a skill.")
-    return "\n".join(lines)
-
-
-def _format_mcp_list(result: Any) -> str:
-    entries: list[dict[str, Any]] = []
-    if isinstance(result, dict):
-        data = result.get("data")
-        if isinstance(data, list):
-            entries = [entry for entry in data if isinstance(entry, dict)]
-    elif isinstance(result, list):
-        entries = [entry for entry in result if isinstance(entry, dict)]
-    if not entries:
-        return "No MCP servers found."
-    lines = ["MCP servers:"]
-    for entry in entries:
-        name = entry.get("name") or "(unknown)"
-        auth = entry.get("authStatus") or "unknown"
-        tools = entry.get("tools")
-        tool_names: list[str] = []
-        if isinstance(tools, dict):
-            tool_names = sorted(tools.keys())
-        elif isinstance(tools, list):
-            tool_names = [str(item) for item in tools]
-        line = f"{name} ({auth})"
-        if tool_names:
-            line = f"{line} - tools: {', '.join(tool_names)}"
-        lines.append(line)
-    return "\n".join(lines)
 
 
 def _format_help_text(command_specs: dict[str, CommandSpec]) -> str:
@@ -1713,33 +1387,6 @@ def _extract_files(params: dict[str, Any]) -> list[str]:
                     if isinstance(path, str) and path:
                         files.append(path)
     return files
-
-
-def _telegram_lock_path(token: str) -> Path:
-    if not isinstance(token, str) or not token:
-        raise ValueError("token is required")
-    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()[:12]
-    return resolve_global_state_root() / "locks" / f"telegram_bot_{digest}.lock"
-
-
-def _read_lock_payload(path: Path) -> Optional[dict[str, Any]]:
-    if not path.exists():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _lock_payload_summary(payload: Optional[dict[str, Any]]) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {}
-    summary: dict[str, Any] = {}
-    for key in ("pid", "started_at", "host", "cwd", "config_root"):
-        if key in payload:
-            summary[key] = payload.get(key)
-    return summary
 
 
 def _split_topic_key(key: str) -> tuple[int, Optional[int]]:
