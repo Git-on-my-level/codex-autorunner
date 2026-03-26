@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ...core.flows.definition import EmitEventFn, FlowDefinition, StepOutcome
+from ...core.flows.definition import (
+    EmitEventFn,
+    FlowDefinition,
+    StepOutcome,
+    step_wants_emit,
+)
 from ...core.flows.models import FlowEventType, FlowRunRecord
 from ...core.utils import find_repo_root
 from ...manifest import ManifestError, load_manifest
@@ -22,6 +27,7 @@ def build_ticket_flow_definition(
     against the current ticket, and re-schedules itself until paused or complete.
     """
 
+    @step_wants_emit
     async def _ticket_turn_step(
         record: FlowRunRecord,
         input_data: Dict[str, Any],

@@ -12,7 +12,7 @@ from .catalog import (
     normalize_flow_action,
 )
 from .controller import FlowController
-from .definition import FlowDefinition, StepFn, StepOutcome
+from .definition import FlowDefinition, StepFn, StepOutcome, step_wants_emit
 from .models import (
     FlowArtifact,
     FlowEvent,
@@ -68,4 +68,5 @@ __all__ = [
     "load_latest_paused_ticket_flow_dispatch",
     "normalize_flow_action",
     "parse_flow_timestamp",
+    "step_wants_emit",
 ]

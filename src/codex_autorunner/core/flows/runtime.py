@@ -4,7 +4,7 @@ import uuid
 from typing import Any, Callable, Dict, Optional, Set, cast
 
 from ..lifecycle_events import LifecycleEventType
-from .definition import FlowDefinition, StepFn, StepFn2, StepFn3
+from .definition import STEP_WANTS_EMIT_ATTR, FlowDefinition, StepFn, StepFn2, StepFn3
 from .failure_diagnostics import ensure_failure_payload
 from .models import FlowEvent, FlowEventType, FlowRunRecord, FlowRunStatus
 from .reasons import ensure_reason_summary
@@ -282,6 +282,9 @@ class FlowRuntime:
                 )
 
             def _step_accepts_emit() -> bool:
+                marker_value = getattr(step_fn, STEP_WANTS_EMIT_ATTR, None)
+                if marker_value is not None:
+                    return bool(marker_value)
                 try:
                     sig = inspect.signature(step_fn)
                 except Exception:

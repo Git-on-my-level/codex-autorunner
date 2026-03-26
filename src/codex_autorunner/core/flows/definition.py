@@ -1,10 +1,13 @@
 import asyncio
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional, Set, Union
+from typing import Any, Awaitable, Callable, Dict, Optional, Set, Union, overload
 
 from .models import FlowEventType, FlowRunRecord, FlowRunStatus
 
 _logger = logging.getLogger(__name__)
+
+
+STEP_WANTS_EMIT_ATTR = "_step_wants_emit"
 
 
 class StepOutcome:
@@ -49,6 +52,26 @@ StepFn3 = Callable[
     [FlowRunRecord, Dict[str, Any], Optional[EmitEventFn]], Awaitable[StepOutcome]
 ]
 StepFn = Union[StepFn2, StepFn3]
+
+
+@overload
+def step_wants_emit(fn: StepFn3) -> StepFn3: ...
+
+
+@overload
+def step_wants_emit() -> Callable[[StepFn3], StepFn3]: ...
+
+
+def step_wants_emit(
+    fn: Optional[StepFn3] = None,
+) -> Union[StepFn3, Callable[[StepFn3], StepFn3]]:
+    def decorator(func: StepFn3) -> StepFn3:
+        setattr(func, STEP_WANTS_EMIT_ATTR, True)
+        return func
+
+    if fn is not None:
+        return decorator(fn)
+    return decorator
 
 
 class FlowDefinition:
