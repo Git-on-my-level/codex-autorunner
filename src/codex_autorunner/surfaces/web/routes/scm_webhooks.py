@@ -390,14 +390,20 @@ def build_scm_webhook_routes(
                 max_raw_payload_bytes=max_raw_payload_bytes,
             )
         except sqlite3.IntegrityError:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "status": "rejected",
-                    "reason": "duplicate_event",
-                    "detail": "SCM event already exists",
+            return _compact(
+                {
+                    "status": "accepted",
                     "event_id": event.event_id,
-                },
+                    "provider": event.provider,
+                    "event_type": event.event_type,
+                    "repo_slug": event.repo_slug,
+                    "repo_id": event.repo_id,
+                    "pr_number": event.pr_number,
+                    "delivery_id": event.delivery_id,
+                    "correlation_id": correlation_id,
+                    "drained_inline": False,
+                    "deduped": True,
+                }
             )
         except ValueError as exc:
             reason = (

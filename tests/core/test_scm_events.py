@@ -67,3 +67,42 @@ def test_record_event_rejects_oversized_raw_payload(tmp_path: Path) -> None:
         assert str(exc) == "raw_payload exceeds max_raw_payload_bytes"
     else:  # pragma: no cover
         raise AssertionError("expected oversized raw payload to be rejected")
+
+
+def test_record_event_canonicalizes_timestamps_and_filters_in_utc_order(
+    tmp_path: Path,
+) -> None:
+    store = ScmEventStore(tmp_path)
+
+    first = store.record_event(
+        provider="github",
+        event_type="pull_request",
+        delivery_id="delivery-1",
+        occurred_at="2026-03-25T01:30:00+01:00",
+        received_at="2026-03-25T01:31:00+01:00",
+        payload={"action": "opened"},
+    )
+    second = store.record_event(
+        provider="github",
+        event_type="pull_request",
+        delivery_id="delivery-2",
+        occurred_at="2026-03-25T00:45:00Z",
+        received_at="2026-03-25T00:46:00Z",
+        payload={"action": "synchronize"},
+    )
+
+    assert first.occurred_at == "2026-03-25T00:30:00Z"
+    assert first.received_at == "2026-03-25T00:31:00Z"
+
+    listed = store.list_events(
+        provider="github",
+        occurred_after="2026-03-25T01:15:00+01:00",
+        occurred_before="2026-03-25T00:45:00Z",
+        limit=10,
+    )
+
+    assert [event.event_id for event in listed] == [second.event_id, first.event_id]
+    assert [event.occurred_at for event in listed] == [
+        "2026-03-25T00:45:00Z",
+        "2026-03-25T00:30:00Z",
+    ]

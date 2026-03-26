@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -41,10 +41,12 @@ def _normalize_timestamp(value: Any, *, field_name: str) -> Optional[str]:
     if normalized is None:
         return None
     try:
-        datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
     except ValueError as exc:
         raise ValueError(f"{field_name} must be an ISO-8601 timestamp") from exc
-    return normalized
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
