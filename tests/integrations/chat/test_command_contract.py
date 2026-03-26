@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from codex_autorunner.integrations.chat.command_contract import COMMAND_CONTRACT
+from codex_autorunner.integrations.chat.command_contract import (
+    COMMAND_CONTRACT,
+    telegram_command_metadata_for_name,
+    telegram_runtime_command_names_from_contract,
+)
 from codex_autorunner.integrations.discord.commands import (
     SUB_COMMAND,
     SUB_COMMAND_GROUP,
     build_application_commands,
+)
+from codex_autorunner.integrations.telegram.commands_registry import (
+    build_command_payloads,
 )
 from codex_autorunner.integrations.telegram.handlers.commands_spec import (
     build_command_specs,
@@ -55,7 +62,9 @@ def _discord_registered_paths() -> set[tuple[str, ...]]:
 
 def _telegram_registered_commands() -> set[str]:
     specs = build_command_specs(_HandlerStub())
-    return set(specs.keys())
+    commands, invalid = build_command_payloads(specs)
+    assert invalid == []
+    return {entry["command"] for entry in commands}
 
 
 def test_command_contract_has_unique_ids_and_paths() -> None:
@@ -71,7 +80,9 @@ def test_command_contract_catalogs_all_registered_surface_commands() -> None:
         path for entry in COMMAND_CONTRACT for path in entry.discord_paths
     }
     contract_telegram_commands = {
-        name for entry in COMMAND_CONTRACT for name in entry.telegram_commands
+        name
+        for name in telegram_runtime_command_names_from_contract()
+        if telegram_command_metadata_for_name(name).exposure == "public"
     }
 
     assert contract_discord_paths == _discord_registered_paths()
@@ -120,3 +131,16 @@ def test_command_contract_discord_metadata_is_present_for_registered_paths() -> 
     assert by_id["car.flow.status"].discord_ack_timing == "post_private_preflight"
     assert by_id["car.flow.start"].discord_ack_timing == "post_private_preflight"
     assert by_id["car.flow.restart"].discord_ack_timing == "post_private_preflight"
+
+
+def test_command_contract_telegram_metadata_is_present_for_runtime_commands() -> None:
+    for name in telegram_runtime_command_names_from_contract():
+        metadata = telegram_command_metadata_for_name(name)
+        assert metadata is not None
+        assert metadata.exposure in {"public", "hidden", "legacy_alias"}
+        assert metadata.response_policy == "typing"
+        assert isinstance(metadata.allow_during_turn, bool)
+
+    assert telegram_command_metadata_for_name("mcp").exposure == "hidden"
+    assert telegram_command_metadata_for_name("experimental").exposure == "hidden"
+    assert telegram_command_metadata_for_name("reply").exposure == "legacy_alias"

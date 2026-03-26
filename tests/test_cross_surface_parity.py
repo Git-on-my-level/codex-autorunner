@@ -227,7 +227,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
-    telegram_ticket_flow = '"flow": CommandSpec(' in spec_text
+    telegram_ticket_flow = (
+        '"flow": _spec(' in spec_text and "handlers._handle_flow" in spec_text
+    )
     checks.append(
         ParityCheck(
             entrypoint="telegram",

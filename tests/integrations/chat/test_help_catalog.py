@@ -27,6 +27,9 @@ def test_telegram_help_lists_shared_commands_without_discord_only_entries() -> N
     assert "/files clear inbox|outbox|all" in text
     assert "/files send <filename>" in text
     assert "/pma - PMA mode controls (on/off/status)" in text
+    assert "/mcp -" not in text
+    assert "/experimental -" not in text
+    assert "/reply <message> (legacy)" in text
     assert "/tickets" not in text
 
 

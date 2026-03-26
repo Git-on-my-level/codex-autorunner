@@ -31,10 +31,14 @@ def make_command_spec(
     *,
     handler: CommandHandler = noop_handler,
     allow_during_turn: bool = False,
+    exposed: bool = True,
+    legacy_alias: bool = False,
 ) -> CommandSpec:
     return CommandSpec(
         name=name,
         description=description,
         handler=handler,
         allow_during_turn=allow_during_turn,
+        exposed=exposed,
+        legacy_alias=legacy_alias,
     )

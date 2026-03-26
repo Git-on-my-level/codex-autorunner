@@ -428,17 +428,19 @@ def build_discord_help_lines() -> list[str]:
     return lines
 
 
-def build_telegram_help_text(command_names: Collection[str]) -> str:
+def build_telegram_help_text(
+    command_names: Collection[str],
+    *,
+    legacy_command_names: Collection[str] = (),
+) -> str:
     available = set(command_names)
+    legacy_available = set(legacy_command_names)
     lines = ["Commands:"]
     for command_name in _TELEGRAM_COMMAND_ORDER:
         if command_name not in available:
             continue
         if command_name == "flow":
             lines.append("/flow - ticket flow controls")
-            continue
-        if command_name == "reply":
-            lines.append("/reply <message> - reply to a paused ticket flow dispatch")
             continue
         line = _render_telegram_line(command_name)
         if line is not None:
@@ -470,7 +472,7 @@ def build_telegram_help_text(command_names: Collection[str]) -> str:
                 "(Use /pma for full flow controls via web app)",
             ]
         )
-        if "reply" in available:
+        if "reply" in legacy_available:
             lines.append("/reply <message> (legacy)")
 
     file_lines = _telegram_file_help_lines(available)

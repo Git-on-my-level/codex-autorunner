@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 CommandStatus = Literal["stable", "partial", "unsupported"]
+TelegramExposure = Literal["public", "hidden", "legacy_alias"]
+TelegramResponsePolicy = Literal["typing"]
 DiscordAckPolicy = Literal[
     "immediate",
     "defer_ephemeral",
@@ -28,6 +30,13 @@ class CommandContractEntry:
     discord_ack_timing: DiscordAckTiming = "dispatch"
     discord_exposure: Optional[DiscordExposure] = None
     required_capabilities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TelegramCommandMetadata:
+    exposure: TelegramExposure
+    response_policy: TelegramResponsePolicy
+    allow_during_turn: bool
 
 
 COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
@@ -512,6 +521,164 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
     ),
 )
 
+_TELEGRAM_COMMAND_METADATA: dict[str, TelegramCommandMetadata] = {
+    "repos": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "bind": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "new": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "newt": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "archive": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "reset": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "resume": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "review": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "flow": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "reply": TelegramCommandMetadata(
+        exposure="legacy_alias",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "agent": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "model": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "approvals": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "pma": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "status": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "files": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "debug": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "ids": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "diff": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "mention": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "skills": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "mcp": TelegramCommandMetadata(
+        exposure="hidden",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "experimental": TelegramCommandMetadata(
+        exposure="hidden",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "init": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "compact": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "rollout": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "update": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "logout": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=False,
+    ),
+    "feedback": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "interrupt": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+    "help": TelegramCommandMetadata(
+        exposure="public",
+        response_policy="typing",
+        allow_during_turn=True,
+    ),
+}
+
 
 def command_contract_entry_for_path(
     path: tuple[str, ...],
@@ -520,3 +687,24 @@ def command_contract_entry_for_path(
         if entry.path == path:
             return entry
     return None
+
+
+def telegram_command_metadata_for_name(
+    name: str,
+) -> Optional[TelegramCommandMetadata]:
+    return _TELEGRAM_COMMAND_METADATA.get(name.strip())
+
+
+def telegram_runtime_command_names_from_contract(
+    contract: tuple[CommandContractEntry, ...] = COMMAND_CONTRACT,
+) -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for entry in contract:
+        for name in entry.telegram_commands:
+            normalized = name.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            names.append(normalized)
+    return tuple(names)

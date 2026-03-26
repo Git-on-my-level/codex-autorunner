@@ -37,6 +37,22 @@ def test_build_command_payloads_rejects_invalid_names() -> None:
     assert invalid == ["foo-bar", "foo bar", "foo@codexbot", "a" * 33]
 
 
+def test_build_command_payloads_skips_hidden_and_legacy_specs() -> None:
+    specs = {
+        "status": make_command_spec("status", "Show status"),
+        "mcp": make_command_spec("mcp", "MCP", exposed=False),
+        "reply": make_command_spec(
+            "reply",
+            "Legacy reply",
+            exposed=False,
+            legacy_alias=True,
+        ),
+    }
+    commands, invalid = build_command_payloads(specs)
+    assert invalid == []
+    assert commands == [{"command": "status", "description": "Show status"}]
+
+
 def test_diff_command_lists_detects_changes() -> None:
     desired = [
         {"command": "run", "description": "Start a task"},
