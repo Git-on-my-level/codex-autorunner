@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import functools
+import inspect
 import logging
 import time
 import uuid
@@ -90,6 +91,7 @@ from .components import build_cancel_turn_button
 from .rendering import (
     chunk_discord_message,
     format_discord_message,
+    sanitize_discord_outbound_text,
     truncate_for_discord,
 )
 
@@ -111,7 +113,173 @@ class DiscordMessageTurnResult:
     send_final_message: bool = True
 
 
+@dataclass(frozen=True)
+class _DiscordProgressReuseRequest:
+    source_message_id: str
+    acknowledgement: str
+
+
+@dataclass(frozen=True)
+class _DiscordReusableProgressMessage:
+    source_message_id: str
+    channel_id: str
+    message_id: str
+
+
 _sanitize_runtime_thread_result_error = sanitize_runtime_thread_error
+
+
+def _get_discord_progress_reuse_requests(
+    service: Any,
+) -> dict[str, _DiscordProgressReuseRequest]:
+    requests = getattr(service, "_discord_turn_progress_reuse_requests", None)
+    if not isinstance(requests, dict):
+        requests = {}
+        service._discord_turn_progress_reuse_requests = requests
+    return requests
+
+
+def _get_discord_reusable_progress_messages(
+    service: Any,
+) -> dict[str, _DiscordReusableProgressMessage]:
+    messages = getattr(service, "_discord_reusable_progress_messages", None)
+    if not isinstance(messages, dict):
+        messages = {}
+        service._discord_reusable_progress_messages = messages
+    return messages
+
+
+def request_discord_turn_progress_reuse(
+    service: Any,
+    *,
+    thread_target_id: str,
+    source_message_id: str,
+    acknowledgement: str,
+) -> None:
+    normalized_thread_target_id = str(thread_target_id or "").strip()
+    normalized_source_message_id = str(source_message_id or "").strip()
+    normalized_acknowledgement = str(acknowledgement or "").strip()
+    if (
+        not normalized_thread_target_id
+        or not normalized_source_message_id
+        or not normalized_acknowledgement
+    ):
+        return
+    _get_discord_progress_reuse_requests(service)[normalized_thread_target_id] = (
+        _DiscordProgressReuseRequest(
+            source_message_id=normalized_source_message_id,
+            acknowledgement=normalized_acknowledgement,
+        )
+    )
+
+
+def clear_discord_turn_progress_reuse(
+    service: Any,
+    *,
+    thread_target_id: str,
+) -> None:
+    normalized_thread_target_id = str(thread_target_id or "").strip()
+    if not normalized_thread_target_id:
+        return
+    _get_discord_progress_reuse_requests(service).pop(normalized_thread_target_id, None)
+    _get_discord_reusable_progress_messages(service).pop(
+        normalized_thread_target_id, None
+    )
+
+
+def _peek_discord_progress_reuse_request(
+    service: Any,
+    *,
+    thread_target_id: str,
+) -> Optional[_DiscordProgressReuseRequest]:
+    normalized_thread_target_id = str(thread_target_id or "").strip()
+    if not normalized_thread_target_id:
+        return None
+    request = _get_discord_progress_reuse_requests(service).get(
+        normalized_thread_target_id
+    )
+    if isinstance(request, _DiscordProgressReuseRequest):
+        return request
+    return None
+
+
+def _stash_discord_reusable_progress_message(
+    service: Any,
+    *,
+    thread_target_id: str,
+    source_message_id: str,
+    channel_id: str,
+    message_id: str,
+) -> None:
+    normalized_thread_target_id = str(thread_target_id or "").strip()
+    normalized_source_message_id = str(source_message_id or "").strip()
+    normalized_channel_id = str(channel_id or "").strip()
+    normalized_message_id = str(message_id or "").strip()
+    if (
+        not normalized_thread_target_id
+        or not normalized_source_message_id
+        or not normalized_channel_id
+        or not normalized_message_id
+    ):
+        return
+    _get_discord_reusable_progress_messages(service)[normalized_thread_target_id] = (
+        _DiscordReusableProgressMessage(
+            source_message_id=normalized_source_message_id,
+            channel_id=normalized_channel_id,
+            message_id=normalized_message_id,
+        )
+    )
+
+
+def _claim_discord_reusable_progress_message(
+    service: Any,
+    *,
+    thread_target_id: str,
+    source_message_id: Optional[str],
+) -> Optional[str]:
+    normalized_thread_target_id = str(thread_target_id or "").strip()
+    normalized_source_message_id = str(source_message_id or "").strip()
+    if not normalized_thread_target_id or not normalized_source_message_id:
+        return None
+    requests = _get_discord_progress_reuse_requests(service)
+    request = requests.get(normalized_thread_target_id)
+    if not isinstance(request, _DiscordProgressReuseRequest):
+        return None
+    if request.source_message_id != normalized_source_message_id:
+        return None
+    requests.pop(normalized_thread_target_id, None)
+    reusable = _get_discord_reusable_progress_messages(service).pop(
+        normalized_thread_target_id, None
+    )
+    if (
+        isinstance(reusable, _DiscordReusableProgressMessage)
+        and reusable.source_message_id == normalized_source_message_id
+    ):
+        return reusable.message_id
+    return None
+
+
+async def _acknowledge_discord_progress_reuse(
+    service: Any,
+    *,
+    channel_id: str,
+    message_id: str,
+    acknowledgement: str,
+) -> None:
+    try:
+        await service._rest.edit_channel_message(
+            channel_id=channel_id,
+            message_id=message_id,
+            payload={
+                "content": truncate_for_discord(
+                    format_discord_message(acknowledgement),
+                    max_len=max(int(service._config.max_message_length), 32),
+                ),
+                "components": [],
+            },
+        )
+    except Exception:
+        return
 
 
 def _get_thread_runtime_binding(
@@ -546,6 +714,14 @@ async def handle_message_event(
                 channel_id if not pma_enabled else f"pma:{channel_id}"
             ),
         }
+        try:
+            if (
+                "source_message_id"
+                in inspect.signature(service._run_agent_turn_for_message).parameters
+            ):
+                run_turn_kwargs["source_message_id"] = event.message.message_id
+        except (TypeError, ValueError):
+            pass
         if turn_input_items:
             run_turn_kwargs["input_items"] = turn_input_items
         try:
@@ -646,6 +822,7 @@ async def run_agent_turn_for_message(
     workspace_root: Path,
     prompt_text: str,
     input_items: Optional[list[dict[str, Any]]] = None,
+    source_message_id: Optional[str] = None,
     agent: str,
     model_override: Optional[str],
     reasoning_effort: Optional[str],
@@ -673,6 +850,7 @@ async def run_agent_turn_for_message(
         workspace_root=workspace_root,
         prompt_text=prompt_text,
         input_items=input_items,
+        source_message_id=source_message_id,
         agent=agent,
         model_override=model_override,
         reasoning_effort=reasoning_effort,
@@ -1460,6 +1638,7 @@ async def _run_discord_orchestrated_turn_for_message(
     workspace_root: Path,
     prompt_text: str,
     input_items: Optional[list[dict[str, Any]]] = None,
+    source_message_id: Optional[str] = None,
     agent: str,
     model_override: Optional[str],
     reasoning_effort: Optional[str],
@@ -1555,12 +1734,18 @@ async def _run_discord_orchestrated_turn_for_message(
         max_actions=max_actions,
         max_output_chars=max_progress_len,
     )
+    managed_thread_id = thread.thread_target_id
     progress_message_id: Optional[str] = None
     progress_rendered: Optional[str] = None
     progress_last_updated = 0.0
     progress_heartbeat_task: Optional[asyncio.Task[None]] = None
     runtime_state = ProgressRuntimeState()
     active_progress_labels = {"working", "queued", "running", "review"}
+    reusable_progress_message_id = _claim_discord_reusable_progress_message(
+        service,
+        thread_target_id=managed_thread_id,
+        source_message_id=source_message_id,
+    )
 
     async def _edit_progress(
         *,
@@ -1609,28 +1794,33 @@ async def _run_discord_orchestrated_turn_for_message(
             await _edit_progress()
 
     try:
-        initial_rendered = render_progress_text(
-            tracker,
-            max_length=max_progress_len,
-            now=time.monotonic(),
-        )
-        initial_content = truncate_for_discord(
-            initial_rendered,
-            max_len=max_progress_len,
-        )
-        response = await service._send_channel_message(
-            channel_id,
-            {
-                "content": initial_content,
-                "components": [build_cancel_turn_button()],
-            },
-        )
-        message_id = response.get("id")
-        if isinstance(message_id, str) and message_id:
-            progress_message_id = message_id
-            progress_rendered = initial_content
-            progress_last_updated = time.monotonic()
+        if reusable_progress_message_id:
+            progress_message_id = reusable_progress_message_id
+            await _edit_progress(force=True)
             progress_heartbeat_task = asyncio.create_task(_progress_heartbeat())
+        else:
+            initial_rendered = render_progress_text(
+                tracker,
+                max_length=max_progress_len,
+                now=time.monotonic(),
+            )
+            initial_content = truncate_for_discord(
+                initial_rendered,
+                max_len=max_progress_len,
+            )
+            response = await service._send_channel_message(
+                channel_id,
+                {
+                    "content": initial_content,
+                    "components": [build_cancel_turn_button()],
+                },
+            )
+            message_id = response.get("id")
+            if isinstance(message_id, str) and message_id:
+                progress_message_id = message_id
+                progress_rendered = initial_content
+                progress_last_updated = time.monotonic()
+                progress_heartbeat_task = asyncio.create_task(_progress_heartbeat())
     except Exception:
         progress_message_id = None
 
@@ -1667,13 +1857,44 @@ async def _run_discord_orchestrated_turn_for_message(
     _ensure_discord_thread_queue_worker(
         service,
         orchestration_service=orchestration_service,
-        managed_thread_id=thread.thread_target_id,
+        managed_thread_id=managed_thread_id,
         channel_id=channel_id,
         public_execution_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
     )
     if finalized["status"] != "ok":
+        if finalized["status"] == "interrupted":
+            reuse_request = _peek_discord_progress_reuse_request(
+                service,
+                thread_target_id=managed_thread_id,
+            )
+            if reuse_request is not None:
+                if progress_message_id:
+                    _stash_discord_reusable_progress_message(
+                        service,
+                        thread_target_id=managed_thread_id,
+                        source_message_id=reuse_request.source_message_id,
+                        channel_id=channel_id,
+                        message_id=progress_message_id,
+                    )
+                    await _acknowledge_discord_progress_reuse(
+                        service,
+                        channel_id=channel_id,
+                        message_id=progress_message_id,
+                        acknowledgement=reuse_request.acknowledgement,
+                    )
+                else:
+                    clear_discord_turn_progress_reuse(
+                        service,
+                        thread_target_id=managed_thread_id,
+                    )
+                return DiscordMessageTurnResult(
+                    final_message=sanitize_discord_outbound_text(
+                        reuse_request.acknowledgement
+                    ),
+                    send_final_message=progress_message_id is None,
+                )
         raise RuntimeError(str(finalized.get("error") or public_execution_error))
     summary_snapshot = render_progress_text(
         tracker,
@@ -1745,6 +1966,7 @@ async def run_managed_thread_turn_for_message(
     workspace_root: Path,
     prompt_text: str,
     input_items: Optional[list[dict[str, Any]]] = None,
+    source_message_id: Optional[str] = None,
     agent: str,
     model_override: Optional[str],
     reasoning_effort: Optional[str],
@@ -1768,6 +1990,7 @@ async def run_managed_thread_turn_for_message(
         workspace_root=workspace_root,
         prompt_text=prompt_text,
         input_items=input_items,
+        source_message_id=source_message_id,
         agent=agent,
         model_override=model_override,
         reasoning_effort=reasoning_effort,

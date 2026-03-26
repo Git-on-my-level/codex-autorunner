@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import inspect
 import logging
 import os
 import re
@@ -288,6 +289,8 @@ from .interactions import (
 from .message_turns import (
     DiscordMessageTurnResult,
     build_discord_thread_orchestration_service,
+    clear_discord_turn_progress_reuse,
+    request_discord_turn_progress_reuse,
     resolve_bound_workspace_root,
     run_agent_turn_for_message,
     run_managed_thread_turn_for_message,
@@ -710,6 +713,8 @@ class DiscordBotService:
         self._pending_ticket_search_queries: dict[str, str] = {}
         self._prepared_interaction_policies: OrderedDict[str, str] = OrderedDict()
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
+        self._discord_turn_progress_reuse_requests: dict[str, Any] = {}
+        self._discord_reusable_progress_messages: dict[str, Any] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._typing_sessions: dict[str, int] = {}
         self._typing_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -3192,6 +3197,7 @@ class DiscordBotService:
         workspace_root: Path,
         prompt_text: str,
         input_items: Optional[list[dict[str, Any]]] = None,
+        source_message_id: Optional[str] = None,
         agent: str,
         model_override: Optional[str],
         reasoning_effort: Optional[str],
@@ -3200,31 +3206,55 @@ class DiscordBotService:
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
             if orchestrator_channel_key.startswith("pma:"):
+                managed_turn_kwargs: dict[str, Any] = {
+                    "workspace_root": workspace_root,
+                    "prompt_text": prompt_text,
+                    "input_items": input_items,
+                    "agent": agent,
+                    "model_override": model_override,
+                    "reasoning_effort": reasoning_effort,
+                    "session_key": session_key,
+                    "orchestrator_channel_key": orchestrator_channel_key,
+                }
+                try:
+                    if (
+                        "source_message_id"
+                        in inspect.signature(
+                            run_managed_thread_turn_for_message
+                        ).parameters
+                    ):
+                        managed_turn_kwargs["source_message_id"] = source_message_id
+                except (TypeError, ValueError):
+                    pass
                 return await run_managed_thread_turn_for_message(
                     self,
-                    workspace_root=workspace_root,
-                    prompt_text=prompt_text,
-                    input_items=input_items,
-                    agent=agent,
-                    model_override=model_override,
-                    reasoning_effort=reasoning_effort,
-                    session_key=session_key,
-                    orchestrator_channel_key=orchestrator_channel_key,
+                    **managed_turn_kwargs,
                 )
+            repo_turn_kwargs: dict[str, Any] = {
+                "workspace_root": workspace_root,
+                "prompt_text": prompt_text,
+                "input_items": input_items,
+                "agent": agent,
+                "model_override": model_override,
+                "reasoning_effort": reasoning_effort,
+                "session_key": session_key,
+                "orchestrator_channel_key": orchestrator_channel_key,
+                "max_actions": DISCORD_TURN_PROGRESS_MAX_ACTIONS,
+                "min_edit_interval_seconds": DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+                "heartbeat_interval_seconds": DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+                "log_event_fn": log_event,
+            }
+            try:
+                if (
+                    "source_message_id"
+                    in inspect.signature(run_agent_turn_for_message).parameters
+                ):
+                    repo_turn_kwargs["source_message_id"] = source_message_id
+            except (TypeError, ValueError):
+                pass
             return await run_agent_turn_for_message(
                 self,
-                workspace_root=workspace_root,
-                prompt_text=prompt_text,
-                input_items=input_items,
-                agent=agent,
-                model_override=model_override,
-                reasoning_effort=reasoning_effort,
-                session_key=session_key,
-                orchestrator_channel_key=orchestrator_channel_key,
-                max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
-                min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
-                heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
-                log_event_fn=log_event,
+                **repo_turn_kwargs,
             )
 
         turn_result: Optional[DiscordMessageTurnResult] = None
@@ -12799,6 +12829,9 @@ class DiscordBotService:
         interaction_token: str,
         *,
         channel_id: str,
+        active_turn_text: str = "Stopping current turn...",
+        progress_reuse_source_message_id: Optional[str] = None,
+        progress_reuse_acknowledgement: Optional[str] = None,
         source: str = "unknown",
         source_custom_id: Optional[str] = None,
         source_message_id: Optional[str] = None,
@@ -12854,6 +12887,13 @@ class DiscordBotService:
             self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
         )
         if current_thread is None:
+            if progress_reuse_source_message_id or progress_reuse_acknowledgement:
+                clear_discord_turn_progress_reuse(
+                    self,
+                    thread_target_id=(
+                        getattr(_binding_row, "thread_target_id", None) or ""
+                    ),
+                )
             log_event(
                 self._logger,
                 logging.INFO,
@@ -12919,6 +12959,11 @@ class DiscordBotService:
                 and not recovered_lost_backend
                 and not cancelled_queued
             ):
+                if progress_reuse_source_message_id or progress_reuse_acknowledgement:
+                    clear_discord_turn_progress_reuse(
+                        self,
+                        thread_target_id=current_thread.thread_target_id,
+                    )
                 text = format_discord_message("No active turn to interrupt.")
                 await self._send_or_respond_ephemeral(
                     interaction_id=interaction_id,
@@ -12927,9 +12972,21 @@ class DiscordBotService:
                     text=text,
                 )
                 return
+            if interrupted_active:
+                request_discord_turn_progress_reuse(
+                    self,
+                    thread_target_id=current_thread.thread_target_id,
+                    source_message_id=str(progress_reuse_source_message_id or ""),
+                    acknowledgement=str(progress_reuse_acknowledgement or ""),
+                )
+            elif progress_reuse_source_message_id or progress_reuse_acknowledgement:
+                clear_discord_turn_progress_reuse(
+                    self,
+                    thread_target_id=current_thread.thread_target_id,
+                )
             parts = []
             if interrupted_active:
-                parts.append("Stopping current turn...")
+                parts.append(active_turn_text)
             elif recovered_lost_backend:
                 parts.append("Recovered stale session after backend thread was lost.")
             if cancelled_queued:
@@ -12937,7 +12994,7 @@ class DiscordBotService:
             text = format_discord_message(
                 "Recovered stale session after backend thread was lost."
                 if recovered_lost_backend
-                else "Stopping current turn..."
+                else active_turn_text
             )
             if parts:
                 text = format_discord_message(" ".join(parts))
@@ -12948,6 +13005,11 @@ class DiscordBotService:
                 text=text,
             )
         except Exception as exc:
+            if progress_reuse_source_message_id or progress_reuse_acknowledgement:
+                clear_discord_turn_progress_reuse(
+                    self,
+                    thread_target_id=current_thread.thread_target_id,
+                )
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -13088,6 +13150,9 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             channel_id=channel_id,
+            active_turn_text="Message received. Switching to it now...",
+            progress_reuse_source_message_id=source_message_id,
+            progress_reuse_acknowledgement="Message received. Switching to it now...",
             source="component",
             source_custom_id=custom_id,
             source_message_id=message_id,

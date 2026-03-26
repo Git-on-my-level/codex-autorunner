@@ -2259,7 +2259,7 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, str, str, str]] = []
 
     try:
         conversation_id = service._dispatcher_conversation_id(
@@ -2275,7 +2275,14 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
             return True
 
         async def _handle_interrupt(*args, **kwargs) -> None:
-            calls.append((kwargs["source_custom_id"], kwargs["channel_id"]))
+            calls.append(
+                (
+                    kwargs["source_custom_id"],
+                    kwargs["channel_id"],
+                    kwargs["active_turn_text"],
+                    kwargs["progress_reuse_source_message_id"],
+                )
+            )
 
         service._dispatcher.promote_pending_message = _promote_pending_message  # type: ignore[method-assign]
         service._get_discord_thread_binding = lambda **_kwargs: (  # type: ignore[method-assign]
@@ -2296,7 +2303,14 @@ async def test_component_interaction_queue_interrupt_send_promotes_and_interrupt
             message_id="notice-1",
         )
 
-        assert calls == [("queue_interrupt_send:m-2", "channel-1")]
+        assert calls == [
+            (
+                "queue_interrupt_send:m-2",
+                "channel-1",
+                "Message received. Switching to it now...",
+                "m-2",
+            )
+        ]
     finally:
         await store.close()
 
@@ -5096,12 +5110,27 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
             )
 
     service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+    discord_message_turns.request_discord_turn_progress_reuse(
+        service,
+        thread_target_id="thread-1",
+        source_message_id="m-2",
+        acknowledgement="Message received. Switching to it now...",
+    )
+    discord_message_turns._stash_discord_reusable_progress_message(
+        service,
+        thread_target_id="thread-1",
+        source_message_id="m-2",
+        channel_id="channel-1",
+        message_id="preview-1",
+    )
 
     try:
         await service._handle_car_interrupt(
             "interaction-1",
             "token-1",
             channel_id="channel-1",
+            progress_reuse_source_message_id="m-2",
+            progress_reuse_acknowledgement="Message received. Switching to it now...",
         )
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
@@ -5109,6 +5138,8 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "recovered stale session" in content
         assert "backend thread was lost" in content
+        assert service._discord_turn_progress_reuse_requests == {}
+        assert service._discord_reusable_progress_messages == {}
     finally:
         await store.close()
 
