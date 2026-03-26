@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.flows import FlowStore
 from codex_autorunner.core.flows import hub_overview as hub_overview_module
 from codex_autorunner.core.flows.models import (
@@ -20,6 +21,7 @@ from codex_autorunner.core.flows.models import (
 from codex_autorunner.core.flows.worker_process import FlowWorkerHealth
 from codex_autorunner.integrations.telegram.adapter import (
     FlowCallback,
+    TelegramCallbackQuery,
     TelegramMessage,
     build_model_keyboard,
     parse_callback_data,
@@ -65,6 +67,20 @@ def _record(
         finished_at=finished_at,
         error_message=None,
         metadata={},
+    )
+
+
+def _write_ticket(repo_root: Path, name: str, *, done: bool) -> None:
+    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    (ticket_dir / name).write_text(
+        "---\n"
+        "agent: codex\n"
+        f"done: {'true' if done else 'false'}\n"
+        "title: Ticket\n"
+        "---\n\n"
+        "Body\n",
+        encoding="utf-8",
     )
 
 
@@ -755,6 +771,22 @@ class _FlowStatusHandler(FlowCommands):
         self.markups.append(reply_markup)
 
 
+class _FlowStatusCallbackHandler(FlowCommands):
+    def __init__(self) -> None:
+        self.edits: list[tuple[str, dict[str, object] | None]] = []
+
+    async def _edit_callback_message(
+        self,
+        _callback: TelegramCallbackQuery,
+        text: str,
+        *,
+        reply_markup: dict[str, object] | None = None,
+        parse_mode: str | None = None,
+    ) -> None:
+        _ = parse_mode
+        self.edits.append((text, reply_markup))
+
+
 @pytest.mark.anyio
 async def test_flow_status_action_sends_keyboard(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -802,6 +834,56 @@ async def test_flow_status_action_sends_keyboard(
     assert handler.sent
     assert any("Run:" in line for line in handler.sent[0].splitlines())
     assert handler.markups[0] is not None
+
+
+@pytest.mark.anyio
+async def test_flow_status_action_without_run_uses_ticket_summary_fallback(
+    tmp_path: Path,
+) -> None:
+    seed_repo_files(tmp_path, git_required=False)
+    _write_ticket(tmp_path, "TICKET-001-a.md", done=True)
+    _write_ticket(tmp_path, "TICKET-002-b.md", done=True)
+
+    handler = _FlowStatusHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+        from_user_id=5,
+        text="/flow status",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_flow_status_action(message, tmp_path, argv=[])
+
+    assert handler.sent == ["Status: Done\nTickets: 2/2"]
+    assert handler.markups == [None]
+
+
+@pytest.mark.anyio
+async def test_flow_status_callback_without_run_uses_ticket_summary_fallback(
+    tmp_path: Path,
+) -> None:
+    seed_repo_files(tmp_path, git_required=False)
+    _write_ticket(tmp_path, "TICKET-001-a.md", done=True)
+    _write_ticket(tmp_path, "TICKET-002-b.md", done=True)
+
+    handler = _FlowStatusCallbackHandler()
+    callback = TelegramCallbackQuery(
+        update_id=1,
+        callback_id="cb-1",
+        from_user_id=5,
+        data="refresh",
+        message_id=2,
+        chat_id=3,
+        thread_id=4,
+    )
+
+    await handler._render_flow_status_callback(callback, tmp_path, None)
+
+    assert handler.edits == [("Status: Done\nTickets: 2/2", {"inline_keyboard": []})]
 
 
 @pytest.mark.anyio

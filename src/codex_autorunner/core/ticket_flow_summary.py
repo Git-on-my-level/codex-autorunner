@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from ..tickets.files import list_ticket_paths
 from ..tickets.frontmatter import parse_markdown_frontmatter
@@ -87,6 +87,35 @@ def build_ticket_flow_display(
         "total_count": total,
         "run_id": run_id,
     }
+
+
+def format_ticket_flow_summary_lines(summary: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+
+    status_label = summary.get("status_label")
+    if isinstance(status_label, str) and status_label.strip():
+        lines.append(f"Status: {status_label.strip()}")
+
+    done_count = summary.get("done_count")
+    total_count = summary.get("total_count")
+    if (
+        isinstance(done_count, int)
+        and isinstance(total_count, int)
+        and total_count >= 0
+    ):
+        lines.append(f"Tickets: {done_count}/{total_count}")
+
+    current_step = summary.get("current_step")
+    if isinstance(current_step, int):
+        lines.append(f"Step: {current_step}")
+    elif isinstance(current_step, str) and current_step.strip():
+        lines.append(f"Step: {current_step.strip()}")
+
+    run_id = summary.get("run_id")
+    if isinstance(run_id, str) and run_id.strip():
+        lines.append(f"Run: {run_id.strip()}")
+
+    return lines
 
 
 def build_ticket_flow_summary(
