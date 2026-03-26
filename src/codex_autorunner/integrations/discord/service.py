@@ -87,7 +87,10 @@ from ...core.managed_processes import reap_managed_processes
 from ...core.orchestration import build_ticket_flow_orchestration_service
 from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
-from ...core.ticket_flow_summary import build_ticket_flow_display
+from ...core.ticket_flow_summary import (
+    build_ticket_flow_display,
+    format_ticket_flow_summary_lines,
+)
 from ...core.update import (
     UpdateInProgressError,
     _available_update_target_definitions,
@@ -7820,6 +7823,25 @@ class DiscordBotService:
             response_text = f"{prefix.strip()}\n\n{response_text}"
         return response_text, self._build_flow_status_components(record, runs)
 
+    @staticmethod
+    def _build_flow_status_summary_fallback(
+        workspace_root: Path,
+    ) -> Optional[str]:
+        progress = ticket_progress(workspace_root)
+        if int(progress.get("total", 0)) <= 0:
+            return None
+        display = build_ticket_flow_display(
+            status=None,
+            done_count=int(progress.get("done", 0)),
+            total_count=int(progress.get("total", 0)),
+            run_id=None,
+        )
+        summary: Mapping[str, Any] = {**display, "current_step": None}
+        lines = format_ticket_flow_summary_lines(summary)
+        if not lines:
+            return None
+        return "\n".join(lines)
+
     async def _handle_flow_status(
         self,
         interaction_id: str,
@@ -7923,6 +7945,27 @@ class DiscordBotService:
                             components,
                         )
                     return
+                if not explicit_run_requested:
+                    summary_text = self._build_flow_status_summary_fallback(
+                        workspace_root
+                    )
+                    if summary_text:
+                        if update_message:
+                            await self._update_component_message(
+                                interaction_id=interaction_id,
+                                interaction_token=interaction_token,
+                                text=summary_text,
+                                components=[],
+                            )
+                        else:
+                            await self._send_or_respond_with_components_public(
+                                interaction_id=interaction_id,
+                                interaction_token=interaction_token,
+                                deferred=deferred_public,
+                                text=summary_text,
+                                components=[],
+                            )
+                        return
                 message = (
                     f"Ticket_flow run {run_id_opt.strip()} not found."
                     if explicit_run_requested

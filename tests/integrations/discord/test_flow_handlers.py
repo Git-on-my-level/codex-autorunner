@@ -254,6 +254,21 @@ def _create_run(
         )
 
 
+def _write_ticket(workspace: Path, name: str, *, done: bool) -> None:
+    ticket_dir = workspace / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / name
+    ticket_path.write_text(
+        "---\n"
+        "agent: codex\n"
+        f"done: {'true' if done else 'false'}\n"
+        "title: Ticket\n"
+        "---\n\n"
+        "Body\n",
+        encoding="utf-8",
+    )
+
+
 def _write_manifest(root: Path, *, repo_id: str, repo_path: str) -> Path:
     manifest_path = root / ".codex-autorunner" / "manifest.yml"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -466,6 +481,46 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
         ]
         assert picker_options[0]["default"] is True
         assert picker_options[1]["default"] is False
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_flow_status_without_run_uses_ticket_summary_fallback(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    _write_ticket(workspace, "TICKET-001-a.md", done=True)
+    _write_ticket(workspace, "TICKET-002-b.md", done=True)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([_flow_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        payload = rest.interaction_responses[1]["payload"]["data"]
+        content = payload["content"]
+        assert content == "Status: Done\nTickets: 2/2"
+        assert payload.get("components") == []
     finally:
         await store.close()
 

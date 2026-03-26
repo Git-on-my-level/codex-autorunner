@@ -39,7 +39,10 @@ from .....core.flows.worker_process import FlowWorkerHealth, check_worker_health
 from .....core.logging_utils import log_event
 from .....core.orchestration import build_ticket_flow_orchestration_service
 from .....core.state import now_iso
-from .....core.ticket_flow_summary import build_ticket_flow_display
+from .....core.ticket_flow_summary import (
+    build_ticket_flow_display,
+    format_ticket_flow_summary_lines,
+)
 from .....core.utils import atomic_write, canonicalize_path
 from .....manifest import load_manifest
 from .....tickets.files import list_ticket_paths
@@ -613,6 +616,15 @@ class FlowCommands(TelegramCommandSupportMixin):
             store.initialize()
             record, error = self._resolve_status_record(store, run_id_raw)
             if error:
+                if not run_id_raw:
+                    summary_text = self._build_flow_status_summary_fallback(repo_root)
+                    if summary_text:
+                        await self._edit_callback_message(
+                            callback,
+                            summary_text,
+                            reply_markup={"inline_keyboard": []},
+                        )
+                        return
                 await self._edit_callback_message(
                     callback, error, reply_markup={"inline_keyboard": []}
                 )
@@ -869,6 +881,22 @@ class FlowCommands(TelegramCommandSupportMixin):
                 "No ticket flow run found. Use /pma to start a new flow via web app.",
             )
         return record, None
+
+    def _build_flow_status_summary_fallback(self, repo_root: Path) -> Optional[str]:
+        progress = ticket_progress(repo_root)
+        if int(progress.get("total", 0)) <= 0:
+            return None
+        display = build_ticket_flow_display(
+            status=None,
+            done_count=int(progress.get("done", 0)),
+            total_count=int(progress.get("total", 0)),
+            run_id=None,
+        )
+        summary = {**display, "current_step": None}
+        lines = format_ticket_flow_summary_lines(summary)
+        if not lines:
+            return None
+        return "\n".join(lines)
 
     def _format_flow_status_lines(
         self,
@@ -1262,6 +1290,17 @@ class FlowCommands(TelegramCommandSupportMixin):
             run_id_raw = self._first_non_flag(argv)
             record, error = self._resolve_status_record(store, run_id_raw)
             if error:
+                if not run_id_raw:
+                    summary_text = self._build_flow_status_summary_fallback(repo_root)
+                    if summary_text:
+                        await self._send_message(
+                            message.chat_id,
+                            summary_text,
+                            thread_id=message.thread_id,
+                            reply_to=message.message_id,
+                            parse_mode="Markdown",
+                        )
+                        return
                 await self._send_message(
                     message.chat_id,
                     error,
