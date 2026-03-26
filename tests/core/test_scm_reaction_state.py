@@ -28,6 +28,7 @@ def _event(
         or {
             "action": "submitted",
             "review_state": "changes_requested",
+            "review_id": "review-1",
             "author_login": "reviewer",
             "body": "Please add webhook coverage.",
         },
@@ -80,6 +81,7 @@ def test_compute_reaction_fingerprint_is_deterministic_and_ignores_event_identit
         payload={
             "body": "Please add webhook coverage.",
             "review_state": "changes_requested",
+            "review_id": "review-1",
             "author_login": "reviewer",
             "action": "submitted",
         },
@@ -98,6 +100,45 @@ def test_compute_reaction_fingerprint_is_deterministic_and_ignores_event_identit
     )
 
     assert first_fingerprint == second_fingerprint
+
+
+def test_compute_reaction_fingerprint_distinguishes_distinct_review_submissions() -> (
+    None
+):
+    binding = _binding()
+    first = _event(payload={"review_state": "approved", "review_id": "review-1"})
+    second = _event(
+        event_id="github:event-2",
+        payload={"review_state": "approved", "review_id": "review-2"},
+    )
+    store = ScmReactionStateStore(Path("/tmp/unused"))
+
+    first_fingerprint = store.compute_reaction_fingerprint(
+        first,
+        binding=binding,
+        intent=ReactionIntent(
+            reaction_kind="approved_and_green",
+            operation_kind="notify_chat",
+            operation_key="scm:key-2",
+            payload={"repo_id": "repo-1", "message": "Approved"},
+            event_id="github:event-1",
+            binding_id="binding-1",
+        ),
+    )
+    second_fingerprint = store.compute_reaction_fingerprint(
+        second,
+        binding=binding,
+        intent=ReactionIntent(
+            reaction_kind="approved_and_green",
+            operation_kind="notify_chat",
+            operation_key="scm:key-3",
+            payload={"repo_id": "repo-1", "message": "Approved"},
+            event_id="github:event-2",
+            binding_id="binding-1",
+        ),
+    )
+
+    assert first_fingerprint != second_fingerprint
 
 
 def test_reaction_state_store_suppresses_emitted_reactions_and_allows_new_fingerprints(

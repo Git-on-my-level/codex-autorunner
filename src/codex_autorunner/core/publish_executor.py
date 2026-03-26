@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 
@@ -8,6 +9,7 @@ from .mutation_policy import evaluate as evaluate_mutation_policy
 from .publish_journal import PublishJournalStore, PublishOperation
 
 DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS = (0.0, 30.0, 300.0)
+_LOGGER = logging.getLogger(__name__)
 _EXTERNAL_ACTION_PROVIDERS: dict[str, str] = {
     "post_pr_comment": "github",
     "add_labels": "github",
@@ -237,10 +239,32 @@ def drain_pending_publish_operations(
             if failed is not None:
                 processed.append(failed)
             continue
-        succeeded = journal.mark_succeeded(
-            current_operation.operation_id,
-            response=response,
-        )
+        try:
+            succeeded = journal.mark_succeeded(
+                current_operation.operation_id,
+                response=response,
+            )
+        except Exception as exc:
+            error_text = (
+                "Publish side effects completed but journal completion failed: "
+                f"{_resolve_error_text(exc)}"
+            )
+            try:
+                failed = journal.mark_failed(
+                    current_operation.operation_id,
+                    error_text=error_text,
+                    next_attempt_at=None,
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                _LOGGER.warning(
+                    "Publish bookkeeping failed for %s after side effects completed",
+                    current_operation.operation_id,
+                    exc_info=True,
+                )
+                continue
+            if failed is not None:
+                processed.append(failed)
+            continue
         if succeeded is not None:
             processed.append(succeeded)
     return processed

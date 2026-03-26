@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -240,6 +241,51 @@ def test_process_now_marks_terminal_failure_without_retry(
     repeated = processor.process_now(limit=10)
     assert repeated == []
     assert call_count == 1
+
+
+def test_drain_pending_publish_operations_marks_terminal_failure_when_journal_completion_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="notify:journal-completion-failure",
+        operation_kind="notify_chat",
+        payload={"body": "ready"},
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    original_mark_succeeded = store.mark_succeeded
+
+    def _fail_mark_succeeded(
+        operation_id: str, *, response: dict[str, object]
+    ) -> PublishOperation | None:
+        _ = operation_id, response
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(store, "mark_succeeded", _fail_mark_succeeded)
+
+    processed = drain_pending_publish_operations(
+        store,
+        executor_registry=PublishExecutorRegistry(
+            {"notify_chat": lambda _operation: {"delivered": True}}
+        ),
+        limit=10,
+        now_fn=_QueuedClock("2026-03-25T00:00:00Z"),
+    )
+
+    assert [operation.operation_id for operation in processed] == [created.operation_id]
+    assert processed[0].state == "failed"
+    assert processed[0].next_attempt_at is None
+    assert processed[0].last_error_text is not None
+    assert "journal completion failed" in processed[0].last_error_text
+
+    monkeypatch.setattr(store, "mark_succeeded", original_mark_succeeded)
+    stored = store.list_operations(limit=10)
+    assert len(stored) == 1
+    assert stored[0].operation_id == created.operation_id
+    assert stored[0].state == "failed"
+    assert stored[0].next_attempt_at is None
+    assert stored[0].last_error_text is not None
+    assert "journal completion failed" in stored[0].last_error_text
 
 
 def test_drain_pending_publish_operations_skips_operation_when_mark_running_fails() -> (

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,8 @@ from .scm_observability import (
 from .scm_reaction_router import route_scm_reactions
 from .scm_reaction_state import ScmReactionStateStore
 from .scm_reaction_types import ReactionIntent, ScmReactionConfig
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ScmEventLookup(Protocol):
@@ -575,23 +578,37 @@ class ScmAutomationService:
         escalation_metadata = dict(tracking)
         escalation_metadata["escalation_reason"] = reason
         if correlation_id is not None:
-            self._audit_recorder.record(
-                action_type=SCM_AUDIT_PUBLISH_CREATED,
-                correlation_id=correlation_id,
-                operation=operation,
-                payload={
-                    "deduped": deduped,
-                    "escalation_reason": reason,
-                },
+            try:
+                self._audit_recorder.record(
+                    action_type=SCM_AUDIT_PUBLISH_CREATED,
+                    correlation_id=correlation_id,
+                    operation=operation,
+                    payload={
+                        "deduped": deduped,
+                        "escalation_reason": reason,
+                    },
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                _LOGGER.warning(
+                    "SCM publish-created audit recording failed for %s",
+                    operation.operation_id,
+                    exc_info=True,
+                )
+        try:
+            self._reaction_state_store.mark_reaction_escalated(
+                binding_id=binding_id,
+                reaction_kind=reaction_kind,
+                fingerprint=fingerprint,
+                event_id=event_id,
+                operation_key=operation_key,
+                metadata=escalation_metadata,
             )
-        self._reaction_state_store.mark_reaction_escalated(
-            binding_id=binding_id,
-            reaction_kind=reaction_kind,
-            fingerprint=fingerprint,
-            event_id=event_id,
-            operation_key=operation_key,
-            metadata=escalation_metadata,
-        )
+        except Exception:  # pragma: no cover - defensive logging
+            _LOGGER.warning(
+                "SCM escalation state update failed for operation %s",
+                operation.operation_id,
+                exc_info=True,
+            )
         return operation
 
     def _handle_processed_operations(
@@ -608,26 +625,34 @@ class ScmAutomationService:
             if binding_id is None or reaction_kind is None or fingerprint is None:
                 continue
             event_id = _normalize_text(tracking.get("event_id"))
-            if operation.state == "succeeded":
-                self._reaction_state_store.mark_reaction_delivery_succeeded(
+            try:
+                if operation.state == "succeeded":
+                    self._reaction_state_store.mark_reaction_delivery_succeeded(
+                        binding_id=binding_id,
+                        reaction_kind=reaction_kind,
+                        fingerprint=fingerprint,
+                        event_id=event_id,
+                        operation_key=operation.operation_key,
+                        metadata=tracking,
+                    )
+                    continue
+                if operation.state not in {"failed", "pending"}:
+                    continue
+                failed_state = self._reaction_state_store.mark_reaction_delivery_failed(
                     binding_id=binding_id,
                     reaction_kind=reaction_kind,
                     fingerprint=fingerprint,
                     event_id=event_id,
-                    operation_key=operation.operation_key,
+                    error_text=operation.last_error_text,
                     metadata=tracking,
                 )
+            except Exception:  # pragma: no cover - defensive logging
+                _LOGGER.warning(
+                    "SCM reaction-state update failed for operation %s",
+                    operation.operation_id,
+                    exc_info=True,
+                )
                 continue
-            if operation.state not in {"failed", "pending"}:
-                continue
-            failed_state = self._reaction_state_store.mark_reaction_delivery_failed(
-                binding_id=binding_id,
-                reaction_kind=reaction_kind,
-                fingerprint=fingerprint,
-                event_id=event_id,
-                error_text=operation.last_error_text,
-                metadata=tracking,
-            )
             failure_threshold = (
                 self._reaction_config.delivery_failure_escalation_threshold
             )
@@ -666,11 +691,18 @@ class ScmAutomationService:
             correlation_id = correlation_id_for_operation(operation)
             if correlation_id is None:
                 continue
-            self._audit_recorder.record(
-                action_type=SCM_AUDIT_PUBLISH_FINISHED,
-                correlation_id=correlation_id,
-                operation=operation,
-            )
+            try:
+                self._audit_recorder.record(
+                    action_type=SCM_AUDIT_PUBLISH_FINISHED,
+                    correlation_id=correlation_id,
+                    operation=operation,
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                _LOGGER.warning(
+                    "SCM publish-finished audit recording failed for %s",
+                    operation.operation_id,
+                    exc_info=True,
+                )
 
 
 __all__ = [

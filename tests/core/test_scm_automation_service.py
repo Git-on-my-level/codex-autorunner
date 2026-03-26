@@ -307,6 +307,76 @@ class _ProcessorSequenceFake:
         return list(self._batches.pop(0))
 
 
+class _FailingReactionStateFake(_PermissiveReactionStateFake):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed_calls = 0
+        self.escalated_calls = 0
+
+    def mark_reaction_delivery_failed(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        error_text: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = binding_id, reaction_kind, fingerprint, event_id, error_text, metadata
+        self.failed_calls += 1
+        if self.failed_calls == 1:
+            raise RuntimeError("reaction state unavailable")
+        return SimpleNamespace(escalated_at=None, delivery_failure_count=1)
+
+    def mark_reaction_escalated(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        operation_key: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = binding_id, reaction_kind, fingerprint, event_id, operation_key, metadata
+        self.escalated_calls += 1
+        raise RuntimeError("escalation state unavailable")
+
+
+class _EscalationStateFailureFake(_PermissiveReactionStateFake):
+    def __init__(self) -> None:
+        super().__init__()
+        self.escalated_calls = 0
+
+    def mark_reaction_delivery_failed(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        error_text: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = binding_id, reaction_kind, fingerprint, event_id, error_text, metadata
+        return SimpleNamespace(escalated_at=None, delivery_failure_count=1)
+
+    def mark_reaction_escalated(
+        self,
+        *,
+        binding_id: str,
+        reaction_kind: str,
+        fingerprint: str,
+        event_id: Optional[str] = None,
+        operation_key: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> object:
+        _ = binding_id, reaction_kind, fingerprint, event_id, operation_key, metadata
+        self.escalated_calls += 1
+        raise RuntimeError("escalation state unavailable")
+
+
 def test_ingest_event_loads_persisted_event_routes_reactions_and_dedupes_publish_operations(
     tmp_path: Path,
 ) -> None:
@@ -440,6 +510,110 @@ def test_process_now_delegates_to_publish_processor(tmp_path: Path) -> None:
 
     assert processor.calls == [7]
     assert result == processed
+
+
+def test_handle_processed_operations_continues_when_reaction_state_update_fails(
+    tmp_path: Path,
+) -> None:
+    reaction_state_store = _FailingReactionStateFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(),
+        binding_resolver=_BindingResolverFake(None),
+        reaction_router=_ReactionRouterFake([]),
+        reaction_state_store=reaction_state_store,
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    first = PublishOperation(
+        **{
+            **_operation(
+                operation_id="op-1",
+                operation_key="scm:key-1",
+                operation_kind="notify_chat",
+                state="failed",
+            ).to_dict(),
+            "payload": {
+                "scm_reaction": {
+                    "binding_id": "binding-1",
+                    "reaction_kind": "changes_requested",
+                    "fingerprint": "fp-1",
+                    "event_id": "github:event-1",
+                }
+            },
+            "last_error_text": "RuntimeError: first failure",
+        }
+    )
+    second = PublishOperation(
+        **{
+            **_operation(
+                operation_id="op-2",
+                operation_key="scm:key-2",
+                operation_kind="notify_chat",
+                state="failed",
+            ).to_dict(),
+            "payload": {
+                "scm_reaction": {
+                    "binding_id": "binding-1",
+                    "reaction_kind": "changes_requested",
+                    "fingerprint": "fp-2",
+                    "event_id": "github:event-2",
+                }
+            },
+            "last_error_text": "RuntimeError: second failure",
+        }
+    )
+
+    escalations = service._handle_processed_operations([first, second])
+
+    assert escalations == []
+    assert reaction_state_store.failed_calls == 2
+
+
+def test_handle_processed_operations_keeps_escalation_operation_when_escalation_state_write_fails(
+    tmp_path: Path,
+) -> None:
+    reaction_state_store = _EscalationStateFailureFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(),
+        binding_resolver=_BindingResolverFake(None),
+        reaction_router=_ReactionRouterFake([]),
+        reaction_config={"delivery_failure_escalation_threshold": 1},
+        reaction_state_store=reaction_state_store,
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    failed = PublishOperation(
+        **{
+            **_operation(
+                operation_id="op-3",
+                operation_key="scm:key-3",
+                operation_kind="notify_chat",
+                state="failed",
+            ).to_dict(),
+            "payload": {
+                "thread_target_id": "thread-123",
+                "scm_reaction": {
+                    "binding_id": "binding-1",
+                    "reaction_kind": "changes_requested",
+                    "fingerprint": "fp-3",
+                    "event_id": "github:event-3",
+                    "thread_target_id": "thread-123",
+                    "repo_id": "repo-1",
+                },
+            },
+            "last_error_text": "RuntimeError: delivery failed",
+        }
+    )
+
+    escalations = service._handle_processed_operations([failed])
+
+    assert len(escalations) == 1
+    assert escalations[0].operation_kind == "notify_chat"
+    assert reaction_state_store.escalated_calls == 1
 
 
 def test_ingest_event_escalates_after_duplicate_threshold_without_requeueing_same_reaction(

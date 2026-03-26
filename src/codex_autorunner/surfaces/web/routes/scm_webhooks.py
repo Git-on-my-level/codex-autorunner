@@ -419,14 +419,24 @@ def build_scm_webhook_routes(
                 },
             )
 
-        ScmAuditRecorder(hub_root).record(
-            action_type=SCM_AUDIT_INGEST,
-            correlation_id=correlation_id,
-            event=persisted,
-        )
-
         drained_inline = False
+        audit_error: Optional[str] = None
         drain_error: Optional[str] = None
+        try:
+            ScmAuditRecorder(hub_root).record(
+                action_type=SCM_AUDIT_INGEST,
+                correlation_id=correlation_id,
+                event=persisted,
+            )
+        except Exception:  # pragma: no cover - defensive logging
+            logger = getattr(request.app.state, "logger", None)
+            if isinstance(logger, logging.Logger):
+                logger.warning(
+                    "SCM ingest audit recording failed for %s",
+                    persisted.event_id,
+                    exc_info=True,
+                )
+            audit_error = "ingest_audit_failed"
         if _drain_inline_enabled(raw_config):
             try:
                 await _run_drain_callback(
@@ -458,6 +468,7 @@ def build_scm_webhook_routes(
                 "delivery_id": persisted.delivery_id,
                 "correlation_id": persisted.correlation_id,
                 "drained_inline": drained_inline,
+                "audit_error": audit_error,
                 "drain_error": drain_error,
             }
         )
