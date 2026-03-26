@@ -2,6 +2,7 @@ import json
 import re
 import subprocess
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
@@ -13,6 +14,8 @@ from ...core.git_utils import (
     run_git,
 )
 from ...core.injected_context import wrap_injected_context
+from ...core.pma_thread_store import PmaThreadStore
+from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.prompts import build_github_issue_to_spec_prompt, build_sync_agent_prompt
 from ...core.utils import (
     atomic_write,
@@ -20,6 +23,7 @@ from ...core.utils import (
     resolve_executable,
     subprocess_env,
 )
+from ...manifest import ManifestError, load_manifest
 
 
 class GitHubError(Exception):
@@ -129,6 +133,52 @@ def _append_issue_close(body: str, issue_num: Optional[int]) -> str:
         return suffix
     trimmed = body.rstrip()
     return f"{trimmed}\n\n{suffix}"
+
+
+def _find_hub_root_for_repo(repo_root: Path) -> Optional[Path]:
+    current = repo_root.resolve()
+    while True:
+        manifest_path = current / ".codex-autorunner" / "manifest.yml"
+        if manifest_path.exists():
+            return current
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
+def _thread_contexts(metadata: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    contexts: list[Mapping[str, Any]] = [metadata]
+    for key in ("manual_context", "scm", "scm_context", "context"):
+        nested = metadata.get(key)
+        if isinstance(nested, Mapping):
+            contexts.append(nested)
+    return tuple(contexts)
+
+
+def _thread_matches_branch(thread: Mapping[str, Any], *, head_branch: str) -> bool:
+    metadata = thread.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return False
+    for context in _thread_contexts(metadata):
+        for key in ("head_branch", "branch", "git_branch"):
+            candidate = _normalize_optional_text(context.get(key))
+            if candidate == head_branch:
+                return True
+    return False
+
+
+def _binding_summary(binding: PrBinding) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "repo_slug": binding.repo_slug,
+        "pr_number": binding.pr_number,
+        "pr_state": binding.pr_state,
+    }
+    if binding.head_branch is not None:
+        summary["head_branch"] = binding.head_branch
+    if binding.base_branch is not None:
+        summary["base_branch"] = binding.base_branch
+    return summary
 
 
 def _run_codex_sync_agent(
@@ -347,6 +397,113 @@ class GitHubService:
         self.github_path = repo_root / ".codex-autorunner" / "github.json"
         self.gh_path, self.gh_override = self._load_gh_path()
 
+    def _binding_context(self) -> tuple[Optional[Path], Optional[str]]:
+        hub_root = _find_hub_root_for_repo(self.repo_root)
+        if hub_root is None:
+            return None, None
+        manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+        try:
+            manifest = load_manifest(manifest_path, hub_root)
+        except ManifestError:
+            return hub_root, None
+        entry = manifest.get_by_path(hub_root, self.repo_root.resolve())
+        repo_id = entry.id.strip() if entry and isinstance(entry.id, str) else None
+        return hub_root, repo_id
+
+    def _pr_binding_store(self) -> Optional[PrBindingStore]:
+        hub_root, _repo_id = self._binding_context()
+        if hub_root is None:
+            return None
+        return PrBindingStore(hub_root)
+
+    def _bound_thread_target_id(
+        self,
+        *,
+        repo_id: Optional[str],
+        head_branch: Optional[str],
+        existing_binding: Optional[PrBinding],
+    ) -> Optional[str]:
+        if (
+            existing_binding is not None
+            and existing_binding.thread_target_id is not None
+        ):
+            return existing_binding.thread_target_id
+        if repo_id is None or head_branch is None:
+            return None
+        hub_root, _ = self._binding_context()
+        if hub_root is None:
+            return None
+        for thread in PmaThreadStore(hub_root).list_threads(
+            status="active",
+            repo_id=repo_id,
+            limit=100,
+        ):
+            candidate_thread_id = _normalize_optional_text(
+                thread.get("managed_thread_id")
+            )
+            if candidate_thread_id is None:
+                continue
+            if _thread_matches_branch(thread, head_branch=head_branch):
+                return candidate_thread_id
+        return None
+
+    def _persist_pr_binding(
+        self,
+        *,
+        repo_slug: str,
+        summary: dict[str, Any],
+        existing_binding: Optional[PrBinding] = None,
+    ) -> Optional[PrBinding]:
+        normalized_repo_slug = _normalize_optional_text(repo_slug)
+        pr_number = _normalize_positive_int(summary.get("pr_number"))
+        pr_state = _normalize_binding_pr_state(summary.get("pr_state"))
+        if normalized_repo_slug is None or pr_number is None or pr_state is None:
+            return None
+
+        store = self._pr_binding_store()
+        if store is None:
+            return None
+        _hub_root, repo_id = self._binding_context()
+        durable_binding = store.get_binding_by_pr(
+            provider="github",
+            repo_slug=normalized_repo_slug,
+            pr_number=pr_number,
+        )
+        head_branch = _normalize_optional_text(summary.get("head_branch"))
+        if head_branch is None:
+            if durable_binding is not None:
+                head_branch = durable_binding.head_branch
+            elif existing_binding is not None:
+                head_branch = existing_binding.head_branch
+        base_branch = _normalize_optional_text(summary.get("base_branch"))
+        if base_branch is None:
+            if durable_binding is not None:
+                base_branch = durable_binding.base_branch
+            elif existing_binding is not None:
+                base_branch = existing_binding.base_branch
+        resolved_repo_id = repo_id
+        if resolved_repo_id is None:
+            if durable_binding is not None:
+                resolved_repo_id = durable_binding.repo_id
+            elif existing_binding is not None:
+                resolved_repo_id = existing_binding.repo_id
+        thread_target_id = self._bound_thread_target_id(
+            repo_id=resolved_repo_id,
+            head_branch=head_branch,
+            existing_binding=durable_binding or existing_binding,
+        )
+
+        return store.upsert_binding(
+            provider="github",
+            repo_slug=normalized_repo_slug,
+            repo_id=resolved_repo_id,
+            pr_number=pr_number,
+            pr_state=pr_state,
+            head_branch=head_branch,
+            base_branch=base_branch,
+            thread_target_id=thread_target_id,
+        )
+
     def _load_gh_path(self) -> tuple[str, bool]:
         cfg = self.raw_config if isinstance(self.raw_config, dict) else {}
         github_cfg_raw = cfg.get("github")
@@ -499,12 +656,48 @@ class GitHubService:
         if not resolved_branch or resolved_branch == "HEAD":
             return None
 
+        hub_root, repo_id = self._binding_context()
+        store = PrBindingStore(hub_root) if hub_root is not None else None
+        if store is not None and repo_id is not None:
+            canonical_bindings = store.list_bindings(
+                provider="github",
+                repo_id=repo_id,
+                head_branch=resolved_branch,
+                limit=1,
+            )
+            if canonical_bindings:
+                return _binding_summary(canonical_bindings[0])
+
         pr = self.pr_for_branch(branch=resolved_branch, cwd=cwd)
         if not isinstance(pr, dict):
             return None
 
-        repo = self.repo_info()
-        return self.normalize_pr_binding_summary(pr=pr, repo_slug=repo.name_with_owner)
+        try:
+            repo_slug = self.repo_info().name_with_owner
+        except Exception:
+            return None
+
+        fallback_binding: Optional[PrBinding] = None
+        if store is not None:
+            fallback_binding = store.find_active_binding_for_branch(
+                provider="github",
+                repo_slug=repo_slug,
+                branch_name=resolved_branch,
+            )
+
+        summary = self.normalize_pr_binding_summary(pr=pr, repo_slug=repo_slug)
+        if summary is None:
+            return (
+                _binding_summary(fallback_binding)
+                if fallback_binding is not None
+                else None
+            )
+        self._persist_pr_binding(
+            repo_slug=repo_slug,
+            summary=summary,
+            existing_binding=fallback_binding,
+        )
+        return summary
 
     def list_open_issues(
         self, *, limit: int = 10, cwd: Optional[Path] = None
@@ -987,6 +1180,7 @@ class GitHubService:
 
         repo = self.repo_info()
         base = repo.default_branch or "main"
+        binding_store = self._pr_binding_store()
         state = self.read_link_state() or {}
         issue_num = ((state.get("issue") or {}) or {}).get("number")
         head_branch = self.current_branch()
@@ -1026,6 +1220,15 @@ class GitHubService:
         )
 
         # Find/create PR
+        binding_hint = (
+            binding_store.find_active_binding_for_branch(
+                provider="github",
+                repo_slug=repo.name_with_owner,
+                branch_name=head_branch,
+            )
+            if binding_store is not None
+            else None
+        )
         pr = self.pr_for_branch(branch=head_branch, cwd=cwd)
         if not pr:
             args = ["pr", "create", "--base", base]
@@ -1078,6 +1281,19 @@ class GitHubService:
                     )
                 except Exception:
                     pass
+            pr = self.pr_for_branch(branch=head_branch, cwd=cwd) or pr
+
+        binding_summary = None
+        if isinstance(pr, dict):
+            binding_summary = self.normalize_pr_binding_summary(
+                pr=pr, repo_slug=repo.name_with_owner
+            )
+        if binding_summary is not None:
+            self._persist_pr_binding(
+                repo_slug=repo.name_with_owner,
+                summary=binding_summary,
+                existing_binding=binding_hint,
+            )
 
         state["repo"] = {"nameWithOwner": repo.name_with_owner, "url": repo.url}
         state["baseBranch"] = base
