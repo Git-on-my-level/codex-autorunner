@@ -357,6 +357,50 @@ def test_scm_webhook_rejects_bad_signature_without_persisting(tmp_path: Path) ->
     assert list_events(hub_root, provider="github", limit=10) == []
 
 
+def test_scm_webhook_hides_storage_exception_details_from_callers(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_webhooks(_hub_config(), store_raw_payload=True)
+    cfg["github"]["automation"]["webhook_ingress"]["max_raw_payload_bytes"] = 1
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "sender": {"login": "octocat", "id": 7, "type": "User"},
+        "pull_request": {
+            "number": 42,
+            "title": "Add webhook route",
+            "state": "open",
+            "merged": False,
+            "draft": False,
+            "html_url": "https://github.com/acme/widgets/pull/42",
+            "created_at": "2026-03-24T10:00:00+00:00",
+            "updated_at": "2026-03-24T10:01:02+00:00",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/webhooks"},
+            "user": {"login": "octocat"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    app = _build_route_app(hub_root, cfg=cfg)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=_headers(body, event="pull_request"),
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "status": "rejected",
+        "reason": "raw_payload_too_large",
+        "detail": "SCM event payload exceeds configured storage limits",
+    }
+    assert list_events(hub_root, provider="github", limit=10) == []
+
+
 def test_scm_webhook_inline_drain_delegates_to_scm_automation_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

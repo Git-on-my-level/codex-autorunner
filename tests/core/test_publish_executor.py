@@ -5,6 +5,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
@@ -625,3 +627,65 @@ def test_process_now_runs_first_publish_operation_types(
     assert enqueue_attempts[0]["state"] == "succeeded"
     assert notify_attempts[0]["state"] == "succeeded"
     assert comment_attempts[0]["state"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_notify_chat_executor_runs_while_event_loop_is_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root, _workspace_root, _repo_id = _publish_hub(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    async def _fake_notify_primary_pma_chat_for_repo(
+        *,
+        hub_root: Path,
+        repo_id: str | None,
+        message: str,
+        correlation_id: str,
+    ) -> dict[str, int]:
+        calls.append(
+            {
+                "hub_root": hub_root,
+                "repo_id": repo_id,
+                "message": message,
+            }
+        )
+        return {"targets": 1, "published": 1}
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.publish_operation_executors.notify_primary_pma_chat_for_repo",
+        _fake_notify_primary_pma_chat_for_repo,
+    )
+    executor = build_notify_chat_executor(hub_root=hub_root)
+    operation = PublishOperation(
+        operation_id="op-async",
+        operation_key="notify:async",
+        operation_kind="notify_chat",
+        state="pending",
+        payload={
+            "delivery": "primary_pma",
+            "message": "ready",
+            "repo_id": _repo_id,
+        },
+        response={},
+        created_at="2026-03-25T00:00:00Z",
+        updated_at="2026-03-25T00:00:00Z",
+        next_attempt_at="2026-03-25T00:00:00Z",
+        attempt_count=1,
+    )
+
+    result = executor(operation)
+
+    assert result == {
+        "delivery": "primary_pma",
+        "repo_id": _repo_id,
+        "targets": 1,
+        "published": 1,
+    }
+    assert calls == [
+        {
+            "hub_root": hub_root,
+            "repo_id": _repo_id,
+            "message": "ready",
+        }
+    ]

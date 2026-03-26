@@ -399,11 +399,15 @@ def build_scm_webhook_routes(
                 },
             )
         except ValueError as exc:
-            detail = str(exc)
             reason = (
                 "raw_payload_too_large"
-                if "raw_payload exceeds" in detail
+                if "raw_payload exceeds" in str(exc)
                 else "invalid_event"
+            )
+            detail = (
+                "SCM event payload exceeds configured storage limits"
+                if reason == "raw_payload_too_large"
+                else "SCM event payload could not be processed"
             )
             return JSONResponse(
                 status_code=413 if reason == "raw_payload_too_large" else 400,

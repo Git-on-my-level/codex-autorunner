@@ -46,6 +46,10 @@ def _is_loopback_host(host: str) -> bool:
         return False
 
 
+def _is_strict_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def _validate_server_security(server: Dict[str, Any]) -> None:
     allowed_hosts = server.get("allowed_hosts")
     if allowed_hosts is not None and not isinstance(allowed_hosts, list):
@@ -700,34 +704,45 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                         "github.automation.webhook_ingress.store_raw_payload must be boolean"
                     )
                 max_payload_bytes = webhook_ingress.get("max_payload_bytes")
-                if max_payload_bytes is not None and not isinstance(
-                    max_payload_bytes, int
+                if max_payload_bytes is not None and not _is_strict_int(
+                    max_payload_bytes
                 ):
                     raise ConfigError(
                         "github.automation.webhook_ingress.max_payload_bytes must be an integer"
                     )
-                if isinstance(max_payload_bytes, int) and max_payload_bytes <= 0:
+                resolved_max_payload_bytes = (
+                    max_payload_bytes if _is_strict_int(max_payload_bytes) else None
+                )
+                if (
+                    resolved_max_payload_bytes is not None
+                    and resolved_max_payload_bytes <= 0
+                ):
                     raise ConfigError(
                         "github.automation.webhook_ingress.max_payload_bytes must be > 0"
                     )
                 max_raw_payload_bytes = webhook_ingress.get("max_raw_payload_bytes")
-                if max_raw_payload_bytes is not None and not isinstance(
-                    max_raw_payload_bytes, int
+                if max_raw_payload_bytes is not None and not _is_strict_int(
+                    max_raw_payload_bytes
                 ):
                     raise ConfigError(
                         "github.automation.webhook_ingress.max_raw_payload_bytes must be an integer"
                     )
+                resolved_max_raw_payload_bytes = (
+                    max_raw_payload_bytes
+                    if _is_strict_int(max_raw_payload_bytes)
+                    else None
+                )
                 if (
-                    isinstance(max_raw_payload_bytes, int)
-                    and max_raw_payload_bytes <= 0
+                    resolved_max_raw_payload_bytes is not None
+                    and resolved_max_raw_payload_bytes <= 0
                 ):
                     raise ConfigError(
                         "github.automation.webhook_ingress.max_raw_payload_bytes must be > 0"
                     )
                 if (
-                    isinstance(max_payload_bytes, int)
-                    and isinstance(max_raw_payload_bytes, int)
-                    and max_raw_payload_bytes > max_payload_bytes
+                    resolved_max_payload_bytes is not None
+                    and resolved_max_raw_payload_bytes is not None
+                    and resolved_max_raw_payload_bytes > resolved_max_payload_bytes
                 ):
                     raise ConfigError(
                         "github.automation.webhook_ingress.max_raw_payload_bytes must be <= max_payload_bytes"
