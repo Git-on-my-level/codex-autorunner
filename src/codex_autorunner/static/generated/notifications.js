@@ -10,6 +10,7 @@ let closeModalFn = null;
 let documentListenerInstalled = false;
 let modalElements = null;
 let isRefreshing = false;
+let volatileHubHintScopeKey = null;
 const DROPDOWN_MARGIN = 8;
 const DROPDOWN_OFFSET = 6;
 const NOTIFICATIONS_REFRESH_ID = "notifications";
@@ -38,7 +39,10 @@ function getHubHintScopeKey() {
         return created;
     }
     catch {
-        return "web:browser:unknown";
+        if (!volatileHubHintScopeKey) {
+            volatileHubHintScopeKey = `web:browser:${newBrowserScopeToken()}`;
+        }
+        return volatileHubHintScopeKey;
     }
 }
 function normalizeCapabilityHintPayload(item) {
@@ -650,3 +654,6 @@ export function initNotifications() {
     });
     notificationsInitialized = true;
 }
+export const __notificationsTest = {
+    getHubHintScopeKey,
+};

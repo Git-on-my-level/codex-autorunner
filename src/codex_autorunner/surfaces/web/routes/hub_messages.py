@@ -8,7 +8,9 @@ from fastapi import APIRouter, HTTPException
 
 from ....core.capability_hints import (
     CAPABILITY_HINT_ITEM_TYPE,
+    HUB_HINT_REPO_ID,
     capability_hint_id_from_run_id,
+    is_hub_scoped_hint_id,
 )
 from ....core.freshness import (
     iso_now,
@@ -141,16 +143,14 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             seq = parsed
 
         if not repo_id:
-            raise HTTPException(status_code=400, detail="Missing repo_id")
+            if item_type != CAPABILITY_HINT_ITEM_TYPE or not is_hub_scoped_hint_id(
+                hint_id
+            ):
+                raise HTTPException(status_code=400, detail="Missing repo_id")
         if not run_id:
             raise HTTPException(status_code=400, detail="Missing run_id")
         if action not in {"dismiss"}:
             raise HTTPException(status_code=400, detail="Unsupported action")
-
-        snapshots = await asyncio.to_thread(context.supervisor.list_repos)
-        snapshot = next((s for s in snapshots if s.id == repo_id), None)
-        if snapshot is None or not snapshot.exists_on_disk:
-            raise HTTPException(status_code=404, detail="Repo not found")
 
         if not item_type:
             hub_payload = await hub_messages(limit=2000, scope_key=scope_key)
@@ -193,11 +193,23 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             if scope_key is None:
                 raise HTTPException(status_code=400, detail="Missing scope_key")
 
-        repo_lock = await _repo_dismissal_lock(snapshot.path)
+        resolution_root: Optional[Path] = None
+        resolved_repo_id = repo_id
+        if item_type == CAPABILITY_HINT_ITEM_TYPE and is_hub_scoped_hint_id(hint_id):
+            resolution_root = context.config.root
+            resolved_repo_id = HUB_HINT_REPO_ID
+        else:
+            snapshots = await asyncio.to_thread(context.supervisor.list_repos)
+            snapshot = next((s for s in snapshots if s.id == repo_id), None)
+            if snapshot is None or not snapshot.exists_on_disk:
+                raise HTTPException(status_code=404, detail="Repo not found")
+            resolution_root = snapshot.path
+
+        repo_lock = await _repo_dismissal_lock(resolution_root)
         async with repo_lock:
             resolved = _record_message_resolution(
-                repo_root=snapshot.path,
-                repo_id=repo_id,
+                repo_root=resolution_root,
+                repo_id=resolved_repo_id,
                 run_id=run_id,
                 item_type=item_type,
                 seq=seq,

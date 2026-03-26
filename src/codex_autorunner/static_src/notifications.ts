@@ -112,6 +112,7 @@ let closeModalFn: (() => void) | null = null;
 let documentListenerInstalled = false;
 let modalElements: ModalElements | null = null;
 let isRefreshing = false;
+let volatileHubHintScopeKey: string | null = null;
 const DROPDOWN_MARGIN = 8;
 const DROPDOWN_OFFSET = 6;
 
@@ -143,7 +144,10 @@ function getHubHintScopeKey(): string {
     localStorage.setItem(HUB_HINT_SCOPE_STORAGE_KEY, created);
     return created;
   } catch {
-    return "web:browser:unknown";
+    if (!volatileHubHintScopeKey) {
+      volatileHubHintScopeKey = `web:browser:${newBrowserScopeToken()}`;
+    }
+    return volatileHubHintScopeKey;
   }
 }
 
@@ -791,3 +795,7 @@ export function initNotifications(): void {
 
   notificationsInitialized = true;
 }
+
+export const __notificationsTest = {
+  getHubHintScopeKey,
+};

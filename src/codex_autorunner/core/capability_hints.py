@@ -8,10 +8,13 @@ import yaml
 
 from ..voice.config import VoiceConfig
 from .config import (
+    CONFIG_FILENAME,
     REPO_OVERRIDE_FILENAME,
     ConfigError,
     HubConfig,
     load_repo_config,
+    load_root_defaults,
+    normalize_generated_hub_config,
     resolve_env_for_root,
 )
 
@@ -22,6 +25,8 @@ VOICE_HINT_ID = "voice_enablement"
 SCM_HINT_ID = "scm_automation_enablement"
 PMA_HINT_ID = "pma_enablement"
 SHELL_HINT_ID = "shell_enablement"
+HUB_HINT_REPO_ID = "__hub__"
+HUB_SCOPED_HINT_IDS = frozenset({PMA_HINT_ID, SHELL_HINT_ID})
 
 
 def capability_hint_run_id(hint_id: str) -> str:
@@ -46,9 +51,12 @@ def build_repo_capability_hints(
 ) -> list[dict[str, Any]]:
     try:
         repo_config = load_repo_config(repo_root, hub_path=hub_config.root)
+        explicit_repo_config = _load_explicit_repo_config(
+            hub_root=hub_config.root,
+            repo_root=repo_root,
+        )
     except ConfigError:
         return []
-    repo_override = _load_yaml_mapping(repo_root / REPO_OVERRIDE_FILENAME)
 
     display_name = repo_display_name or repo_id
     hints: list[dict[str, Any]] = []
@@ -58,7 +66,7 @@ def build_repo_capability_hints(
         repo_root=repo_root,
         repo_display_name=display_name,
         repo_config=repo_config,
-        repo_override=repo_override,
+        explicit_repo_config=explicit_repo_config,
     )
     if voice_hint is not None:
         hints.append(voice_hint)
@@ -67,22 +75,28 @@ def build_repo_capability_hints(
         repo_id=repo_id,
         repo_display_name=display_name,
         repo_config=repo_config,
-        repo_override=repo_override,
+        explicit_repo_config=explicit_repo_config,
     )
     if scm_hint is not None:
         hints.append(scm_hint)
 
+    return hints
+
+
+def build_hub_capability_hints(*, hub_config: HubConfig) -> list[dict[str, Any]]:
+    hints: list[dict[str, Any]] = []
+
     pma_hint = _build_pma_hint(
-        repo_id=repo_id,
-        repo_display_name=display_name,
+        repo_id=HUB_HINT_REPO_ID,
+        repo_display_name="Hub",
         hub_config=hub_config,
     )
     if pma_hint is not None:
         hints.append(pma_hint)
 
     shell_hint = _build_shell_hint(
-        repo_id=repo_id,
-        repo_display_name=display_name,
+        repo_id=HUB_HINT_REPO_ID,
+        repo_display_name="Hub",
         hub_config=hub_config,
     )
     if shell_hint is not None:
@@ -91,18 +105,22 @@ def build_repo_capability_hints(
     return hints
 
 
+def is_hub_scoped_hint_id(hint_id: Optional[str]) -> bool:
+    return str(hint_id or "").strip() in HUB_SCOPED_HINT_IDS
+
+
 def _build_voice_hint(
     *,
     repo_id: str,
     repo_root: Path,
     repo_display_name: str,
     repo_config: Any,
-    repo_override: Mapping[str, Any],
+    explicit_repo_config: Mapping[str, Any],
 ) -> Optional[dict[str, Any]]:
-    voice_override = _mapping(repo_override.get("voice"))
-    if not voice_override:
+    voice_config_source = _mapping(explicit_repo_config.get("voice"))
+    if not voice_config_source:
         return None
-    enabled = _explicit_bool(voice_override, "enabled")
+    enabled = _explicit_bool(voice_config_source, "enabled")
     if enabled is None:
         return None
     workspace_env = resolve_env_for_root(repo_root, base_env=os.environ)
@@ -168,10 +186,10 @@ def _build_scm_hint(
     repo_id: str,
     repo_display_name: str,
     repo_config: Any,
-    repo_override: Mapping[str, Any],
+    explicit_repo_config: Mapping[str, Any],
 ) -> Optional[dict[str, Any]]:
-    github_override = _mapping(repo_override.get("github"))
-    automation = _mapping(github_override.get("automation"))
+    github_config_source = _mapping(explicit_repo_config.get("github"))
+    automation = _mapping(github_config_source.get("automation"))
     if not automation:
         return None
 
@@ -244,6 +262,7 @@ def _build_pma_hint(
         title="Enable PMA",
         body=body,
         queue_rank=90_020,
+        open_url="/",
     )
 
 
@@ -291,6 +310,7 @@ def _build_shell_hint(
         title="Enable chat shell commands",
         body=body,
         queue_rank=90_030,
+        open_url="/",
     )
 
 
@@ -303,6 +323,7 @@ def _hint_item(
     title: str,
     body: str,
     queue_rank: int,
+    open_url: Optional[str] = None,
 ) -> dict[str, Any]:
     run_id = capability_hint_run_id(hint_id)
     return {
@@ -316,7 +337,7 @@ def _hint_item(
         "queue_rank": queue_rank,
         "queue_source": "capability_hint",
         "dispatch_actionable": False,
-        "open_url": f"/repos/{repo_id}/",
+        "open_url": open_url or f"/repos/{repo_id}/",
         "dispatch": {
             "mode": CAPABILITY_HINT_ITEM_TYPE,
             "title": title,
@@ -352,3 +373,39 @@ def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     except (OSError, yaml.YAMLError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _load_explicit_repo_config(*, hub_root: Path, repo_root: Path) -> dict[str, Any]:
+    explicit_repo_config: dict[str, Any] = {}
+    root_defaults = load_root_defaults(hub_root)
+    explicit_repo_defaults = _mapping(root_defaults.get("repo_defaults"))
+    if explicit_repo_defaults:
+        explicit_repo_config = _merge_mappings(
+            explicit_repo_config, explicit_repo_defaults
+        )
+    hub_generated_config = normalize_generated_hub_config(hub_root / CONFIG_FILENAME)
+    explicit_generated_repo_defaults = _mapping(
+        hub_generated_config.get("repo_defaults")
+    )
+    if explicit_generated_repo_defaults:
+        explicit_repo_config = _merge_mappings(
+            explicit_repo_config, explicit_generated_repo_defaults
+        )
+    repo_override = _load_yaml_mapping(repo_root / REPO_OVERRIDE_FILENAME)
+    if repo_override:
+        explicit_repo_config = _merge_mappings(explicit_repo_config, repo_override)
+    return explicit_repo_config
+
+
+def _merge_mappings(
+    base: Mapping[str, Any], overlay: Mapping[str, Any]
+) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in overlay.items():
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            merged[key] = _merge_mappings(_mapping(merged.get(key)), value)
+        elif isinstance(value, Mapping):
+            merged[key] = _merge_mappings({}, value)
+        else:
+            merged[key] = value
+    return merged
