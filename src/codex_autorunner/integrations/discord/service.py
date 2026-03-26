@@ -6695,6 +6695,17 @@ class DiscordBotService:
                     components,
                 )
             return
+        deferred = (
+            await self._defer_component_update(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+            if component_response
+            else await self._defer_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+        )
         if not confirmed and _update_target_restarts_surface(
             update_target, surface="discord"
         ):
@@ -6708,35 +6719,26 @@ class DiscordBotService:
                     update_target=update_target
                 )
                 if component_response:
-                    await self._update_component_message(
+                    await self._send_or_update_component_message(
                         interaction_id=interaction_id,
                         interaction_token=interaction_token,
+                        deferred=deferred,
                         text=warning_text,
                         components=components,
                     )
                 else:
-                    await self._respond_with_components(
-                        interaction_id,
-                        interaction_token,
-                        warning_text,
-                        components,
+                    await self._send_or_respond_with_components_ephemeral(
+                        interaction_id=interaction_id,
+                        interaction_token=interaction_token,
+                        deferred=deferred,
+                        text=warning_text,
+                        components=components,
                     )
                 return
 
         target_label = get_update_target_label(update_target)
         restarts_discord = _update_target_restarts_surface(
             update_target, surface="discord"
-        )
-        deferred = (
-            await self._defer_component_update(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-            if component_response
-            else await self._defer_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
         )
         if restarts_discord:
             text = format_discord_message(

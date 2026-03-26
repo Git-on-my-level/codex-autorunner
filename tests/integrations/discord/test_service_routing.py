@@ -5326,7 +5326,17 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
         outbox_manager=_FakeOutboxManager(),
     )
 
-    service._active_update_session_count = lambda: 1  # type: ignore[method-assign]
+    observed: dict[str, Any] = {}
+
+    def _active_update_session_count() -> int:
+        observed["deferred_type"] = (
+            rest.interaction_responses[0]["payload"]["type"]
+            if rest.interaction_responses
+            else None
+        )
+        return 1
+
+    service._active_update_session_count = _active_update_session_count  # type: ignore[method-assign]
     spawned = False
 
     def _fake_spawn_update_process(**_kwargs: Any) -> None:
@@ -5342,8 +5352,71 @@ async def test_car_update_prompts_for_confirmation_when_sessions_active(
     try:
         await service.run_forever()
         assert spawned is False
+        assert observed["deferred_type"] == 5
         assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        data = rest.followup_messages[0]["payload"]
+        assert "active codex session" in data["content"].lower()
+        components = data.get("components") or []
+        assert components
+        buttons = components[0]["components"]
+        assert buttons[0]["custom_id"] == "update_confirm:all"
+        assert buttons[1]["custom_id"] == "update_cancel:all"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_update_prompts_for_confirmation_after_defer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_component_interaction(custom_id="update_target_select", values=["all"])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _active_update_session_count() -> int:
+        observed["deferred_type"] = (
+            rest.interaction_responses[0]["payload"]["type"]
+            if rest.interaction_responses
+            else None
+        )
+        return 1
+
+    service._active_update_session_count = _active_update_session_count  # type: ignore[method-assign]
+    spawned = False
+
+    def _fake_spawn_update_process(**_kwargs: Any) -> None:
+        nonlocal spawned
+        spawned = True
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_spawn_update_process",
+        _fake_spawn_update_process,
+    )
+
+    try:
+        await service.run_forever()
+        assert spawned is False
+        assert observed["deferred_type"] == 6
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        data = rest.edited_original_interaction_responses[0]["payload"]
         assert "active codex session" in data["content"].lower()
         components = data.get("components") or []
         assert components
