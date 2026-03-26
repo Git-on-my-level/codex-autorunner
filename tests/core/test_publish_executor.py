@@ -15,7 +15,7 @@ from codex_autorunner.core.publish_executor import (
     TerminalPublishError,
     drain_pending_publish_operations,
 )
-from codex_autorunner.core.publish_journal import PublishJournalStore
+from codex_autorunner.core.publish_journal import PublishJournalStore, PublishOperation
 from codex_autorunner.core.publish_operation_executors import (
     build_enqueue_managed_turn_executor,
     build_notify_chat_executor,
@@ -238,6 +238,49 @@ def test_process_now_marks_terminal_failure_without_retry(
     repeated = processor.process_now(limit=10)
     assert repeated == []
     assert call_count == 1
+
+
+def test_drain_pending_publish_operations_skips_operation_when_mark_running_fails() -> (
+    None
+):
+    operation = PublishOperation(
+        operation_id="op-1",
+        operation_key="notify:op-1",
+        operation_kind="notify_chat",
+        state="pending",
+        payload={"body": "ready"},
+        response={},
+        created_at="2026-03-25T00:00:00Z",
+        updated_at="2026-03-25T00:00:00Z",
+        next_attempt_at="2026-03-25T00:00:00Z",
+        attempt_count=1,
+    )
+
+    class _FakeJournal:
+        def claim_pending_operations(self, *, limit: int, now_timestamp: str):
+            assert limit == 10
+            assert now_timestamp == "2026-03-25T00:00:00Z"
+            return [operation]
+
+        def mark_running(self, operation_id: str):
+            assert operation_id == "op-1"
+            return None
+
+    executor_calls: list[str] = []
+
+    def executor(_operation):
+        executor_calls.append("called")
+        return {"delivered": True}
+
+    processed = drain_pending_publish_operations(
+        _FakeJournal(),
+        executor_registry=PublishExecutorRegistry({"notify_chat": executor}),
+        limit=10,
+        now_fn=_QueuedClock("2026-03-25T00:00:00Z"),
+    )
+
+    assert processed == []
+    assert executor_calls == []
 
 
 def test_process_now_denies_post_pr_comment_without_github_side_effect(

@@ -218,7 +218,9 @@ def drain_pending_publish_operations(
     )
     processed: list[PublishOperation] = []
     for operation in claimed:
-        current_operation = journal.mark_running(operation.operation_id) or operation
+        current_operation = journal.mark_running(operation.operation_id)
+        if current_operation is None:
+            continue
         try:
             response = executor_registry.dispatch(current_operation)
         except Exception as exc:

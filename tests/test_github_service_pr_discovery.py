@@ -103,3 +103,65 @@ def test_discover_pr_binding_summary_returns_none_when_branch_has_no_pr(
     )
 
     assert service.discover_pr_binding_summary() is None
+
+
+def test_sync_pr_does_not_append_duplicate_close_keyword(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = GitHubService(tmp_path, raw_config={})
+    edit_calls: list[list[str]] = []
+
+    monkeypatch.setattr(service, "gh_authenticated", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "repo_info",
+        lambda: RepoInfo(
+            name_with_owner="acme/widgets",
+            url="https://github.com/acme/widgets",
+            default_branch="main",
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "read_link_state",
+        lambda: {"issue": {"number": 123}},
+    )
+    monkeypatch.setattr(service, "current_branch", lambda *, cwd=None: "feature/login")
+    monkeypatch.setattr(service, "is_clean", lambda *, cwd=None: True)
+    monkeypatch.setattr(
+        service,
+        "pr_for_branch",
+        lambda *, branch, cwd=None: {
+            "url": "https://github.com/acme/widgets/pull/17",
+            "number": 17,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": branch,
+            "baseRefName": "main",
+            "title": "Login flow",
+        },
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        lambda **_: None,
+    )
+
+    def _fake_gh(
+        args: list[str], *, cwd=None, check=True, timeout_seconds=None
+    ):  # type: ignore[no-untyped-def]
+        if args[:3] == ["pr", "view", "https://github.com/acme/widgets/pull/17"]:
+            return type(
+                "Proc", (), {"stdout": '{"body":"Fixes #123\\n\\nAlready done"}'}
+            )()
+        if args[:3] == ["pr", "edit", "https://github.com/acme/widgets/pull/17"]:
+            edit_calls.append(list(args))
+            return type("Proc", (), {"stdout": ""})()
+        raise AssertionError(f"unexpected gh args: {args}")
+
+    monkeypatch.setattr(service, "_gh", _fake_gh)
+    monkeypatch.setattr(service, "write_link_state", lambda state: None)
+
+    result = service.sync_pr(draft=False, title="Login flow", body="Initial body")
+
+    assert result["links"]["url"] == "https://github.com/acme/widgets/pull/17"
+    assert edit_calls == []

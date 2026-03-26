@@ -116,7 +116,7 @@ def _body_has_issue_close(body: str, issue_num: Optional[int]) -> bool:
     if not body or not issue_num:
         return False
     pattern = re.compile(
-        rf"(?i)\\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\\s+#?{int(issue_num)}\\b"
+        rf"(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#?{int(issue_num)}\b"
     )
     return bool(pattern.search(body))
 
