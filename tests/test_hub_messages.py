@@ -5,11 +5,14 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.config import CONFIG_FILENAME, REPO_OVERRIDE_FILENAME
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.hub_inbox_resolution import message_resolution_key
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
@@ -191,6 +194,23 @@ def _build_hub_messages_app(hub_root: Path, monkeypatch) -> object:
         lambda *args, **kwargs: object(),
     )
     return create_hub_app(hub_root)
+
+
+def _update_yaml_config(path: Path, mutate) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {}
+    if path.exists():
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    mutate(payload)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+def _update_repo_config(repo_root: Path, mutate) -> None:
+    _update_yaml_config(repo_root / REPO_OVERRIDE_FILENAME, mutate)
+
+
+def _update_hub_config(hub_root: Path, mutate) -> None:
+    _update_yaml_config(hub_root / CONFIG_FILENAME, mutate)
 
 
 def _assert_canonical_state_v1(
@@ -624,6 +644,141 @@ def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env, monkeypatch) 
     data = json.loads(dismissals_path.read_text(encoding="utf-8"))
     stored = data["items"][f"{run_id}:run_failed"]
     assert stored["resolved_by"] == "hub_messages_resolve"
+
+
+def test_hub_messages_include_capability_hints_and_filter_scoped_dismissals(
+    hub_env, monkeypatch
+) -> None:
+    _update_repo_config(
+        hub_env.repo_root,
+        lambda payload: payload.update(
+            {
+                "voice": {"enabled": False, "provider": "local_whisper"},
+                "github": {
+                    "automation": {
+                        "enabled": False,
+                        "webhook_ingress": {"enabled": False},
+                    }
+                },
+            }
+        ),
+    )
+    _update_hub_config(
+        hub_env.hub_root,
+        lambda payload: payload.update(
+            {
+                "pma": {"enabled": False},
+                "discord_bot": {"enabled": True, "shell": {"enabled": False}},
+                "telegram_bot": {"enabled": True, "shell": {"enabled": False}},
+            }
+        ),
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        before = client.get("/hub/messages", params={"scope_key": "scope-a"}).json()[
+            "items"
+        ]
+        hint_ids = {
+            item["hint_id"]
+            for item in before
+            if item.get("item_type") == "capability_hint"
+        }
+        assert hint_ids == {
+            "voice_enablement",
+            "scm_automation_enablement",
+            "pma_enablement",
+            "shell_enablement",
+        }
+
+        dismiss = client.post(
+            "/hub/messages/resolve",
+            json={
+                "repo_id": hub_env.repo_id,
+                "run_id": "capability_hint:voice_enablement",
+                "item_type": "capability_hint",
+                "hint_id": "voice_enablement",
+                "scope_key": "scope-a",
+                "action": "dismiss",
+                "reason": "not now",
+            },
+        )
+        assert dismiss.status_code == 200
+        payload = dismiss.json()["resolved"]
+        assert payload["hint_id"] == "voice_enablement"
+        assert payload["scope_key"] == "scope-a"
+
+        scoped_after = client.get(
+            "/hub/messages", params={"scope_key": "scope-a"}
+        ).json()["items"]
+        scoped_hint_ids = {
+            item["hint_id"]
+            for item in scoped_after
+            if item.get("item_type") == "capability_hint"
+        }
+        assert "voice_enablement" not in scoped_hint_ids
+
+        other_scope = client.get(
+            "/hub/messages", params={"scope_key": "scope-b"}
+        ).json()["items"]
+        other_scope_hint_ids = {
+            item["hint_id"]
+            for item in other_scope
+            if item.get("item_type") == "capability_hint"
+        }
+        assert "voice_enablement" in other_scope_hint_ids
+
+    dismissals_path = (
+        hub_env.repo_root / ".codex-autorunner" / "hub_inbox_dismissals.json"
+    )
+    data = json.loads(dismissals_path.read_text(encoding="utf-8"))
+    stored = data["items"][
+        message_resolution_key(
+            "capability_hint:voice_enablement",
+            item_type="capability_hint",
+            hint_id="voice_enablement",
+            scope_key="scope-a",
+        )
+    ]
+    assert stored["reason"] == "not now"
+
+
+def test_hub_messages_do_not_hint_from_provider_only_repo_defaults(
+    hub_env, monkeypatch
+) -> None:
+    _update_repo_config(
+        hub_env.repo_root,
+        lambda payload: payload.update({"voice": {"provider": "local_whisper"}}),
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        items = client.get("/hub/messages").json()["items"]
+        assert not any(item.get("item_type") == "capability_hint" for item in items)
+
+
+def test_hub_messages_resolve_requires_scope_key_for_capability_hint(
+    hub_env, monkeypatch
+) -> None:
+    _update_repo_config(
+        hub_env.repo_root,
+        lambda payload: payload.update({"voice": {"enabled": False}}),
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/messages/resolve",
+            json={
+                "repo_id": hub_env.repo_id,
+                "run_id": "capability_hint:voice_enablement",
+                "item_type": "capability_hint",
+                "hint_id": "voice_enablement",
+                "action": "dismiss",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json() == {"detail": "Missing scope_key"}
 
 
 class TestIssue975CharacterizationHubMessageFreshness:

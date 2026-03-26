@@ -6,6 +6,10 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 
+from ....core.capability_hints import (
+    CAPABILITY_HINT_ITEM_TYPE,
+    capability_hint_id_from_run_id,
+)
 from ....core.freshness import (
     iso_now,
     resolve_stale_threshold_seconds,
@@ -33,14 +37,17 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             return lock
 
     @router.get("/hub/messages")
-    async def hub_messages(limit: int = 100):
+    async def hub_messages(limit: int = 100, scope_key: Optional[str] = None):
         """Return paused ticket_flow dispatches across all repos.
 
         The hub inbox is intentionally simple: it surfaces the latest archived
         dispatch for each paused ticket_flow run.
         """
         items = await asyncio.to_thread(
-            hub_gather_service.gather_hub_messages, context, limit=limit
+            hub_gather_service.gather_hub_messages,
+            context,
+            limit=limit,
+            scope_key=scope_key,
         )
         generated_at = iso_now()
         stale_threshold_seconds = resolve_stale_threshold_seconds(
@@ -117,6 +124,8 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
         repo_id = str(payload.get("repo_id") or "").strip()
         run_id = str(payload.get("run_id") or "").strip()
         item_type = str(payload.get("item_type") or "").strip()
+        hint_id = str(payload.get("hint_id") or "").strip() or None
+        scope_key = str(payload.get("scope_key") or "").strip() or None
         action = str(payload.get("action") or "dismiss").strip() or "dismiss"
         reason_raw = payload.get("reason")
         reason = str(reason_raw).strip() if isinstance(reason_raw, str) else ""
@@ -144,7 +153,7 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             raise HTTPException(status_code=404, detail="Repo not found")
 
         if not item_type:
-            hub_payload = await hub_messages(limit=2000)
+            hub_payload = await hub_messages(limit=2000, scope_key=scope_key)
             items_raw = (
                 hub_payload.get("items", []) if isinstance(hub_payload, dict) else []
             )
@@ -156,6 +165,9 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                     continue
                 if str(item.get("run_id") or "") != run_id:
                     continue
+                candidate_hint_id = str(item.get("hint_id") or "").strip() or None
+                if hint_id is not None and candidate_hint_id != hint_id:
+                    continue
                 candidate_seq = item.get("seq")
                 if seq is not None and candidate_seq != seq:
                     continue
@@ -164,12 +176,22 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             if matched is None:
                 raise HTTPException(status_code=404, detail="Hub message not found")
             item_type = str(matched.get("item_type") or "").strip() or "run_dispatch"
+            if hint_id is None:
+                matched_hint_id = str(matched.get("hint_id") or "").strip()
+                hint_id = matched_hint_id or None
             if seq is None:
                 matched_seq = matched.get("seq")
                 if isinstance(matched_seq, int) and matched_seq > 0:
                     seq = matched_seq
         elif item_type == "run_dispatch" and seq is None:
             raise HTTPException(status_code=400, detail="Missing seq for run_dispatch")
+        elif item_type == CAPABILITY_HINT_ITEM_TYPE:
+            if hint_id is None:
+                hint_id = capability_hint_id_from_run_id(run_id)
+            if hint_id is None:
+                raise HTTPException(status_code=400, detail="Missing hint_id")
+            if scope_key is None:
+                raise HTTPException(status_code=400, detail="Missing scope_key")
 
         repo_lock = await _repo_dismissal_lock(snapshot.path)
         async with repo_lock:
@@ -182,6 +204,8 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                 action=action,
                 reason=reason or None,
                 actor="hub_messages_resolve",
+                hint_id=hint_id,
+                scope_key=scope_key,
             )
         return {"status": "ok", "resolved": resolved}
 

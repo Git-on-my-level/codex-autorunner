@@ -1130,6 +1130,35 @@ main {
   font-size: 12px;
 }
 
+.notifications-modal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notifications-section-label {
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.notifications-key-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.notifications-key-pill {
+  background: rgba(108, 168, 255, 0.12);
+  border: 1px solid rgba(108, 168, 255, 0.18);
+  color: var(--accent);
+}
+
+.notifications-modal-prompt {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .notifications-open-run {
   display: inline-flex;
   align-items: center;
