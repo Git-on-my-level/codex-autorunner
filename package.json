@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "eslint": "^10.0.3",
+    "eslint": "^10.1.0",
     "glob": "^13.0.6",
     "globals": "^17.4.0",
     "html-validate": "^10.11.2",
