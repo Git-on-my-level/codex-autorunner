@@ -5,11 +5,21 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
+from codex_autorunner.core.config import (
+    CONFIG_FILENAME,
+    REPO_OVERRIDE_FILENAME,
+    ROOT_CONFIG_FILENAME,
+)
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
+from codex_autorunner.core.hub_inbox_resolution import (
+    message_resolution_key,
+    record_message_resolution,
+)
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.state import RunnerState, save_state
 from codex_autorunner.server import create_hub_app
@@ -191,6 +201,44 @@ def _build_hub_messages_app(hub_root: Path, monkeypatch) -> object:
         lambda *args, **kwargs: object(),
     )
     return create_hub_app(hub_root)
+
+
+def _update_yaml_config(path: Path, mutate) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {}
+    if path.exists():
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    mutate(payload)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+def _update_repo_config(repo_root: Path, mutate) -> None:
+    _update_yaml_config(repo_root / REPO_OVERRIDE_FILENAME, mutate)
+
+
+def _update_hub_config(hub_root: Path, mutate) -> None:
+    _update_yaml_config(hub_root / CONFIG_FILENAME, mutate)
+
+
+def _update_root_config(hub_root: Path, mutate) -> None:
+    _update_yaml_config(hub_root / ROOT_CONFIG_FILENAME, mutate)
+
+
+def _add_hub_repo(hub_root: Path, repo_id: str) -> Path:
+    from codex_autorunner.bootstrap import seed_repo_files
+    from codex_autorunner.core.config import load_hub_config
+    from codex_autorunner.manifest import load_manifest, save_manifest
+
+    repo_root = hub_root / "worktrees" / repo_id
+    repo_root.mkdir(parents=True)
+    (repo_root / ".git").mkdir()
+    seed_repo_files(repo_root, git_required=False)
+
+    hub_config = load_hub_config(hub_root)
+    manifest = load_manifest(hub_config.manifest_path, hub_root)
+    manifest.ensure_repo(hub_root, repo_root, repo_id=repo_id, display_name=repo_id)
+    save_manifest(hub_config.manifest_path, manifest, hub_root)
+    return repo_root
 
 
 def _assert_canonical_state_v1(
@@ -624,6 +672,259 @@ def test_hub_messages_resolve_dismisses_non_dispatch_item(hub_env, monkeypatch) 
     data = json.loads(dismissals_path.read_text(encoding="utf-8"))
     stored = data["items"][f"{run_id}:run_failed"]
     assert stored["resolved_by"] == "hub_messages_resolve"
+
+
+def test_hub_messages_include_capability_hints_and_filter_scoped_dismissals(
+    hub_env, monkeypatch
+) -> None:
+    second_repo_root = _add_hub_repo(hub_env.hub_root, "repo-two")
+    _update_hub_config(
+        hub_env.hub_root,
+        lambda payload: payload.update(
+            {
+                "repo_defaults": {
+                    "voice": {"enabled": False, "provider": "local_whisper"},
+                    "github": {
+                        "automation": {
+                            "enabled": False,
+                            "webhook_ingress": {"enabled": False},
+                        }
+                    },
+                },
+                "pma": {"enabled": False},
+                "discord_bot": {"enabled": True, "shell": {"enabled": False}},
+                "telegram_bot": {"enabled": True, "shell": {"enabled": False}},
+            }
+        ),
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        before = client.get("/hub/messages", params={"scope_key": "scope-a"}).json()[
+            "items"
+        ]
+        capability_hints = [
+            item for item in before if item.get("item_type") == "capability_hint"
+        ]
+        repo_scoped = [
+            item
+            for item in capability_hints
+            if item["hint_id"] in {"voice_enablement", "scm_automation_enablement"}
+        ]
+        hub_scoped = [
+            item
+            for item in capability_hints
+            if item["hint_id"] in {"pma_enablement", "shell_enablement"}
+        ]
+        assert {(item["repo_id"], item["hint_id"]) for item in repo_scoped} == {
+            (hub_env.repo_id, "voice_enablement"),
+            (hub_env.repo_id, "scm_automation_enablement"),
+            ("repo-two", "voice_enablement"),
+            ("repo-two", "scm_automation_enablement"),
+        }
+        assert {(item["repo_id"], item["hint_id"]) for item in hub_scoped} == {
+            ("__hub__", "pma_enablement"),
+            ("__hub__", "shell_enablement"),
+        }
+
+        dismiss = client.post(
+            "/hub/messages/resolve",
+            json={
+                "repo_id": "__hub__",
+                "run_id": "capability_hint:pma_enablement",
+                "item_type": "capability_hint",
+                "hint_id": "pma_enablement",
+                "scope_key": "scope-a",
+                "action": "dismiss",
+                "reason": "not now",
+            },
+        )
+        assert dismiss.status_code == 200
+        payload = dismiss.json()["resolved"]
+        assert payload["hint_id"] == "pma_enablement"
+        assert payload["repo_id"] == "__hub__"
+        assert payload["scope_key"] == "scope-a"
+
+        scoped_after = client.get(
+            "/hub/messages", params={"scope_key": "scope-a"}
+        ).json()["items"]
+        scoped_hint_ids = {
+            (item["repo_id"], item["hint_id"])
+            for item in scoped_after
+            if item.get("item_type") == "capability_hint"
+        }
+        assert ("__hub__", "pma_enablement") not in scoped_hint_ids
+        assert (hub_env.repo_id, "voice_enablement") in scoped_hint_ids
+        assert ("repo-two", "voice_enablement") in scoped_hint_ids
+
+        other_scope = client.get(
+            "/hub/messages", params={"scope_key": "scope-b"}
+        ).json()["items"]
+        other_scope_hint_ids = {
+            (item["repo_id"], item["hint_id"])
+            for item in other_scope
+            if item.get("item_type") == "capability_hint"
+        }
+        assert ("__hub__", "pma_enablement") in other_scope_hint_ids
+
+    dismissals_path = (
+        hub_env.hub_root / ".codex-autorunner" / "hub_inbox_dismissals.json"
+    )
+    data = json.loads(dismissals_path.read_text(encoding="utf-8"))
+    stored = data["items"][
+        message_resolution_key(
+            "capability_hint:pma_enablement",
+            item_type="capability_hint",
+            hint_id="pma_enablement",
+            scope_key="scope-a",
+        )
+    ]
+    assert stored["reason"] == "not now"
+    assert stored["repo_id"] == "__hub__"
+    assert not (
+        hub_env.repo_root / ".codex-autorunner" / "hub_inbox_dismissals.json"
+    ).exists()
+    assert second_repo_root.exists()
+
+
+def test_hub_messages_include_capability_hints_from_root_repo_defaults(
+    hub_env, monkeypatch
+) -> None:
+    _update_root_config(
+        hub_env.hub_root,
+        lambda payload: payload.update(
+            {
+                "repo_defaults": {
+                    "voice": {"enabled": False, "provider": "local_whisper"},
+                    "github": {
+                        "automation": {
+                            "enabled": False,
+                            "webhook_ingress": {"enabled": False},
+                        }
+                    },
+                }
+            }
+        ),
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        items = client.get("/hub/messages", params={"scope_key": "scope-a"}).json()[
+            "items"
+        ]
+        capability_hints = [
+            item for item in items if item.get("item_type") == "capability_hint"
+        ]
+        hint_ids = {(item["repo_id"], item["hint_id"]) for item in capability_hints}
+        assert (hub_env.repo_id, "voice_enablement") in hint_ids
+        assert (hub_env.repo_id, "scm_automation_enablement") in hint_ids
+
+
+def test_hub_messages_honor_legacy_repo_scoped_hub_hint_dismissals(
+    hub_env, monkeypatch
+) -> None:
+    _update_hub_config(
+        hub_env.hub_root,
+        lambda payload: payload.update({"pma": {"enabled": False}}),
+    )
+    record_message_resolution(
+        repo_root=hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        run_id="capability_hint:pma_enablement",
+        item_type="capability_hint",
+        seq=None,
+        action="dismiss",
+        reason="legacy",
+        actor="test",
+        hint_id="pma_enablement",
+        scope_key="scope-a",
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        scoped_items = client.get(
+            "/hub/messages", params={"scope_key": "scope-a"}
+        ).json()["items"]
+        scoped_hint_ids = {
+            (item["repo_id"], item["hint_id"])
+            for item in scoped_items
+            if item.get("item_type") == "capability_hint"
+        }
+        assert ("__hub__", "pma_enablement") not in scoped_hint_ids
+
+        other_scope_items = client.get(
+            "/hub/messages", params={"scope_key": "scope-b"}
+        ).json()["items"]
+        other_scope_hint_ids = {
+            (item["repo_id"], item["hint_id"])
+            for item in other_scope_items
+            if item.get("item_type") == "capability_hint"
+        }
+        assert ("__hub__", "pma_enablement") in other_scope_hint_ids
+
+
+def test_hub_messages_do_not_hint_from_provider_only_repo_defaults(
+    hub_env, monkeypatch
+) -> None:
+    _update_hub_config(
+        hub_env.hub_root,
+        lambda payload: payload.update(
+            {"repo_defaults": {"voice": {"provider": "local_whisper"}}}
+        ),
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        items = client.get("/hub/messages").json()["items"]
+        assert not any(item.get("item_type") == "capability_hint" for item in items)
+
+
+def test_hub_messages_resolve_allows_unscoped_capability_hint_dismissals(
+    hub_env, monkeypatch
+) -> None:
+    _update_repo_config(
+        hub_env.repo_root,
+        lambda payload: payload.update({"voice": {"enabled": False}}),
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/messages/resolve",
+            json={
+                "repo_id": hub_env.repo_id,
+                "run_id": "capability_hint:voice_enablement",
+                "item_type": "capability_hint",
+                "hint_id": "voice_enablement",
+                "action": "dismiss",
+            },
+        )
+        assert response.status_code == 200
+        resolved = response.json()["resolved"]
+        assert resolved["hint_id"] == "voice_enablement"
+        assert "scope_key" not in resolved
+
+        scoped_items = client.get(
+            "/hub/messages", params={"scope_key": "scope-a"}
+        ).json()["items"]
+        assert not any(
+            item.get("item_type") == "capability_hint"
+            and item.get("hint_id") == "voice_enablement"
+            for item in scoped_items
+        )
+
+    dismissals_path = (
+        hub_env.repo_root / ".codex-autorunner" / "hub_inbox_dismissals.json"
+    )
+    data = json.loads(dismissals_path.read_text(encoding="utf-8"))
+    assert (
+        message_resolution_key(
+            "capability_hint:voice_enablement",
+            item_type="capability_hint",
+            hint_id="voice_enablement",
+        )
+        in data["items"]
+    )
 
 
 class TestIssue975CharacterizationHubMessageFreshness:

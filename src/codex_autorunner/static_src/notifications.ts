@@ -1,12 +1,25 @@
 import { api, confirmModal, escapeHtml, flash, inputModal, openModal, resolvePath } from "./utils.js";
 import { registerAutoRefresh, type RefreshContext } from "./autoRefresh.js";
 
+const HUB_HINT_SCOPE_STORAGE_KEY = "car.hub.hint-scope";
+const HUB_HINT_SCOPE_EVENT = "car:capability-hint-request";
+
 interface HubDispatch {
   mode?: string;
   title?: string | null;
   body?: string | null;
   extra?: Record<string, unknown> | null;
   is_handoff?: boolean;
+}
+
+interface CapabilityHintPayload {
+  hint_id?: string;
+  feature_label?: string | null;
+  prompt?: string | null;
+  config_keys?: string[] | null;
+  reason_code?: string | null;
+  dismiss_label?: string | null;
+  open_label?: string | null;
 }
 
 interface SupersessionPayload {
@@ -24,6 +37,15 @@ interface HubMessageItem {
   status?: string;
   seq?: number;
   item_type?: string;
+  title?: string | null;
+  body?: string | null;
+  hint_id?: string | null;
+  feature_label?: string | null;
+  prompt?: string | null;
+  config_keys?: string[] | null;
+  reason_code?: string | null;
+  dismiss_label?: string | null;
+  open_label?: string | null;
   dispatch?: HubDispatch | null;
   dispatch_actionable?: boolean;
   open_url?: string;
@@ -47,6 +69,14 @@ interface NormalizedNotification {
   runId?: string;
   status?: string;
   seq?: number;
+  itemType?: string;
+  hintId?: string;
+  featureLabel?: string;
+  prompt?: string;
+  configKeys?: string[];
+  reasonCode?: string;
+  dismissLabel?: string;
+  openLabel?: string;
   title: string;
   mode?: string;
   body: string;
@@ -75,6 +105,11 @@ interface ModalElements {
   closeBtn: HTMLButtonElement;
 }
 
+interface CapabilityHintEventDetail {
+  hintId?: string;
+  repoId?: string | null;
+}
+
 let notificationsInitialized = false;
 const notificationItemsByRoot: Record<string, NormalizedNotification[]> = {};
 let activeRoot: NotificationRoot | null = null;
@@ -82,11 +117,87 @@ let closeModalFn: (() => void) | null = null;
 let documentListenerInstalled = false;
 let modalElements: ModalElements | null = null;
 let isRefreshing = false;
+let volatileHubHintScopeKey: string | null = null;
 const DROPDOWN_MARGIN = 8;
 const DROPDOWN_OFFSET = 6;
 
 const NOTIFICATIONS_REFRESH_ID = "notifications";
 const NOTIFICATIONS_REFRESH_MS = 15000;
+
+function newBrowserScopeToken(): string {
+  try {
+    if (
+      typeof crypto !== "undefined" &&
+      "randomUUID" in crypto &&
+      typeof crypto.randomUUID === "function"
+    ) {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // ignore
+  }
+  return `scope-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getHubHintScopeKey(): string {
+  try {
+    const existing = localStorage.getItem(HUB_HINT_SCOPE_STORAGE_KEY);
+    if (existing && existing.trim()) {
+      return existing.trim();
+    }
+    const created = `web:browser:${newBrowserScopeToken()}`;
+    localStorage.setItem(HUB_HINT_SCOPE_STORAGE_KEY, created);
+    return created;
+  } catch {
+    if (!volatileHubHintScopeKey) {
+      volatileHubHintScopeKey = `web:browser:${newBrowserScopeToken()}`;
+    }
+    return volatileHubHintScopeKey;
+  }
+}
+
+function normalizeCapabilityHintPayload(item: HubMessageItem): CapabilityHintPayload {
+  const extra = item.dispatch?.extra || {};
+  const payload = item as unknown as Record<string, unknown>;
+  const configKeysRaw = payload.config_keys ?? extra.config_keys;
+  const configKeys = Array.isArray(configKeysRaw)
+    ? configKeysRaw
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter(Boolean)
+    : [];
+  return {
+    hint_id:
+      (typeof payload.hint_id === "string" && payload.hint_id.trim()) ||
+      (typeof extra.hint_id === "string" && extra.hint_id.trim()) ||
+      undefined,
+    feature_label:
+      (typeof payload.feature_label === "string" && payload.feature_label.trim()) ||
+      (typeof extra.feature_label === "string" && extra.feature_label.trim()) ||
+      null,
+    prompt:
+      (typeof payload.prompt === "string" && payload.prompt.trim()) ||
+      (typeof extra.prompt === "string" && extra.prompt.trim()) ||
+      null,
+    config_keys: configKeys,
+    reason_code:
+      (typeof payload.reason_code === "string" && payload.reason_code.trim()) ||
+      (typeof extra.reason_code === "string" && extra.reason_code.trim()) ||
+      null,
+    dismiss_label:
+      (typeof payload.dismiss_label === "string" && payload.dismiss_label.trim()) ||
+      (typeof extra.dismiss_label === "string" && extra.dismiss_label.trim()) ||
+      null,
+    open_label:
+      (typeof payload.open_label === "string" && payload.open_label.trim()) ||
+      (typeof extra.open_label === "string" && extra.open_label.trim()) ||
+      null,
+  };
+}
+
+function hubMessagesPath(): string {
+  const params = new URLSearchParams({ scope_key: getHubHintScopeKey() });
+  return `/hub/messages?${params.toString()}`;
+}
 
 function getModalElements(): ModalElements | null {
   if (modalElements) return modalElements;
@@ -124,17 +235,29 @@ function setBadgeCount(rootKey: string, count: number): void {
 function normalizeHubItem(item: HubMessageItem): NormalizedNotification {
   const repoId = String(item.repo_id || "");
   const repoDisplay = item.repo_display_name || repoId;
+  const itemType = item.item_type || "run_dispatch";
+  const hint = normalizeCapabilityHintPayload(item);
   const mode = item.dispatch?.mode || "";
-  const title = (item.dispatch?.title || "").trim();
-  const fallbackTitle = title || mode || "Dispatch";
-  const body = item.dispatch?.body || "";
+  const title =
+    (item.title || "").trim() ||
+    (item.dispatch?.title || "").trim() ||
+    hint.feature_label ||
+    "";
+  const fallbackTitle =
+    title ||
+    (itemType === "capability_hint" ? "Feature hint" : mode || "Dispatch");
+  const body = item.body || item.dispatch?.body || "";
   const isInformationalDispatch =
-    item.item_type === "run_dispatch" && item.dispatch_actionable === false;
+    itemType === "run_dispatch" && item.dispatch_actionable === false;
   const isHandoff =
     !isInformationalDispatch &&
     (Boolean(item.dispatch?.is_handoff) || mode === "pause");
   const runId = String(item.run_id || "");
-  const openUrl = item.open_url || `/repos/${repoId}/?tab=inbox&run_id=${runId}`;
+  const openUrl =
+    item.open_url ||
+    (itemType === "capability_hint"
+      ? `/repos/${repoId}/`
+      : `/repos/${repoId}/?tab=inbox&run_id=${runId}`);
   const supersession = item.supersession;
   const isSuperseded = supersession?.superseded === true;
   const isPrimary = supersession?.is_primary === true;
@@ -147,12 +270,27 @@ function normalizeHubItem(item: HubMessageItem): NormalizedNotification {
     runId,
     status: item.status || "paused",
     seq: item.seq,
+    itemType,
+    hintId: hint.hint_id,
+    featureLabel: hint.feature_label || undefined,
+    prompt: hint.prompt || undefined,
+    configKeys: hint.config_keys || undefined,
+    reasonCode: hint.reason_code || undefined,
+    dismissLabel: hint.dismiss_label || undefined,
+    openLabel: hint.open_label || undefined,
     title: fallbackTitle,
     mode,
     body,
     isHandoff,
     openUrl,
-    pillLabel: isHandoff ? "handoff" : isInformationalDispatch ? "info" : "paused",
+    pillLabel:
+      itemType === "capability_hint"
+        ? "hint"
+        : isHandoff
+          ? "handoff"
+          : isInformationalDispatch
+            ? "info"
+            : "paused",
     isSuperseded,
     supersededBy,
     supersededReason,
@@ -326,7 +464,9 @@ function isSameNotification(a: NormalizedNotification, b: NormalizedNotification
     a.kind === b.kind &&
     a.repoId === b.repoId &&
     a.runId === b.runId &&
-    a.seq === b.seq
+    a.seq === b.seq &&
+    a.itemType === b.itemType &&
+    a.hintId === b.hintId
   );
 }
 
@@ -359,78 +499,162 @@ function openNotificationsModal(item: NormalizedNotification, returnFocusTo?: HT
       </div>
     `;
   } else {
-    const runId = item.runId || "";
-    const runLabel = item.seq ? `${runId.slice(0, 8)} (#${item.seq})` : runId.slice(0, 8);
-    const modeLabel = item.mode ? ` (${item.mode})` : "";
-    const supersededBlock = item.isSuperseded
-      ? `
-        <div class="notifications-modal-row muted">
-          <span class="notifications-modal-label">Status</span>
-          <span class="notifications-modal-value">Superseded by ${escapeHtml(item.supersededBy || "newer action")}</span>
+    const isCapabilityHint = item.itemType === "capability_hint";
+    if (isCapabilityHint) {
+      const configKeys = (item.configKeys || [])
+        .map((key) => `<span class="pill pill-small notifications-key-pill">${escapeHtml(key)}</span>`)
+        .join("");
+      const configBlock = configKeys
+        ? `
+          <div class="notifications-modal-section">
+            <div class="notifications-section-label muted small">Config keys</div>
+            <div class="notifications-key-list">${configKeys}</div>
+          </div>
+        `
+        : "";
+      const promptBlock = item.prompt
+        ? `
+          <div class="notifications-modal-section">
+            <div class="notifications-section-label muted small">PMA prompt</div>
+            <div class="notifications-modal-body notifications-modal-prompt">${escapeHtml(item.prompt)}</div>
+          </div>
+        `
+        : "";
+      const reasonBlock = item.reasonCode
+        ? `
+          <div class="notifications-modal-row muted">
+            <span class="notifications-modal-label">Reason</span>
+            <span class="notifications-modal-value mono">${escapeHtml(item.reasonCode)}</span>
+          </div>
+        `
+        : "";
+      modal.body.innerHTML = `
+        <div class="notifications-modal-meta">
+          <div class="notifications-modal-row">
+            <span class="notifications-modal-label">Repo</span>
+            <span class="notifications-modal-value">${escapeHtml(item.repoDisplay || "")}</span>
+          </div>
+          <div class="notifications-modal-row">
+            <span class="notifications-modal-label">Hint</span>
+            <span class="notifications-modal-value">${escapeHtml(item.featureLabel || item.title)}</span>
+          </div>
+          ${reasonBlock}
         </div>
-        ${item.supersededReason ? `<div class="notifications-modal-row muted"><span class="notifications-modal-label"></span><span class="notifications-modal-value small">${escapeHtml(item.supersededReason)}</span></div>` : ""}
-      `
-      : "";
-    const primaryLabel = item.isPrimary ? ' <span class="pill pill-small pill-info">primary</span>' : "";
-    modal.body.innerHTML = `
-      <div class="notifications-modal-meta">
-        <div class="notifications-modal-row">
-          <span class="notifications-modal-label">Repo</span>
-          <span class="notifications-modal-value">${escapeHtml(item.repoDisplay || "")}${primaryLabel}</span>
+        <div class="notifications-modal-body">${body}</div>
+        ${configBlock}
+        ${promptBlock}
+        <div class="notifications-modal-actions">
+          <a class="primary sm notifications-open-run" href="${escapeHtml(resolvePath(item.openUrl))}">${escapeHtml(item.openLabel || "Open repo")}</a>
+          <button class="ghost sm notifications-dismiss" type="button">${escapeHtml(item.dismissLabel || "Dismiss")}</button>
         </div>
-        <div class="notifications-modal-row">
-          <span class="notifications-modal-label">Run</span>
-          <span class="notifications-modal-value mono">${escapeHtml(runLabel)}</span>
-        </div>
-        <div class="notifications-modal-row">
-          <span class="notifications-modal-label">Dispatch</span>
-          <span class="notifications-modal-value">${escapeHtml(item.title)}${escapeHtml(modeLabel)}</span>
-        </div>
-        ${supersededBlock}
-      </div>
-      <div class="notifications-modal-body">${body}</div>
-      <div class="notifications-modal-actions">
-        <a class="primary sm notifications-open-run" href="${escapeHtml(resolvePath(item.openUrl))}">Open run</a>
-        ${item.seq ? '<button class="ghost sm notifications-dismiss" type="button">Dismiss</button>' : ""}
-      </div>
-      <div class="notifications-modal-placeholder">Reply here (coming soon).</div>
-    `;
-    const dismissBtn = modal.body.querySelector(
-      ".notifications-dismiss"
-    ) as HTMLButtonElement | null;
-    if (dismissBtn && item.seq) {
-      dismissBtn.addEventListener("click", async () => {
-        const confirmed = await confirmModal("Dismiss this inbox item?", {
-          confirmText: "Dismiss",
-          danger: false,
+      `;
+      const dismissBtn = modal.body.querySelector(
+        ".notifications-dismiss"
+      ) as HTMLButtonElement | null;
+      if (dismissBtn) {
+        dismissBtn.addEventListener("click", async () => {
+          const confirmed = await confirmModal("Dismiss this feature hint?", {
+            confirmText: item.dismissLabel || "Dismiss",
+            danger: false,
+          });
+          if (!confirmed) return;
+          await api("/hub/messages/resolve", {
+            method: "POST",
+            body: {
+              repo_id: item.repoId,
+              run_id: item.runId,
+              item_type: item.itemType,
+              hint_id: item.hintId,
+              scope_key: getHubHintScopeKey(),
+              action: "dismiss",
+            },
+          });
+          const hubItems = getItemsForRoot("hub").filter(
+            (entry) => !isSameNotification(entry, item)
+          );
+          notificationItemsByRoot.hub = hubItems;
+          setBadgeCount("hub", hubItems.filter((entry) => !entry.isSuperseded).length);
+          if (activeRoot && activeRoot.key === "hub") {
+            renderDropdown(activeRoot);
+          }
+          closeNotificationsModal();
+          flash("Feature hint dismissed");
         });
-        if (!confirmed) return;
-        const reason = await inputModal("Dismiss reason (optional)", {
-          placeholder: "obsolete, resolved elsewhere, ...",
-          confirmText: "Dismiss",
-          allowEmpty: true,
+      }
+    } else {
+      const runId = item.runId || "";
+      const runLabel = item.seq ? `${runId.slice(0, 8)} (#${item.seq})` : runId.slice(0, 8);
+      const modeLabel = item.mode ? ` (${item.mode})` : "";
+      const supersededBlock = item.isSuperseded
+        ? `
+          <div class="notifications-modal-row muted">
+            <span class="notifications-modal-label">Status</span>
+            <span class="notifications-modal-value">Superseded by ${escapeHtml(item.supersededBy || "newer action")}</span>
+          </div>
+          ${item.supersededReason ? `<div class="notifications-modal-row muted"><span class="notifications-modal-label"></span><span class="notifications-modal-value small">${escapeHtml(item.supersededReason)}</span></div>` : ""}
+        `
+        : "";
+      const primaryLabel = item.isPrimary ? ' <span class="pill pill-small pill-info">primary</span>' : "";
+      modal.body.innerHTML = `
+        <div class="notifications-modal-meta">
+          <div class="notifications-modal-row">
+            <span class="notifications-modal-label">Repo</span>
+            <span class="notifications-modal-value">${escapeHtml(item.repoDisplay || "")}${primaryLabel}</span>
+          </div>
+          <div class="notifications-modal-row">
+            <span class="notifications-modal-label">Run</span>
+            <span class="notifications-modal-value mono">${escapeHtml(runLabel)}</span>
+          </div>
+          <div class="notifications-modal-row">
+            <span class="notifications-modal-label">Dispatch</span>
+            <span class="notifications-modal-value">${escapeHtml(item.title)}${escapeHtml(modeLabel)}</span>
+          </div>
+          ${supersededBlock}
+        </div>
+        <div class="notifications-modal-body">${body}</div>
+        <div class="notifications-modal-actions">
+          <a class="primary sm notifications-open-run" href="${escapeHtml(resolvePath(item.openUrl))}">Open run</a>
+          ${item.seq ? '<button class="ghost sm notifications-dismiss" type="button">Dismiss</button>' : ""}
+        </div>
+        <div class="notifications-modal-placeholder">Reply here (coming soon).</div>
+      `;
+      const dismissBtn = modal.body.querySelector(
+        ".notifications-dismiss"
+      ) as HTMLButtonElement | null;
+      if (dismissBtn && item.seq) {
+        dismissBtn.addEventListener("click", async () => {
+          const confirmed = await confirmModal("Dismiss this inbox item?", {
+            confirmText: "Dismiss",
+            danger: false,
+          });
+          if (!confirmed) return;
+          const reason = await inputModal("Dismiss reason (optional)", {
+            placeholder: "obsolete, resolved elsewhere, ...",
+            confirmText: "Dismiss",
+            allowEmpty: true,
+          });
+          if (reason === null) return;
+          await api("/hub/messages/dismiss", {
+            method: "POST",
+            body: {
+              repo_id: item.repoId,
+              run_id: item.runId,
+              seq: item.seq,
+              reason,
+            },
+          });
+          const hubItems = getItemsForRoot("hub").filter(
+            (entry) => !isSameNotification(entry, item)
+          );
+          notificationItemsByRoot.hub = hubItems;
+          setBadgeCount("hub", hubItems.filter((entry) => !entry.isSuperseded).length);
+          if (activeRoot && activeRoot.key === "hub") {
+            renderDropdown(activeRoot);
+          }
+          closeNotificationsModal();
+          flash("Dispatch dismissed");
         });
-        if (reason === null) return;
-        await api("/hub/messages/dismiss", {
-          method: "POST",
-          body: {
-            repo_id: item.repoId,
-            run_id: item.runId,
-            seq: item.seq,
-            reason,
-          },
-        });
-        const hubItems = getItemsForRoot("hub").filter(
-          (entry) => !isSameNotification(entry, item)
-        );
-        notificationItemsByRoot.hub = hubItems;
-        setBadgeCount("hub", hubItems.filter((entry) => !entry.isSuperseded).length);
-        if (activeRoot && activeRoot.key === "hub") {
-          renderDropdown(activeRoot);
-        }
-        closeNotificationsModal();
-        flash("Dispatch dismissed");
-      });
+      }
     }
   }
   closeModalFn = openModal(modal.overlay, {
@@ -448,7 +672,7 @@ async function refreshNotifications(_ctx?: RefreshContext): Promise<void> {
     let hubPayload: { items?: HubMessageItem[] } | null = null;
     let pmaPayload: { items?: PmaDispatchItem[] } | null = null;
     try {
-      hubPayload = (await api("/hub/messages", { method: "GET" })) as {
+      hubPayload = (await api(hubMessagesPath(), { method: "GET" })) as {
         items?: HubMessageItem[];
       };
     } catch {
@@ -507,11 +731,65 @@ function attachRoot(root: NotificationRoot): void {
     if (!item) return;
     closeDropdown();
     const mouseEvent = event as MouseEvent;
-    if (mouseEvent.shiftKey) {
+    if (item.itemType === "capability_hint" || mouseEvent.shiftKey) {
       openNotificationsModal(item, root.trigger);
       return;
     }
     window.location.href = resolvePath(item.openUrl);
+  });
+}
+
+function findCapabilityHint(
+  items: NormalizedNotification[],
+  locator: { hintId: string; repoId?: string | null }
+): NormalizedNotification | undefined {
+  const normalizedHintId = locator.hintId.trim();
+  const normalizedRepoId = typeof locator.repoId === "string" ? locator.repoId.trim() : "";
+  if (normalizedRepoId) {
+    const repoMatch = items.find(
+      (item) =>
+        item.itemType === "capability_hint" &&
+        item.hintId === normalizedHintId &&
+        item.repoId === normalizedRepoId
+    );
+    if (repoMatch) return repoMatch;
+  }
+  return items.find(
+    (item) => item.itemType === "capability_hint" && item.hintId === normalizedHintId
+  );
+}
+
+async function openCapabilityHintByLocator(locator: {
+  hintId: string;
+  repoId?: string | null;
+}): Promise<boolean> {
+  const hintId = locator.hintId.trim();
+  if (!hintId) return false;
+  let items = getItemsForRoot("hub");
+  let match = findCapabilityHint(items, locator);
+  if (!match) {
+    await refreshNotifications();
+    items = getItemsForRoot("hub");
+    match = findCapabilityHint(items, locator);
+  }
+  if (!match) {
+    return false;
+  }
+  openNotificationsModal(match, activeRoot?.trigger || null);
+  return true;
+}
+
+function attachCapabilityHintListener(): void {
+  window.addEventListener(HUB_HINT_SCOPE_EVENT, (event: Event) => {
+    const detail = (event as CustomEvent<CapabilityHintEventDetail>).detail;
+    const hintId = typeof detail?.hintId === "string" ? detail.hintId.trim() : "";
+    const repoId = typeof detail?.repoId === "string" ? detail.repoId.trim() : "";
+    if (!hintId) return;
+    void openCapabilityHintByLocator({ hintId, repoId }).then((opened) => {
+      if (!opened) {
+        flash("Feature hint unavailable right now", "error");
+      }
+    });
   });
 }
 
@@ -535,6 +813,7 @@ export function initNotifications(): void {
   });
 
   attachModalHandlers();
+  attachCapabilityHintListener();
 
   registerAutoRefresh(NOTIFICATIONS_REFRESH_ID, {
     callback: refreshNotifications,
@@ -546,3 +825,8 @@ export function initNotifications(): void {
 
   notificationsInitialized = true;
 }
+
+export const __notificationsTest = {
+  findCapabilityHint,
+  getHubHintScopeKey,
+};

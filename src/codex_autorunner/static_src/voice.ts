@@ -1,8 +1,10 @@
+import { REPO_ID } from "./env.js";
 import { flash, resolvePath, getAuthToken } from "./utils.js";
 
 const MIC_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" x2="12" y1="19" y2="22"></line></svg>`;
 const SENDING_ICON_SVG = `<svg class="voice-spinner" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" opacity="0.25"></circle><path d="M21 12a9 9 0 0 0-9-9"></path></svg>`;
 const RETRY_ICON = "↻";
+const CAPABILITY_HINT_EVENT = "car:capability-hint-request";
 
 const NUM_BARS = 5;
 
@@ -153,7 +155,7 @@ export async function initVoiceInput({
       config.has_api_key === false
         ? `Voice disabled (${config.api_key_env || "API key"} not set)`
         : "Voice disabled";
-    disableButton(button, statusEl, reason);
+    enableHintButton(button, statusEl, reason, "voice_enablement");
     return null;
   }
 
@@ -641,4 +643,31 @@ function disableButton(button: HTMLButtonElement, statusEl: HTMLElement | undefi
   button.innerHTML = MIC_ICON_SVG;
   button.title = reason;
   setStatus(statusEl, reason);
+}
+
+function enableHintButton(
+  button: HTMLButtonElement,
+  statusEl: HTMLElement | undefined,
+  reason: string,
+  hintId: string
+): void {
+  button.disabled = false;
+  button.classList.add("disabled");
+  button.innerHTML = MIC_ICON_SVG;
+  button.title = `${reason}. Click for enablement hint.`;
+  button.setAttribute("aria-disabled", "true");
+  setStatus(statusEl, reason);
+  const existing = button.dataset.capabilityHintBound;
+  if (existing === hintId) return;
+  button.dataset.capabilityHintBound = hintId;
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    flash(reason, "error");
+    window.dispatchEvent(
+      new CustomEvent(CAPABILITY_HINT_EVENT, {
+        detail: { hintId, repoId: REPO_ID },
+      })
+    );
+  });
 }
