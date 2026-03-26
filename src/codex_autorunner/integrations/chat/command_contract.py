@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 CommandStatus = Literal["stable", "partial", "unsupported"]
+DiscordAckPolicy = Literal[
+    "immediate",
+    "defer_ephemeral",
+    "defer_public",
+    "defer_component_update",
+]
+DiscordExposure = Literal["public", "operator"]
 
 
 @dataclass(frozen=True)
@@ -16,6 +23,8 @@ class CommandContractEntry:
     status: CommandStatus
     telegram_commands: tuple[str, ...] = ()
     discord_paths: tuple[tuple[str, ...], ...] = ()
+    discord_ack_policy: Optional[DiscordAckPolicy] = None
+    discord_exposure: Optional[DiscordExposure] = None
     required_capabilities: tuple[str, ...] = ()
 
 
@@ -28,6 +37,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("bind",),
         discord_paths=(("car", "bind"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
     ),
     CommandContractEntry(
         id="car.status",
@@ -36,6 +47,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("status",),
         discord_paths=(("car", "status"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
     ),
     CommandContractEntry(
         id="car.new",
@@ -44,6 +57,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("new",),
         discord_paths=(("car", "new"),),
+        discord_ack_policy="defer_public",
+        discord_exposure="public",
     ),
     CommandContractEntry(
         id="car.newt",
@@ -52,6 +67,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("newt",),
         discord_paths=(("car", "newt"),),
+        discord_ack_policy="defer_public",
+        discord_exposure="public",
     ),
     CommandContractEntry(
         id="car.debug",
@@ -60,6 +77,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("debug",),
         discord_paths=(("car", "admin", "debug"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="operator",
     ),
     CommandContractEntry(
         id="car.agent",
@@ -68,6 +87,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("agent",),
         discord_paths=(("car", "agent"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("agent_selection",),
     ),
     CommandContractEntry(
@@ -77,6 +98,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("model",),
         discord_paths=(("car", "model"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("model_selection",),
     ),
     CommandContractEntry(
@@ -86,6 +109,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("update",),
         discord_paths=(("car", "update"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("service_update",),
     ),
     CommandContractEntry(
@@ -95,6 +120,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("help",),
         discord_paths=(("car", "admin", "help"),),
+        discord_ack_policy="immediate",
+        discord_exposure="operator",
     ),
     CommandContractEntry(
         id="car.ids",
@@ -103,6 +130,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("ids",),
         discord_paths=(("car", "admin", "ids"),),
+        discord_ack_policy="immediate",
+        discord_exposure="operator",
     ),
     CommandContractEntry(
         id="car.diff",
@@ -111,6 +140,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("diff",),
         discord_paths=(("car", "diff"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
     ),
     CommandContractEntry(
         id="car.skills",
@@ -119,6 +150,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("skills",),
         discord_paths=(("car", "skills"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
     ),
     CommandContractEntry(
         id="car.tickets",
@@ -126,15 +159,16 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         discord_paths=(("car", "tickets"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
         id="car.mcp",
         path=("car", "mcp"),
         requires_bound_workspace=True,
-        status="stable",
+        status="partial",
         telegram_commands=("mcp",),
-        discord_paths=(("car", "admin", "mcp"),),
     ),
     CommandContractEntry(
         id="car.init",
@@ -143,6 +177,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("init",),
         discord_paths=(("car", "admin", "init"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="operator",
     ),
     CommandContractEntry(
         id="car.repos",
@@ -151,6 +187,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("repos",),
         discord_paths=(("car", "admin", "repos"),),
+        discord_ack_policy="immediate",
+        discord_exposure="operator",
     ),
     CommandContractEntry(
         id="car.archive",
@@ -159,6 +197,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("archive",),
         discord_paths=(("car", "archive"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
     ),
     # Commands with cross-surface shape differences (partial parity).
     CommandContractEntry(
@@ -168,6 +208,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("files",),
         discord_paths=(("car", "files", "inbox"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("filebox_access",),
     ),
     CommandContractEntry(
@@ -177,6 +219,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("files",),
         discord_paths=(("car", "files", "outbox"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("filebox_access",),
     ),
     CommandContractEntry(
@@ -186,6 +230,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("files",),
         discord_paths=(("car", "files", "clear"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("filebox_access",),
     ),
     CommandContractEntry(
@@ -195,6 +241,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "status"),),
+        discord_ack_policy="defer_public",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -204,6 +252,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "runs"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -213,6 +263,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "issue"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("ticket_flow", "github_cli"),
     ),
     CommandContractEntry(
@@ -222,6 +274,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "plan"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -231,6 +285,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "start"),),
+        discord_ack_policy="defer_public",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -240,6 +296,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "restart"),),
+        discord_ack_policy="defer_public",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -249,6 +307,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "resume"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -258,6 +318,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "stop"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -267,6 +329,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "archive"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -276,6 +340,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow",),
         discord_paths=(("flow", "recover"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -285,6 +351,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("flow", "reply"),
         discord_paths=(("flow", "reply"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("ticket_flow",),
     ),
     CommandContractEntry(
@@ -294,6 +362,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("pma",),
         discord_paths=(("pma", "on"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("pma_mode",),
     ),
     CommandContractEntry(
@@ -303,6 +373,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("pma",),
         discord_paths=(("pma", "off"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("pma_mode",),
     ),
     CommandContractEntry(
@@ -312,6 +384,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="stable",
         telegram_commands=("pma",),
         discord_paths=(("pma", "status"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("pma_mode",),
     ),
     CommandContractEntry(
@@ -321,6 +395,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("resume",),
         discord_paths=(("car", "session", "resume"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("session_resume",),
     ),
     CommandContractEntry(
@@ -330,6 +406,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("reset",),
         discord_paths=(("car", "session", "reset"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("pma_thread_reset",),
     ),
     CommandContractEntry(
@@ -339,6 +417,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("review",),
         discord_paths=(("car", "review"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("code_review",),
     ),
     CommandContractEntry(
@@ -348,6 +428,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("approvals",),
         discord_paths=(("car", "approvals"),),
+        discord_ack_policy="immediate",
+        discord_exposure="public",
         required_capabilities=("approval_policy", "sandbox_policy"),
     ),
     CommandContractEntry(
@@ -357,6 +439,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("mention",),
         discord_paths=(("car", "mention"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("file_mentions",),
     ),
     CommandContractEntry(
@@ -365,7 +449,6 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         requires_bound_workspace=True,
         status="partial",
         telegram_commands=("experimental",),
-        discord_paths=(("car", "admin", "experimental"),),
         required_capabilities=("feature_flags",),
     ),
     CommandContractEntry(
@@ -375,6 +458,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("compact",),
         discord_paths=(("car", "session", "compact"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("conversation_compaction",),
     ),
     CommandContractEntry(
@@ -384,6 +469,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("rollout",),
         discord_paths=(("car", "admin", "rollout"),),
+        discord_ack_policy="immediate",
+        discord_exposure="operator",
     ),
     CommandContractEntry(
         id="car.logout",
@@ -392,6 +479,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("logout",),
         discord_paths=(("car", "session", "logout"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("auth_session",),
     ),
     CommandContractEntry(
@@ -401,6 +490,8 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("feedback",),
         discord_paths=(("car", "admin", "feedback"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="operator",
         required_capabilities=("feedback_reporting",),
     ),
     CommandContractEntry(
@@ -410,6 +501,17 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         status="partial",
         telegram_commands=("interrupt",),
         discord_paths=(("car", "session", "interrupt"),),
+        discord_ack_policy="defer_ephemeral",
+        discord_exposure="public",
         required_capabilities=("turn_control",),
     ),
 )
+
+
+def command_contract_entry_for_path(
+    path: tuple[str, ...],
+) -> Optional[CommandContractEntry]:
+    for entry in COMMAND_CONTRACT:
+        if entry.path == path:
+            return entry
+    return None

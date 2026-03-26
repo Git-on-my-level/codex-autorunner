@@ -99,7 +99,6 @@ _HELP_COMMANDS: tuple[HelpCommandDescriptor, ...] = (
         description="Show MCP server status",
         section="admin",
         telegram_command="mcp",
-        discord_path=("car", "admin", "mcp"),
     ),
     HelpCommandDescriptor(
         id="car.init",
@@ -174,9 +173,7 @@ _HELP_COMMANDS: tuple[HelpCommandDescriptor, ...] = (
         description="Toggle experimental features",
         section="admin",
         telegram_command="experimental",
-        discord_path=("car", "admin", "experimental"),
         telegram_usage="[action] [feature]",
-        discord_usage="[action] [feature]",
     ),
     HelpCommandDescriptor(
         id="car.rollout",
@@ -331,10 +328,8 @@ _DISCORD_SECTION_ORDER: tuple[tuple[str, tuple[str, ...]], ...] = (
             "car.help",
             "car.debug",
             "car.ids",
-            "car.mcp",
             "car.init",
             "car.repos",
-            "car.experimental",
             "car.rollout",
             "car.feedback",
         ),

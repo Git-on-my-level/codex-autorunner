@@ -1080,10 +1080,12 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         bind_payload = rest.interaction_responses[0]["payload"]
         status_payload = rest.interaction_responses[1]["payload"]
         assert bind_payload["data"]["flags"] == 64
-        assert status_payload["data"]["flags"] == 64
+        assert status_payload["type"] == 5
         assert "bound this channel" in bind_payload["data"]["content"].lower()
-        assert "channel is bound" in status_payload["data"]["content"].lower()
-        assert "policy mode:" in status_payload["data"]["content"].lower()
+        assert len(rest.followup_messages) == 1
+        status_content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "channel is bound" in status_content
+        assert "policy mode:" in status_content
     finally:
         await store.close()
 
@@ -1138,7 +1140,8 @@ async def test_service_status_reports_effective_collaboration_policy(
 
     try:
         await service.run_forever()
-        status_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
+        assert rest.interaction_responses[1]["payload"]["type"] == 5
+        status_payload = rest.followup_messages[0]["payload"]["content"]
         lowered = status_payload.lower()
         assert "policy mode: active" in lowered
         assert "policy plain-text trigger: mentions" in lowered
@@ -2471,7 +2474,9 @@ async def test_service_continues_when_sync_request_fails(tmp_path: Path) -> None
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert "not bound" in payload["data"]["content"].lower()
+        assert payload["type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert "not bound" in rest.followup_messages[0]["payload"]["content"].lower()
     finally:
         await store.close()
 
@@ -2525,7 +2530,14 @@ async def test_service_routes_car_agent_and_model_without_generic_fallback(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        if subcommand == "model":
+            assert rest.interaction_responses[0]["payload"]["type"] == 5
+            assert len(rest.followup_messages) == 1
+            content = rest.followup_messages[0]["payload"]["content"].lower()
+        else:
+            content = rest.interaction_responses[0]["payload"]["data"][
+                "content"
+            ].lower()
         assert "not bound" in content
         assert "not implemented yet for discord" not in content
     finally:
@@ -2884,10 +2896,12 @@ async def test_car_model_with_partial_name_prompts_filtered_picker(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 4
-        content = payload["data"]["content"].lower()
+        assert payload["type"] == 5
+        assert len(rest.followup_messages) == 1
+        followup_payload = rest.followup_messages[0]["payload"]
+        content = followup_payload["content"].lower()
         assert "matched 2 models" in content
-        select = payload["data"]["components"][0]["components"][0]
+        select = followup_payload["components"][0]["components"][0]
         values = [option["value"] for option in select["options"]]
         assert values == ["clear", "zai/glm-4.5", "zai/glm-5"]
     finally:
@@ -3172,7 +3186,9 @@ async def test_car_model_rejects_invalid_opencode_model_name(tmp_path: Path) -> 
         assert binding is not None
         assert binding.get("model_override") is None
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "provider/model" in content
     finally:
         await store.close()
@@ -3372,6 +3388,53 @@ async def test_normalized_interaction_routes_car_agent_without_generic_fallback(
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
         assert "not bound" in content
         assert "not implemented yet for discord" not in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_normalized_interaction_status_defers_before_reading_active_flow(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_get_active_flow_info(_workspace_path: str) -> Any:
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        return None
+
+    async def _fake_read_status_rate_limits(
+        _workspace_path: str | None, *, agent: str
+    ) -> Any:
+        _ = agent
+        return None
+
+    service._get_active_flow_info = _fake_get_active_flow_info  # type: ignore[assignment]
+    service._read_status_rate_limits = _fake_read_status_rate_limits  # type: ignore[assignment]
+
+    try:
+        event = _normalized_interaction_event(command="car:status")
+        context = build_dispatch_context(event)
+        await service._handle_normalized_interaction(event, context)
+        assert len(rest.followup_messages) == 1
     finally:
         await store.close()
 
@@ -4038,7 +4101,9 @@ async def test_car_update_without_target_returns_picker(tmp_path: Path) -> None:
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        data = rest.followup_messages[0]["payload"]
         components = data.get("components") or []
         assert components
         menu = components[0]["components"][0]
@@ -4319,7 +4384,9 @@ async def test_car_skills_search_filters_results(tmp_path: Path) -> None:
 
     try:
         await service.run_forever()
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Skills matching `deck`" in content
         assert "slides" in content
         assert "spreadsheets" not in content
@@ -5205,6 +5272,52 @@ async def test_car_update_status_defers_before_reading_status(
 
 
 @pytest.mark.anyio
+async def test_car_status_defers_before_loading_workspace_state(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _fake_get_active_flow_info(_workspace_path: str) -> Any:
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        return None
+
+    async def _fake_read_status_rate_limits(
+        _workspace_path: str | None, *, agent: str
+    ) -> Any:
+        _ = agent
+        return None
+
+    service._get_active_flow_info = _fake_get_active_flow_info  # type: ignore[assignment]
+    service._read_status_rate_limits = _fake_read_status_rate_limits  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert len(rest.followup_messages) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_update_starts_worker_with_explicit_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5251,6 +5364,65 @@ async def test_car_update_starts_worker_with_explicit_target(
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "preparing update (all)" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_init_defers_before_repo_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".git").mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_interaction_path(command_path=("car", "admin", "init"), options=[])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    observed: dict[str, Any] = {}
+
+    def _fake_seed_repo_files(*args: Any, **kwargs: Any) -> None:
+        observed["deferred_type"] = (
+            rest.interaction_responses[0]["payload"]["type"]
+            if rest.interaction_responses
+            else None
+        )
+        _ = args, kwargs
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "seed_repo_files",
+        _fake_seed_repo_files,
+    )
+    monkeypatch.setattr(
+        discord_service_module,
+        "find_nearest_hub_config_path",
+        lambda _path: workspace / ".codex-autorunner" / "config.yml",
+    )
+
+    try:
+        await service.run_forever()
+        assert observed["deferred_type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "init complete" in content
     finally:
         await store.close()
 
@@ -5811,7 +5983,9 @@ async def test_car_update_rejects_invalid_target(tmp_path: Path) -> None:
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        data = rest.followup_messages[0]["payload"]
         content = data["content"].lower()
         assert "unsupported update target" in content
         components = data.get("components") or []

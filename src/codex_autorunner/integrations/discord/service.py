@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import time
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import (
@@ -136,6 +137,7 @@ from ...integrations.chat.collaboration_policy import (
     evaluate_collaboration_admission,
     evaluate_collaboration_policy,
 )
+from ...integrations.chat.command_contract import command_contract_entry_for_path
 from ...integrations.chat.command_diagnostics import (
     ActiveFlowInfo,
     build_status_text,
@@ -343,6 +345,7 @@ TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
 TICKETS_SELECT_ID = "tickets_select"
 TICKETS_MODAL_PREFIX = "tickets_modal"
 TICKETS_BODY_INPUT_ID = "ticket_body"
+PREPARED_INTERACTION_CACHE_LIMIT = 512
 
 
 class AppServerUnavailableError(Exception):
@@ -705,6 +708,7 @@ class DiscordBotService:
         self._pending_ticket_context: dict[str, dict[str, str]] = {}
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
+        self._prepared_interaction_policies: OrderedDict[str, str] = OrderedDict()
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._typing_sessions: dict[str, int] = {}
@@ -1371,6 +1375,11 @@ class DiscordBotService:
         ingress = replace(
             ingress,
             command_path=self._normalize_discord_command_path(ingress.command_path),
+        )
+        await self._prepare_command_interaction(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            command_path=ingress.command_path,
         )
 
         try:
@@ -4270,6 +4279,11 @@ class DiscordBotService:
             ingress,
             command_path=self._normalize_discord_command_path(ingress.command_path),
         )
+        await self._prepare_command_interaction(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            command_path=ingress.command_path,
+        )
 
         try:
             if ingress.command_path[:1] == ("car",):
@@ -5066,6 +5080,60 @@ class DiscordBotService:
             if command_path[2] in admin_aliases:
                 return ("car", command_path[2])
         return command_path
+
+    def _prepared_interaction_policy(
+        self,
+        interaction_token: str,
+    ) -> Optional[str]:
+        token = interaction_token.strip()
+        if not token:
+            return None
+        policy = self._prepared_interaction_policies.get(token)
+        if policy is None:
+            return None
+        self._prepared_interaction_policies.move_to_end(token)
+        return policy
+
+    def _remember_prepared_interaction_policy(
+        self,
+        *,
+        interaction_token: str,
+        policy: str,
+    ) -> None:
+        token = interaction_token.strip()
+        if not token:
+            return
+        self._prepared_interaction_policies[token] = policy
+        self._prepared_interaction_policies.move_to_end(token)
+        while (
+            len(self._prepared_interaction_policies) > PREPARED_INTERACTION_CACHE_LIMIT
+        ):
+            self._prepared_interaction_policies.popitem(last=False)
+
+    async def _prepare_command_interaction(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        command_path: tuple[str, ...],
+    ) -> bool:
+        entry = command_contract_entry_for_path(command_path)
+        if entry is None or entry.discord_ack_policy in (None, "immediate"):
+            return False
+        if entry.discord_ack_policy == "defer_public":
+            return await self._defer_public(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+        if entry.discord_ack_policy == "defer_component_update":
+            return await self._defer_component_update(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+        return await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
 
     async def _bind_with_path(
         self,
@@ -9735,6 +9803,13 @@ class DiscordBotService:
     ) -> None:
         max_len = max(int(self._config.max_message_length), 32)
         content = truncate_for_discord(text, max_len=max_len)
+        if self._prepared_interaction_policy(interaction_token) is not None:
+            sent_followup = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=content,
+            )
+            if sent_followup:
+                return
         try:
             await self._rest.create_interaction_response(
                 interaction_id=interaction_id,
@@ -9765,6 +9840,8 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
+        if self._prepared_interaction_policy(interaction_token) is not None:
+            return True
         try:
             await self._rest.create_interaction_response(
                 interaction_id=interaction_id,
@@ -9783,6 +9860,10 @@ class DiscordBotService:
                 interaction_id,
             )
             return False
+        self._remember_prepared_interaction_policy(
+            interaction_token=interaction_token,
+            policy="defer_ephemeral",
+        )
         return True
 
     async def _defer_component_update(
@@ -9791,6 +9872,8 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
+        if self._prepared_interaction_policy(interaction_token) is not None:
+            return True
         try:
             await self._rest.create_interaction_response(
                 interaction_id=interaction_id,
@@ -9804,6 +9887,10 @@ class DiscordBotService:
                 interaction_id,
             )
             return False
+        self._remember_prepared_interaction_policy(
+            interaction_token=interaction_token,
+            policy="defer_component_update",
+        )
         return True
 
     async def _send_or_respond_ephemeral(
@@ -9888,6 +9975,23 @@ class DiscordBotService:
     ) -> None:
         max_len = max(int(self._config.max_message_length), 32)
         content = truncate_for_discord(text, max_len=max_len)
+        prepared_policy = self._prepared_interaction_policy(interaction_token)
+        if prepared_policy == "defer_component_update":
+            updated = await self._edit_original_component_message(
+                interaction_token=interaction_token,
+                text=content,
+                components=components,
+            )
+            if updated:
+                return
+        if prepared_policy is not None:
+            sent_followup = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=content,
+                components=components,
+            )
+            if sent_followup:
+                return
         try:
             await self._rest.create_interaction_response(
                 interaction_id=interaction_id,
@@ -9961,6 +10065,23 @@ class DiscordBotService:
     ) -> None:
         max_len = max(int(self._config.max_message_length), 32)
         content = truncate_for_discord(text, max_len=max_len)
+        prepared_policy = self._prepared_interaction_policy(interaction_token)
+        if prepared_policy == "defer_component_update":
+            updated = await self._edit_original_component_message(
+                interaction_token=interaction_token,
+                text=content,
+                components=components,
+            )
+            if updated:
+                return
+        if prepared_policy is not None:
+            sent_followup = await self._send_followup_ephemeral(
+                interaction_token=interaction_token,
+                content=content,
+                components=components,
+            )
+            if sent_followup:
+                return
         try:
             await self._rest.create_interaction_response(
                 interaction_id=interaction_id,
@@ -10049,6 +10170,22 @@ class DiscordBotService:
     ) -> None:
         max_len = max(int(self._config.max_message_length), 32)
         content = truncate_for_discord(text, max_len=max_len)
+        prepared_policy = self._prepared_interaction_policy(interaction_token)
+        if prepared_policy == "defer_component_update":
+            updated = await self._edit_original_component_message(
+                interaction_token=interaction_token,
+                text=content,
+                components=[],
+            )
+            if updated:
+                return
+        if prepared_policy is not None:
+            sent_followup = await self._send_followup_public(
+                interaction_token=interaction_token,
+                content=content,
+            )
+            if sent_followup:
+                return
         try:
             await self._rest.create_interaction_response(
                 interaction_id=interaction_id,
@@ -10078,6 +10215,8 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
+        if self._prepared_interaction_policy(interaction_token) is not None:
+            return True
         try:
             await self._rest.create_interaction_response(
                 interaction_id=interaction_id,
@@ -10091,6 +10230,10 @@ class DiscordBotService:
                 interaction_id,
             )
             return False
+        self._remember_prepared_interaction_policy(
+            interaction_token=interaction_token,
+            policy="defer_public",
+        )
         return True
 
     async def _send_or_respond_public(
@@ -10142,6 +10285,23 @@ class DiscordBotService:
     ) -> None:
         max_len = max(int(self._config.max_message_length), 32)
         content = truncate_for_discord(text, max_len=max_len)
+        prepared_policy = self._prepared_interaction_policy(interaction_token)
+        if prepared_policy == "defer_component_update":
+            updated = await self._edit_original_component_message(
+                interaction_token=interaction_token,
+                text=content,
+                components=components,
+            )
+            if updated:
+                return
+        if prepared_policy is not None:
+            sent_followup = await self._send_followup_public(
+                interaction_token=interaction_token,
+                content=content,
+                components=components,
+            )
+            if sent_followup:
+                return
         try:
             await self._rest.create_interaction_response(
                 interaction_id=interaction_id,

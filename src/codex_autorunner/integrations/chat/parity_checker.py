@@ -88,6 +88,7 @@ def run_parity_checks(
     telegram_commands_spec_ast = _parse_module(telegram_commands_spec_text)
 
     return (
+        _check_contract_discord_metadata_complete(contract=contract),
         _check_contract_registry_entries_cataloged(
             contract=contract,
             discord_commands_ast=discord_commands_ast,
@@ -171,6 +172,12 @@ def _source_unavailable_results(
     }
     return (
         ParityCheckResult(
+            id="contract.discord_metadata_complete",
+            passed=True,
+            message=message,
+            metadata=metadata,
+        ),
+        ParityCheckResult(
             id="contract.registry_entries_cataloged",
             passed=True,
             message=message,
@@ -206,6 +213,40 @@ def _source_unavailable_results(
             message=message,
             metadata=metadata,
         ),
+    )
+
+
+def _check_contract_discord_metadata_complete(
+    *,
+    contract: Sequence[CommandContractEntry],
+) -> ParityCheckResult:
+    missing_ack_policy = sorted(
+        entry.id
+        for entry in contract
+        if entry.discord_paths and entry.discord_ack_policy is None
+    )
+    missing_exposure = sorted(
+        entry.id
+        for entry in contract
+        if entry.discord_paths and entry.discord_exposure is None
+    )
+    passed = not missing_ack_policy and not missing_exposure
+    if passed:
+        message = (
+            "Registered Discord commands declare ack policy and exposure metadata."
+        )
+    else:
+        message = (
+            "One or more registered Discord commands are missing contract metadata."
+        )
+    return ParityCheckResult(
+        id="contract.discord_metadata_complete",
+        passed=passed,
+        message=message,
+        metadata={
+            "missing_ack_policy": missing_ack_policy,
+            "missing_exposure": missing_exposure,
+        },
     )
 
 
@@ -393,21 +434,31 @@ def _is_discord_path_routed_in_service(
     discord_service_ast: ast.Module | None,
     discord_car_dispatch_ast: ast.Module | None,
 ) -> bool:
+    normalized_path = _normalize_discord_contract_route_path(path)
     if discord_service_ast is None and discord_car_dispatch_ast is None:
         return False
 
-    prefix = path[0] if path else ""
+    prefix = normalized_path[0] if normalized_path else ""
 
     if prefix == "car":
-        return _module_has_command_path_route(discord_service_ast, path) or (
-            _module_has_command_path_route(discord_car_dispatch_ast, path)
+        return _module_has_command_path_route(discord_service_ast, normalized_path) or (
+            _module_has_command_path_route(discord_car_dispatch_ast, normalized_path)
         )
 
     if prefix == "pma":
-        subcommand = path[1] if len(path) > 1 else ""
+        subcommand = normalized_path[1] if len(normalized_path) > 1 else ""
         return _module_has_pma_subcommand_route(discord_service_ast, subcommand)
 
     return False
+
+
+def _normalize_discord_contract_route_path(path: tuple[str, ...]) -> tuple[str, ...]:
+    if path[:1] == ("flow",):
+        return ("car", "flow", *path[1:])
+    if len(path) == 3 and path[:2] == ("car", "admin"):
+        if path[2] in {"help", "debug", "ids", "init", "repos", "rollout", "feedback"}:
+            return ("car", path[2])
+    return path
 
 
 def _check_discord_known_commands_not_in_generic_fallback(
@@ -745,7 +796,16 @@ def _extract_discord_registered_command_paths(
     if return_value is None:
         return None
 
-    commands = _evaluate_static_expr(return_value, names=constants)
+    local_functions = {
+        function.name: function
+        for function in ast.walk(tree)
+        if isinstance(function, _FUNCTION_NODE_TYPES)
+    }
+    commands = _evaluate_static_expr(
+        return_value,
+        names=constants,
+        functions=local_functions,
+    )
     if not isinstance(commands, list):
         return None
 
@@ -815,7 +875,7 @@ def _module_literal_bindings(tree: ast.Module) -> dict[str, Any]:
         target = node.targets[0]
         if not isinstance(target, ast.Name):
             continue
-        value = _evaluate_static_expr(node.value, names=names)
+        value = _evaluate_static_expr(node.value, names=names, functions={})
         if value is not _MISSING:
             names[target.id] = value
     return names
@@ -830,28 +890,60 @@ def _first_return_value(
     return None
 
 
-def _evaluate_static_expr(expr: ast.expr, *, names: dict[str, Any]) -> Any:
+def _evaluate_static_expr(
+    expr: ast.expr,
+    *,
+    names: dict[str, Any],
+    functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef],
+    active_functions: frozenset[str] = frozenset(),
+) -> Any:
     if isinstance(expr, ast.Constant):
         return expr.value
 
     if isinstance(expr, ast.Name):
         return names.get(expr.id, _MISSING)
 
+    if isinstance(expr, ast.JoinedStr):
+        parts: list[str] = []
+        for item in expr.values:
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                parts.append(item.value)
+                continue
+            if isinstance(item, ast.FormattedValue):
+                value = _evaluate_static_expr(
+                    item.value,
+                    names=names,
+                    functions=functions,
+                    active_functions=active_functions,
+                )
+                parts.append("" if value is _MISSING else str(value))
+        return "".join(parts)
+
     if isinstance(expr, ast.List):
         values: list[Any] = []
         for item in expr.elts:
-            value = _evaluate_static_expr(item, names=names)
+            value = _evaluate_static_expr(
+                item,
+                names=names,
+                functions=functions,
+                active_functions=active_functions,
+            )
             if value is _MISSING:
-                return _MISSING
+                value = None
             values.append(value)
         return values
 
     if isinstance(expr, ast.Tuple):
         tuple_values: list[Any] = []
         for item in expr.elts:
-            value = _evaluate_static_expr(item, names=names)
+            value = _evaluate_static_expr(
+                item,
+                names=names,
+                functions=functions,
+                active_functions=active_functions,
+            )
             if value is _MISSING:
-                return _MISSING
+                value = None
             tuple_values.append(value)
         return tuple(tuple_values)
 
@@ -860,12 +952,63 @@ def _evaluate_static_expr(expr: ast.expr, *, names: dict[str, Any]) -> Any:
         for key_expr, value_expr in zip(expr.keys, expr.values):
             if key_expr is None:
                 return _MISSING
-            key = _evaluate_static_expr(key_expr, names=names)
-            value = _evaluate_static_expr(value_expr, names=names)
-            if key is _MISSING or value is _MISSING:
+            key = _evaluate_static_expr(
+                key_expr,
+                names=names,
+                functions=functions,
+                active_functions=active_functions,
+            )
+            value = _evaluate_static_expr(
+                value_expr,
+                names=names,
+                functions=functions,
+                active_functions=active_functions,
+            )
+            if key is _MISSING:
                 return _MISSING
+            if value is _MISSING:
+                value = None
             result[key] = value
         return result
+
+    if isinstance(expr, ast.Call):
+        if (
+            isinstance(expr.func, ast.Name)
+            and expr.func.id == "list"
+            and len(expr.args) == 1
+            and not expr.keywords
+        ):
+            value = _evaluate_static_expr(
+                expr.args[0],
+                names=names,
+                functions=functions,
+                active_functions=active_functions,
+            )
+            if isinstance(value, list):
+                return value
+            if isinstance(value, tuple):
+                return list(value)
+            if value is _MISSING:
+                return []
+            return [value]
+        if (
+            isinstance(expr.func, ast.Name)
+            and not expr.args
+            and not expr.keywords
+            and expr.func.id in functions
+            and expr.func.id not in active_functions
+        ):
+            function = functions[expr.func.id]
+            return_value = _first_return_value(function)
+            if return_value is None:
+                return _MISSING
+            return _evaluate_static_expr(
+                return_value,
+                names=names,
+                functions=functions,
+                active_functions=active_functions | {expr.func.id},
+            )
+        return _MISSING
 
     return _MISSING
 

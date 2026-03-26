@@ -36,6 +36,8 @@ def test_discord_help_lists_session_file_flow_and_admin_sections() -> None:
     assert "/car tickets [search] - Browse and edit tickets" in text
     assert "/car admin help - Show this help" in text
     assert "/car admin ids - Show chat/user IDs for debugging" in text
+    assert "/car admin mcp" not in text
+    assert "/car admin experimental" not in text
     assert "/car session resume [thread_id] - Resume a previous chat thread" in text
     assert "/car files inbox - List files in inbox" in text
     assert "/car files clear [target] - Clear inbox/outbox" in text

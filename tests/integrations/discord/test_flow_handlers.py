@@ -35,6 +35,8 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
 class _FakeRest:
     def __init__(self) -> None:
         self.interaction_responses: list[dict[str, Any]] = []
+        self.followup_messages: list[dict[str, Any]] = []
+        self.edited_original_interaction_responses: list[dict[str, Any]] = []
         self.channel_messages: list[dict[str, Any]] = []
         self.command_sync_calls: list[dict[str, Any]] = []
 
@@ -58,6 +60,38 @@ class _FakeRest:
     ) -> dict[str, Any]:
         self.channel_messages.append({"channel_id": channel_id, "payload": payload})
         return {"id": "msg-1", "channel_id": channel_id, "payload": payload}
+
+    async def create_followup_message(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.followup_messages.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+        return {"id": "followup-1"}
+
+    async def edit_original_interaction_response(
+        self,
+        *,
+        application_id: str,
+        interaction_token: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.edited_original_interaction_responses.append(
+            {
+                "application_id": application_id,
+                "interaction_token": interaction_token,
+                "payload": payload,
+            }
+        )
+        return {"id": "@original"}
 
     async def bulk_overwrite_application_commands(
         self,
@@ -183,6 +217,7 @@ def _flow_interaction(
     *,
     root: str = "car",
 ) -> dict[str, Any]:
+    interaction_id = str(uuid.uuid4())
     if root == "flow":
         data = {
             "name": "flow",
@@ -200,8 +235,8 @@ def _flow_interaction(
             ],
         }
     return {
-        "id": str(uuid.uuid4()),
-        "token": "token-1",
+        "id": interaction_id,
+        "token": f"token-{interaction_id}",
         "channel_id": "channel-1",
         "guild_id": "guild-1",
         "member": {"user": {"id": "user-1"}},
@@ -210,9 +245,10 @@ def _flow_interaction(
 
 
 def _flow_component_interaction(custom_id: str) -> dict[str, Any]:
+    interaction_id = str(uuid.uuid4())
     return {
-        "id": str(uuid.uuid4()),
-        "token": "token-1",
+        "id": interaction_id,
+        "token": f"token-{interaction_id}",
         "channel_id": "channel-1",
         "guild_id": "guild-1",
         "type": 3,
@@ -225,7 +261,12 @@ def _flow_component_interaction(custom_id: str) -> dict[str, Any]:
 
 
 def _latest_status_message(rest: _FakeRest) -> dict[str, Any]:
-    payload = rest.interaction_responses[-1]["payload"]
+    if rest.edited_original_interaction_responses:
+        payload = rest.edited_original_interaction_responses[-1]["payload"]
+    elif rest.followup_messages:
+        payload = rest.followup_messages[-1]["payload"]
+    else:
+        payload = rest.interaction_responses[-1]["payload"]
     data = payload.get("data")
     return data if isinstance(data, dict) else payload
 
@@ -330,11 +371,12 @@ async def test_flow_status_and_runs_render_expected_output(tmp_path: Path) -> No
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 4
+        assert len(rest.interaction_responses) == 2
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert rest.interaction_responses[2]["payload"]["type"] == 5
-        status_payload = rest.interaction_responses[1]["payload"]["data"]["content"]
-        runs_payload = rest.interaction_responses[3]["payload"]["data"]["content"]
+        assert rest.interaction_responses[1]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 2
+        status_payload = rest.followup_messages[0]["payload"]["content"]
+        runs_payload = rest.followup_messages[1]["payload"]["content"]
 
         assert f"Run: {paused_run_id}" in status_payload
         assert "Status: paused" in status_payload
@@ -402,9 +444,9 @@ async def test_flow_status_without_run_id_uses_authoritative_run_and_includes_pi
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 2
+        assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.interaction_responses[1]["payload"]["data"]
+        payload = rest.followup_messages[0]["payload"]
         content = payload["content"]
         components = payload["components"]
 
@@ -459,9 +501,9 @@ async def test_flow_status_without_run_id_shows_no_current_run_for_history_only(
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 2
+        assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.interaction_responses[1]["payload"]["data"]
+        payload = rest.followup_messages[0]["payload"]
         content = payload["content"]
         components = payload["components"]
 
@@ -515,12 +557,12 @@ async def test_flow_status_without_run_uses_ticket_summary_fallback(
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 2
+        assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.interaction_responses[1]["payload"]["data"]
+        payload = rest.followup_messages[0]["payload"]
         content = payload["content"]
         assert content == "Status: Done\nTickets: 2/2"
-        assert payload.get("components") == []
+        assert not payload.get("components")
     finally:
         await store.close()
 
@@ -554,7 +596,7 @@ async def test_flow_root_alias_routes_to_authoritative_status(tmp_path: Path) ->
     try:
         await service.run_forever()
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        content = rest.followup_messages[0]["payload"]["content"]
         assert f"Run: {completed_run_id}" in content
         assert "Status: completed" in content
     finally:
@@ -603,7 +645,7 @@ async def test_flow_status_shows_elapsed_for_completed_run(tmp_path: Path) -> No
     try:
         await service.run_forever()
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Status: completed" in content
         assert "Elapsed: 2h 30m" in content
     finally:
@@ -648,9 +690,9 @@ async def test_flow_status_with_missing_explicit_run_id_reports_not_found(
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 2
+        assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        content = rest.followup_messages[0]["payload"]["content"]
         assert content == f"Ticket_flow run {missing_run_id} not found."
     finally:
         await store.close()
@@ -711,15 +753,14 @@ async def test_flow_refresh_button_updates_existing_status_message(
 
     try:
         await service.run_forever()
-        assert len(rest.interaction_responses) == 3
+        assert len(rest.interaction_responses) == 2
         initial_defer = rest.interaction_responses[0]["payload"]
-        initial_payload = rest.interaction_responses[1]["payload"]
-        refresh_payload = rest.interaction_responses[2]["payload"]
+        refresh_payload = rest.interaction_responses[1]["payload"]
 
         assert initial_defer["type"] == 5
-        assert initial_payload["type"] == 4
-        assert "flags" not in initial_payload["data"]
-        assert "Status: running" in initial_payload["data"]["content"]
+        assert len(rest.followup_messages) == 1
+        initial_payload = rest.followup_messages[0]["payload"]
+        assert "Status: running" in initial_payload["content"]
 
         assert refresh_payload["type"] == 7
         assert "Status: completed" in refresh_payload["data"]["content"]
@@ -773,7 +814,7 @@ async def test_flow_issue_seeds_issue_md(
         assert issue_path.exists()
         assert "Issue 123" in issue_path.read_text(encoding="utf-8")
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Seeded ISSUE.md from GitHub issue 123." in content
     finally:
         await store.close()
@@ -856,7 +897,7 @@ async def test_flow_start_reuses_active_or_paused_run(
         await service.run_forever()
         assert flow_service.ensure_calls == [(paused_run_id, False)]
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.interaction_responses[1]["payload"]["data"]
+        payload = rest.followup_messages[0]["payload"]
         content = payload["content"]
         assert f"Reusing ticket_flow run {paused_run_id} (paused)." in content
         assert f"Run: {paused_run_id}" in content
@@ -933,7 +974,7 @@ async def test_flow_restart_starts_new_run_for_failed_flow(
         assert flow_service.start_calls[0]["metadata"]["force_new"] is True
         assert flow_service.start_calls[0]["metadata"]["origin"] == "discord"
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        payload = rest.interaction_responses[1]["payload"]["data"]
+        payload = rest.followup_messages[0]["payload"]
         content = payload["content"]
         assert f"Started new ticket_flow run {new_run_id}." in content
         assert f"Run: {new_run_id}" in content
@@ -989,7 +1030,7 @@ async def test_flow_restart_aborts_when_active_run_does_not_terminate(
         assert flow_service.stop_calls == [running_run_id]
         assert flow_service.start_calls == []
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "restart aborted to avoid concurrent workers" in content
     finally:
         await store.close()
@@ -1108,7 +1149,7 @@ async def test_flow_recover_reconciles_active_run(
         await service.run_forever()
         assert flow_service.reconcile_calls == [running_run_id]
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        content = rest.followup_messages[0]["payload"]["content"]
         assert f"Recovered for run {running_run_id}" in content
     finally:
         await store.close()
@@ -1166,9 +1207,9 @@ async def test_flow_reply_writes_user_reply_and_resumes(
         )
         assert reply_path.exists()
         assert reply_path.read_text(encoding="utf-8").strip() == "Please continue"
-        assert len(rest.interaction_responses) == 2
+        assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        content = rest.followup_messages[0]["payload"]["content"]
         assert paused_run_id in content
         assert "resumed run" in content.lower()
 
@@ -1238,7 +1279,8 @@ async def test_flow_status_in_pma_mode_without_manifest_reports_missing_manifest
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Hub manifest not configured." in content
     finally:
         await store.close()
@@ -1289,7 +1331,8 @@ async def test_flow_status_in_pma_mode_shows_hub_overview(tmp_path: Path) -> Non
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Hub Flow Overview:" in content
         assert "workspace:" in content
         assert paused_run_id in content
@@ -1352,7 +1395,8 @@ async def test_flow_status_in_pma_mode_uses_manifest_display_name(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Friendly Workspace" in content
     finally:
         await store.close()
@@ -1433,7 +1477,8 @@ async def test_flow_status_in_pma_mode_shows_only_active_chat_bound_worktrees(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "wt-visible" in content
         assert "wt-hidden" not in content
         assert "\n  -> " in content
@@ -1516,7 +1561,8 @@ async def test_flow_status_in_pma_mode_includes_manifest_worktree_with_active_fl
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "wt-hidden" in content
         assert "wt-visible" not in content
         assert "\n  -> " in content
@@ -1564,7 +1610,8 @@ async def test_flow_runs_in_pma_mode_shows_hub_overview(tmp_path: Path) -> None:
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Hub Flow Overview:" in content
         assert paused_run_id in content
         assert "Recent ticket_flow runs" not in content
@@ -1620,7 +1667,8 @@ async def test_flow_status_with_run_id_in_pma_mode_still_shows_hub_overview(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Hub Flow Overview:" in content
         assert "Run: " not in content
     finally:
@@ -1675,7 +1723,8 @@ async def test_flow_runs_with_large_limit_in_pma_mode_still_shows_hub_overview(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        content = rest.followup_messages[0]["payload"]["content"]
         assert "Hub Flow Overview:" in content
         assert "Recent ticket_flow runs" not in content
     finally:
@@ -1728,7 +1777,7 @@ async def test_flow_recover_uses_explicit_run_id(
         await service.run_forever()
         assert flow_service.reconcile_calls == [target_run_id]
         assert rest.interaction_responses[0]["payload"]["type"] == 5
-        content = rest.interaction_responses[1]["payload"]["data"]["content"]
+        content = rest.followup_messages[0]["payload"]["content"]
         assert f"Recovered for run {target_run_id}" in content
     finally:
         await store.close()

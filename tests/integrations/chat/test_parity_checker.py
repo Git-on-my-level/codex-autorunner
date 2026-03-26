@@ -60,6 +60,27 @@ def test_parity_checker_reports_non_stable_route_gaps_informationally(
     assert "car.future.partial" in route_check.metadata["missing_non_stable_ids"]
 
 
+def test_parity_checker_fails_when_registered_discord_metadata_is_missing() -> None:
+    contract = (
+        CommandContractEntry(
+            id="car.future",
+            path=("car", "future"),
+            requires_bound_workspace=False,
+            status="partial",
+            discord_paths=(("car", "future"),),
+            telegram_commands=("future",),
+        ),
+    )
+    results_by_id = {
+        result.id: result for result in run_parity_checks(contract=contract)
+    }
+
+    metadata_check = results_by_id["contract.discord_metadata_complete"]
+    assert not metadata_check.passed
+    assert "car.future" in metadata_check.metadata["missing_ack_policy"]
+    assert "car.future" in metadata_check.metadata["missing_exposure"]
+
+
 def test_parity_checker_fails_when_contract_route_is_missing(tmp_path: Path) -> None:
     repo_root = _write_fixture_repo(tmp_path, include_car_model_route=False)
 

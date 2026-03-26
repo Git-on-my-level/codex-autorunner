@@ -68,10 +68,8 @@ def test_build_application_commands_structure_is_stable() -> None:
         "help",
         "debug",
         "ids",
-        "mcp",
         "init",
         "repos",
-        "experimental",
         "rollout",
         "feedback",
     ]
@@ -190,11 +188,3 @@ def test_agent_and_effort_options_include_choices() -> None:
     assert update_target.get("choices", []) == list(
         update_target_command_choices(include_status=True)
     )
-
-    admin = _find_option(car_options, "admin")
-    experimental = _find_option(admin["options"], "experimental")
-    experimental_action = _find_option(experimental["options"], "action")
-    action_choices = {
-        choice["value"] for choice in experimental_action.get("choices", [])
-    }
-    assert action_choices == {"list", "enable", "disable"}

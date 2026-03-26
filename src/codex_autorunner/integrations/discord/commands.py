@@ -166,11 +166,6 @@ def _build_admin_subcommand_options() -> list[dict[str, Any]]:
         },
         {
             "type": SUB_COMMAND,
-            "name": "mcp",
-            "description": "Show MCP server status",
-        },
-        {
-            "type": SUB_COMMAND,
             "name": "init",
             "description": "Generate AGENTS.md",
         },
@@ -178,30 +173,6 @@ def _build_admin_subcommand_options() -> list[dict[str, Any]]:
             "type": SUB_COMMAND,
             "name": "repos",
             "description": "List hub repositories",
-        },
-        {
-            "type": SUB_COMMAND,
-            "name": "experimental",
-            "description": "Toggle experimental features",
-            "options": [
-                {
-                    "type": STRING,
-                    "name": "action",
-                    "description": "list, enable, or disable",
-                    "required": False,
-                    "choices": [
-                        {"name": "list", "value": "list"},
-                        {"name": "enable", "value": "enable"},
-                        {"name": "disable", "value": "disable"},
-                    ],
-                },
-                {
-                    "type": STRING,
-                    "name": "feature",
-                    "description": "Feature name (for enable/disable)",
-                    "required": False,
-                },
-            ],
         },
         {
             "type": SUB_COMMAND,
