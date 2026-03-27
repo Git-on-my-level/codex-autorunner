@@ -248,6 +248,46 @@ class TestExecuteWorkspaceRetention:
         assert summary.pruned == 1
         assert not old_workspace.exists()
 
+    def test_failed_delete_does_not_report_reclaimed_bytes(
+        self, monkeypatch, tmp_path: Path
+    ):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+        old_workspace = root / "old123456789"
+        old_workspace.mkdir()
+        (old_workspace / "state.json").write_text("{}")
+
+        old_mtime = datetime.now(timezone.utc) - timedelta(days=10)
+        old_ts = old_mtime.timestamp()
+        os.utime(old_workspace, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            now=now,
+        )
+
+        def _fail_remove(_path: Path) -> None:
+            raise OSError("boom")
+
+        monkeypatch.setattr(
+            "codex_autorunner.integrations.app_server.retention._remove_tree",
+            _fail_remove,
+        )
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=False)
+
+        assert summary.pruned == 0
+        assert summary.bytes_after == summary.bytes_before
+        assert summary.blocked_paths == (str(old_workspace),)
+        assert summary.blocked_reasons == ("deletion_failed",)
+        assert old_workspace.exists()
+
 
 class TestPruneWorkspaceRoot:
     def test_combined_plan_and_execute(self, tmp_path: Path):

@@ -80,8 +80,10 @@ def resolve_workspace_retention_policy(config: object) -> WorkspaceRetentionPoli
     )
 
 
-def resolve_global_workspace_root() -> Path:
-    return resolve_global_state_root() / "workspaces"
+def resolve_global_workspace_root(
+    *, config: object | None = None, repo_root: Optional[Path] = None
+) -> Path:
+    return resolve_global_state_root(config=config, repo_root=repo_root) / "workspaces"
 
 
 def resolve_repo_workspace_root(repo_root: Path) -> Path:
@@ -286,6 +288,7 @@ def execute_workspace_retention(
     blocked_paths: list[str] = []
     blocked_reasons: list[str] = []
     deleted_bytes = 0
+    failed_prune_count = 0
 
     for candidate in plan.prune_candidates:
         path = candidate.path
@@ -294,16 +297,19 @@ def execute_workspace_retention(
         except Exception:
             blocked_paths.append(str(path))
             blocked_reasons.append("path_outside_root")
+            failed_prune_count += 1
             continue
 
+        size_bytes = _path_size_bytes(path)
         if not dry_run:
             try:
-                deleted_bytes += _path_size_bytes(path)
                 _remove_tree(path)
             except OSError:
                 blocked_paths.append(str(path))
                 blocked_reasons.append("deletion_failed")
+                failed_prune_count += 1
                 continue
+            deleted_bytes += size_bytes
 
         pruned_paths.append(str(path))
 
@@ -316,7 +322,7 @@ def execute_workspace_retention(
         )
         blocked_reasons.append(reason)
 
-    kept_count = plan.kept_count + len(plan.blocked_candidates)
+    kept_count = plan.kept_count + len(plan.blocked_candidates) + failed_prune_count
     bytes_after = (
         plan.total_bytes - plan.reclaimable_bytes
         if dry_run

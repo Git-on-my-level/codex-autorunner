@@ -704,6 +704,33 @@ def test_housekeeping_validation_rejects_negative_min_file_age_seconds(
         load_hub_config(hub_root)
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    (
+        ("report_max_history_files", "bad"),
+        ("report_max_total_bytes", "bad"),
+        ("app_server_workspace_max_age_days", "bad"),
+    ),
+)
+def test_pma_validation_rejects_invalid_state_cleanup_knobs(
+    tmp_path: Path, key: str, value: object
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "pma": {
+                key: value,
+            },
+        },
+    )
+
+    with pytest.raises(ConfigError, match=key):
+        load_hub_config(hub_root)
+
+
 def test_repo_ticket_flow_invalid_approval_mode_fails_fast(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir()

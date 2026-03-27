@@ -11,6 +11,7 @@ from ....core.archive_retention import (
     resolve_run_archive_retention_policy,
     resolve_worktree_archive_retention_policy,
 )
+from ....core.config import ConfigError, load_hub_config
 from ....core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -26,6 +27,10 @@ from ....core.report_retention import (
 )
 from ....core.runtime import RuntimeContext
 from ....core.state_retention import (
+    CleanupAction,
+    CleanupCandidate,
+    CleanupPlan,
+    CleanupReason,
     CleanupResult,
     RetentionBucket,
     RetentionClass,
@@ -34,6 +39,14 @@ from ....core.state_retention import (
     adapt_filebox_prune_summary_to_result,
     adapt_report_prune_summary_to_result,
     aggregate_cleanup_results,
+    make_cleanup_result,
+)
+from ....core.state_roots import resolve_global_state_root
+from ....housekeeping import (
+    HousekeepingConfig,
+    HousekeepingRule,
+    HousekeepingRuleResult,
+    run_housekeeping_once,
 )
 from ....integrations.app_server.retention import (
     adapt_workspace_summary_to_result,
@@ -42,6 +55,7 @@ from ....integrations.app_server.retention import (
     resolve_repo_workspace_root,
     resolve_workspace_retention_policy,
 )
+from ....manifest import load_manifest
 from ....workspace import workspace_id_for_path
 
 
@@ -318,7 +332,9 @@ def register_cleanup_commands(
         )
         repo_workspace_root = resolve_repo_workspace_root(repo_root)
         active_workspace_ids, locked_workspace_ids, current_workspace_ids = (
-            _resolve_workspace_guards(engine, repo_workspace_root)
+            _resolve_workspace_guards(
+                engine, repo_workspace_root, scope=RetentionScope.REPO
+            )
         )
         repo_workspace_summary = prune_workspace_root(
             repo_workspace_root,
@@ -338,14 +354,18 @@ def register_cleanup_commands(
     def _run_global_cleanup(
         engine: RuntimeContext, dry_run: bool, results: list
     ) -> None:
+        _run_global_update_cache_cleanup(engine, dry_run, results)
+
         global_workspace_bucket = RetentionBucket(
             family="workspaces",
             scope=RetentionScope.GLOBAL,
             retention_class=RetentionClass.EPHEMERAL,
         )
-        global_workspace_root = resolve_global_workspace_root()
+        global_workspace_root = _resolve_global_cleanup_workspace_root(engine)
         active_workspace_ids, locked_workspace_ids, current_workspace_ids = (
-            _resolve_workspace_guards(engine, global_workspace_root)
+            _resolve_workspace_guards(
+                engine, global_workspace_root, scope=RetentionScope.GLOBAL
+            )
         )
         global_workspace_summary = prune_workspace_root(
             global_workspace_root,
@@ -362,6 +382,53 @@ def register_cleanup_commands(
             )
         )
 
+    def _run_global_update_cache_cleanup(
+        engine: RuntimeContext, dry_run: bool, results: list
+    ) -> None:
+        update_cache_bucket = RetentionBucket(
+            family="update_cache",
+            scope=RetentionScope.GLOBAL,
+            retention_class=RetentionClass.CACHE_ONLY,
+        )
+        update_cache_root = (
+            resolve_global_state_root(config=engine.config, repo_root=engine.repo_root)
+            / "update_cache"
+        )
+        summary = run_housekeeping_once(
+            HousekeepingConfig(
+                enabled=True,
+                interval_seconds=3600,
+                min_file_age_seconds=0,
+                dry_run=dry_run,
+                rules=[
+                    HousekeepingRule(
+                        name="update_cache",
+                        kind="directory",
+                        path=str(update_cache_root),
+                        glob="*",
+                        recursive=True,
+                        max_files=2000,
+                        max_total_bytes=1_000_000_000,
+                        max_age_days=30,
+                    )
+                ],
+            ),
+            engine.repo_root,
+        )
+        rule_result = (
+            summary.rules[0]
+            if summary.rules
+            else HousekeepingRuleResult(name="update_cache", kind="directory")
+        )
+        results.append(
+            _adapt_housekeeping_rule_result_to_result(
+                rule_result,
+                update_cache_bucket,
+                dry_run=dry_run,
+                reason=CleanupReason.CACHE_REBUILDABLE,
+            )
+        )
+
     def _print_cleanup_report(results: list, dry_run: bool) -> None:
         aggregated = aggregate_cleanup_results(results)
         prefix = "DRY RUN: " if dry_run else ""
@@ -369,11 +436,17 @@ def register_cleanup_commands(
         lines = [f"{prefix}CAR State Cleanup Report"]
         lines.append("=" * 50)
 
-        by_family = {}
+        family_scope_counts: dict[str, set[str]] = {}
         for result in results:
-            family = result.bucket.family
-            if family not in by_family:
-                by_family[family] = {
+            family_scope_counts.setdefault(result.bucket.family, set()).add(
+                result.bucket.scope.value
+            )
+
+        by_bucket = {}
+        for result in results:
+            key = (result.bucket.scope.value, result.bucket.family)
+            if key not in by_bucket:
+                by_bucket[key] = {
                     "action_count": 0,
                     "action_bytes": 0,
                     "blocked_count": 0,
@@ -382,16 +455,21 @@ def register_cleanup_commands(
             action_bytes = (
                 result.plan.reclaimable_bytes if dry_run else result.deleted_bytes
             )
-            by_family[family]["action_count"] += action_count
-            by_family[family]["action_bytes"] += action_bytes
-            by_family[family]["blocked_count"] += len(result.plan.blocked_candidates)
+            by_bucket[key]["action_count"] += action_count
+            by_bucket[key]["action_bytes"] += action_bytes
+            by_bucket[key]["blocked_count"] += len(result.plan.blocked_candidates)
 
-        for family, stats in sorted(by_family.items()):
+        for (scope_name, family), stats in sorted(by_bucket.items()):
             action_count = stats["action_count"]
             action_bytes = stats["action_bytes"]
             blocked_count = stats["blocked_count"]
             if action_count > 0 or blocked_count > 0:
-                lines.append(f"{family}:")
+                label = (
+                    f"{scope_name}/{family}"
+                    if len(family_scope_counts.get(family, set())) > 1
+                    else family
+                )
+                lines.append(f"{label}:")
                 lines.append(f"  pruned={action_count} bytes={action_bytes}")
                 if blocked_count > 0:
                     lines.append(f"  blocked={blocked_count}")
@@ -441,11 +519,12 @@ def register_cleanup_commands(
         )
 
     def _resolve_workspace_guards(
-        engine: RuntimeContext, workspace_root: Path
+        engine: RuntimeContext,
+        workspace_root: Path,
+        *,
+        scope: RetentionScope,
     ) -> tuple[set[str], set[str], set[str]]:
-        active_workspace_ids = _live_workspace_ids_from_process_registry(
-            engine.repo_root
-        )
+        active_workspace_ids: set[str] = set()
         locked_workspace_ids = _workspace_ids_with_marker(
             workspace_root, marker_name="lock"
         )
@@ -453,13 +532,51 @@ def register_cleanup_commands(
             workspace_root, marker_name="run.json"
         )
 
-        thread_registry = (
-            engine.repo_root / ".codex-autorunner" / "app_server_threads.json"
-        )
-        if thread_registry.exists():
-            current_workspace_ids.add(workspace_id_for_path(engine.repo_root))
+        for managed_root in _managed_workspace_roots_for_guard_scan(
+            engine, scope=scope
+        ):
+            active_workspace_ids.update(
+                _live_workspace_ids_from_process_registry(managed_root)
+            )
+            thread_registry = (
+                managed_root / ".codex-autorunner" / "app_server_threads.json"
+            )
+            if thread_registry.exists():
+                current_workspace_ids.add(workspace_id_for_path(managed_root))
 
         return active_workspace_ids, locked_workspace_ids, current_workspace_ids
+
+    def _managed_workspace_roots_for_guard_scan(
+        engine: RuntimeContext, *, scope: RetentionScope
+    ) -> tuple[Path, ...]:
+        roots: set[Path] = {engine.repo_root.resolve()}
+        if scope != RetentionScope.GLOBAL:
+            return tuple(sorted(roots, key=lambda path: str(path)))
+
+        try:
+            hub_config = load_hub_config(engine.repo_root)
+            manifest = load_manifest(hub_config.manifest_path, hub_config.root)
+        except ConfigError:
+            return tuple(sorted(roots, key=lambda path: str(path)))
+        except Exception:
+            return tuple(sorted(roots, key=lambda path: str(path)))
+
+        for entry in manifest.repos:
+            roots.add((hub_config.root / entry.path).resolve())
+        for workspace in manifest.agent_workspaces:
+            roots.add((hub_config.root / workspace.path).resolve())
+
+        return tuple(sorted(roots, key=lambda path: str(path)))
+
+    def _resolve_global_cleanup_workspace_root(engine: RuntimeContext) -> Path:
+        app_server_cfg = getattr(engine.config, "app_server", None)
+        state_root = getattr(app_server_cfg, "state_root", None)
+        if isinstance(state_root, Path):
+            return state_root
+        return resolve_global_workspace_root(
+            config=engine.config,
+            repo_root=engine.repo_root,
+        )
 
     def _live_workspace_ids_from_process_registry(repo_root: Path) -> set[str]:
         workspace_ids: set[str] = set()
@@ -484,3 +601,46 @@ def register_cleanup_commands(
             if (path / marker_name).exists():
                 protected_ids.add(path.name)
         return protected_ids
+
+    def _adapt_housekeeping_rule_result_to_result(
+        rule_result: HousekeepingRuleResult,
+        bucket: RetentionBucket,
+        *,
+        dry_run: bool,
+        reason: CleanupReason,
+    ) -> CleanupResult:
+        candidates = tuple(
+            CleanupCandidate(
+                path=Path("<unknown>"),
+                size_bytes=0,
+                bucket=bucket,
+                action=CleanupAction.PRUNE,
+                reason=reason,
+            )
+            for _ in range(rule_result.deleted_count)
+        )
+        plan = CleanupPlan(
+            bucket=bucket,
+            candidates=candidates,
+            total_bytes=rule_result.deleted_bytes,
+            reclaimable_bytes=rule_result.deleted_bytes,
+            kept_count=max(rule_result.scanned_count - rule_result.deleted_count, 0),
+            prune_count=rule_result.deleted_count,
+            blocked_count=0,
+        )
+        if dry_run:
+            return CleanupResult(
+                bucket=bucket,
+                plan=plan,
+                deleted_paths=(),
+                deleted_count=0,
+                deleted_bytes=0,
+                kept_bytes=0,
+                errors=tuple(rule_result.error_samples),
+            )
+        return make_cleanup_result(
+            plan,
+            deleted_paths=(),
+            deleted_bytes=rule_result.deleted_bytes,
+            errors=tuple(rule_result.error_samples),
+        )

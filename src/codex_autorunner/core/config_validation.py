@@ -1156,6 +1156,9 @@ def _validate_pma_config(cfg: Dict[str, Any]) -> None:
         "run_archive_max_entries",
         "run_archive_max_age_days",
         "run_archive_max_total_bytes",
+        "report_max_history_files",
+        "report_max_total_bytes",
+        "app_server_workspace_max_age_days",
     ):
         _validate_optional_type(pma_cfg, key, int, path="pma")
         _validate_optional_int_ge(pma_cfg, key, 0, path="pma")
