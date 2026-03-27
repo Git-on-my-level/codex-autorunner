@@ -123,6 +123,15 @@ class _TelegramApprovalHarness(TelegramApprovalHandlers):
         _ = bucket, key
 
 
+class _HermesApprovalHarness(_TelegramApprovalHarness):
+    def _resolve_turn_context(
+        self, turn_id: str, thread_id: str | None = None
+    ) -> object | None:
+        assert turn_id == "turn-hermes-1"
+        assert thread_id == "hermes-thread-1"
+        return self._context
+
+
 @pytest.mark.anyio
 async def test_telegram_approval_request_accepts_zero_request_id() -> None:
     handlers = _TelegramApprovalHarness()
@@ -171,3 +180,31 @@ async def test_telegram_approval_request_rejects_blank_request_id() -> None:
     assert handlers._bot.calls == []
     assert handlers._store.upserted_records == []
     assert handlers._pending_approvals == {}
+
+
+@pytest.mark.anyio
+async def test_telegram_approval_request_supports_hermes_thread_ids() -> None:
+    handlers = _HermesApprovalHarness()
+
+    task = asyncio.create_task(
+        handlers._handle_approval_request(
+            {
+                "id": "hermes-req-1",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "turnId": "turn-hermes-1",
+                    "threadId": "hermes-thread-1",
+                    "command": ["/bin/zsh", "-c", "pwd"],
+                },
+            }
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert handlers._bot.calls
+    assert "hermes-req-1" in handlers._pending_approvals
+
+    pending = handlers._pending_approvals.pop("hermes-req-1")
+    pending.future.set_result("accept")
+
+    assert await task == "accept"

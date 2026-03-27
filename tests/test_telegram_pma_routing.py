@@ -3790,6 +3790,407 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
 
 
 @pytest.mark.anyio
+async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=False,
+        workspace_path=str(tmp_path),
+        repo_id="repo-1",
+        agent="hermes",
+    )
+
+    class _RepoIngressHandler(_ManagedThreadPMAHandler):
+        def __init__(self, record: TelegramTopicRecord, hub_root: Path) -> None:
+            super().__init__(record, hub_root)
+            self._router.runtime_for = lambda _key: _RuntimeStub()  # type: ignore[attr-defined]
+            self._pending_questions = {}
+            self._resume_options = {}
+            self._bind_options = {}
+            self._flow_run_options = {}
+            self._agent_options = {}
+            self._model_options = {}
+            self._model_pending = {}
+            self._review_commit_options = {}
+            self._review_commit_subjects = {}
+            self._pending_review_custom = {}
+            self._ticket_flow_pause_targets = {}
+            self._bot_username = None
+            self._command_specs = {}
+            self._config.trigger_mode = "all"
+
+        def _get_paused_ticket_flow(
+            self, _workspace_root: Path, *, preferred_run_id: Optional[str]
+        ) -> Optional[tuple[str, object]]:
+            _ = preferred_run_id
+            return None
+
+        def _enqueue_topic_work(self, _key: str, work):  # type: ignore[no-untyped-def]
+            asyncio.get_running_loop().create_task(work())
+
+        def _wrap_placeholder_work(self, **kwargs):  # type: ignore[no-untyped-def]
+            return kwargs["work"]
+
+        def _handle_pending_resume(self, *_args, **_kwargs) -> bool:
+            return False
+
+        def _handle_pending_bind(self, *_args, **_kwargs) -> bool:
+            return False
+
+        async def _handle_pending_review_commit(self, *_args, **_kwargs) -> bool:
+            return False
+
+        async def _handle_pending_review_custom(self, *_args, **_kwargs) -> bool:
+            return False
+
+        async def _dismiss_review_custom_prompt(self, *_args, **_kwargs) -> None:
+            return None
+
+    class _FakeHarness:
+        display_name = "Hermes"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+                "approvals",
+                "active_thread_discovery",
+            }
+        )
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-hermes-1"
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="hermes-repo-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id="hermes-repo-turn-1",
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="hermes repo ingress reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    handler = _RepoIngressHandler(record, tmp_path)
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda: {
+            "hermes": AgentDescriptor(
+                id="hermes",
+                name="Hermes",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    class _IngressStub:
+        async def submit_message(self, request, **kwargs):  # type: ignore[no-untyped-def]
+            await kwargs["submit_thread_message"](request)
+            return SimpleNamespace(route="thread", thread_result=None)
+
+    monkeypatch.setattr(
+        telegram_messages_module,
+        "build_surface_orchestration_ingress",
+        lambda **_: _IngressStub(),
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=111,
+        thread_id=222,
+        from_user_id=333,
+        text="hello from hermes ingress",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await telegram_messages_module.handle_message_inner(handler, message)
+    with anyio.fail_after(2):
+        while "hermes repo ingress reply" not in handler._sent:
+            await anyio.sleep(0.05)
+
+    assert "hermes repo ingress reply" in handler._sent
+    orchestration_service = (
+        execution_commands_module._build_telegram_thread_orchestration_service(handler)
+    )
+    binding = orchestration_service.get_binding(
+        surface_kind="telegram",
+        surface_key="111:222",
+    )
+    assert binding is not None
+    assert binding.agent_id == "hermes"
+    assert binding.mode == "repo"
+
+
+@pytest.mark.anyio
+async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=False,
+        workspace_path=str(tmp_path),
+        repo_id="repo-1",
+        agent="hermes",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class _FakeHarness:
+        display_name = "Hermes"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+                "approvals",
+                "active_thread_discovery",
+            }
+        )
+
+        def __init__(self) -> None:
+            self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-hermes-1"
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="hermes-fresh-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            turn_id = "hermes-turn-1"
+            if release_first.is_set():
+                turn_id = "hermes-turn-2"
+            return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, timeout
+            assert isinstance(turn_id, str)
+            if turn_id == "hermes-turn-1":
+                first_started.set()
+                await release_first.wait()
+                return SimpleNamespace(
+                    status="interrupted",
+                    assistant_text="",
+                    errors=[],
+                )
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="unexpected hermes queued reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
+            release_first.set()
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda: {
+            "hermes": AgentDescriptor(
+                id="hermes",
+                name="Hermes",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    first_message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="interruptible hermes prompt",
+        date=None,
+        is_topic_message=True,
+    )
+    queued_message = TelegramMessage(
+        update_id=2,
+        message_id=11,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="queued hermes prompt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    first_task = asyncio.create_task(
+        handler._handle_normal_message(first_message, runtime=_RuntimeStub())
+    )
+    try:
+        await first_started.wait()
+        await handler._handle_normal_message(queued_message, runtime=_RuntimeStub())
+        await handler._process_interrupt(
+            chat_id=first_message.chat_id,
+            thread_id=first_message.thread_id,
+            reply_to=first_message.message_id,
+            runtime=_RuntimeStub(),
+            message_id=99,
+        )
+        with anyio.fail_after(2):
+            while (
+                "Interrupted active turn. Cancelled 1 queued turn(s)."
+                not in handler._sent
+            ):
+                await anyio.sleep(0.05)
+        await first_task
+
+        assert harness.interrupt_calls == [(tmp_path, "fresh-1", "hermes-turn-1")]
+        assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
+        assert "unexpected hermes queued reply" not in handler._sent
+    finally:
+        release_first.set()
+        if not first_task.done():
+            first_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await first_task
+        remaining_tasks = list(handler._spawned_tasks)
+        for task in remaining_tasks:
+            if not task.done():
+                task.cancel()
+        for task in remaining_tasks:
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
+@pytest.mark.anyio
 async def test_pma_missing_thread_resets_registry_and_recovers(tmp_path: Path) -> None:
     registry = AppServerThreadRegistry(tmp_path / "threads.json")
     registry.reset_all()

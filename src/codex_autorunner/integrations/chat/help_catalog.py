@@ -125,7 +125,7 @@ _HELP_COMMANDS: tuple[HelpCommandDescriptor, ...] = (
     ),
     HelpCommandDescriptor(
         id="car.model",
-        description="List or set the model",
+        description="Show or set the active model when supported",
         section="core",
         telegram_command="model",
         discord_path=("car", "model"),
@@ -143,7 +143,7 @@ _HELP_COMMANDS: tuple[HelpCommandDescriptor, ...] = (
     ),
     HelpCommandDescriptor(
         id="car.review",
-        description="Run a code review",
+        description="Run a code review when supported by the active agent",
         section="core",
         telegram_command="review",
         discord_path=("car", "review"),
@@ -483,7 +483,7 @@ def build_telegram_help_text(
         [
             "",
             "Other:",
-            "Note: /resume is supported for the codex and opencode agents.",
+            "Note: /resume is available when the active agent supports durable threads.",
             "!<cmd> - run a bash command in the bound workspace (non-interactive; long-running commands time out)",
         ]
     )

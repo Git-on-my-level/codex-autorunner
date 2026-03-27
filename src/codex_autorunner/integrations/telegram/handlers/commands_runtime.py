@@ -935,6 +935,21 @@ class TelegramCommandHandlers(
         record = await self._router.ensure_topic(message.chat_id, message.thread_id)
         agent = self._effective_agent(record)
         supports_effort = self._agent_supports_effort(agent)
+        supports_model_listing = self._agent_supports_capability(agent, "model_listing")
+        supports_manual_model_override = self._agent_supports_capability(
+            agent, "message_turns"
+        )
+        agent_label = self._agent_display_name(agent)
+        argv = self._parse_command_args(args)
+
+        def _model_catalog_unavailable_text() -> str:
+            if supports_manual_model_override:
+                return (
+                    f"{agent_label} does not expose a model catalog. "
+                    "Use /model set <model> to override manually."
+                )
+            return f"{agent_label} does not support model selection in Telegram."
+
         list_params = {
             "cursor": None,
             "limit": DEFAULT_MODEL_LIST_LIMIT,
@@ -949,33 +964,43 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
-        try:
-            client = await self._client_for_workspace(workspace_path)
-        except AppServerUnavailableError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.app_server.unavailable",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                "App server unavailable; try again or check logs.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if client is None:
-            await self._send_message(
-                message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        argv = self._parse_command_args(args)
+        if not supports_model_listing:
+            if not argv or argv[0].lower() in ("list", "ls"):
+                await self._send_message(
+                    message.chat_id,
+                    _model_catalog_unavailable_text(),
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+        client = None
+        if supports_model_listing:
+            try:
+                client = await self._client_for_workspace(workspace_path)
+            except AppServerUnavailableError as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.app_server.unavailable",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "App server unavailable; try again or check logs.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+            if client is None:
+                await self._send_message(
+                    message.chat_id,
+                    error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
         cache_key = f"{workspace_path}:{agent}"
         if argv and argv[0].lower() in ("list", "ls"):
             record_for_models = self._record_with_workspace_path(record, workspace_path)
@@ -1063,13 +1088,18 @@ class TelegramCommandHandlers(
         search_query_lower = search_query.lower() if search_query else None
         resolved_model_id: Optional[str] = None
 
-        if search_query and search_query_lower not in {
-            "list",
-            "ls",
-            "clear",
-            "reset",
-            "set",
-        }:
+        if (
+            supports_model_listing
+            and search_query
+            and search_query_lower
+            not in {
+                "list",
+                "ls",
+                "clear",
+                "reset",
+                "set",
+            }
+        ):
             result: Any | None = None
             cached_result = self._model_catalog_cache.get(cache_key)
             if cached_result is not None:
@@ -1285,6 +1315,14 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
+        if argv[0].lower() == "set" and len(argv) < 2:
+            await self._send_message(
+                message.chat_id,
+                "Usage: /model set <model> [effort]",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if argv[0].lower() == "set" and len(argv) > 1:
             model = argv[1]
             effort = argv[2] if len(argv) > 2 else None
@@ -1299,7 +1337,7 @@ class TelegramCommandHandlers(
                 reply_to=message.message_id,
             )
             return
-        if not supports_effort and "/" not in model:
+        if agent == "opencode" and "/" not in model:
             await self._send_message(
                 message.chat_id,
                 "OpenCode models must be in provider/model format (e.g., openai/gpt-4o).",

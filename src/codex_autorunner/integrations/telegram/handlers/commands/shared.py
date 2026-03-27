@@ -10,7 +10,9 @@ import httpx
 
 from .....agents.opencode.client import OpenCodeProtocolError
 from .....agents.opencode.supervisor import OpenCodeSupervisorError
+from .....agents.registry import get_registered_agents, normalize_agent_capabilities
 from .....core.coercion import coerce_int
+from ....chat.agents import DEFAULT_CHAT_AGENT, normalize_chat_agent
 from ...adapter import InlineButton, build_inline_keyboard, encode_cancel_callback
 from ...helpers import format_public_error
 from ...payload_utils import (
@@ -40,6 +42,43 @@ class TelegramCommandSupportMixin:
             Integer value if coercion succeeds and value is not bool, None otherwise.
         """
         return coerce_int(value)
+
+    def _agent_descriptor(self, agent: object) -> Any:
+        normalized = normalize_chat_agent(agent, default=DEFAULT_CHAT_AGENT)
+        if normalized is None:
+            return None
+        return get_registered_agents().get(normalized)
+
+    def _agent_display_name(self, agent: object) -> str:
+        descriptor = self._agent_descriptor(agent)
+        if descriptor is not None:
+            return descriptor.name
+        normalized = normalize_chat_agent(agent)
+        if isinstance(normalized, str) and normalized:
+            return normalized
+        if isinstance(agent, str) and agent.strip():
+            return agent.strip()
+        return "This agent"
+
+    def _agent_supports_capability(self, agent: object, capability: str) -> bool:
+        descriptor = self._agent_descriptor(agent)
+        if descriptor is None:
+            return False
+        normalized = normalize_agent_capabilities([capability])
+        if not normalized:
+            return False
+        return next(iter(normalized)) in descriptor.capabilities
+
+    def _agents_supporting_capability(self, capability: str) -> list[str]:
+        normalized = normalize_agent_capabilities([capability])
+        if not normalized:
+            return []
+        resolved = next(iter(normalized))
+        return sorted(
+            descriptor.id
+            for descriptor in get_registered_agents().values()
+            if resolved in descriptor.capabilities
+        )
 
     def _format_httpx_exception(self, exc: Exception) -> Optional[str]:
         """Format httpx exceptions for user-friendly error messages.
