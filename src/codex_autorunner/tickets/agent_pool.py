@@ -11,7 +11,7 @@ EmitEventFn = Callable[[FlowEventType, dict[str, Any]], None]
 
 @dataclass(frozen=True)
 class AgentTurnRequest:
-    agent_id: str  # "codex" | "opencode"
+    agent_id: str
     prompt: str
     workspace_root: Path
     conversation_id: Optional[str] = None

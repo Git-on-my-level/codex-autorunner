@@ -651,6 +651,44 @@ async def test_ticket_runner_switches_agents_between_tickets(tmp_path: Path) -> 
     assert len(pool.requests) == 2
 
 
+@pytest.mark.asyncio
+async def test_ticket_runner_executes_hermes_ticket(tmp_path: Path) -> None:
+    workspace_root = tmp_path
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, agent="hermes", done=False)
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        assert req.agent_id == "hermes"
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv-hermes",
+            turn_id="t-hermes",
+            text="hermes turn",
+        )
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    result = await runner.step({})
+
+    assert result.status == "continue"
+    assert len(pool.requests) == 1
+    assert pool.requests[0].agent_id == "hermes"
+    assert result.agent_id == "hermes"
+    assert result.agent_conversation_id == "conv-hermes"
+
+
 async def test_ticket_runner_pauses_on_duplicate_ticket_indices(tmp_path: Path) -> None:
     workspace_root = tmp_path
     ticket_dir = workspace_root / ".codex-autorunner" / "tickets"

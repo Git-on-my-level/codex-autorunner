@@ -186,11 +186,16 @@ class _FakeCloser:
         self.closed = True
 
 
-def _build_descriptor(agent_id: str) -> AgentDescriptor:
+def _build_descriptor(
+    agent_id: str,
+    *,
+    capabilities: Optional[frozenset[RuntimeCapability]] = None,
+) -> AgentDescriptor:
     return AgentDescriptor(
         id=agent_id,
         name=agent_id.title(),
-        capabilities=frozenset(
+        capabilities=capabilities
+        or frozenset(
             {
                 RuntimeCapability("durable_threads"),
                 RuntimeCapability("message_turns"),
@@ -206,6 +211,7 @@ def _make_pool(
     harness: _FakeHarness,
     *,
     approval_mode: str,
+    descriptors: Optional[dict[str, AgentDescriptor]] = None,
 ) -> DefaultAgentPool:
     cfg = SimpleNamespace(
         root=tmp_path,
@@ -216,7 +222,7 @@ def _make_pool(
         ),
     )
     pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
-    pool._agent_descriptors_override = {  # type: ignore[attr-defined]
+    pool._agent_descriptors_override = descriptors or {  # type: ignore[attr-defined]
         "codex": _build_descriptor("codex"),
         "opencode": _build_descriptor("opencode"),
     }
@@ -792,6 +798,71 @@ async def test_run_turn_passes_model_reasoning_and_reuses_thread_target(
 
 
 @pytest.mark.asyncio
+async def test_run_turn_supports_runtime_backed_hermes_agent(tmp_path: Path):
+    harness = _FakeHarness([_HarnessScript(assistant_text="hermes response")])
+    pool = _make_pool(
+        tmp_path,
+        harness,
+        approval_mode="review",
+        descriptors={
+            "codex": _build_descriptor("codex"),
+            "opencode": _build_descriptor("opencode"),
+            "hermes": _build_descriptor("hermes"),
+        },
+    )
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="hermes",
+            prompt="main prompt",
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert result.text == "hermes response"
+    assert result.error is None
+    assert result.raw["backend_thread_id"] == "session-1"
+
+    threads = pool._thread_store.list_threads(agent="hermes", limit=1)
+    assert len(threads) == 1
+    assert threads[0]["name"] == "ticket-flow:hermes"
+    assert harness.calls[0]["conversation_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_run_turn_fails_early_when_ticket_flow_capability_is_missing(
+    tmp_path: Path,
+):
+    harness = _FakeHarness([_HarnessScript(assistant_text="should not run")])
+    pool = _make_pool(
+        tmp_path,
+        harness,
+        approval_mode="review",
+        descriptors={
+            "broken": _build_descriptor(
+                "broken",
+                capabilities=frozenset({RuntimeCapability("durable_threads")}),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        await pool.run_turn(
+            AgentTurnRequest(
+                agent_id="broken",
+                prompt="main prompt",
+                workspace_root=tmp_path,
+            )
+        )
+
+    assert (
+        str(excinfo.value)
+        == "Agent 'broken' does not support ticket-flow execution (missing capability: message_turns)"
+    )
+    assert harness.calls == []
+
+
+@pytest.mark.asyncio
 async def test_run_turn_queues_busy_delegated_thread_and_shows_active_work(
     tmp_path: Path,
 ):
@@ -858,9 +929,11 @@ async def test_close_all_closes_runtime_supervisors(tmp_path: Path):
     pool = _make_pool(tmp_path, harness, approval_mode="yolo")
     codex_supervisor = _FakeCloser()
     opencode_supervisor = _FakeCloser()
+    hermes_supervisor = _FakeCloser()
     pool._runtime_context = SimpleNamespace(  # type: ignore[attr-defined]
         app_server_supervisor=codex_supervisor,
         opencode_supervisor=opencode_supervisor,
+        hermes_supervisor=hermes_supervisor,
         zeroclaw_supervisor=None,
     )
 
@@ -868,3 +941,4 @@ async def test_close_all_closes_runtime_supervisors(tmp_path: Path):
 
     assert codex_supervisor.closed is True
     assert opencode_supervisor.closed is True
+    assert hermes_supervisor.closed is True
