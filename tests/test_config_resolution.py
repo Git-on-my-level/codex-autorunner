@@ -232,15 +232,54 @@ def test_resolve_housekeeping_rule_matches_by_name() -> None:
     assert rule.max_files == 77
 
 
-def test_default_housekeeping_rule_named_exposes_hub_update_cache_defaults() -> None:
+@pytest.mark.parametrize(
+    ("rule_name", "include_repo_review_runs", "include_hub_update_rules", "path"),
+    [
+        ("run_logs", True, False, ".codex-autorunner/runs"),
+        (
+            "terminal_image_uploads",
+            True,
+            False,
+            ".codex-autorunner/uploads/terminal-images",
+        ),
+        (
+            "telegram_images",
+            True,
+            False,
+            ".codex-autorunner/uploads/telegram-images",
+        ),
+        (
+            "telegram_voice",
+            True,
+            False,
+            ".codex-autorunner/uploads/telegram-voice",
+        ),
+        (
+            "telegram_files",
+            True,
+            False,
+            ".codex-autorunner/uploads/telegram-files",
+        ),
+        ("github_context", True, False, ".codex-autorunner/github_context"),
+        ("review_runs", True, False, ".codex-autorunner/review/runs"),
+        ("update_cache", False, True, "~/.codex-autorunner/update_cache"),
+        ("update_log", False, True, "~/.codex-autorunner/update-standalone.log"),
+    ],
+)
+def test_default_housekeeping_rule_named_exposes_canonical_defaults(
+    rule_name: str,
+    include_repo_review_runs: bool,
+    include_hub_update_rules: bool,
+    path: str,
+) -> None:
     rule = default_housekeeping_rule_named(
-        "update_cache",
-        include_hub_update_rules=True,
+        rule_name,
+        include_repo_review_runs=include_repo_review_runs,
+        include_hub_update_rules=include_hub_update_rules,
     )
 
     assert rule is not None
-    assert rule.path == "~/.codex-autorunner/update_cache"
-    assert rule.max_files == 2000
+    assert rule.path == path
 
 
 @pytest.mark.parametrize("field", ["max_payload_bytes", "max_raw_payload_bytes"])

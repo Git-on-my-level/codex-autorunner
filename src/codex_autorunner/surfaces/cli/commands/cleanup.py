@@ -256,6 +256,7 @@ def register_cleanup_commands(
 
     def _run_repo_cleanup(engine: RuntimeContext, dry_run: bool, results: list) -> None:
         repo_root = engine.repo_root
+        _run_repo_housekeeping_cleanup(engine, dry_run, results)
 
         worktree_archive_bucket = RetentionBucket(
             family="worktree_archives",
@@ -353,7 +354,7 @@ def register_cleanup_commands(
     def _run_global_cleanup(
         engine: RuntimeContext, dry_run: bool, results: list
     ) -> None:
-        _run_global_update_cache_cleanup(engine, dry_run, results)
+        _run_global_housekeeping_cleanup(engine, dry_run, results)
 
         global_workspace_bucket = RetentionBucket(
             family="workspaces",
@@ -390,39 +391,189 @@ def register_cleanup_commands(
             )
         )
 
-    def _run_global_update_cache_cleanup(
+    def _run_repo_housekeeping_cleanup(
         engine: RuntimeContext, dry_run: bool, results: list
     ) -> None:
-        update_cache_bucket = RetentionBucket(
-            family="update_cache",
-            scope=RetentionScope.GLOBAL,
-            retention_class=RetentionClass.CACHE_ONLY,
+        _run_housekeeping_cleanup(
+            engine,
+            dry_run,
+            results,
+            specs=(
+                (
+                    "run_logs",
+                    RetentionBucket(
+                        family="logs",
+                        scope=RetentionScope.REPO,
+                        retention_class=RetentionClass.EPHEMERAL,
+                    ),
+                    CleanupReason.AGE_LIMIT,
+                    True,
+                    False,
+                    None,
+                ),
+                (
+                    "terminal_image_uploads",
+                    RetentionBucket(
+                        family="uploads",
+                        scope=RetentionScope.REPO,
+                        retention_class=RetentionClass.EPHEMERAL,
+                    ),
+                    CleanupReason.AGE_LIMIT,
+                    True,
+                    False,
+                    None,
+                ),
+                (
+                    "telegram_images",
+                    RetentionBucket(
+                        family="uploads",
+                        scope=RetentionScope.REPO,
+                        retention_class=RetentionClass.EPHEMERAL,
+                    ),
+                    CleanupReason.AGE_LIMIT,
+                    True,
+                    False,
+                    None,
+                ),
+                (
+                    "telegram_voice",
+                    RetentionBucket(
+                        family="uploads",
+                        scope=RetentionScope.REPO,
+                        retention_class=RetentionClass.EPHEMERAL,
+                    ),
+                    CleanupReason.AGE_LIMIT,
+                    True,
+                    False,
+                    None,
+                ),
+                (
+                    "telegram_files",
+                    RetentionBucket(
+                        family="uploads",
+                        scope=RetentionScope.REPO,
+                        retention_class=RetentionClass.EPHEMERAL,
+                    ),
+                    CleanupReason.AGE_LIMIT,
+                    True,
+                    False,
+                    None,
+                ),
+                (
+                    "github_context",
+                    RetentionBucket(
+                        family="github_context",
+                        scope=RetentionScope.REPO,
+                        retention_class=RetentionClass.REVIEWABLE,
+                    ),
+                    CleanupReason.AGE_LIMIT,
+                    True,
+                    False,
+                    None,
+                ),
+                (
+                    "review_runs",
+                    RetentionBucket(
+                        family="review_runs",
+                        scope=RetentionScope.REPO,
+                        retention_class=RetentionClass.REVIEWABLE,
+                    ),
+                    CleanupReason.AGE_LIMIT,
+                    True,
+                    False,
+                    None,
+                ),
+            ),
         )
-        update_cache_rule = _resolve_update_cache_housekeeping_rule(engine)
-        if update_cache_rule is None:
+
+    def _run_global_housekeeping_cleanup(
+        engine: RuntimeContext, dry_run: bool, results: list
+    ) -> None:
+        _run_housekeeping_cleanup(
+            engine,
+            dry_run,
+            results,
+            specs=(
+                (
+                    "update_cache",
+                    RetentionBucket(
+                        family="update_cache",
+                        scope=RetentionScope.GLOBAL,
+                        retention_class=RetentionClass.CACHE_ONLY,
+                    ),
+                    CleanupReason.CACHE_REBUILDABLE,
+                    False,
+                    True,
+                    lambda ctx: _resolve_global_cleanup_root(ctx) / "update_cache",
+                ),
+                (
+                    "update_log",
+                    RetentionBucket(
+                        family="logs",
+                        scope=RetentionScope.GLOBAL,
+                        retention_class=RetentionClass.EPHEMERAL,
+                    ),
+                    CleanupReason.AGE_LIMIT,
+                    False,
+                    True,
+                    lambda ctx: _resolve_global_cleanup_root(ctx)
+                    / "update-standalone.log",
+                ),
+            ),
+        )
+
+    def _run_housekeeping_cleanup(
+        engine: RuntimeContext,
+        dry_run: bool,
+        results: list,
+        *,
+        specs,
+    ) -> None:
+        base_config = getattr(engine.config, "housekeeping", None)
+        resolved_specs = []
+        resolved_rules: list[HousekeepingRule] = []
+
+        for (
+            rule_name,
+            bucket,
+            reason,
+            include_repo_review_runs,
+            include_hub_update_rules,
+            path_resolver,
+        ) in specs:
+            rule = _resolve_cleanup_housekeeping_rule(
+                engine,
+                rule_name,
+                include_repo_review_runs=include_repo_review_runs,
+                include_hub_update_rules=include_hub_update_rules,
+            )
+            if rule is None:
+                continue
+            if path_resolver is not None:
+                rule = dataclasses.replace(rule, path=str(path_resolver(engine)))
+            resolved_specs.append((bucket, reason))
+            resolved_rules.append(rule)
+
+        if not resolved_rules:
             return
-        update_cache_root = (
-            resolve_global_state_root(config=engine.config, repo_root=engine.repo_root)
-            / "update_cache"
-        )
-        cleanup_config = _cleanup_housekeeping_config(
-            getattr(engine.config, "housekeeping", None),
-            dry_run=dry_run,
-            rule=dataclasses.replace(update_cache_rule, path=str(update_cache_root)),
-        )
+
         summary = run_housekeeping_once(
-            cleanup_config,
+            _cleanup_housekeeping_config(
+                base_config,
+                dry_run=dry_run,
+                rules=resolved_rules,
+            ),
             engine.repo_root,
         )
-        rule_result = summary.rules[0]
-        results.append(
-            adapt_housekeeping_rule_result_to_result(
-                rule_result,
-                update_cache_bucket,
-                dry_run=dry_run,
-                reason=CleanupReason.CACHE_REBUILDABLE,
+        for rule_result, (bucket, reason) in zip(summary.rules, resolved_specs):
+            results.append(
+                adapt_housekeeping_rule_result_to_result(
+                    rule_result,
+                    bucket,
+                    dry_run=dry_run,
+                    reason=reason,
+                )
             )
-        )
 
     def _print_cleanup_report(results: list, dry_run: bool) -> None:
         aggregated = aggregate_cleanup_results(results)
@@ -601,40 +752,52 @@ def register_cleanup_commands(
                 protected_ids.add(path.name)
         return protected_ids
 
-    def _resolve_update_cache_housekeeping_rule(engine: RuntimeContext):
+    def _resolve_global_cleanup_root(engine: RuntimeContext) -> Path:
+        return resolve_global_state_root(
+            config=engine.config, repo_root=engine.repo_root
+        )
+
+    def _resolve_cleanup_housekeeping_rule(
+        engine: RuntimeContext,
+        rule_name: str,
+        *,
+        include_repo_review_runs: bool,
+        include_hub_update_rules: bool,
+    ):
+        configured_housekeeping = getattr(engine.config, "housekeeping", None)
         configured_rule = resolve_housekeeping_rule(
-            getattr(engine.config, "housekeeping", None),
-            "update_cache",
+            configured_housekeeping,
+            rule_name,
         )
         if configured_rule is not None:
             return configured_rule
-        mode = str(getattr(engine.config, "mode", "repo")).strip().lower()
-        if mode == "hub":
+        if isinstance(configured_housekeeping, HousekeepingConfig):
             return None
         return default_housekeeping_rule_named(
-            "update_cache",
-            include_hub_update_rules=True,
+            rule_name,
+            include_repo_review_runs=include_repo_review_runs,
+            include_hub_update_rules=include_hub_update_rules,
         )
 
     def _cleanup_housekeeping_config(
         base_config: object,
         *,
         dry_run: bool,
-        rule: HousekeepingRule,
+        rules: list[HousekeepingRule],
     ) -> HousekeepingConfig:
         if isinstance(base_config, HousekeepingConfig):
             return dataclasses.replace(
                 base_config,
                 enabled=True,
                 dry_run=dry_run,
-                rules=[rule],
+                rules=rules,
             )
         return HousekeepingConfig(
             enabled=True,
             interval_seconds=3600,
             min_file_age_seconds=600,
             dry_run=dry_run,
-            rules=[rule],
+            rules=rules,
         )
 
     def _make_skipped_cleanup_result(

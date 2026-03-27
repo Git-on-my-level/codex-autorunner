@@ -11,8 +11,13 @@ CAR manages state across several retention families:
 |--------|-------|-------|-------------|
 | worktree_archives | repo | reviewable | Worktree cleanup snapshots |
 | run_archives | repo | reviewable | Run archive entries |
+| logs | repo/global | ephemeral | Run logs and update log |
+| uploads | repo | ephemeral | Terminal and Telegram upload staging |
+| github_context | repo | reviewable | GitHub context bundles |
+| review_runs | repo | reviewable | Review run artifacts |
 | filebox | repo | ephemeral | Inbox/outbox staging |
 | reports | repo | reviewable | Report history files |
+| update_cache | global | cache-only | Update artifacts cache |
 | workspaces | repo/global | ephemeral | App-server workspace directories |
 
 Retention classes determine cleanup behavior:
@@ -38,7 +43,7 @@ car cleanup state --dry-run
 # Clean repo-local state only
 car cleanup state --scope repo
 
-# Clean global state only (workspaces)
+# Clean global state only (update cache/logs, workspaces)
 car cleanup state --scope global
 
 # Clean all scopes
@@ -76,8 +81,8 @@ Total: deleted=22 bytes=36700160
 
 | Scope | Families Included |
 |-------|-------------------|
-| `repo` | worktree_archives, run_archives, filebox, reports, repo workspaces |
-| `global` | global workspaces |
+| `repo` | worktree_archives, run_archives, logs, uploads, github_context, review_runs, filebox, reports, repo workspaces |
+| `global` | update_cache, logs, global workspaces |
 | `all` | All families |
 
 ## Safety Guards

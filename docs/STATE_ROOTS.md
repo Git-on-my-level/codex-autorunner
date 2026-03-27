@@ -158,6 +158,7 @@ Key reviewable artifacts (bounded pruning):
 - `flows/<run_id>/` — flow artifacts
 - `reports/` history files
 - `github_context/`
+- `review/runs/` — review run artifacts
 
 Key ephemeral artifacts (aggressive pruning):
 - `state.sqlite3` — runtime state database
@@ -165,6 +166,7 @@ Key ephemeral artifacts (aggressive pruning):
 - `filebox/inbox/`, `filebox/outbox/` — attachment staging
 - `*.log` files
 - `uploads/**`
+- `update-standalone.log`
 - `lock` files
 
 Key cache-only artifacts:

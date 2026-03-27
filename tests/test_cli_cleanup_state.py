@@ -211,6 +211,133 @@ class TestCleanupStateRepoCleanup:
         assert captured_summaries.get("reports") is True
         assert captured_summaries.get("workspace") is True
 
+    def test_repo_cleanup_reports_housekeeping_families(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.run_housekeeping_once",
+            lambda *a, **kw: HousekeepingSummary(
+                root=tmp_path,
+                rules=[
+                    HousekeepingRuleResult(
+                        name="run_logs",
+                        kind="directory",
+                        scanned_count=5,
+                        deleted_count=2,
+                        deleted_bytes=20,
+                    ),
+                    HousekeepingRuleResult(
+                        name="terminal_image_uploads",
+                        kind="directory",
+                        scanned_count=3,
+                        deleted_count=1,
+                        deleted_bytes=10,
+                    ),
+                    HousekeepingRuleResult(
+                        name="telegram_images",
+                        kind="directory",
+                        scanned_count=3,
+                        deleted_count=2,
+                        deleted_bytes=20,
+                    ),
+                    HousekeepingRuleResult(
+                        name="telegram_voice",
+                        kind="directory",
+                        scanned_count=2,
+                        deleted_count=1,
+                        deleted_bytes=15,
+                    ),
+                    HousekeepingRuleResult(
+                        name="telegram_files",
+                        kind="directory",
+                        scanned_count=4,
+                        deleted_count=1,
+                        deleted_bytes=25,
+                    ),
+                    HousekeepingRuleResult(
+                        name="github_context",
+                        kind="directory",
+                        scanned_count=2,
+                        deleted_count=1,
+                        deleted_bytes=30,
+                    ),
+                    HousekeepingRuleResult(
+                        name="review_runs",
+                        kind="directory",
+                        scanned_count=4,
+                        deleted_count=2,
+                        deleted_bytes=40,
+                    ),
+                ],
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_worktree_archive_root",
+            lambda *a, **kw: ArchivePruneSummary(
+                kept=0, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_run_archive_root",
+            lambda *a, **kw: ArchivePruneSummary(
+                kept=0, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_filebox_root",
+            lambda *a, **kw: FileBoxPruneSummary(
+                inbox_kept=0,
+                inbox_pruned=0,
+                outbox_kept=0,
+                outbox_pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_report_directory",
+            lambda *a, **kw: PruneSummary(
+                kept=0, pruned=0, bytes_before=0, bytes_after=0
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_workspace_root",
+            lambda *a, **kw: WorkspacePruneSummary(
+                kept=0,
+                pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+                blocked_paths=(),
+                blocked_reasons=(),
+            ),
+        )
+
+        cleanup_app = typer.Typer()
+        cleanup_cmd.register_cleanup_commands(
+            cleanup_app,
+            require_repo_config=lambda _repo, _hub: types.SimpleNamespace(  # type: ignore[arg-type]
+                repo_root=tmp_path,
+                config=types.SimpleNamespace(pma=types.SimpleNamespace()),
+            ),
+        )
+
+        result = runner.invoke(
+            cleanup_app,
+            ["state", "--repo", str(tmp_path), "--scope", "repo", "--dry-run"],
+        )
+
+        assert result.exit_code == 0
+        assert "logs:" in result.output
+        assert "pruned=2 bytes=20" in result.output
+        assert "uploads:" in result.output
+        assert "pruned=5 bytes=70" in result.output
+        assert "github_context:" in result.output
+        assert "pruned=1 bytes=30" in result.output
+        assert "review_runs:" in result.output
+        assert "pruned=2 bytes=40" in result.output
+
     def test_repo_cleanup_respects_dry_run_flag(
         self, monkeypatch, tmp_path: Path
     ) -> None:
@@ -647,6 +774,78 @@ class TestCleanupStateGlobalCleanup:
         assert result.exit_code == 0
         assert "update_cache:" in result.output
         assert "bytes=123" in result.output
+
+    def test_global_cleanup_reports_update_cache_and_log(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.run_housekeeping_once",
+            lambda *a, **kw: HousekeepingSummary(
+                root=tmp_path,
+                rules=[
+                    HousekeepingRuleResult(
+                        name="update_cache",
+                        kind="directory",
+                        scanned_count=5,
+                        deleted_count=2,
+                        deleted_bytes=123,
+                    ),
+                    HousekeepingRuleResult(
+                        name="update_log",
+                        kind="file",
+                        scanned_count=1,
+                        deleted_count=1,
+                        deleted_bytes=12,
+                    ),
+                ],
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_workspace_root",
+            lambda *a, **kw: WorkspacePruneSummary(
+                kept=1,
+                pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+                blocked_paths=(),
+                blocked_reasons=(),
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.load_hub_config",
+            lambda repo_root: types.SimpleNamespace(
+                manifest_path=tmp_path / "manifest.yml",
+                root=tmp_path,
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.load_manifest",
+            lambda manifest_path, root: types.SimpleNamespace(
+                repos=[],
+                agent_workspaces=[],
+            ),
+        )
+
+        cleanup_app = typer.Typer()
+        cleanup_cmd.register_cleanup_commands(
+            cleanup_app,
+            require_repo_config=lambda _repo, _hub: types.SimpleNamespace(  # type: ignore[arg-type]
+                repo_root=tmp_path,
+                config=types.SimpleNamespace(pma=types.SimpleNamespace()),
+            ),
+        )
+
+        result = runner.invoke(
+            cleanup_app,
+            ["state", "--repo", str(tmp_path), "--scope", "global", "--dry-run"],
+        )
+
+        assert result.exit_code == 0
+        assert "update_cache:" in result.output
+        assert "bytes=123" in result.output
+        assert "logs:" in result.output
+        assert "bytes=12" in result.output
 
     def test_global_cleanup_counts_executed_update_cache_deletions(
         self, monkeypatch, tmp_path: Path
