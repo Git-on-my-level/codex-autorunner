@@ -33,8 +33,23 @@ from .protocol import (
 )
 
 NotificationHandler = Callable[[ACPEvent], Awaitable[None]]
-PermissionHandler = Callable[[ACPPermissionRequestEvent], Awaitable[None]]
+PermissionHandler = Callable[[ACPPermissionRequestEvent], Awaitable[Any]]
 _QUEUE_SENTINEL = object()
+
+_APPROVAL_ALLOW_DECISIONS = frozenset(
+    {"accept", "accepted", "allow", "allowed", "approve", "approved", "yes", "true"}
+)
+_APPROVAL_DENY_DECISIONS = frozenset(
+    {"decline", "declined", "deny", "denied", "reject", "rejected", "no", "false"}
+)
+_APPROVAL_CANCEL_DECISIONS = frozenset(
+    {"cancel", "cancelled", "canceled", "timeout", "timed_out"}
+)
+_PERMISSION_NOTIFICATION_METHODS = (
+    "permission/respond",
+    "permission/reply",
+    "permission/resolve",
+)
 
 
 @dataclass(frozen=True)
@@ -69,6 +84,81 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {}
+
+
+def _stringify(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _decision_label(value: Any) -> str:
+    normalized = _stringify(value)
+    if normalized in _APPROVAL_ALLOW_DECISIONS:
+        return "allow"
+    if normalized in _APPROVAL_DENY_DECISIONS:
+        return "deny"
+    if normalized in _APPROVAL_CANCEL_DECISIONS:
+        return "cancel"
+    return ""
+
+
+def _select_permission_option_id(options: Any, decision: str) -> Optional[str]:
+    if not isinstance(options, list):
+        return None
+    matched_ids: list[str] = []
+    fallback_ids: list[str] = []
+    for option in options:
+        if not isinstance(option, dict):
+            continue
+        option_id = _normalize_optional_text(
+            option.get("optionId")
+            or option.get("option_id")
+            or option.get("id")
+            or option.get("value")
+        )
+        if not option_id:
+            continue
+        fallback_ids.append(option_id)
+        label = " ".join(
+            part
+            for part in (
+                _normalize_optional_text(option.get("optionId"))
+                or _normalize_optional_text(option.get("option_id"))
+                or _normalize_optional_text(option.get("id")),
+                _normalize_optional_text(option.get("label")),
+                _normalize_optional_text(option.get("title")),
+                _normalize_optional_text(option.get("description")),
+            )
+            if part
+        ).lower()
+        if decision == "allow" and any(
+            token in label for token in ("allow", "approve", "accept", "yes")
+        ):
+            matched_ids.append(option_id)
+        elif decision == "deny" and any(
+            token in label for token in ("deny", "decline", "reject", "no")
+        ):
+            matched_ids.append(option_id)
+    if matched_ids:
+        return matched_ids[0]
+    if len(fallback_ids) == 2 and decision in {"allow", "deny"}:
+        return fallback_ids[0] if decision == "allow" else fallback_ids[1]
+    return None
+
+
+def _permission_outcome_payload(
+    event: ACPPermissionRequestEvent, decision: Any
+) -> dict[str, Any]:
+    normalized = _decision_label(decision)
+    if normalized == "cancel":
+        return {"outcome": {"outcome": "cancelled"}}
+    option_id = _select_permission_option_id(event.payload.get("options"), normalized)
+    if option_id:
+        return {"outcome": {"outcome": "selected", "optionId": option_id}}
+    if normalized == "allow":
+        return {"outcome": {"outcome": "selected", "optionId": "allow"}}
+    if normalized == "deny":
+        return {"outcome": {"outcome": "selected", "optionId": "deny"}}
+    return {"outcome": {"outcome": "cancelled"}}
 
 
 def _build_transport_error_message(
@@ -432,6 +522,14 @@ class ACPClient:
 
     async def _dispatch_message(self, message: dict[str, Any]) -> None:
         request_id = _normalize_optional_text(message.get("id"))
+        method = _normalize_optional_text(message.get("method"))
+        if (
+            request_id is not None
+            and method is not None
+            and not ("result" in message or "error" in message)
+        ):
+            await self._handle_server_request(message, request_id=request_id)
+            return
         if request_id is not None and ("result" in message or "error" in message):
             future = self._pending.get(request_id)
             if future is None or future.done():
@@ -445,7 +543,6 @@ class ACPClient:
             future.set_result(message.get("result"))
             return
 
-        method = _normalize_optional_text(message.get("method"))
         if not method:
             raise ACPProtocolError("ACP message is missing a method name")
         event = normalize_notification(message)
@@ -454,7 +551,11 @@ class ACPClient:
             isinstance(event, ACPPermissionRequestEvent)
             and self._permission_handler is not None
         ):
-            await self._permission_handler(event)
+            decision = await self._permission_handler(event)
+            if decision is not None and event.method == "permission/requested":
+                asyncio.create_task(
+                    self._respond_to_permission_notification(event, decision)
+                )
         if self._notification_handler is not None:
             await self._notification_handler(event)
         if event.turn_id:
@@ -463,6 +564,70 @@ class ACPClient:
                 self._orphan_events[event.turn_id].append(event)
             else:
                 await self._record_prompt_event(state, event)
+
+    async def _handle_server_request(
+        self, message: dict[str, Any], *, request_id: str
+    ) -> None:
+        method = _normalize_optional_text(message.get("method")) or ""
+        event = normalize_notification(message)
+        await self._notifications.put(event)
+        if event.turn_id:
+            state = self._prompts.get(event.turn_id)
+            if state is None:
+                self._orphan_events[event.turn_id].append(event)
+            else:
+                await self._record_prompt_event(state, event)
+        if self._notification_handler is not None:
+            await self._notification_handler(event)
+
+        if method != "session/request_permission" or not isinstance(
+            event, ACPPermissionRequestEvent
+        ):
+            await self._write_message(
+                {
+                    "id": request_id,
+                    "error": {
+                        "code": -32601,
+                        "message": f"Unsupported ACP server request: {method or 'unknown'}",
+                    },
+                }
+            )
+            return
+
+        decision: Any = "cancel"
+        if self._permission_handler is not None:
+            try:
+                decision = await self._permission_handler(event)
+            except asyncio.CancelledError:
+                decision = "cancel"
+            except Exception:
+                decision = "cancel"
+        await self._write_message(
+            {
+                "id": request_id,
+                "result": _permission_outcome_payload(event, decision),
+            }
+        )
+
+    async def _respond_to_permission_notification(
+        self,
+        event: ACPPermissionRequestEvent,
+        decision: Any,
+    ) -> None:
+        payload = {
+            "requestId": event.request_id,
+            "sessionId": event.session_id,
+            "turnId": event.turn_id,
+            "decision": _decision_label(decision) or "cancel",
+            "outcome": _permission_outcome_payload(event, decision)["outcome"],
+        }
+        for method in _PERMISSION_NOTIFICATION_METHODS:
+            try:
+                result = await self.call_optional(method, payload)
+            except ACPError:
+                continue
+            if result is not None:
+                return
 
     def _ensure_prompt_state(self, session_id: str, turn_id: str) -> _PromptState:
         state = self._prompts.get(turn_id)

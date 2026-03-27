@@ -25,8 +25,11 @@ class FakeACPServer:
         self._running = True
         self._next_session = 1
         self._next_turn = 1
+        self._next_permission = 1
         self._sessions: dict[str, dict[str, Any]] = {}
         self._cancel_events: dict[str, threading.Event] = {}
+        self._permission_waiters: dict[str, threading.Event] = {}
+        self._permission_results: dict[str, dict[str, Any]] = {}
 
     def send(self, payload: dict[str, Any]) -> None:
         _write_line(self._lock, payload)
@@ -56,18 +59,75 @@ class FakeACPServer:
         )
         cancel_event = self._cancel_events[turn_id]
         if prompt == "needs permission":
+            permission_id = f"perm-{self._next_permission}"
+            self._next_permission += 1
+            waiter = threading.Event()
+            self._permission_waiters[permission_id] = waiter
             self.send(
                 {
-                    "method": "permission/requested",
+                    "id": permission_id,
+                    "method": "session/request_permission",
                     "params": {
                         "sessionId": session_id,
                         "turnId": turn_id,
-                        "requestId": "perm-1",
+                        "requestId": permission_id,
                         "description": "Need approval",
-                        "context": {"tool": "shell", "command": "ls"},
+                        "toolCall": {
+                            "kind": "shell",
+                            "rawInput": {"command": ["ls"]},
+                        },
+                        "options": [
+                            {"optionId": "allow", "label": "Allow once"},
+                            {"optionId": "deny", "label": "Deny"},
+                        ],
+                        "context": {"tool": "shell", "command": ["ls"]},
                     },
                 }
             )
+            while True:
+                if cancel_event.wait(0.02):
+                    self.send(
+                        {
+                            "method": "prompt/cancelled",
+                            "params": {
+                                "sessionId": session_id,
+                                "turnId": turn_id,
+                                "status": "cancelled",
+                            },
+                        }
+                    )
+                    return
+                if waiter.is_set():
+                    break
+            result = self._permission_results.pop(permission_id, {})
+            outcome = result.get("outcome")
+            if isinstance(outcome, dict):
+                outcome_type = outcome.get("outcome")
+                if outcome_type == "cancelled":
+                    self.send(
+                        {
+                            "method": "prompt/cancelled",
+                            "params": {
+                                "sessionId": session_id,
+                                "turnId": turn_id,
+                                "status": "cancelled",
+                            },
+                        }
+                    )
+                    return
+                if outcome_type == "selected" and outcome.get("optionId") == "deny":
+                    self.send(
+                        {
+                            "method": "prompt/failed",
+                            "params": {
+                                "sessionId": session_id,
+                                "turnId": turn_id,
+                                "status": "failed",
+                                "message": "permission denied",
+                            },
+                        }
+                    )
+                    return
         if prompt == "crash":
             self.send(
                 {
@@ -218,6 +278,20 @@ class FakeACPServer:
             return
         self._send_error(request_id, -32601, f"Method not found: {method}")
 
+    def _handle_response(self, message: dict[str, Any]) -> None:
+        request_id = message.get("id")
+        if request_id is None:
+            return
+        permission_id = str(request_id)
+        waiter = self._permission_waiters.get(permission_id)
+        if waiter is None:
+            return
+        result = message.get("result")
+        self._permission_results[permission_id] = (
+            result if isinstance(result, dict) else {}
+        )
+        waiter.set()
+
     def _handle_notification(self, message: dict[str, Any]) -> None:
         method = message.get("method")
         if method == "initialized":
@@ -232,7 +306,9 @@ class FakeACPServer:
             if not line:
                 continue
             message = json.loads(line)
-            if "id" in message:
+            if "id" in message and "method" not in message:
+                self._handle_response(message)
+            elif "id" in message:
                 self._handle_request(message)
             else:
                 self._handle_notification(message)

@@ -27,6 +27,7 @@ HERMES_CAPABILITIES = frozenset(
         RuntimeCapability("interrupt"),
         RuntimeCapability("active_thread_discovery"),
         RuntimeCapability("event_streaming"),
+        RuntimeCapability("approvals"),
     ]
 )
 
@@ -79,12 +80,13 @@ class HermesHarness(AgentHarness):
         sandbox_policy: Optional[Any],
         input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
-        _ = reasoning, approval_mode, sandbox_policy, input_items
+        _ = reasoning, sandbox_policy, input_items
         turn_id = await self._supervisor.start_turn(
             workspace_root,
             conversation_id,
             prompt,
             model=model,
+            approval_mode=approval_mode,
         )
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 

@@ -47,6 +47,30 @@ def test_normalize_notification_maps_permission_request_and_preserves_raw() -> N
     assert event.raw_notification == raw
 
 
+def test_normalize_notification_maps_request_style_permission_event() -> None:
+    raw = {
+        "id": "perm-9",
+        "method": "session/request_permission",
+        "params": {
+            "sessionId": "session-1",
+            "turnId": "turn-1",
+            "description": "Need approval",
+            "options": [
+                {"optionId": "allow", "label": "Allow once"},
+                {"optionId": "deny", "label": "Deny"},
+            ],
+            "context": {"tool": "shell", "command": ["ls"]},
+        },
+    }
+
+    event = normalize_notification(raw)
+
+    assert isinstance(event, ACPPermissionRequestEvent)
+    assert event.request_id == "perm-9"
+    assert event.description == "Need approval"
+    assert event.context == {"tool": "shell", "command": ["ls"]}
+
+
 def test_normalize_notification_maps_terminal_event() -> None:
     event = normalize_notification(
         {

@@ -146,6 +146,7 @@ class TestHasCapability:
         assert has_capability("hermes", "active_thread_discovery") is True
         assert has_capability("hermes", "event_streaming") is True
         assert has_capability("hermes", "interrupt") is True
+        assert has_capability("hermes", "approvals") is True
         assert has_capability("hermes", "review") is False
         assert has_capability("hermes", "model_listing") is False
         assert has_capability("hermes", "transcript_history") is False

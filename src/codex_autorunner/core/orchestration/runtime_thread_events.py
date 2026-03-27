@@ -394,7 +394,7 @@ def normalize_runtime_thread_message(
             )
         ]
 
-    if method == "permission/requested":
+    if method in {"permission/requested", "session/request_permission"}:
         request_id = _request_id_for_event(method, params)
         description = str(
             params.get("description") or params.get("message") or "Approval requested"
@@ -406,6 +406,28 @@ def normalize_runtime_thread_message(
                 request_id=request_id,
                 description=description or "Approval requested",
                 context=context,
+            )
+        ]
+
+    if method == "permission/decision":
+        decision = str(params.get("decision") or "cancel").strip().lower()
+        description = str(
+            params.get("description")
+            or params.get("reason")
+            or "Approval decision recorded"
+        ).strip()
+        label = {
+            "accept": "Approval accepted",
+            "decline": "Approval declined",
+            "cancel": "Approval cancelled",
+        }.get(decision, "Approval updated")
+        message = label if not description else f"{label}: {description}"
+        return [
+            RunNotice(
+                timestamp=event_timestamp,
+                kind="approval",
+                message=message,
+                data=dict(params),
             )
         ]
 

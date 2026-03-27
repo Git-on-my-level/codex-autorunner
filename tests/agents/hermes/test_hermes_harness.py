@@ -14,7 +14,7 @@ class _StubSupervisor:
     def __init__(self) -> None:
         self.created: list[tuple[Path, str | None]] = []
         self.resumed: list[tuple[Path, str]] = []
-        self.started: list[tuple[Path, str, str, str | None]] = []
+        self.started: list[tuple[Path, str, str, str | None, str | None]] = []
         self.waited: list[tuple[Path, str, str, float | None]] = []
         self.interrupted: list[tuple[Path, str, str | None]] = []
         self.streamed: list[tuple[Path, str, str]] = []
@@ -52,8 +52,9 @@ class _StubSupervisor:
         prompt: str,
         *,
         model: Optional[str] = None,
+        approval_mode: Optional[str] = None,
     ) -> str:
-        self.started.append((workspace_root, session_id, prompt, model))
+        self.started.append((workspace_root, session_id, prompt, model, approval_mode))
         return "hermes-turn-1"
 
     async def wait_for_turn(
@@ -110,6 +111,7 @@ async def test_hermes_harness_reports_capabilities_from_contract() -> None:
     assert harness.supports("active_thread_discovery") is True
     assert harness.supports("interrupt") is True
     assert harness.supports("event_streaming") is True
+    assert harness.supports("approvals") is True
     assert harness.supports("review") is False
     assert harness.supports("model_listing") is False
     assert harness.supports("transcript_history") is False
@@ -161,7 +163,13 @@ async def test_hermes_harness_session_lifecycle_and_model_override() -> None:
     assert supervisor.created == [(workspace_root, "Hermes Test")]
     assert supervisor.resumed == [(workspace_root, "hermes-session-1")]
     assert supervisor.started == [
-        (workspace_root, "hermes-session-1", "hello", "anthropic/claude-opus")
+        (
+            workspace_root,
+            "hermes-session-1",
+            "hello",
+            "anthropic/claude-opus",
+            "never",
+        )
     ]
     assert supervisor.waited == [
         (workspace_root, "hermes-session-1", "hermes-turn-1", 9.5)

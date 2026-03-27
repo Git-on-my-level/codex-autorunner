@@ -212,6 +212,44 @@ async def test_normalize_runtime_thread_raw_event_handles_acp_progress_approval_
     assert state.completed_seen is True
 
 
+async def test_normalize_runtime_thread_raw_event_handles_request_style_permission_and_decision() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    approval = await normalize_runtime_thread_raw_event(
+        {
+            "id": "perm-1",
+            "method": "session/request_permission",
+            "params": {
+                "turnId": "turn-1",
+                "requestId": "perm-1",
+                "description": "Need approval",
+                "context": {"tool": "shell"},
+            },
+        },
+        state,
+    )
+    decision = await normalize_runtime_thread_raw_event(
+        {
+            "method": "permission/decision",
+            "params": {
+                "turnId": "turn-1",
+                "requestId": "perm-1",
+                "decision": "decline",
+                "description": "Need approval",
+            },
+        },
+        state,
+    )
+
+    assert isinstance(approval[0], ApprovalRequested)
+    assert approval[0].request_id == "perm-1"
+    assert isinstance(decision[0], RunNotice)
+    assert decision[0].kind == "approval"
+    assert "declined" in decision[0].message.lower()
+
+
 async def test_normalize_runtime_thread_raw_event_handles_acp_failure_and_usage() -> (
     None
 ):

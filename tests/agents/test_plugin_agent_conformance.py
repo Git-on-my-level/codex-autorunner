@@ -396,6 +396,20 @@ def test_opencode_descriptor_capabilities() -> None:
     assert RuntimeCapability("event_streaming") in descriptor.capabilities
 
 
+def test_hermes_descriptor_supports_approval_capability() -> None:
+    agents = get_registered_agents()
+    assert "hermes" in agents
+
+    descriptor = agents["hermes"]
+
+    assert RuntimeCapability("durable_threads") in descriptor.capabilities
+    assert RuntimeCapability("message_turns") in descriptor.capabilities
+    assert RuntimeCapability("interrupt") in descriptor.capabilities
+    assert RuntimeCapability("active_thread_discovery") in descriptor.capabilities
+    assert RuntimeCapability("event_streaming") in descriptor.capabilities
+    assert RuntimeCapability("approvals") in descriptor.capabilities
+
+
 def test_plugin_descriptor_loading() -> None:
     """Test that plugin descriptors can be loaded and normalized."""
     agents = reload_agents()

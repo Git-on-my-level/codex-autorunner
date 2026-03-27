@@ -34,6 +34,26 @@ def _extract_text(payload: Mapping[str, Any], *keys: str) -> Optional[str]:
     return None
 
 
+def _permission_description(payload: Mapping[str, Any]) -> str:
+    description = _extract_text(payload, "description", "message")
+    if description:
+        return description
+    tool_call = payload.get("toolCall")
+    if not isinstance(tool_call, Mapping):
+        return ""
+    raw_input = tool_call.get("rawInput")
+    if isinstance(raw_input, Mapping):
+        command = raw_input.get("command")
+        if isinstance(command, list):
+            normalized = " ".join(str(part) for part in command).strip()
+            if normalized:
+                return normalized
+        if isinstance(command, str) and command.strip():
+            return command
+    kind = _normalize_optional_text(tool_call.get("kind"))
+    return kind or ""
+
+
 @dataclass(frozen=True)
 class ACPEventEnvelope:
     kind: str
@@ -194,13 +214,13 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             or "",
         )
 
-    if method == "permission/requested":
+    if method in {"permission/requested", "session/request_permission"}:
         context = _coerce_mapping(payload.get("context"))
         if not context:
             context = {
                 key: value
                 for key, value in payload.items()
-                if key not in {"requestId", "request_id", "description"}
+                if key not in {"requestId", "request_id", "description", "message"}
             }
         return ACPPermissionRequestEvent(
             kind="permission_requested",
@@ -209,8 +229,12 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             turn_id=turn_id,
             payload=payload,
             raw_notification=raw_notification,
-            request_id=(_extract_identifier(payload, "requestId", "request_id") or ""),
-            description=_extract_text(payload, "description", "message") or "",
+            request_id=(
+                _extract_identifier(payload, "requestId", "request_id")
+                or _normalize_optional_text(raw_notification.get("id"))
+                or ""
+            ),
+            description=_permission_description(payload),
             context=context,
         )
 

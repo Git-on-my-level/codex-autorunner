@@ -4,12 +4,12 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Mapping, Optional, Sequence
+from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
 
 from ...core.config import HubConfig, RepoConfig
 from ...core.utils import resolve_executable
 from ...workspace import canonical_workspace_root
-from ..acp import ACPPromptHandle, ACPSubprocessSupervisor
+from ..acp import ACPPermissionRequestEvent, ACPPromptHandle, ACPSubprocessSupervisor
 from ..managed_runtime import RuntimeLaunchMode, RuntimePreflightResult
 from ..types import TerminalTurnResult
 
@@ -18,6 +18,7 @@ _logger = logging.getLogger(__name__)
 HERMES_RUNTIME_ID = "hermes"
 HERMES_ACP_COMMAND = "acp"
 HERMES_SESSION_STATE_FILE_MODE: RuntimeLaunchMode = "session_state_file"
+HERMES_APPROVAL_TIMEOUT_SECONDS = 300.0
 
 
 class HermesSupervisorError(RuntimeError):
@@ -31,6 +32,19 @@ class HermesSessionHandle:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+HermesApprovalHandler = Callable[[dict[str, Any]], Awaitable[Any]]
+
+
+@dataclass
+class _HermesTurnState:
+    session_id: str
+    turn_id: str
+    handle: ACPPromptHandle
+    approval_mode: Optional[str] = None
+    raw_events: list[dict[str, Any]] = field(default_factory=list)
+    pending_approval_task: Optional[asyncio.Future[Any]] = None
+
+
 class HermesSupervisor:
     """Thin Hermes wrapper over the generic ACP subprocess supervisor."""
 
@@ -41,19 +55,32 @@ class HermesSupervisor:
         base_env: Optional[Mapping[str, str]] = None,
         initialize_params: Optional[dict[str, Any]] = None,
         request_timeout: Optional[float] = None,
+        approval_handler: Optional[HermesApprovalHandler] = None,
+        default_approval_decision: str = "cancel",
+        approval_timeout_seconds: float = HERMES_APPROVAL_TIMEOUT_SECONDS,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         if not command:
             raise ValueError("Hermes command must not be empty")
         self._logger = logger or logging.getLogger(__name__)
+        self._approval_handler = approval_handler
+        self._default_approval_decision = _normalize_approval_decision(
+            default_approval_decision,
+            default="cancel",
+        )
+        self._approval_timeout_seconds = max(
+            float(approval_timeout_seconds or 0.0), 0.0
+        )
         self._acp = ACPSubprocessSupervisor(
             command,
             base_env=dict(base_env or {}),
             initialize_params=dict(initialize_params or {}),
             request_timeout=request_timeout,
+            notification_handler=self._handle_acp_event,
+            permission_handler=self._handle_permission_request,
             logger=self._logger,
         )
-        self._turn_handles: dict[tuple[str, str], ACPPromptHandle] = {}
+        self._turn_states: dict[tuple[str, str], _HermesTurnState] = {}
         self._session_turns: dict[tuple[str, str], str] = {}
         self._lock = asyncio.Lock()
 
@@ -108,6 +135,7 @@ class HermesSupervisor:
         prompt: str,
         *,
         model: Optional[str] = None,
+        approval_mode: Optional[str] = None,
     ) -> str:
         handle = await self._acp.start_prompt(
             workspace_root,
@@ -119,8 +147,13 @@ class HermesSupervisor:
         async with self._lock:
             previous_turn_id = self._session_turns.get((workspace, session_id))
             if previous_turn_id:
-                self._turn_handles.pop((workspace, previous_turn_id), None)
-            self._turn_handles[(workspace, handle.turn_id)] = handle
+                self._turn_states.pop((workspace, previous_turn_id), None)
+            self._turn_states[(workspace, handle.turn_id)] = _HermesTurnState(
+                session_id=session_id,
+                turn_id=handle.turn_id,
+                handle=handle,
+                approval_mode=_normalize_optional_text(approval_mode),
+            )
             self._session_turns[(workspace, session_id)] = handle.turn_id
         return handle.turn_id
 
@@ -137,14 +170,10 @@ class HermesSupervisor:
             session_id,
             turn_id,
         )
-        handle = await self._require_turn_handle(workspace_root, resolved_turn_id)
-        result = await handle.wait(timeout=timeout)
+        state = await self._require_turn_state(workspace_root, resolved_turn_id)
+        result = await state.handle.wait(timeout=timeout)
         errors = [result.error_message] if result.error_message else []
-        raw_events = [
-            dict(getattr(event, "raw_notification", {}) or {})
-            for event in result.events
-            if isinstance(getattr(event, "raw_notification", None), dict)
-        ]
+        raw_events = list(state.raw_events)
         return TerminalTurnResult(
             status=result.status,
             assistant_text=result.final_output,
@@ -163,8 +192,8 @@ class HermesSupervisor:
             session_id,
             turn_id,
         )
-        handle = await self._require_turn_handle(workspace_root, resolved_turn_id)
-        async for event in handle.events():
+        state = await self._require_turn_state(workspace_root, resolved_turn_id)
+        async for event in state.handle.events():
             raw_notification = getattr(event, "raw_notification", None)
             if isinstance(raw_notification, dict):
                 yield dict(raw_notification)
@@ -180,14 +209,18 @@ class HermesSupervisor:
             session_id,
             turn_id,
         )
+        state = await self._require_turn_state(workspace_root, resolved_turn_id)
+        pending_task = state.pending_approval_task
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
         await self._acp.cancel_prompt(workspace_root, session_id, resolved_turn_id)
 
     async def close_workspace(self, workspace_root: Path) -> None:
         workspace = _workspace_key(workspace_root)
         async with self._lock:
-            self._turn_handles = {
+            self._turn_states = {
                 key: value
-                for key, value in self._turn_handles.items()
+                for key, value in self._turn_states.items()
                 if key[0] != workspace
             }
             self._session_turns = {
@@ -199,7 +232,7 @@ class HermesSupervisor:
 
     async def close_all(self) -> None:
         async with self._lock:
-            self._turn_handles.clear()
+            self._turn_states.clear()
             self._session_turns.clear()
         await self._acp.close_all()
 
@@ -221,17 +254,152 @@ class HermesSupervisor:
             f"No active Hermes turn tracked for session '{session_id}'"
         )
 
-    async def _require_turn_handle(
+    async def _require_turn_state(
         self,
         workspace_root: Path,
         turn_id: str,
-    ) -> ACPPromptHandle:
+    ) -> _HermesTurnState:
         workspace = _workspace_key(workspace_root)
         async with self._lock:
-            handle = self._turn_handles.get((workspace, turn_id))
-        if handle is None:
+            state = self._turn_states.get((workspace, turn_id))
+        if state is None:
             raise HermesSupervisorError(f"Unknown Hermes turn '{turn_id}'")
-        return handle
+        return state
+
+    async def _handle_acp_event(
+        self,
+        workspace_root: Path,
+        event: Any,
+    ) -> None:
+        turn_id = _normalize_optional_text(getattr(event, "turn_id", None))
+        if turn_id is None:
+            return
+        raw_notification = getattr(event, "raw_notification", None)
+        if not isinstance(raw_notification, dict):
+            return
+        try:
+            state = await self._require_turn_state(workspace_root, turn_id)
+        except HermesSupervisorError:
+            return
+        state.raw_events.append(dict(raw_notification))
+
+    async def _handle_permission_request(
+        self,
+        workspace_root: Path,
+        event: ACPPermissionRequestEvent,
+    ) -> Any:
+        turn_id = _normalize_optional_text(event.turn_id)
+        if turn_id is None:
+            return "cancel"
+        try:
+            state = await self._require_turn_state(workspace_root, turn_id)
+        except HermesSupervisorError:
+            return "cancel"
+        approval_mode = _normalize_optional_text(state.approval_mode)
+        if not _approval_policy_requires_prompt(approval_mode):
+            decision = "accept"
+            self._record_approval_decision(
+                state,
+                event=event,
+                decision=decision,
+                reason="policy_auto_accept",
+            )
+            return decision
+
+        request = _build_surface_approval_request(event)
+        if self._approval_handler is None:
+            decision = self._default_approval_decision
+            self._record_approval_decision(
+                state,
+                event=event,
+                decision=decision,
+                reason="default_fallback",
+            )
+            return decision
+
+        task: asyncio.Future[Any] = asyncio.ensure_future(
+            self._approval_handler(request)
+        )
+        state.pending_approval_task = task
+        try:
+            if self._approval_timeout_seconds > 0:
+                decision = await asyncio.wait_for(
+                    asyncio.shield(task),
+                    timeout=self._approval_timeout_seconds,
+                )
+            else:
+                decision = await asyncio.shield(task)
+        except asyncio.TimeoutError:
+            task.cancel()
+            decision = "cancel"
+            self._record_approval_decision(
+                state,
+                event=event,
+                decision=decision,
+                reason="timeout",
+            )
+            return decision
+        except asyncio.CancelledError:
+            decision = "cancel"
+            self._record_approval_decision(
+                state,
+                event=event,
+                decision=decision,
+                reason="cancelled",
+            )
+            return decision
+        except Exception:
+            task.cancel()
+            decision = "cancel"
+            self._record_approval_decision(
+                state,
+                event=event,
+                decision=decision,
+                reason="handler_error",
+            )
+            return decision
+        finally:
+            if state.pending_approval_task is task:
+                state.pending_approval_task = None
+
+        normalized = _normalize_approval_decision(decision, default="cancel")
+        self._record_approval_decision(
+            state,
+            event=event,
+            decision=normalized,
+            reason="handled",
+        )
+        return normalized
+
+    def _record_approval_decision(
+        self,
+        state: _HermesTurnState,
+        *,
+        event: ACPPermissionRequestEvent,
+        decision: str,
+        reason: str,
+    ) -> None:
+        state.raw_events.append(
+            {
+                "method": "permission/decision",
+                "params": {
+                    "sessionId": state.session_id,
+                    "turnId": state.turn_id,
+                    "requestId": event.request_id,
+                    "decision": decision,
+                    "reason": reason,
+                    "description": event.description,
+                },
+            }
+        )
+        self._logger.info(
+            "Hermes approval decision: session=%s turn=%s request=%s decision=%s reason=%s",
+            state.session_id,
+            state.turn_id,
+            event.request_id,
+            decision,
+            reason,
+        )
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -241,6 +409,54 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _normalize_approval_decision(value: Any, *, default: str) -> str:
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return default
+    lowered = normalized.lower()
+    if lowered in {"accept", "accepted", "allow", "allowed", "approve", "approved"}:
+        return "accept"
+    if lowered in {"decline", "declined", "deny", "denied", "reject", "rejected"}:
+        return "decline"
+    if lowered in {"cancel", "cancelled", "canceled", "timeout", "timed_out"}:
+        return "cancel"
+    return default
+
+
+def _approval_policy_requires_prompt(value: Optional[str]) -> bool:
+    normalized = _normalize_optional_text(value)
+    if normalized is None:
+        return False
+    return normalized.lower() not in {"never", "allow", "approved", "approve"}
+
+
+def _build_surface_approval_request(
+    event: ACPPermissionRequestEvent,
+) -> dict[str, Any]:
+    context = dict(event.context)
+    params: dict[str, Any] = {
+        "turnId": event.turn_id,
+        "threadId": event.session_id,
+        "sessionId": event.session_id,
+        "requestId": event.request_id,
+        "reason": event.description,
+        "description": event.description,
+        "context": context,
+    }
+    for key, value in context.items():
+        params.setdefault(key, value)
+    method = "permission/requested"
+    if any(key in context for key in ("command", "tool", "toolCall")):
+        method = "item/commandExecution/requestApproval"
+    elif any(key in context for key in ("paths", "files", "fileChanges")):
+        method = "item/fileChange/requestApproval"
+    return {
+        "id": event.request_id,
+        "method": method,
+        "params": params,
+    }
+
+
 def _workspace_key(workspace_root: Path) -> str:
     return str(canonical_workspace_root(workspace_root))
 
@@ -248,6 +464,8 @@ def _workspace_key(workspace_root: Path) -> str:
 def build_hermes_supervisor_from_config(
     config: RepoConfig | HubConfig,
     *,
+    approval_handler: Optional[HermesApprovalHandler] = None,
+    default_approval_decision: str = "cancel",
     logger: Optional[logging.Logger] = None,
 ) -> Optional[HermesSupervisor]:
     try:
@@ -256,7 +474,12 @@ def build_hermes_supervisor_from_config(
         return None
     if not binary:
         return None
-    return HermesSupervisor([binary, HERMES_ACP_COMMAND], logger=logger)
+    return HermesSupervisor(
+        [binary, HERMES_ACP_COMMAND],
+        approval_handler=approval_handler,
+        default_approval_decision=default_approval_decision,
+        logger=logger,
+    )
 
 
 def hermes_binary_available(config: Optional[RepoConfig | HubConfig]) -> bool:

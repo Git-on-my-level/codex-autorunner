@@ -4,11 +4,15 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Awaitable, Callable, Optional, Sequence
 
 from ...workspace import canonical_workspace_root
-from .client import ACPClient, ACPPromptHandle, NotificationHandler, PermissionHandler
+from .client import ACPClient, ACPPromptHandle
+from .events import ACPEvent, ACPPermissionRequestEvent
 from .protocol import ACPSessionDescriptor
+
+NotificationHandler = Callable[[Path, ACPEvent], Awaitable[None]]
+PermissionHandler = Callable[[Path, ACPPermissionRequestEvent], Awaitable[Any]]
 
 
 @dataclass(frozen=True)
@@ -51,8 +55,20 @@ class ACPSubprocessSupervisor:
                     env=self._base_env or None,
                     initialize_params=self._initialize_params,
                     request_timeout=self._request_timeout,
-                    notification_handler=self._notification_handler,
-                    permission_handler=self._permission_handler,
+                    notification_handler=(
+                        None
+                        if self._notification_handler is None
+                        else _workspace_notification_handler(
+                            canonical_root, self._notification_handler
+                        )
+                    ),
+                    permission_handler=(
+                        None
+                        if self._permission_handler is None
+                        else _workspace_permission_handler(
+                            canonical_root, self._permission_handler
+                        )
+                    ),
                     logger=self._logger,
                 )
                 self._clients[key] = client
@@ -139,6 +155,26 @@ class ACPSubprocessSupervisor:
                 )
                 for workspace_root, client in sorted(self._clients.items())
             )
+
+
+def _workspace_notification_handler(
+    workspace_root: Path,
+    handler: NotificationHandler,
+) -> Callable[[ACPEvent], Awaitable[None]]:
+    async def _wrapped(event: ACPEvent) -> None:
+        await handler(workspace_root, event)
+
+    return _wrapped
+
+
+def _workspace_permission_handler(
+    workspace_root: Path,
+    handler: PermissionHandler,
+) -> Callable[[ACPPermissionRequestEvent], Awaitable[Any]]:
+    async def _wrapped(event: ACPPermissionRequestEvent) -> Any:
+        return await handler(workspace_root, event)
+
+    return _wrapped
 
 
 __all__ = [

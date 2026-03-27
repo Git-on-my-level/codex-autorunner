@@ -871,8 +871,9 @@ async def test_pma_interrupt_route_interrupts_running_hermes_turn(hub_env) -> No
             conversation_id: str,
             prompt: str,
             model: Optional[str] = None,
+            approval_mode: Optional[str] = None,
         ) -> str:
-            _ = workspace_root, conversation_id, prompt, model
+            _ = workspace_root, conversation_id, prompt, model, approval_mode
             return "hermes-turn-1"
 
         async def wait_for_turn(
@@ -1701,8 +1702,15 @@ def test_pma_chat_hermes_reuses_agent_scoped_registry_binding(hub_env) -> None:
             conversation_id: str,
             prompt: str,
             model: Optional[str] = None,
+            approval_mode: Optional[str] = None,
         ) -> str:
-            observed["start_turn"] = (workspace_root, conversation_id, prompt, model)
+            observed["start_turn"] = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                approval_mode,
+            )
             return "hermes-turn-2"
 
         async def wait_for_turn(self, *_args: Any, **_kwargs: Any):

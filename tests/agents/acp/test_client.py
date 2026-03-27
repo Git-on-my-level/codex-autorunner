@@ -60,8 +60,9 @@ async def test_client_prompt_streams_updates_and_calls_permission_hook(
 ) -> None:
     seen_permissions: list[ACPPermissionRequestEvent] = []
 
-    async def permission_handler(event: ACPPermissionRequestEvent) -> None:
+    async def permission_handler(event: ACPPermissionRequestEvent) -> str:
         seen_permissions.append(event)
+        return "accept"
 
     client = ACPClient(
         fixture_command("basic"),
@@ -87,6 +88,29 @@ async def test_client_prompt_streams_updates_and_calls_permission_hook(
         ]
         assert len(seen_permissions) == 1
         assert seen_permissions[0].request_id == "perm-1"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_can_deny_permission_requests(tmp_path: Path) -> None:
+    async def permission_handler(_event: ACPPermissionRequestEvent) -> str:
+        return "decline"
+
+    client = ACPClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        permission_handler=permission_handler,
+    )
+    try:
+        session = await client.create_session(
+            cwd=str(tmp_path), title="Fixture Session"
+        )
+        handle = await client.start_prompt(session.session_id, "needs permission")
+        result = await handle.wait()
+
+        assert result.status == "failed"
+        assert result.error_message == "permission denied"
     finally:
         await client.close()
 
