@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.core.app_server_threads import (
+    FILE_CHAT_HERMES_PREFIX,
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
     PMA_KEY,
@@ -63,10 +64,13 @@ class TestFeatureKeyNormalization:
         static_keys = [
             "file_chat",
             "file_chat.opencode",
+            "file_chat.hermes",
             "pma",
             "pma.opencode",
+            "pma.hermes",
             "autorunner",
             "autorunner.opencode",
+            "autorunner.hermes",
         ]
         for key in static_keys:
             assert normalize_feature_key(key) == key
@@ -79,8 +83,22 @@ class TestFeatureKeyNormalization:
             == "file_chat.opencode.discord.123"
         )
         assert (
+            normalize_feature_key("file_chat.hermes.discord.456")
+            == "file_chat.hermes.discord.456"
+        )
+        assert (
             normalize_feature_key("FILE_CHAT/workspace.spec")
             == "file_chat.workspace.spec"
+        )
+
+    def test_accepts_hermes_prefixed_keys(self) -> None:
+        assert normalize_feature_key("file_chat.hermes") == "file_chat.hermes"
+        assert normalize_feature_key("pma.hermes") == "pma.hermes"
+        assert normalize_feature_key("autorunner.hermes") == "autorunner.hermes"
+        assert normalize_feature_key("pma.hermes.topic-abc") == "pma.hermes.topic-abc"
+        assert (
+            normalize_feature_key("file_chat.hermes.ticket.1")
+            == "file_chat.hermes.ticket.1"
         )
 
     def test_normalizes_separators(self) -> None:
@@ -311,6 +329,24 @@ class TestFileChatDiscordKeyHelper:
             workspace_path="/workspace/other-repo",
         )
         assert key.startswith(FILE_CHAT_OPENCODE_PREFIX + "discord.987654321.")
+        assert len(key.split(".")[-1]) == 12
+
+    def test_builds_hermes_discord_key(self) -> None:
+        key = file_chat_discord_key(
+            agent="hermes",
+            channel_id="111222333",
+            workspace_path="/workspace/hermes-repo",
+        )
+        assert key.startswith(FILE_CHAT_HERMES_PREFIX + "discord.111222333.")
+        assert len(key.split(".")[-1]) == 12
+
+    def test_builds_other_agent_discord_key(self) -> None:
+        key = file_chat_discord_key(
+            agent="custom-agent",
+            channel_id="999888777",
+            workspace_path="/workspace/custom-repo",
+        )
+        assert key.startswith("file_chat.custom-agent.discord.999888777.")
         assert len(key.split(".")[-1]) == 12
 
     def test_stable_hash_for_same_path(self) -> None:

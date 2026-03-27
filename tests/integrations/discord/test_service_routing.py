@@ -2591,7 +2591,7 @@ async def test_car_agent_without_name_returns_picker_when_bound(tmp_path: Path) 
         menu = components[0]["components"][0]
         assert menu["custom_id"] == "agent_select"
         values = {opt["value"] for opt in menu["options"]}
-        assert values == {"codex", "opencode"}
+        assert values == {"codex", "opencode", "hermes", "zeroclaw"}
     finally:
         await store.close()
 
