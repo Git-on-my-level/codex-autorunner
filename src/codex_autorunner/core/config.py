@@ -20,7 +20,11 @@ from typing import (
 
 import yaml
 
-from ..housekeeping import HousekeepingConfig, parse_housekeeping_config
+from ..housekeeping import (
+    HousekeepingConfig,
+    HousekeepingRule,
+    parse_housekeeping_config,
+)
 from ..manifest import ManifestError, load_manifest
 from .app_server_command import (
     GLOBAL_APP_SERVER_COMMAND_ENV,
@@ -501,6 +505,36 @@ def _default_housekeeping_section(
         "dry_run": False,
         "rules": rules,
     }
+
+
+def resolve_housekeeping_rule(
+    config: object,
+    name: str,
+) -> Optional[HousekeepingRule]:
+    if not isinstance(config, HousekeepingConfig):
+        return None
+    wanted = name.strip().lower()
+    if not wanted:
+        return None
+    for rule in config.rules:
+        if rule.name.strip().lower() == wanted:
+            return rule
+    return None
+
+
+def default_housekeeping_rule_named(
+    name: str,
+    *,
+    include_repo_review_runs: bool = False,
+    include_hub_update_rules: bool = False,
+) -> Optional[HousekeepingRule]:
+    default_config = parse_housekeeping_config(
+        _default_housekeeping_section(
+            include_repo_review_runs=include_repo_review_runs,
+            include_hub_update_rules=include_hub_update_rules,
+        )
+    )
+    return resolve_housekeeping_rule(default_config, name)
 
 
 DEFAULT_REPO_CONFIG: Dict[str, Any] = {

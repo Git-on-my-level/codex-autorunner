@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -11,7 +12,12 @@ from ....core.archive_retention import (
     resolve_run_archive_retention_policy,
     resolve_worktree_archive_retention_policy,
 )
-from ....core.config import ConfigError, load_hub_config
+from ....core.config import (
+    ConfigError,
+    default_housekeeping_rule_named,
+    load_hub_config,
+    resolve_housekeeping_rule,
+)
 from ....core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -27,8 +33,6 @@ from ....core.report_retention import (
 )
 from ....core.runtime import RuntimeContext
 from ....core.state_retention import (
-    CleanupAction,
-    CleanupCandidate,
     CleanupPlan,
     CleanupReason,
     CleanupResult,
@@ -37,17 +41,12 @@ from ....core.state_retention import (
     RetentionScope,
     adapt_archive_prune_summary_to_result,
     adapt_filebox_prune_summary_to_result,
+    adapt_housekeeping_rule_result_to_result,
     adapt_report_prune_summary_to_result,
     aggregate_cleanup_results,
-    make_cleanup_result,
 )
 from ....core.state_roots import resolve_global_state_root
-from ....housekeeping import (
-    HousekeepingConfig,
-    HousekeepingRule,
-    HousekeepingRuleResult,
-    run_housekeeping_once,
-)
+from ....housekeeping import HousekeepingConfig, HousekeepingRule, run_housekeeping_once
 from ....integrations.app_server.retention import (
     adapt_workspace_summary_to_result,
     prune_workspace_root,
@@ -362,11 +361,20 @@ def register_cleanup_commands(
             retention_class=RetentionClass.EPHEMERAL,
         )
         global_workspace_root = _resolve_global_cleanup_workspace_root(engine)
-        active_workspace_ids, locked_workspace_ids, current_workspace_ids = (
-            _resolve_workspace_guards(
-                engine, global_workspace_root, scope=RetentionScope.GLOBAL
+        try:
+            active_workspace_ids, locked_workspace_ids, current_workspace_ids = (
+                _resolve_workspace_guards(
+                    engine, global_workspace_root, scope=RetentionScope.GLOBAL
+                )
             )
-        )
+        except RuntimeError as exc:
+            results.append(
+                _make_skipped_cleanup_result(
+                    global_workspace_bucket,
+                    error=str(exc),
+                )
+            )
+            return
         global_workspace_summary = prune_workspace_root(
             global_workspace_root,
             policy=resolve_workspace_retention_policy(engine.config.pma),
@@ -390,38 +398,25 @@ def register_cleanup_commands(
             scope=RetentionScope.GLOBAL,
             retention_class=RetentionClass.CACHE_ONLY,
         )
+        update_cache_rule = _resolve_update_cache_housekeeping_rule(engine)
+        if update_cache_rule is None:
+            return
         update_cache_root = (
             resolve_global_state_root(config=engine.config, repo_root=engine.repo_root)
             / "update_cache"
         )
+        cleanup_config = _cleanup_housekeeping_config(
+            getattr(engine.config, "housekeeping", None),
+            dry_run=dry_run,
+            rule=dataclasses.replace(update_cache_rule, path=str(update_cache_root)),
+        )
         summary = run_housekeeping_once(
-            HousekeepingConfig(
-                enabled=True,
-                interval_seconds=3600,
-                min_file_age_seconds=0,
-                dry_run=dry_run,
-                rules=[
-                    HousekeepingRule(
-                        name="update_cache",
-                        kind="directory",
-                        path=str(update_cache_root),
-                        glob="*",
-                        recursive=True,
-                        max_files=2000,
-                        max_total_bytes=1_000_000_000,
-                        max_age_days=30,
-                    )
-                ],
-            ),
+            cleanup_config,
             engine.repo_root,
         )
-        rule_result = (
-            summary.rules[0]
-            if summary.rules
-            else HousekeepingRuleResult(name="update_cache", kind="directory")
-        )
+        rule_result = summary.rules[0]
         results.append(
-            _adapt_housekeeping_rule_result_to_result(
+            adapt_housekeeping_rule_result_to_result(
                 rule_result,
                 update_cache_bucket,
                 dry_run=dry_run,
@@ -556,10 +551,14 @@ def register_cleanup_commands(
         try:
             hub_config = load_hub_config(engine.repo_root)
             manifest = load_manifest(hub_config.manifest_path, hub_config.root)
-        except ConfigError:
-            return tuple(sorted(roots, key=lambda path: str(path)))
-        except Exception:
-            return tuple(sorted(roots, key=lambda path: str(path)))
+        except ConfigError as exc:
+            raise RuntimeError(
+                "Skipping global workspace cleanup: unable to load hub context for guard discovery; partial visibility could prune an active shared workspace."
+            ) from exc
+        except Exception as exc:
+            raise RuntimeError(
+                "Skipping global workspace cleanup: unable to inspect hub manifest for guard discovery; partial visibility could prune an active shared workspace."
+            ) from exc
 
         for entry in manifest.repos:
             roots.add((hub_config.root / entry.path).resolve())
@@ -602,45 +601,62 @@ def register_cleanup_commands(
                 protected_ids.add(path.name)
         return protected_ids
 
-    def _adapt_housekeeping_rule_result_to_result(
-        rule_result: HousekeepingRuleResult,
-        bucket: RetentionBucket,
+    def _resolve_update_cache_housekeeping_rule(engine: RuntimeContext):
+        configured_rule = resolve_housekeeping_rule(
+            getattr(engine.config, "housekeeping", None),
+            "update_cache",
+        )
+        if configured_rule is not None:
+            return configured_rule
+        mode = str(getattr(engine.config, "mode", "repo")).strip().lower()
+        if mode == "hub":
+            return None
+        return default_housekeeping_rule_named(
+            "update_cache",
+            include_hub_update_rules=True,
+        )
+
+    def _cleanup_housekeeping_config(
+        base_config: object,
         *,
         dry_run: bool,
-        reason: CleanupReason,
-    ) -> CleanupResult:
-        candidates = tuple(
-            CleanupCandidate(
-                path=Path("<unknown>"),
-                size_bytes=0,
-                bucket=bucket,
-                action=CleanupAction.PRUNE,
-                reason=reason,
+        rule: HousekeepingRule,
+    ) -> HousekeepingConfig:
+        if isinstance(base_config, HousekeepingConfig):
+            return dataclasses.replace(
+                base_config,
+                enabled=True,
+                dry_run=dry_run,
+                rules=[rule],
             )
-            for _ in range(rule_result.deleted_count)
+        return HousekeepingConfig(
+            enabled=True,
+            interval_seconds=3600,
+            min_file_age_seconds=600,
+            dry_run=dry_run,
+            rules=[rule],
         )
+
+    def _make_skipped_cleanup_result(
+        bucket: RetentionBucket,
+        *,
+        error: str,
+    ) -> CleanupResult:
         plan = CleanupPlan(
             bucket=bucket,
-            candidates=candidates,
-            total_bytes=rule_result.deleted_bytes,
-            reclaimable_bytes=rule_result.deleted_bytes,
-            kept_count=max(rule_result.scanned_count - rule_result.deleted_count, 0),
-            prune_count=rule_result.deleted_count,
+            candidates=(),
+            total_bytes=0,
+            reclaimable_bytes=0,
+            kept_count=0,
+            prune_count=0,
             blocked_count=0,
         )
-        if dry_run:
-            return CleanupResult(
-                bucket=bucket,
-                plan=plan,
-                deleted_paths=(),
-                deleted_count=0,
-                deleted_bytes=0,
-                kept_bytes=0,
-                errors=tuple(rule_result.error_samples),
-            )
-        return make_cleanup_result(
-            plan,
+        return CleanupResult(
+            bucket=bucket,
+            plan=plan,
             deleted_paths=(),
-            deleted_bytes=rule_result.deleted_bytes,
-            errors=tuple(rule_result.error_samples),
+            deleted_count=0,
+            deleted_bytes=0,
+            kept_bytes=0,
+            errors=(error,),
         )

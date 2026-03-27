@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Mapping, Optional
 
 if TYPE_CHECKING:
+    from ..housekeeping import HousekeepingRuleResult
     from .archive_retention import ArchivePruneSummary
     from .filebox_retention import FileBoxPruneSummary
     from .report_retention import PruneSummary
@@ -241,10 +242,6 @@ def make_cleanup_result(
     )
 
 
-def aggregate_cleanup_plans(plans: Iterable[CleanupPlan]) -> AggregatedCleanupPlan:
-    return AggregatedCleanupPlan(plans=tuple(plans))
-
-
 def aggregate_cleanup_results(
     results: Iterable[CleanupResult],
 ) -> AggregatedCleanupResult:
@@ -357,6 +354,61 @@ def adapt_filebox_prune_summary_to_result(
     )
 
 
+def adapt_housekeeping_rule_result_to_plan(
+    summary: "HousekeepingRuleResult",
+    bucket: RetentionBucket,
+    *,
+    reason: CleanupReason,
+) -> CleanupPlan:
+    from ..housekeeping import HousekeepingRuleResult
+
+    if not isinstance(summary, HousekeepingRuleResult):
+        raise TypeError("summary must be a HousekeepingRuleResult")
+
+    candidates = tuple(
+        CleanupCandidate(
+            path=Path("<unknown>"),
+            size_bytes=0,
+            bucket=bucket,
+            action=CleanupAction.PRUNE,
+            reason=reason,
+        )
+        for _ in range(summary.deleted_count)
+    )
+    return CleanupPlan(
+        bucket=bucket,
+        candidates=candidates,
+        total_bytes=summary.deleted_bytes,
+        reclaimable_bytes=summary.deleted_bytes,
+        kept_count=max(summary.scanned_count - summary.deleted_count, 0),
+        prune_count=summary.deleted_count,
+        blocked_count=0,
+    )
+
+
+def adapt_housekeeping_rule_result_to_result(
+    summary: "HousekeepingRuleResult",
+    bucket: RetentionBucket,
+    *,
+    dry_run: bool = False,
+    reason: CleanupReason,
+) -> CleanupResult:
+    plan = adapt_housekeeping_rule_result_to_plan(summary, bucket, reason=reason)
+    deleted_count = 0 if dry_run else summary.deleted_count
+    deleted_bytes = 0 if dry_run else summary.deleted_bytes
+    kept_bytes = 0 if dry_run else max(plan.total_bytes - deleted_bytes, 0)
+
+    return CleanupResult(
+        bucket=bucket,
+        plan=plan,
+        deleted_paths=(),
+        deleted_count=deleted_count,
+        deleted_bytes=deleted_bytes,
+        kept_bytes=kept_bytes,
+        errors=tuple(summary.error_samples),
+    )
+
+
 def adapt_report_prune_summary_to_plan(
     summary: "PruneSummary",
     bucket: RetentionBucket,
@@ -422,12 +474,13 @@ __all__ = [
     "AggregatedCleanupResult",
     "make_cleanup_plan",
     "make_cleanup_result",
-    "aggregate_cleanup_plans",
     "aggregate_cleanup_results",
     "adapt_archive_prune_summary_to_plan",
     "adapt_archive_prune_summary_to_result",
     "adapt_filebox_prune_summary_to_plan",
     "adapt_filebox_prune_summary_to_result",
+    "adapt_housekeeping_rule_result_to_plan",
+    "adapt_housekeeping_rule_result_to_result",
     "adapt_report_prune_summary_to_plan",
     "adapt_report_prune_summary_to_result",
 ]

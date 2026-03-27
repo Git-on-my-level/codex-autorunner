@@ -7,6 +7,7 @@ from codex_autorunner.core.archive_retention import ArchivePruneSummary
 from codex_autorunner.core.filebox_retention import FileBoxPruneSummary
 from codex_autorunner.core.report_retention import PruneSummary
 from codex_autorunner.core.state_retention import (
+    AggregatedCleanupPlan,
     CleanupAction,
     CleanupCandidate,
     CleanupReason,
@@ -17,13 +18,15 @@ from codex_autorunner.core.state_retention import (
     adapt_archive_prune_summary_to_result,
     adapt_filebox_prune_summary_to_plan,
     adapt_filebox_prune_summary_to_result,
+    adapt_housekeeping_rule_result_to_plan,
+    adapt_housekeeping_rule_result_to_result,
     adapt_report_prune_summary_to_plan,
     adapt_report_prune_summary_to_result,
-    aggregate_cleanup_plans,
     aggregate_cleanup_results,
     make_cleanup_plan,
     make_cleanup_result,
 )
+from codex_autorunner.housekeeping import HousekeepingRuleResult
 
 
 def test_retention_bucket_is_hashable() -> None:
@@ -212,7 +215,7 @@ def test_aggregate_cleanup_plans_sums_totals() -> None:
         ],
     )
 
-    aggregated = aggregate_cleanup_plans([plan1, plan2])
+    aggregated = AggregatedCleanupPlan(plans=(plan1, plan2))
 
     assert aggregated.total_candidates == 3
     assert aggregated.total_reclaimable_bytes == 100
@@ -242,7 +245,7 @@ def test_aggregate_cleanup_plans_groups_by_scope() -> None:
     plan2 = make_cleanup_plan(hub_bucket, [])
     plan3 = make_cleanup_plan(global_bucket, [])
 
-    aggregated = aggregate_cleanup_plans([plan1, plan2, plan3])
+    aggregated = AggregatedCleanupPlan(plans=(plan1, plan2, plan3))
 
     by_scope = aggregated.by_scope()
     assert RetentionScope.REPO in by_scope
@@ -267,7 +270,7 @@ def test_aggregate_cleanup_plans_groups_by_retention_class() -> None:
     plan1 = make_cleanup_plan(ephemeral_bucket, [])
     plan2 = make_cleanup_plan(reviewable_bucket, [])
 
-    aggregated = aggregate_cleanup_plans([plan1, plan2])
+    aggregated = AggregatedCleanupPlan(plans=(plan1, plan2))
 
     by_class = aggregated.by_retention_class()
     assert RetentionClass.EPHEMERAL in by_class
@@ -290,7 +293,7 @@ def test_aggregate_cleanup_plans_groups_by_family() -> None:
     plan1 = make_cleanup_plan(logs_bucket, [])
     plan2 = make_cleanup_plan(archives_bucket, [])
 
-    aggregated = aggregate_cleanup_plans([plan1, plan2])
+    aggregated = AggregatedCleanupPlan(plans=(plan1, plan2))
 
     by_family = aggregated.by_family()
     assert "logs" in by_family
@@ -558,6 +561,88 @@ def test_adapt_filebox_prune_summary_to_result_executed() -> None:
     assert result.deleted_bytes == 300
 
 
+def test_adapt_housekeeping_rule_result_to_plan() -> None:
+    summary = HousekeepingRuleResult(
+        name="update_cache",
+        kind="directory",
+        scanned_count=5,
+        deleted_count=2,
+        deleted_bytes=123,
+    )
+    bucket = RetentionBucket(
+        family="update_cache",
+        scope=RetentionScope.GLOBAL,
+        retention_class=RetentionClass.CACHE_ONLY,
+    )
+
+    plan = adapt_housekeeping_rule_result_to_plan(
+        summary,
+        bucket,
+        reason=CleanupReason.CACHE_REBUILDABLE,
+    )
+
+    assert plan.bucket == bucket
+    assert plan.total_bytes == 123
+    assert plan.reclaimable_bytes == 123
+    assert plan.kept_count == 3
+    assert plan.prune_count == 2
+    assert plan.blocked_count == 0
+
+
+def test_adapt_housekeeping_rule_result_to_result_dry_run() -> None:
+    summary = HousekeepingRuleResult(
+        name="update_cache",
+        kind="directory",
+        scanned_count=5,
+        deleted_count=2,
+        deleted_bytes=123,
+        error_samples=["sample error"],
+    )
+    bucket = RetentionBucket(
+        family="update_cache",
+        scope=RetentionScope.GLOBAL,
+        retention_class=RetentionClass.CACHE_ONLY,
+    )
+
+    result = adapt_housekeeping_rule_result_to_result(
+        summary,
+        bucket,
+        dry_run=True,
+        reason=CleanupReason.CACHE_REBUILDABLE,
+    )
+
+    assert result.deleted_count == 0
+    assert result.deleted_bytes == 0
+    assert result.kept_bytes == 0
+    assert result.errors == ("sample error",)
+
+
+def test_adapt_housekeeping_rule_result_to_result_executed() -> None:
+    summary = HousekeepingRuleResult(
+        name="update_cache",
+        kind="directory",
+        scanned_count=5,
+        deleted_count=2,
+        deleted_bytes=123,
+    )
+    bucket = RetentionBucket(
+        family="update_cache",
+        scope=RetentionScope.GLOBAL,
+        retention_class=RetentionClass.CACHE_ONLY,
+    )
+
+    result = adapt_housekeeping_rule_result_to_result(
+        summary,
+        bucket,
+        dry_run=False,
+        reason=CleanupReason.CACHE_REBUILDABLE,
+    )
+
+    assert result.deleted_count == 2
+    assert result.deleted_bytes == 123
+    assert result.kept_bytes == 0
+
+
 def test_adapt_report_prune_summary_to_plan() -> None:
     summary = PruneSummary(
         kept=10,
@@ -810,7 +895,7 @@ class TestCleanupReasonCoverage:
 
 class TestAggregationEdgeCases:
     def test_aggregate_empty_plans(self) -> None:
-        aggregated = aggregate_cleanup_plans([])
+        aggregated = AggregatedCleanupPlan(plans=())
 
         assert aggregated.total_candidates == 0
         assert aggregated.total_reclaimable_bytes == 0
@@ -846,7 +931,7 @@ class TestAggregationEdgeCases:
             ],
         )
 
-        aggregated = aggregate_cleanup_plans([plan])
+        aggregated = AggregatedCleanupPlan(plans=(plan,))
 
         assert aggregated.total_candidates == 1
         assert aggregated.total_reclaimable_bytes == 100
@@ -881,7 +966,7 @@ class TestAggregationEdgeCases:
         )
         plan = make_cleanup_plan(hub_bucket, [])
 
-        aggregated = aggregate_cleanup_plans([plan])
+        aggregated = AggregatedCleanupPlan(plans=(plan,))
         by_scope = aggregated.by_scope()
 
         assert RetentionScope.HUB in by_scope
@@ -942,7 +1027,7 @@ class TestAggregationEdgeCases:
             ],
         )
 
-        aggregated = aggregate_cleanup_plans([plan1, plan2, plan3])
+        aggregated = AggregatedCleanupPlan(plans=(plan1, plan2, plan3))
         by_family = aggregated.by_family()
 
         assert "family_a" in by_family

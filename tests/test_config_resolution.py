@@ -11,10 +11,13 @@ from codex_autorunner.core.config import (
     DEFAULT_REPO_CONFIG,
     REPO_OVERRIDE_FILENAME,
     ConfigError,
+    default_housekeeping_rule_named,
     load_hub_config,
     load_repo_config,
     resolve_env_for_root,
+    resolve_housekeeping_rule,
 )
+from codex_autorunner.housekeeping import HousekeepingConfig, HousekeepingRule
 from tests.conftest import write_test_config
 
 
@@ -204,6 +207,40 @@ def test_load_repo_config_accepts_github_mutation_policy_bool_and_enum_values(
     assert (
         config.raw["github"]["automation"]["policy"]["merge_pr"] == "require_approval"
     )
+
+
+def test_resolve_housekeeping_rule_matches_by_name() -> None:
+    config = HousekeepingConfig(
+        enabled=True,
+        interval_seconds=60,
+        min_file_age_seconds=10,
+        dry_run=False,
+        rules=[
+            HousekeepingRule(
+                name="update_cache",
+                kind="directory",
+                path="~/.codex-autorunner/update_cache",
+                recursive=True,
+                max_files=77,
+            )
+        ],
+    )
+
+    rule = resolve_housekeeping_rule(config, "UPDATE_CACHE")
+
+    assert rule is not None
+    assert rule.max_files == 77
+
+
+def test_default_housekeeping_rule_named_exposes_hub_update_cache_defaults() -> None:
+    rule = default_housekeeping_rule_named(
+        "update_cache",
+        include_hub_update_rules=True,
+    )
+
+    assert rule is not None
+    assert rule.path == "~/.codex-autorunner/update_cache"
+    assert rule.max_files == 2000
 
 
 @pytest.mark.parametrize("field", ["max_payload_bytes", "max_raw_payload_bytes"])
