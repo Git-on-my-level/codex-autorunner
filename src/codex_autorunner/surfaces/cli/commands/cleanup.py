@@ -753,6 +753,15 @@ def register_cleanup_commands(
         return protected_ids
 
     def _resolve_global_cleanup_root(engine: RuntimeContext) -> Path:
+        try:
+            hub_config = load_hub_config(engine.repo_root)
+        except ConfigError:
+            hub_config = None
+        if getattr(hub_config, "raw", None) is not None:
+            return resolve_global_state_root(
+                config=hub_config,
+                repo_root=getattr(hub_config, "root", engine.repo_root),
+            )
         return resolve_global_state_root(
             config=engine.config, repo_root=engine.repo_root
         )

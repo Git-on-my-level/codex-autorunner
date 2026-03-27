@@ -101,9 +101,8 @@ def _collect_workspace_entries(root: Path) -> list[_WorkspaceEntry]:
     for path in iterator:
         if not path.is_dir():
             continue
-        try:
-            stat = path.stat()
-        except OSError:
+        latest_activity = _path_latest_mtime(path)
+        if latest_activity is None:
             continue
         size_bytes = _path_size_bytes(path)
         entries.append(
@@ -111,10 +110,34 @@ def _collect_workspace_entries(root: Path) -> list[_WorkspaceEntry]:
                 workspace_id=path.name,
                 path=path,
                 size_bytes=size_bytes,
-                mtime=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                mtime=latest_activity,
             )
         )
     return entries
+
+
+def _path_latest_mtime(path: Path) -> datetime | None:
+    latest_timestamp: float | None = None
+    for candidate in _iter_tree(path):
+        try:
+            candidate_timestamp = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if latest_timestamp is None or candidate_timestamp > latest_timestamp:
+            latest_timestamp = candidate_timestamp
+    if latest_timestamp is None:
+        return None
+    return datetime.fromtimestamp(latest_timestamp, tz=timezone.utc)
+
+
+def _iter_tree(path: Path) -> Iterable[Path]:
+    yield path
+    if not path.is_dir():
+        return
+    try:
+        yield from path.rglob("*")
+    except OSError:
+        return
 
 
 def _path_size_bytes(path: Path) -> int:

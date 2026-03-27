@@ -27,3 +27,4 @@ bin/
 .pytest_cache/
 .coverage
 htmlcov/
+scorecard.png

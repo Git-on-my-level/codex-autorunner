@@ -63,6 +63,13 @@ class TestResolveWorkspaceRoots:
         assert root == tmp_path / ".codex-autorunner" / "app_server_workspaces"
 
 
+def _set_tree_mtime(path: Path, timestamp: float) -> None:
+    descendants = sorted(path.rglob("*"), key=lambda candidate: len(candidate.parts))
+    for candidate in reversed(descendants):
+        os.utime(candidate, (timestamp, timestamp))
+    os.utime(path, (timestamp, timestamp))
+
+
 class TestPlanWorkspaceRetention:
     def test_empty_root_returns_empty_plan(self, tmp_path: Path):
         root = tmp_path / "workspaces"
@@ -90,7 +97,7 @@ class TestPlanWorkspaceRetention:
 
         old_mtime = datetime.now(timezone.utc) - timedelta(days=14)
         old_ts = old_mtime.timestamp()
-        os.utime(old_workspace, (old_ts, old_ts))
+        _set_tree_mtime(old_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -191,6 +198,33 @@ class TestPlanWorkspaceRetention:
         assert plan.kept_count == 1
         assert plan.prune_count == 0
 
+    def test_keeps_workspace_with_recent_nested_activity(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+        workspace = root / "recent123456"
+        workspace.mkdir()
+        nested = workspace / "state" / "session.json"
+        nested.parent.mkdir()
+        nested.write_text("{}")
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
+        _set_tree_mtime(workspace, old_ts)
+        recent_ts = datetime.now(timezone.utc).timestamp()
+        os.utime(nested, (recent_ts, recent_ts))
+        os.utime(workspace, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+        )
+
+        assert plan.kept_count == 1
+        assert plan.prune_count == 0
+
 
 class TestExecuteWorkspaceRetention:
     def test_dry_run_does_not_delete(self, tmp_path: Path):
@@ -202,7 +236,7 @@ class TestExecuteWorkspaceRetention:
 
         old_mtime = datetime.now(timezone.utc) - timedelta(days=10)
         old_ts = old_mtime.timestamp()
-        os.utime(old_workspace, (old_ts, old_ts))
+        _set_tree_mtime(old_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -230,7 +264,7 @@ class TestExecuteWorkspaceRetention:
 
         old_mtime = datetime.now(timezone.utc) - timedelta(days=10)
         old_ts = old_mtime.timestamp()
-        os.utime(old_workspace, (old_ts, old_ts))
+        _set_tree_mtime(old_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -259,7 +293,7 @@ class TestExecuteWorkspaceRetention:
 
         old_mtime = datetime.now(timezone.utc) - timedelta(days=10)
         old_ts = old_mtime.timestamp()
-        os.utime(old_workspace, (old_ts, old_ts))
+        _set_tree_mtime(old_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -302,7 +336,7 @@ class TestPruneWorkspaceRoot:
         stale_workspace.mkdir()
         (stale_workspace / "state.json").write_text("{}")
         old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
-        os.utime(stale_workspace, (old_ts, old_ts))
+        _set_tree_mtime(stale_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -417,7 +451,7 @@ class TestWorkspaceRetentionSafetyGuards:
         (active_workspace / "state.json").write_text("{}")
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
-        os.utime(active_workspace, (old_ts, old_ts))
+        _set_tree_mtime(active_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -451,7 +485,7 @@ class TestWorkspaceRetentionSafetyGuards:
         (locked_workspace / "lock").write_text("locked")
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
-        os.utime(locked_workspace, (old_ts, old_ts))
+        _set_tree_mtime(locked_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -484,7 +518,7 @@ class TestWorkspaceRetentionSafetyGuards:
         (current_workspace / "run.json").write_text("{}")
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
-        os.utime(current_workspace, (old_ts, old_ts))
+        _set_tree_mtime(current_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -517,7 +551,7 @@ class TestWorkspaceRetentionSafetyGuards:
         (active_workspace / "state.json").write_text("{}")
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
-        os.utime(active_workspace, (old_ts, old_ts))
+        _set_tree_mtime(active_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=0)
         now = datetime.now(timezone.utc)
@@ -555,7 +589,7 @@ class TestWorkspaceRetentionSafetyGuards:
         recent_workspace.mkdir()
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
-        os.utime(stale_workspace, (old_ts, old_ts))
+        _set_tree_mtime(stale_workspace, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -589,7 +623,7 @@ class TestWorkspaceRetentionSafetyGuards:
             ws.mkdir()
             (ws / "data.txt").write_text("data")
             old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
-            os.utime(ws, (old_ts, old_ts))
+            _set_tree_mtime(ws, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -623,7 +657,7 @@ class TestWorkspaceRetentionSafetyGuards:
 
         cutoff_time = datetime.now(timezone.utc) - timedelta(days=7)
         boundary_ts = cutoff_time.timestamp()
-        os.utime(boundary_workspace, (boundary_ts, boundary_ts))
+        _set_tree_mtime(boundary_workspace, boundary_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
 
@@ -684,13 +718,13 @@ class TestWorkspaceRetentionIntegration:
         stale_ws1.mkdir()
         (stale_ws1 / "old.json").write_text("{}")
         old_ts1 = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
-        os.utime(stale_ws1, (old_ts1, old_ts1))
+        _set_tree_mtime(stale_ws1, old_ts1)
 
         stale_ws2 = root / "old987654321"
         stale_ws2.mkdir()
         (stale_ws2 / "data.txt").write_text("old data")
         old_ts2 = (datetime.now(timezone.utc) - timedelta(days=21)).timestamp()
-        os.utime(stale_ws2, (old_ts2, old_ts2))
+        _set_tree_mtime(stale_ws2, old_ts2)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -723,7 +757,7 @@ class TestWorkspaceRetentionIntegration:
         (stale_ws / "small_file.txt").write_text("y" * 100)
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
-        os.utime(stale_ws, (old_ts, old_ts))
+        _set_tree_mtime(stale_ws, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)
@@ -795,7 +829,7 @@ class TestWorkspaceRetentionIntegration:
         (stale_ws / "level1" / "level2" / "file2.txt").write_text("y" * 500)
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
-        os.utime(stale_ws, (old_ts, old_ts))
+        _set_tree_mtime(stale_ws, old_ts)
 
         policy = WorkspaceRetentionPolicy(max_age_days=7)
         now = datetime.now(timezone.utc)

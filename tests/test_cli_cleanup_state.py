@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import types
 from pathlib import Path
 
@@ -14,7 +15,6 @@ from codex_autorunner.core.managed_processes.registry import (
     write_process_record,
 )
 from codex_autorunner.core.report_retention import PruneSummary
-from codex_autorunner.core.state_roots import resolve_global_state_root
 from codex_autorunner.housekeeping import (
     HousekeepingConfig,
     HousekeepingRule,
@@ -27,6 +27,13 @@ from codex_autorunner.surfaces.cli.commands import cleanup as cleanup_cmd
 from tests.conftest import write_test_config
 
 runner = CliRunner()
+
+
+def _set_tree_mtime(path: Path, timestamp: float) -> None:
+    descendants = sorted(path.rglob("*"), key=lambda candidate: len(candidate.parts))
+    for candidate in reversed(descendants):
+        os.utime(candidate, (timestamp, timestamp))
+    os.utime(path, (timestamp, timestamp))
 
 
 class TestCleanupStateCLI:
@@ -532,12 +539,11 @@ class TestCleanupStateRepoCleanup:
         )
         write_process_record(tmp_path, registry_record)
 
-        import os
         from datetime import datetime, timedelta, timezone
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
         for ws in (stale_ws, locked_ws, current_ws, active_ws):
-            os.utime(ws, (old_ts, old_ts))
+            _set_tree_mtime(ws, old_ts)
 
         monkeypatch.setattr(
             "codex_autorunner.surfaces.cli.commands.cleanup.prune_worktree_archive_root",
@@ -915,6 +921,8 @@ class TestCleanupStateGlobalCleanup:
         self, monkeypatch, tmp_path: Path
     ) -> None:
         captured: dict[str, object] = {}
+        repo_global_root = tmp_path / "repo-global-state"
+        hub_global_root = tmp_path / "hub-global-state"
 
         def _fake_run_housekeeping_once(config, root, **kwargs):
             captured["rule"] = config.rules[0]
@@ -928,7 +936,7 @@ class TestCleanupStateGlobalCleanup:
         config = types.SimpleNamespace(
             mode="hub",
             root=tmp_path,
-            raw={"state_roots": {"global": str(tmp_path / "global-state")}},
+            raw={"state_roots": {"global": str(repo_global_root)}},
             pma=types.SimpleNamespace(),
             housekeeping=HousekeepingConfig(
                 enabled=False,
@@ -970,6 +978,7 @@ class TestCleanupStateGlobalCleanup:
             lambda repo_root: types.SimpleNamespace(
                 manifest_path=tmp_path / "manifest.yml",
                 root=tmp_path,
+                raw={"state_roots": {"global": str(hub_global_root)}},
             ),
         )
         monkeypatch.setattr(
@@ -994,10 +1003,7 @@ class TestCleanupStateGlobalCleanup:
             ["state", "--repo", str(tmp_path), "--scope", "global", "--dry-run"],
         )
 
-        expected_path = (
-            resolve_global_state_root(config=config, repo_root=tmp_path)
-            / "update_cache"
-        )
+        expected_path = hub_global_root / "update_cache"
         rule = captured["rule"]
         assert result.exit_code == 0
         assert isinstance(rule, HousekeepingRule)
@@ -1006,6 +1012,83 @@ class TestCleanupStateGlobalCleanup:
         assert rule.max_total_bytes == 888
         assert captured["dry_run"] is True
         assert captured["min_file_age_seconds"] == 42
+
+    def test_global_cleanup_falls_back_to_repo_root_when_hub_config_missing(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        captured: dict[str, object] = {}
+        repo_global_root = tmp_path / "repo-global-state"
+
+        def _fake_run_housekeeping_once(config, root, **kwargs):
+            captured["rule"] = config.rules[0]
+            return HousekeepingSummary(
+                root=tmp_path,
+                rules=[HousekeepingRuleResult(name="update_cache", kind="directory")],
+            )
+
+        config = types.SimpleNamespace(
+            mode="hub",
+            root=tmp_path,
+            raw={"state_roots": {"global": str(repo_global_root)}},
+            pma=types.SimpleNamespace(),
+            housekeeping=HousekeepingConfig(
+                enabled=False,
+                interval_seconds=99,
+                min_file_age_seconds=42,
+                dry_run=False,
+                rules=[
+                    HousekeepingRule(
+                        name="update_cache",
+                        kind="directory",
+                        path="/tmp/ignored",
+                        glob="*",
+                        recursive=True,
+                        max_files=1,
+                        max_total_bytes=1,
+                        max_age_days=1,
+                    )
+                ],
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.run_housekeeping_once",
+            _fake_run_housekeeping_once,
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_workspace_root",
+            lambda *a, **kw: WorkspacePruneSummary(
+                kept=1,
+                pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+                blocked_paths=(),
+                blocked_reasons=(),
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.load_hub_config",
+            lambda repo_root: (_ for _ in ()).throw(ConfigError("missing hub")),
+        )
+
+        cleanup_app = typer.Typer()
+        cleanup_cmd.register_cleanup_commands(
+            cleanup_app,
+            require_repo_config=lambda _repo, _hub: types.SimpleNamespace(  # type: ignore[arg-type]
+                repo_root=tmp_path,
+                config=config,
+            ),
+        )
+
+        result = runner.invoke(
+            cleanup_app,
+            ["state", "--repo", str(tmp_path), "--scope", "global", "--dry-run"],
+        )
+
+        rule = captured["rule"]
+        assert result.exit_code == 0
+        assert isinstance(rule, HousekeepingRule)
+        assert rule.path == str(repo_global_root / "update_cache")
 
     def test_global_cleanup_protects_active_workspace_from_sibling_repo(
         self, monkeypatch, tmp_path: Path
@@ -1032,11 +1115,10 @@ class TestCleanupStateGlobalCleanup:
         active_workspace.mkdir()
         (active_workspace / "state.json").write_text("{}")
 
-        import os
         from datetime import datetime, timedelta, timezone
 
         old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
-        os.utime(active_workspace, (old_ts, old_ts))
+        _set_tree_mtime(active_workspace, old_ts)
 
         registry_record = ProcessRecord(
             kind="codex_app_server",
