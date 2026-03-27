@@ -323,3 +323,303 @@ def test_doctor_processes_skips_opencode_lifecycle_when_repo_config_missing(
 
     payload = json.loads(result.output)
     assert payload["opencode_lifecycle"] == {}
+
+
+def test_cleanup_state_dry_run_reports_all_buckets(monkeypatch, repo: Path) -> None:
+    captured = {"calls": []}
+    cleanup_app = typer.Typer()
+    cleanup_cmd.register_cleanup_commands(
+        cleanup_app,
+        require_repo_config=lambda _repo, _hub: types.SimpleNamespace(
+            repo_root=repo,
+            config=types.SimpleNamespace(
+                pma=types.SimpleNamespace(
+                    worktree_archive_max_snapshots_per_repo=3,
+                    worktree_archive_max_age_days=14,
+                    worktree_archive_max_total_bytes=100000,
+                    run_archive_max_entries=5,
+                    run_archive_max_age_days=7,
+                    run_archive_max_total_bytes=50000,
+                    filebox_inbox_max_age_days=3,
+                    filebox_outbox_max_age_days=3,
+                    app_server_workspace_max_age_days=7,
+                )
+            ),
+        ),
+    )
+
+    def _fake_prune_worktrees(path: Path, *, policy, preserve_paths=(), dry_run=False):
+        captured["calls"].append(("worktrees", dry_run))
+        return ArchivePruneSummary(
+            kept=2,
+            pruned=3,
+            bytes_before=500,
+            bytes_after=200,
+            pruned_paths=("a", "b", "c"),
+        )
+
+    def _fake_prune_runs(path: Path, *, policy, preserve_paths=(), dry_run=False):
+        captured["calls"].append(("runs", dry_run))
+        return ArchivePruneSummary(
+            kept=1, pruned=2, bytes_before=300, bytes_after=100, pruned_paths=("d", "e")
+        )
+
+    def _fake_prune_filebox(
+        path: Path, *, policy, scope="both", dry_run=False, now=None
+    ):
+        captured["calls"].append(("filebox", scope, dry_run))
+        return FileBoxPruneSummary(
+            inbox_kept=2,
+            inbox_pruned=1,
+            outbox_kept=3,
+            outbox_pruned=2,
+            bytes_before=200,
+            bytes_after=80,
+            pruned_paths=("f", "g", "h"),
+        )
+
+    def _fake_prune_reports(
+        path: Path, *, max_history_files=10, max_total_bytes=1000000
+    ):
+        captured["calls"].append(("reports",))
+        from codex_autorunner.core.report_retention import PruneSummary
+
+        return PruneSummary(kept=4, pruned=1, bytes_before=150, bytes_after=100)
+
+    def _fake_prune_workspace(
+        workspace_root,
+        *,
+        policy,
+        active_workspace_ids,
+        locked_workspace_ids,
+        current_workspace_ids,
+        dry_run=False,
+        now=None,
+        scope=None,
+    ):
+        captured["calls"].append(("workspace", scope, dry_run))
+        from codex_autorunner.integrations.app_server.retention import (
+            WorkspacePruneSummary,
+        )
+
+        return WorkspacePruneSummary(
+            kept=1,
+            pruned=2,
+            bytes_before=400,
+            bytes_after=100,
+            pruned_paths=("i", "j"),
+            blocked_paths=(),
+            blocked_reasons=(),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_worktree_archive_root",
+        _fake_prune_worktrees,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_run_archive_root",
+        _fake_prune_runs,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_filebox_root",
+        _fake_prune_filebox,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_report_directory",
+        _fake_prune_reports,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_workspace_root",
+        _fake_prune_workspace,
+    )
+
+    result = runner.invoke(
+        cleanup_app,
+        ["state", "--repo", str(repo), "--dry-run", "--scope", "repo"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert ("worktrees", True) in captured["calls"]
+    assert ("runs", True) in captured["calls"]
+    assert ("filebox", "both", True) in captured["calls"]
+    assert ("reports",) in captured["calls"]
+    workspace_calls = [c for c in captured["calls"] if c[0] == "workspace"]
+    assert len(workspace_calls) >= 1
+    assert workspace_calls[0][2] is True
+    assert "DRY RUN:" in result.stdout
+    assert "CAR State Cleanup Report" in result.stdout
+
+
+def test_cleanup_state_scope_global_includes_global_workspaces(
+    monkeypatch, repo: Path
+) -> None:
+    captured = {"calls": []}
+    cleanup_app = typer.Typer()
+    cleanup_cmd.register_cleanup_commands(
+        cleanup_app,
+        require_repo_config=lambda _repo, _hub: types.SimpleNamespace(
+            repo_root=repo,
+            config=types.SimpleNamespace(
+                pma=types.SimpleNamespace(
+                    app_server_workspace_max_age_days=7,
+                )
+            ),
+        ),
+    )
+
+    def _fake_prune_workspace(
+        workspace_root,
+        *,
+        policy,
+        active_workspace_ids,
+        locked_workspace_ids,
+        current_workspace_ids,
+        dry_run=False,
+        now=None,
+        scope=None,
+    ):
+        captured["calls"].append(("workspace", scope, dry_run))
+        from codex_autorunner.integrations.app_server.retention import (
+            WorkspacePruneSummary,
+        )
+
+        return WorkspacePruneSummary(
+            kept=0,
+            pruned=0,
+            bytes_before=0,
+            bytes_after=0,
+            pruned_paths=(),
+            blocked_paths=(),
+            blocked_reasons=(),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_workspace_root",
+        _fake_prune_workspace,
+    )
+
+    result = runner.invoke(
+        cleanup_app,
+        ["state", "--repo", str(repo), "--scope", "global"],
+    )
+
+    assert result.exit_code == 0, result.output
+    global_calls = [
+        c for c in captured["calls"] if c[1] is not None and c[1].value == "global"
+    ]
+    assert len(global_calls) >= 1
+
+
+def test_cleanup_state_scope_all_includes_both_repo_and_global(
+    monkeypatch, repo: Path
+) -> None:
+    captured = {"scopes": []}
+    cleanup_app = typer.Typer()
+    cleanup_cmd.register_cleanup_commands(
+        cleanup_app,
+        require_repo_config=lambda _repo, _hub: types.SimpleNamespace(
+            repo_root=repo,
+            config=types.SimpleNamespace(
+                pma=types.SimpleNamespace(
+                    worktree_archive_max_snapshots_per_repo=3,
+                    worktree_archive_max_age_days=14,
+                    worktree_archive_max_total_bytes=100000,
+                    run_archive_max_entries=5,
+                    run_archive_max_age_days=7,
+                    run_archive_max_total_bytes=50000,
+                    filebox_inbox_max_age_days=3,
+                    filebox_outbox_max_age_days=3,
+                    app_server_workspace_max_age_days=7,
+                )
+            ),
+        ),
+    )
+
+    def _fake_prune_worktrees(path: Path, *, policy, preserve_paths=(), dry_run=False):
+        return ArchivePruneSummary(
+            kept=0, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+        )
+
+    def _fake_prune_runs(path: Path, *, policy, preserve_paths=(), dry_run=False):
+        return ArchivePruneSummary(
+            kept=0, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+        )
+
+    def _fake_prune_filebox(
+        path: Path, *, policy, scope="both", dry_run=False, now=None
+    ):
+        return FileBoxPruneSummary(
+            inbox_kept=0,
+            inbox_pruned=0,
+            outbox_kept=0,
+            outbox_pruned=0,
+            bytes_before=0,
+            bytes_after=0,
+            pruned_paths=(),
+        )
+
+    def _fake_prune_reports(
+        path: Path, *, max_history_files=10, max_total_bytes=1000000
+    ):
+        from codex_autorunner.core.report_retention import PruneSummary
+
+        return PruneSummary(kept=0, pruned=0, bytes_before=0, bytes_after=0)
+
+    def _fake_prune_workspace(
+        workspace_root,
+        *,
+        policy,
+        active_workspace_ids,
+        locked_workspace_ids,
+        current_workspace_ids,
+        dry_run=False,
+        now=None,
+        scope=None,
+    ):
+        if scope is not None:
+            captured["scopes"].append(
+                scope.value if hasattr(scope, "value") else str(scope)
+            )
+        from codex_autorunner.integrations.app_server.retention import (
+            WorkspacePruneSummary,
+        )
+
+        return WorkspacePruneSummary(
+            kept=0,
+            pruned=0,
+            bytes_before=0,
+            bytes_after=0,
+            pruned_paths=(),
+            blocked_paths=(),
+            blocked_reasons=(),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_worktree_archive_root",
+        _fake_prune_worktrees,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_run_archive_root",
+        _fake_prune_runs,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_filebox_root",
+        _fake_prune_filebox,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_report_directory",
+        _fake_prune_reports,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.cli.commands.cleanup.prune_workspace_root",
+        _fake_prune_workspace,
+    )
+
+    result = runner.invoke(
+        cleanup_app,
+        ["state", "--repo", str(repo), "--scope", "all"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "repo" in captured["scopes"]
+    assert "global" in captured["scopes"]

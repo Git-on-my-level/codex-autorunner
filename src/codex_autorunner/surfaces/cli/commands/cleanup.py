@@ -23,6 +23,23 @@ from ....core.report_retention import (
     prune_report_directory,
 )
 from ....core.runtime import RuntimeContext
+from ....core.state_retention import (
+    CleanupResult,
+    RetentionBucket,
+    RetentionClass,
+    RetentionScope,
+    adapt_archive_prune_summary_to_result,
+    adapt_filebox_prune_summary_to_result,
+    adapt_report_prune_summary_to_result,
+    aggregate_cleanup_results,
+)
+from ....integrations.app_server.retention import (
+    adapt_workspace_summary_to_result,
+    prune_workspace_root,
+    resolve_global_workspace_root,
+    resolve_repo_workspace_root,
+    resolve_workspace_retention_policy,
+)
 
 
 def _build_force_attestation(
@@ -191,3 +208,187 @@ def register_cleanup_commands(
                 ]
             )
         )
+
+    @cleanup_app.command("state")
+    def cleanup_state(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        dry_run: bool = typer.Option(
+            False, "--dry-run", help="Preview cleanup without deleting files."
+        ),
+        scope: str = typer.Option(
+            "repo",
+            "--scope",
+            help="Cleanup scope: repo, global, or all.",
+        ),
+    ) -> None:
+        """Umbrella cleanup for CAR state retention across all families."""
+        engine = require_repo_config(repo, hub)
+        scope_value = scope.strip().lower()
+        if scope_value not in {"repo", "global", "all"}:
+            raise typer.BadParameter("scope must be one of: repo, global, all")
+
+        results: list[CleanupResult] = []
+
+        if scope_value in {"repo", "all"}:
+            _run_repo_cleanup(engine, dry_run, results)
+
+        if scope_value in {"global", "all"}:
+            _run_global_cleanup(engine, dry_run, results)
+
+        _print_cleanup_report(results, dry_run)
+
+    def _run_repo_cleanup(engine: RuntimeContext, dry_run: bool, results: list) -> None:
+        repo_root = engine.repo_root
+
+        worktree_archive_bucket = RetentionBucket(
+            family="worktree_archives",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+        worktree_summary = prune_worktree_archive_root(
+            repo_root / ".codex-autorunner" / "archive" / "worktrees",
+            policy=resolve_worktree_archive_retention_policy(engine.config.pma),
+            dry_run=dry_run,
+        )
+        results.append(
+            adapt_archive_prune_summary_to_result(
+                worktree_summary, worktree_archive_bucket, dry_run=dry_run
+            )
+        )
+
+        run_archive_bucket = RetentionBucket(
+            family="run_archives",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+        run_summary = prune_run_archive_root(
+            repo_root / ".codex-autorunner" / "archive" / "runs",
+            policy=resolve_run_archive_retention_policy(engine.config.pma),
+            dry_run=dry_run,
+        )
+        results.append(
+            adapt_archive_prune_summary_to_result(
+                run_summary, run_archive_bucket, dry_run=dry_run
+            )
+        )
+
+        filebox_bucket = RetentionBucket(
+            family="filebox",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+        filebox_summary = prune_filebox_root(
+            repo_root,
+            policy=resolve_filebox_retention_policy(engine.config.pma),
+            scope="both",
+            dry_run=dry_run,
+        )
+        results.append(
+            adapt_filebox_prune_summary_to_result(
+                filebox_summary, filebox_bucket, dry_run=dry_run
+            )
+        )
+
+        reports_bucket = RetentionBucket(
+            family="reports",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.REVIEWABLE,
+        )
+        reports_dir = repo_root / ".codex-autorunner" / "reports"
+        report_summary = prune_report_directory(
+            reports_dir,
+            max_history_files=DEFAULT_REPORT_MAX_HISTORY_FILES,
+            max_total_bytes=DEFAULT_REPORT_MAX_TOTAL_BYTES,
+        )
+        results.append(
+            adapt_report_prune_summary_to_result(report_summary, reports_bucket)
+        )
+
+        repo_workspace_bucket = RetentionBucket(
+            family="workspaces",
+            scope=RetentionScope.REPO,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+        repo_workspace_root = resolve_repo_workspace_root(repo_root)
+        repo_workspace_summary = prune_workspace_root(
+            repo_workspace_root,
+            policy=resolve_workspace_retention_policy(engine.config.pma),
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            dry_run=dry_run,
+            scope=RetentionScope.REPO,
+        )
+        results.append(
+            adapt_workspace_summary_to_result(
+                repo_workspace_summary, repo_workspace_bucket, dry_run=dry_run
+            )
+        )
+
+    def _run_global_cleanup(
+        engine: RuntimeContext, dry_run: bool, results: list
+    ) -> None:
+        global_workspace_bucket = RetentionBucket(
+            family="workspaces",
+            scope=RetentionScope.GLOBAL,
+            retention_class=RetentionClass.EPHEMERAL,
+        )
+        global_workspace_root = resolve_global_workspace_root()
+        global_workspace_summary = prune_workspace_root(
+            global_workspace_root,
+            policy=resolve_workspace_retention_policy(engine.config.pma),
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            dry_run=dry_run,
+            scope=RetentionScope.GLOBAL,
+        )
+        results.append(
+            adapt_workspace_summary_to_result(
+                global_workspace_summary, global_workspace_bucket, dry_run=dry_run
+            )
+        )
+
+    def _print_cleanup_report(results: list, dry_run: bool) -> None:
+        aggregated = aggregate_cleanup_results(results)
+        prefix = "DRY RUN: " if dry_run else ""
+
+        lines = [f"{prefix}CAR State Cleanup Report"]
+        lines.append("=" * 50)
+
+        by_family = {}
+        for result in results:
+            family = result.bucket.family
+            if family not in by_family:
+                by_family[family] = {
+                    "deleted_count": 0,
+                    "deleted_bytes": 0,
+                    "kept_bytes": 0,
+                    "blocked_count": len(result.plan.blocked_candidates),
+                }
+            by_family[family]["deleted_count"] += result.deleted_count
+            by_family[family]["deleted_bytes"] += result.deleted_bytes
+            by_family[family]["kept_bytes"] += result.kept_bytes
+
+        for family, stats in sorted(by_family.items()):
+            deleted_count = stats["deleted_count"]
+            deleted_bytes = stats["deleted_bytes"]
+            blocked_count = stats["blocked_count"]
+            if deleted_count > 0 or blocked_count > 0:
+                lines.append(f"{family}:")
+                lines.append(f"  pruned={deleted_count} bytes={deleted_bytes}")
+                if blocked_count > 0:
+                    lines.append(f"  blocked={blocked_count}")
+
+        lines.append("")
+        lines.append(
+            f"Total: deleted={aggregated.total_deleted_count} bytes={aggregated.total_deleted_bytes}"
+        )
+        if aggregated.has_errors:
+            lines.append("")
+            lines.append("Errors:")
+            for error in aggregated.all_errors:
+                lines.append(f"  - {error}")
+
+        typer.echo("\n".join(lines))
