@@ -133,6 +133,36 @@ async def test_hermes_supervisor_bridges_permission_requests_and_allows(
 
 
 @pytest.mark.asyncio
+async def test_hermes_supervisor_auto_accepts_when_approval_mode_never(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(
+        fixture_command("basic"),
+        default_approval_decision="cancel",
+        approval_timeout_seconds=0.1,
+    )
+    try:
+        session = await supervisor.create_session(tmp_path)
+        turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "needs permission",
+            approval_mode="never",
+        )
+        result = await supervisor.wait_for_turn(tmp_path, session.session_id, turn_id)
+
+        assert result.status == "completed"
+        assert any(
+            event.get("method") == "permission/decision"
+            and event.get("params", {}).get("decision") == "accept"
+            and event.get("params", {}).get("reason") == "policy_auto_accept"
+            for event in result.raw_events
+        )
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
 async def test_hermes_supervisor_can_deny_permission_requests(
     tmp_path: Path,
 ) -> None:

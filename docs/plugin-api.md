@@ -86,6 +86,10 @@ async def start_turn(...) -> TurnRef
 async def wait_for_turn(...) -> TerminalTurnResult
 ```
 
+Hermes is the in-tree example of a backend that satisfies this contract through
+an external thread/session API while still omitting other optional capabilities
+such as `review` and `model_listing`.
+
 ### Single-Session Runtimes (Out of Scope)
 
 **Single-session runtimes are explicitly out of scope for CAR v1 orchestration.** These are runtimes that:
@@ -97,12 +101,14 @@ async def wait_for_turn(...) -> TerminalTurnResult
 If your runtime does not expose a documented public thread/session API, do not
 advertise the durable-thread contract unless CAR can prove equivalent
 relaunch/resume semantics with a first-class CAR-managed `agent_workspace`.
-ZeroClaw is the reference example for this narrower path: CAR proves
-`durable_threads` and `message_turns` only for CAR-managed agent workspaces
-when the installed runtime build advertises the exact launch contract CAR uses.
-Current public `zeroclaw 0.2.0` does not advertise
-`zeroclaw agent --session-state-file`, so CAR now reports it as incompatible
-instead of inferring durability from workspace selection alone.
+Hermes is the reference example for the documented repo-backed path: CAR trusts
+Hermes durable sessions through ACP when the installed build advertises the ACP
+launch contract CAR expects. ZeroClaw is the reference example for the narrower
+`agent_workspace` path: CAR proves `durable_threads` and `message_turns` only
+for CAR-managed agent workspaces when the installed runtime build advertises the
+exact launch contract CAR uses. Current public `zeroclaw 0.2.0` does not
+advertise `zeroclaw agent --session-state-file`, so CAR now reports it as
+incompatible instead of inferring durability from workspace selection alone.
 
 ## Capability Model
 
@@ -148,5 +154,11 @@ The harness automatically gates optional helper methods:
   `event_streaming` for CAR-managed agent workspaces. Caveats remain explicit:
   workspace memory is shared across threads, one active turn is allowed per
   ZeroClaw session, and `interrupt`/`review` are not advertised.
+- **Hermes**: ACP-backed repo/worktree adapter. Supports `durable_threads`,
+  `message_turns`, `active_thread_discovery`, `interrupt`, `event_streaming`,
+  and `approvals`. Caveats remain explicit: Hermes runs against a shared
+  `HERMES_HOME`, model catalogs are not advertised, review is unsupported, and
+  CAR does not promise transcript-history reconstruction beyond CAR-observed
+  turns.
 - **Codex**: Full-featured, supports all optional capabilities
 - **OpenCode**: Full-featured except `approvals`

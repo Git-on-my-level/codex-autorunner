@@ -130,8 +130,8 @@ across runtime threads, bindings, PMA shims, and flow targets:
   does not collapse into a normal chat thread.
 - **Observability**: Thread and flow targets share discovery and observability
   surfaces without losing their distinct identities.
-- **Capability filtering**: ZeroClaw-capability differences and capability-aware
-  filtering continue to work inside the integrated build.
+- **Capability filtering**: ZeroClaw and Hermes capability differences, plus
+  capability-aware filtering, continue to work inside the integrated build.
 
 ### Acceptance criteria
 
@@ -148,14 +148,25 @@ across runtime threads, bindings, PMA shims, and flow targets:
 8. No PMA-only bypasses or transport-local binding authority are used for
    routing decisions.
 
-### ZeroClaw capability verification
+### Hermes and ZeroClaw capability verification
 
 Verify that richer adapter capabilities remain visible and are not flattened to
 the weakest common interface:
 
 ```bash
 ./.venv/bin/pytest \
+  tests/routes/test_agents_routes.py::test_list_agents_includes_hermes_when_available \
+  tests/routes/test_agents_routes.py::test_models_endpoint_returns_capability_error_for_hermes \
+  tests/test_telegram_hermes_parity.py \
   tests/test_pma_routes.py::test_pma_managed_thread_status_and_tail_use_orchestration_service \
   tests/test_pma_cli.py::test_pma_cli_thread_query_commands_use_orchestration_routes \
   -v
 ```
+
+For Hermes specifically, this should confirm:
+
+1. Discovery surfaces list Hermes when runtime preflight is ready.
+2. Unsupported Hermes actions such as model listing fail with explicit
+   capability errors.
+3. Telegram and PMA routing preserve Hermes thread bindings instead of falling
+   back to Codex/OpenCode assumptions.

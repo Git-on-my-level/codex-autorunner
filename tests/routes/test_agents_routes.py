@@ -149,7 +149,9 @@ def test_list_agents_includes_hermes_when_available(monkeypatch) -> None:
         assert "durable_threads" in hermes_caps
         assert "message_turns" in hermes_caps
         assert "interrupt" in hermes_caps
+        assert "active_thread_discovery" in hermes_caps
         assert "event_streaming" in hermes_caps
+        assert "approvals" in hermes_caps
         assert "model_listing" not in hermes_caps
 
 

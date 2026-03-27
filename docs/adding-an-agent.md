@@ -9,6 +9,15 @@ CAR supports multiple AI agents through a registry and capability model. Each ag
 - **Supervisor**: Manages agent process lifecycle (for agents that run as subprocesses)
 - **Registry**: Central registration with capabilities
 
+Reference points in-tree today:
+
+- **Codex**: full-featured repo/worktree runtime
+- **OpenCode**: full-featured repo/worktree runtime without approvals
+- **Hermes**: ACP-backed repo/worktree runtime with durable threads, approvals,
+  and event streaming, but without review/model-listing/transcript-history
+- **ZeroClaw**: narrower `agent_workspace` runtime with detect-only durability
+  requirements
+
 ## Choose The Right Resource Model
 
 Before writing code, decide what CAR is actually managing:
@@ -16,6 +25,10 @@ Before writing code, decide what CAR is actually managing:
 - Use repo semantics when the agent works against project code in a repo/worktree.
 - Use `agent_workspace` semantics when the durable thing is runtime state rather
   than project code.
+
+Hermes is the reference example of a repo/worktree-backed runtime that exposes
+its own durable session/thread API through ACP. ZeroClaw is the reference
+example of the narrower `agent_workspace` path.
 
 `agent_workspace` resources are first-class hub resources stored under
 `<hub_root>/.codex-autorunner/runtimes/<runtime>/<workspace_id>/`. CAR threads
@@ -40,6 +53,10 @@ Before adding a new agent, ensure:
    `agent_workspace` contract for durable state
 3. The agent supports durable thread/session operations: create, resume, and execute turns
 4. You have tested the agent works independently of CAR
+
+For ACP-backed runtimes like Hermes, verify the runtime advertises the exact
+launch contract CAR depends on before wiring it in. For Hermes that means
+`hermes acp --help` advertises `--session-state-file`.
 
 **Important**: CAR detects configured runtimes; it does not install them. Single-session or volatile wrapper-only runtimes are out of scope for CAR v1 orchestration. See "Single-Session Runtimes (Out of Scope for v1)" below.
 
@@ -270,8 +287,8 @@ _BUILTIN_AGENTS["myagent"] = AgentDescriptor(
     id="myagent",
     name="My Agent",
     capabilities=frozenset([
-        "threads",
-        "turns",
+        "durable_threads",
+        "message_turns",
         "model_listing",
         "event_streaming",
         # Add other capabilities as needed
@@ -328,6 +345,8 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "agents": {
         "codex": {"binary": "codex"},
         "opencode": {"binary": "opencode"},
+        "zeroclaw": {"binary": "zeroclaw"},
+        "hermes": {"binary": "hermes"},
         "myagent": {"binary": "myagent"},  # ADD THIS
     },
 }
@@ -355,9 +374,10 @@ async def test_myagent_smoke():
 
     try:
         await harness.ensure_ready(Path("/tmp"))
-        catalog = await harness.model_catalog(Path("/tmp"))
-        assert len(catalog.models) > 0, "Should have at least one model"
-        assert catalog.default_model, "Should have a default model"
+        assert await harness.new_conversation(Path("/tmp"))
+        if harness.supports("model_listing"):
+            catalog = await harness.model_catalog(Path("/tmp"))
+            assert len(catalog.models) > 0, "Should have at least one model"
     finally:
         await supervisor.close_all()
 ```
@@ -377,6 +397,12 @@ Optional capabilities:
 - **`interrupt`**: Interrupt a running turn
 - **`active_thread_discovery`**: List existing conversations
 - **`transcript_history`**: Retrieve conversation transcript history
+
+Hermes is a useful example of a deliberately partial capability surface:
+
+- supports `active_thread_discovery`, `interrupt`, `event_streaming`, and
+  `approvals`
+- does not support `review`, `model_listing`, or `transcript_history`
 
 ## Durable-Thread Contract (Must-Support)
 
@@ -402,6 +428,10 @@ async def wait_for_turn(...) -> TerminalTurnResult
 ```
 
 **Capability gating**: Optional features like `interrupt`, `review`, `transcript_history`, and `event_streaming` raise `UnsupportedAgentCapabilityError` when called on agents that don't advertise them.
+
+Hermes is the in-tree reference for this style of capability-gated behavior:
+selectors can show Hermes, while unsupported actions still fail explicitly
+instead of being silently remapped.
 
 ## Single-Session Runtimes (Out of Scope for v1)
 
@@ -458,9 +488,13 @@ Before submitting, verify:
 - [ ] Configuration defaults include agent binary path
 - [ ] Smoke tests pass (binary present, no credentials required)
 - [ ] Full turn tests pass (if credentials available)
-- [ ] `/api/agents/<agent_id>/models` returns valid model catalog
-- [ ] `/api/agents/<agent_id>/threads` returns conversation list
+- [ ] If `model_listing` is advertised, `/api/agents/<agent_id>/models` returns
+  a valid model catalog; otherwise it returns a capability error
+- [ ] If `active_thread_discovery` is advertised, conversation listing works
+  through the relevant CAR surface
 - [ ] Version info is accessible (if agent supports it)
+- [ ] Unsupported actions fail with capability-driven errors rather than
+  pretending to work
 
 ## Troubleshooting
 
@@ -480,7 +514,7 @@ Before submitting, verify:
 
 ## References
 
-- Existing implementations: `src/codex_autorunner/agents/codex/`, `src/codex_autorunner/agents/opencode/`
+- Existing implementations: `src/codex_autorunner/agents/codex/`, `src/codex_autorunner/agents/opencode/`, `src/codex_autorunner/agents/hermes/`, `src/codex_autorunner/agents/zeroclaw/`
 - Agent harness protocol: `src/codex_autorunner/agents/base.py`
 - Registry: `src/codex_autorunner/agents/registry.py`
 

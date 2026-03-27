@@ -684,7 +684,7 @@ def _render_compacted_active_context(
 def pma_chat(
     message: str = typer.Argument(..., help="Message to send to PMA"),
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Agent to use (codex|opencode)"
+        None, "--agent", help="Agent to use (codex|opencode|hermes)"
     ),
     model: Optional[str] = typer.Option(None, "--model", help="Model override"),
     reasoning: Optional[str] = typer.Option(
@@ -905,7 +905,7 @@ def pma_interrupt(
 @pma_app.command("reset")
 def pma_reset(
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Agent thread to reset (opencode|codex|all)"
+        None, "--agent", help="Agent thread to reset (opencode|codex|hermes|all)"
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
@@ -1050,7 +1050,7 @@ def pma_agents(
 
 @pma_app.command("models")
 def pma_models(
-    agent: str = typer.Argument(..., help="Agent ID (codex|opencode)"),
+    agent: str = typer.Argument(..., help="Agent ID (codex|opencode|hermes)"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
@@ -1102,7 +1102,7 @@ def pma_models(
 @thread_app.command("create")
 def pma_thread_spawn(
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Thread agent to use (codex|opencode|zeroclaw)"
+        None, "--agent", help="Thread agent to use (codex|opencode|hermes|zeroclaw)"
     ),
     repo_id: Optional[str] = typer.Option(
         None, "--repo", help="Hub repo id for the target workspace"
