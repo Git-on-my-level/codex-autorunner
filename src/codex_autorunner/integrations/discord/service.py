@@ -29,6 +29,12 @@ from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...agents.opencode.supervisor_protocol import (
     OpenCodeHarnessSupervisorProtocol,
 )
+from ...agents.registry import (
+    AgentDescriptor,
+    get_agent_descriptor,
+    get_registered_agents,
+    normalize_agent_capabilities,
+)
 from ...bootstrap import seed_repo_files
 from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
@@ -4895,7 +4901,7 @@ class DiscordBotService:
         return agent == "codex"
 
     def _agent_supports_resume(self, agent: str) -> bool:
-        return agent in {"codex", "opencode"}
+        return self._agent_supports_capability(agent, "durable_threads")
 
     def _status_model_label(self, binding: dict[str, Any]) -> str:
         model = binding.get("model_override")
@@ -7124,6 +7130,39 @@ class DiscordBotService:
             text=text,
         )
 
+    def _agent_descriptor(self, agent: object) -> AgentDescriptor | None:
+        normalized = self._normalize_agent(agent)
+        return get_agent_descriptor(normalized)
+
+    def _agent_display_name(self, agent: object) -> str:
+        descriptor = self._agent_descriptor(agent)
+        if descriptor is not None:
+            return descriptor.name
+        normalized = self._normalize_agent(agent)
+        if normalized:
+            return normalized
+        return "This agent"
+
+    def _agent_supports_capability(self, agent: object, capability: str) -> bool:
+        descriptor = self._agent_descriptor(agent)
+        if descriptor is None:
+            return False
+        normalized = normalize_agent_capabilities([capability])
+        if not normalized:
+            return False
+        return next(iter(normalized)) in descriptor.capabilities
+
+    def _agents_supporting_capability(self, capability: str) -> list[str]:
+        normalized = normalize_agent_capabilities([capability])
+        if not normalized:
+            return []
+        resolved = next(iter(normalized))
+        return sorted(
+            descriptor.id
+            for descriptor in get_registered_agents().values()
+            if resolved in descriptor.capabilities
+        )
+
     VALID_AGENT_VALUES = VALID_CHAT_AGENT_VALUES
     DEFAULT_AGENT = DEFAULT_CHAT_AGENT
 
@@ -7295,6 +7334,23 @@ class DiscordBotService:
                     interaction_token,
                     text,
                 )
+
+            supports_model_listing = self._agent_supports_capability(
+                current_agent, "model_listing"
+            )
+            if not supports_model_listing:
+                supported_agents = self._agents_supporting_capability("model_listing")
+                supported_hint = (
+                    f" Switch to an agent with model picker support: {', '.join(supported_agents)}."
+                    if supported_agents
+                    else ""
+                )
+                await _send_model_picker_or_fallback(
+                    _fallback_model_text(
+                        f"{self._agent_display_name(current_agent)} does not expose a model catalog in Discord.{supported_hint}"
+                    ),
+                )
+                return
 
             if current_agent == "opencode":
                 try:
@@ -11728,6 +11784,25 @@ class DiscordBotService:
                 interaction_id,
                 interaction_token,
                 "Channel binding not found.",
+            )
+            return
+
+        current_agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
+        if current_agent not in self.VALID_AGENT_VALUES:
+            current_agent = self.DEFAULT_AGENT
+
+        supports_review = self._agent_supports_capability(current_agent, "review")
+        if not supports_review:
+            supported_agents = self._agents_supporting_capability("review")
+            supported_hint = (
+                f" Switch to an agent with review support: {', '.join(supported_agents)}."
+                if supported_agents
+                else ""
+            )
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"{self._agent_display_name(current_agent)} does not support code review in Discord.{supported_hint}",
             )
             return
 

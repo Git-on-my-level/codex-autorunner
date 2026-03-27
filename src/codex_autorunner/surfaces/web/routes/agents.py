@@ -53,15 +53,29 @@ def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
             default_agent = agent_id
 
     if not agents:
-        agents = [
-            {
-                "id": "codex",
-                "name": "Codex",
-                "protocol_version": "2.0",
-                "capabilities": [],
-            }
-        ]
-        default_agent = "codex"
+        fallback_descriptor = get_agent_descriptor("codex")
+        if fallback_descriptor is not None:
+            agents = [
+                {
+                    "id": fallback_descriptor.id,
+                    "name": fallback_descriptor.name,
+                    "protocol_version": "2.0",
+                    "capabilities": sorted(
+                        map_agent_capabilities(fallback_descriptor.capabilities)
+                    ),
+                }
+            ]
+            default_agent = fallback_descriptor.id
+        else:
+            agents = [
+                {
+                    "id": "codex",
+                    "name": "Codex",
+                    "protocol_version": "2.0",
+                    "capabilities": [],
+                }
+            ]
+            default_agent = "codex"
 
     return agents, default_agent or "codex"
 
