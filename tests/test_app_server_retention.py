@@ -359,3 +359,449 @@ class TestSupervisorIntegration:
 
         assert supervisor.active_workspace_ids() == set()
         assert supervisor.state_root() == tmp_path
+
+
+class TestWorkspaceRetentionSafetyGuards:
+    def test_never_deletes_active_workspace_even_if_stale(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        active_workspace = root / "active123456"
+        active_workspace.mkdir()
+        (active_workspace / "state.json").write_text("{}")
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+        os.utime(active_workspace, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids={"active123456"},
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            now=now,
+        )
+
+        assert plan.blocked_count == 1
+        assert plan.prune_count == 0
+        blocked = plan.blocked_candidates[0]
+        assert blocked.reason == CleanupReason.LIVE_WORKSPACE_GUARD
+        assert blocked.action == CleanupAction.SKIP_BLOCKED
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=False)
+
+        assert summary.pruned == 0
+        assert active_workspace.exists()
+
+    def test_never_deletes_locked_workspace_even_if_stale(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        locked_workspace = root / "locked123456"
+        locked_workspace.mkdir()
+        (locked_workspace / "lock").write_text("locked")
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+        os.utime(locked_workspace, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids={"locked123456"},
+            current_workspace_ids=set(),
+            now=now,
+        )
+
+        assert plan.blocked_count == 1
+        assert plan.prune_count == 0
+        blocked = plan.blocked_candidates[0]
+        assert blocked.reason == CleanupReason.LOCK_GUARD
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=False)
+
+        assert summary.pruned == 0
+        assert locked_workspace.exists()
+
+    def test_never_deletes_current_run_workspace_even_if_stale(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        current_workspace = root / "current123456"
+        current_workspace.mkdir()
+        (current_workspace / "run.json").write_text("{}")
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+        os.utime(current_workspace, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids={"current123456"},
+            now=now,
+        )
+
+        assert plan.blocked_count == 1
+        assert plan.prune_count == 0
+        blocked = plan.blocked_candidates[0]
+        assert blocked.reason == CleanupReason.ACTIVE_RUN_GUARD
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=False)
+
+        assert summary.pruned == 0
+        assert current_workspace.exists()
+
+    def test_multiple_guards_all_protect_workspace(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        active_workspace = root / "active123456"
+        active_workspace.mkdir()
+        (active_workspace / "state.json").write_text("{}")
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+        os.utime(active_workspace, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=0)
+        now = datetime.now(timezone.utc)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids={"active123456"},
+            locked_workspace_ids={"active123456"},
+            current_workspace_ids={"active123456"},
+            now=now,
+        )
+
+        assert plan.blocked_count == 1
+        assert plan.prune_count == 0
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=False)
+
+        assert summary.pruned == 0
+        assert active_workspace.exists()
+
+    def test_deletes_only_truly_stale_workspaces(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        active_workspace = root / "active123456"
+        active_workspace.mkdir()
+        (active_workspace / "state.json").write_text("{}")
+
+        stale_workspace = root / "stale123456789"
+        stale_workspace.mkdir()
+        (stale_workspace / "old_data.json").write_text("{}")
+
+        recent_workspace = root / "recent123456"
+        recent_workspace.mkdir()
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
+        os.utime(stale_workspace, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids={"active123456"},
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            now=now,
+        )
+
+        assert plan.blocked_count == 1
+        assert plan.prune_count == 1
+        assert plan.kept_count == 1
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=False)
+
+        assert summary.pruned == 1
+        assert active_workspace.exists()
+        assert recent_workspace.exists()
+        assert not stale_workspace.exists()
+
+    def test_dry_run_never_deletes_any_workspace(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        for i in range(5):
+            ws = root / f"stale{i:09d}"
+            ws.mkdir()
+            (ws / "data.txt").write_text("data")
+            old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
+            os.utime(ws, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            now=now,
+        )
+
+        assert plan.prune_count == 5
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=True)
+
+        assert summary.pruned == 5
+
+        for i in range(5):
+            ws = root / f"stale{i:09d}"
+            assert ws.exists()
+
+    def test_respects_max_age_boundary_exactly(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        boundary_workspace = root / "boundary123456"
+        boundary_workspace.mkdir()
+        (boundary_workspace / "state.json").write_text("{}")
+
+        cutoff_time = datetime.now(timezone.utc) - timedelta(days=7)
+        boundary_ts = cutoff_time.timestamp()
+        os.utime(boundary_workspace, (boundary_ts, boundary_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            now=cutoff_time + timedelta(seconds=1),
+        )
+
+        assert plan.kept_count == 1
+        assert plan.prune_count == 0
+
+    def test_workspace_outside_root_is_blocked(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        outside_root = tmp_path / "outside"
+        outside_root.mkdir()
+
+        policy = WorkspaceRetentionPolicy(max_age_days=0)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+        )
+
+        assert plan.blocked_count == 0
+
+
+class TestWorkspaceRetentionIntegration:
+    def test_end_to_end_cleanup_with_mixed_states(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        active_ws = root / "active123456"
+        active_ws.mkdir()
+        (active_ws / "state.json").write_text('{"active": true}')
+
+        locked_ws = root / "locked123456"
+        locked_ws.mkdir()
+        (locked_ws / "lock").write_text("1")
+
+        current_ws = root / "current123456"
+        current_ws.mkdir()
+        (current_ws / "run.json").write_text("{}")
+
+        recent_ws = root / "recent123456"
+        recent_ws.mkdir()
+        (recent_ws / "data.json").write_text("{}")
+
+        stale_ws1 = root / "stale123456789"
+        stale_ws1.mkdir()
+        (stale_ws1 / "old.json").write_text("{}")
+        old_ts1 = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
+        os.utime(stale_ws1, (old_ts1, old_ts1))
+
+        stale_ws2 = root / "old987654321"
+        stale_ws2.mkdir()
+        (stale_ws2 / "data.txt").write_text("old data")
+        old_ts2 = (datetime.now(timezone.utc) - timedelta(days=21)).timestamp()
+        os.utime(stale_ws2, (old_ts2, old_ts2))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+
+        summary = prune_workspace_root(
+            root,
+            policy=policy,
+            active_workspace_ids={"active123456"},
+            locked_workspace_ids={"locked123456"},
+            current_workspace_ids={"current123456"},
+            dry_run=False,
+            now=now,
+        )
+
+        assert summary.pruned == 2
+        assert active_ws.exists()
+        assert locked_ws.exists()
+        assert current_ws.exists()
+        assert recent_ws.exists()
+        assert not stale_ws1.exists()
+        assert not stale_ws2.exists()
+
+    def test_byte_accounting_across_deletions(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        stale_ws = root / "stale123456789"
+        stale_ws.mkdir()
+        (stale_ws / "big_file.txt").write_text("x" * 10000)
+        (stale_ws / "small_file.txt").write_text("y" * 100)
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
+        os.utime(stale_ws, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            now=now,
+        )
+
+        assert plan.reclaimable_bytes > 0
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=False)
+
+        assert summary.pruned == 1
+        assert summary.bytes_before > 0
+        assert summary.bytes_after == 0
+        assert not stale_ws.exists()
+
+    def test_empty_workspace_root_handles_gracefully(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+
+        summary = prune_workspace_root(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            dry_run=False,
+        )
+
+        assert summary.pruned == 0
+        assert summary.kept == 0
+        assert summary.bytes_before == 0
+        assert summary.bytes_after == 0
+
+    def test_missing_workspace_root_returns_empty_summary(self, tmp_path: Path):
+        root = tmp_path / "nonexistent"
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+
+        summary = prune_workspace_root(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            dry_run=False,
+        )
+
+        assert summary.pruned == 0
+        assert summary.kept == 0
+
+    def test_workspace_with_nested_directories_calculates_size(self, tmp_path: Path):
+        root = tmp_path / "workspaces"
+        root.mkdir()
+
+        stale_ws = root / "stale123456789"
+        stale_ws.mkdir()
+        (stale_ws / "level1").mkdir()
+        (stale_ws / "level1" / "file1.txt").write_text("x" * 1000)
+        (stale_ws / "level1" / "level2").mkdir()
+        (stale_ws / "level1" / "level2" / "file2.txt").write_text("y" * 500)
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=14)).timestamp()
+        os.utime(stale_ws, (old_ts, old_ts))
+
+        policy = WorkspaceRetentionPolicy(max_age_days=7)
+        now = datetime.now(timezone.utc)
+
+        plan = plan_workspace_retention(
+            root,
+            policy=policy,
+            active_workspace_ids=set(),
+            locked_workspace_ids=set(),
+            current_workspace_ids=set(),
+            now=now,
+        )
+
+        assert plan.reclaimable_bytes >= 1500
+
+        summary = execute_workspace_retention(plan, workspace_root=root, dry_run=False)
+
+        assert summary.pruned == 1
+        assert not stale_ws.exists()
+
+
+class TestWorkspaceRetentionPolicyResolution:
+    def test_policy_respects_config_object(self):
+        class Config:
+            app_server_workspace_max_age_days = 14
+
+        policy = resolve_workspace_retention_policy(Config())
+        assert policy.max_age_days == 14
+
+    def test_policy_respects_dict_config(self):
+        config = {"app_server_workspace_max_age_days": 21}
+        policy = resolve_workspace_retention_policy(config)
+        assert policy.max_age_days == 21
+
+    def test_policy_uses_default_when_missing(self):
+        policy = resolve_workspace_retention_policy(None)
+        assert policy.max_age_days == DEFAULT_WORKSPACE_MAX_AGE_DAYS
+
+    def test_policy_coerces_negative_to_zero(self):
+        policy = resolve_workspace_retention_policy(
+            {"app_server_workspace_max_age_days": -5}
+        )
+        assert policy.max_age_days == 0
+
+    def test_policy_coerces_string_to_int(self):
+        policy = resolve_workspace_retention_policy(
+            {"app_server_workspace_max_age_days": "30"}
+        )
+        assert policy.max_age_days == 30
+
+    def test_policy_ignores_invalid_string(self):
+        policy = resolve_workspace_retention_policy(
+            {"app_server_workspace_max_age_days": "invalid"}
+        )
+        assert policy.max_age_days == DEFAULT_WORKSPACE_MAX_AGE_DAYS
