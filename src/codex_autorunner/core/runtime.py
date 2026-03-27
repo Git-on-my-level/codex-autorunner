@@ -862,15 +862,18 @@ def pma_doctor_checks(
     )
 
     default_agent = pma_cfg.get("default_agent", "codex")
-    valid_agents = ("codex", "opencode", "zeroclaw", "hermes")
-    if default_agent not in valid_agents:
+    from ..integrations.agents import get_registered_agents
+
+    registered_agents = get_registered_agents()
+    if default_agent not in registered_agents:
+        available = ", ".join(sorted(registered_agents.keys()))
         checks.append(
             DoctorCheck(
                 name="PMA default agent",
                 passed=False,
                 message=f"Invalid PMA default_agent: {default_agent}",
                 check_id="pma.default_agent",
-                fix=f"Set pma.default_agent to one of: {', '.join(valid_agents)} in config.",
+                fix=f"Set pma.default_agent to a registered agent. Available: {available}",
             )
         )
     else:

@@ -10,6 +10,7 @@ from typing import Any, Optional
 import httpx
 import typer
 
+from ...agents.registry import get_registered_agents
 from ...bootstrap import ensure_pma_docs, pma_doc_path
 from ...core.car_context import (
     default_managed_thread_context_profile,
@@ -443,10 +444,12 @@ def _normalize_agent_option(agent: Optional[str]) -> Optional[str]:
     normalized = agent.strip().lower()
     if not normalized:
         return None
-    allowed = {"codex", "opencode", "zeroclaw", "hermes"}
-    if normalized not in allowed:
+    registered = get_registered_agents()
+    if normalized not in registered:
+        available = ", ".join(sorted(registered.keys()))
         typer.echo(
-            "--agent must be one of: codex, opencode, zeroclaw, hermes", err=True
+            f"--agent must be a registered agent. Available: {available}",
+            err=True,
         )
         raise typer.Exit(code=1) from None
     return normalized

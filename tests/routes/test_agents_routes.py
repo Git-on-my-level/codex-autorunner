@@ -18,6 +18,7 @@ def _build_client(with_supervisors: bool = False) -> TestClient:
         app.state.config = SimpleNamespace(
             agent_binary=lambda _agent_id: "zeroclaw",
         )
+        app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
     app.include_router(build_agents_routes())
     return TestClient(app)
 
@@ -117,3 +118,119 @@ def test_list_agents_omits_zeroclaw_when_runtime_is_incompatible(
     assert response.status_code == 200
     data = response.json()
     assert "zeroclaw" not in {agent["id"] for agent in data["agents"]}
+
+
+def test_list_agents_includes_hermes_when_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 0.1.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    data = response.json()
+    agents = {agent["id"]: agent for agent in data["agents"]}
+
+    if "hermes" in agents:
+        hermes_caps = agents["hermes"]["capabilities"]
+        assert "durable_threads" in hermes_caps
+        assert "message_turns" in hermes_caps
+        assert "interrupt" in hermes_caps
+        assert "event_streaming" in hermes_caps
+        assert "model_listing" not in hermes_caps
+
+
+def test_models_endpoint_returns_capability_error_for_hermes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 0.1.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents/hermes/models")
+
+    assert response.status_code == 400
+    data = response.json()
+    assert "model_listing" in data["detail"]
+    assert "hermes" in data["detail"]
+
+
+def test_models_endpoint_returns_capability_error_for_unknown_agent() -> None:
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents/unknown-agent/models")
+
+    assert response.status_code == 404
+    data = response.json()
+    assert "Unknown agent" in data["detail"]
+
+
+def test_events_endpoint_returns_capability_error_for_agent_without_event_streaming(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "zeroclaw 0.2.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+    from codex_autorunner.agents.zeroclaw.harness import ZEROCLAW_CAPABILITIES
+
+    if "event_streaming" in ZEROCLAW_CAPABILITIES:
+        return
+
+    client = _build_client(with_supervisors=True)
+
+    response = client.get(
+        "/api/agents/zeroclaw/turns/turn-123/events",
+        params={"thread_id": "thread-123"},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert "event_streaming" in data["detail"]
+
+
+def test_events_endpoint_returns_unknown_agent_for_unregistered() -> None:
+    client = _build_client(with_supervisors=True)
+
+    response = client.get(
+        "/api/agents/nonexistent-agent/turns/turn-123/events",
+        params={"thread_id": "thread-123"},
+    )
+
+    assert response.status_code == 404
+    data = response.json()
+    assert "Unknown agent" in data["detail"]

@@ -8,6 +8,7 @@ from codex_autorunner.surfaces.cli.pma_cli import (
     _CAPABILITY_REQUIREMENTS,
     _check_capability,
     _fetch_agent_capabilities,
+    _normalize_agent_option,
     pma_app,
 )
 
@@ -133,3 +134,42 @@ class TestPmaThreadSpawnCapabilityCheck:
         assert result.exit_code == 1
         assert "does not support thread creation" in result.output
         assert "durable_threads" in result.output
+
+
+class TestNormalizeAgentOption:
+    def test_normalize_agent_option_returns_none_for_none(self):
+        result = _normalize_agent_option(None)
+        assert result is None
+
+    def test_normalize_agent_option_returns_none_for_blank(self):
+        result = _normalize_agent_option("   ")
+        assert result is None
+
+    def test_normalize_agent_option_accepts_registered_agents(self):
+        result = _normalize_agent_option("CODEX")
+        assert result == "codex"
+
+        result = _normalize_agent_option("  OpenCode  ")
+        assert result == "opencode"
+
+    def test_normalize_agent_option_accepts_hermes(self):
+        result = _normalize_agent_option("hermes")
+        assert result == "hermes"
+
+        result = _normalize_agent_option("HERMES")
+        assert result == "hermes"
+
+    def test_normalize_agent_option_rejects_unknown_agent(self):
+        result = runner.invoke(
+            pma_app,
+            [
+                "thread",
+                "spawn",
+                "--agent",
+                "unknown-agent",
+                "--repo",
+                "test-repo",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "registered agent" in result.output

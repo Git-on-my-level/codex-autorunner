@@ -9,10 +9,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ....agents.codex.harness import CodexHarness
-from ....agents.opencode.harness import OpenCodeHarness
-from ....agents.opencode.supervisor import OpenCodeSupervisorError
-from ....agents.registry import get_available_agents
+from ....agents.registry import get_agent_descriptor, get_available_agents
 from ....agents.types import ModelCatalog
 from ....core.orchestration.catalog import map_agent_capabilities
 from ..services.validation import normalize_agent_id
@@ -96,29 +93,22 @@ def build_agents_routes() -> APIRouter:
     async def list_agent_models(agent: str, request: Request):
         agent_id = _normalize_path_agent_id(agent)
         engine = request.app.state.engine
-        if agent_id == "codex":
-            supervisor = request.app.state.app_server_supervisor
-            events = request.app.state.app_server_events
-            if supervisor is None:
-                raise HTTPException(status_code=404, detail="Codex harness unavailable")
-            codex_harness = CodexHarness(supervisor, events)
-            catalog = await codex_harness.model_catalog(engine.repo_root)
+        descriptor = get_agent_descriptor(agent_id)
+        if descriptor is None:
+            raise HTTPException(status_code=404, detail="Unknown agent")
+        if "model_listing" not in descriptor.capabilities:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Agent '{agent_id}' does not support capability 'model_listing'",
+            )
+        try:
+            harness = descriptor.make_harness(request.app.state)
+            catalog = await harness.model_catalog(engine.repo_root)
             return _serialize_model_catalog(catalog)
-        if agent_id == "opencode":
-            supervisor = getattr(request.app.state, "opencode_supervisor", None)
-            if supervisor is None:
-                raise HTTPException(
-                    status_code=404, detail="OpenCode harness unavailable"
-                )
-            try:
-                opencode_harness = OpenCodeHarness(supervisor)
-                catalog = await opencode_harness.model_catalog(engine.repo_root)
-                return _serialize_model_catalog(catalog)
-            except OpenCodeSupervisorError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
-        raise HTTPException(status_code=404, detail="Unknown agent")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @router.get("/api/agents/{agent}/turns/{turn_id}/events")
     async def stream_agent_turn_events(
@@ -137,26 +127,18 @@ def build_agents_routes() -> APIRouter:
                     resume_after = int(last_event_id)
                 except ValueError:
                     resume_after = None
-        if agent_id == "codex":
-            events = getattr(request.app.state, "app_server_events", None)
-            if events is None:
-                raise HTTPException(status_code=404, detail="Codex events unavailable")
-            if not thread_id:
-                raise HTTPException(status_code=400, detail="thread_id is required")
-            return StreamingResponse(
-                events.stream(thread_id, turn_id, after_id=(resume_after or 0)),
-                media_type="text/event-stream",
-                headers=SSE_HEADERS,
+        descriptor = get_agent_descriptor(agent_id)
+        if descriptor is None:
+            raise HTTPException(status_code=404, detail="Unknown agent")
+        if "event_streaming" not in descriptor.capabilities:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Agent '{agent_id}' does not support capability 'event_streaming'",
             )
-        if agent_id == "opencode":
-            if not thread_id:
-                raise HTTPException(status_code=400, detail="thread_id is required")
-            supervisor = getattr(request.app.state, "opencode_supervisor", None)
-            if supervisor is None:
-                raise HTTPException(
-                    status_code=404, detail="OpenCode events unavailable"
-                )
-            harness = OpenCodeHarness(supervisor)
+        if not thread_id:
+            raise HTTPException(status_code=400, detail="thread_id is required")
+        try:
+            harness = descriptor.make_harness(request.app.state)
             return StreamingResponse(
                 harness.stream_events(
                     request.app.state.engine.repo_root, thread_id, turn_id
@@ -164,7 +146,8 @@ def build_agents_routes() -> APIRouter:
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
-        raise HTTPException(status_code=404, detail="Unknown agent")
+        except RuntimeError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return router
 

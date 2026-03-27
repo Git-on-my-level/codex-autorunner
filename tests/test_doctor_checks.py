@@ -633,7 +633,21 @@ def test_pma_doctor_checks_invalid_agent():
     """Test PMA doctor checks with invalid default agent."""
     checks = pma_doctor_checks({"pma": {"enabled": True, "default_agent": "invalid"}})
     assert len(checks) > 0
-    assert any(c.check_id == "pma.default_agent" for c in checks)
+    invalid_agent_checks = [c for c in checks if c.check_id == "pma.default_agent"]
+    assert len(invalid_agent_checks) == 1
+    assert not invalid_agent_checks[0].passed
+    assert invalid_agent_checks[0].fix is not None
+    assert "registered agent" in invalid_agent_checks[0].fix.lower()
+
+
+def test_pma_doctor_checks_valid_registered_agent():
+    """Test PMA doctor checks with a valid registered agent."""
+    checks = pma_doctor_checks({"pma": {"enabled": True, "default_agent": "hermes"}})
+    assert len(checks) > 0
+    agent_checks = [c for c in checks if c.check_id == "pma.default_agent"]
+    assert len(agent_checks) == 1
+    assert agent_checks[0].passed
+    assert agent_checks[0].message == "Default agent: hermes"
 
 
 def test_pma_doctor_checks_missing_state_file(tmp_path: Path):

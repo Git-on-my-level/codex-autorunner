@@ -457,9 +457,10 @@ async def test_ticket_flow_orchestration_wrapper_preserves_pause_resume_lifecycl
 
     def record_worker_call(
         repo_root_arg: Path, run_id: str, *, is_terminal: bool
-    ) -> None:
+    ) -> dict:
         assert repo_root_arg == repo_root
         worker_calls.append((run_id, is_terminal))
+        return {"status": "spawned", "stdout": None, "stderr": None}
 
     monkeypatch.setattr(
         "codex_autorunner.flows.ticket_flow.runtime_helpers.build_ticket_flow_runtime_resources",
