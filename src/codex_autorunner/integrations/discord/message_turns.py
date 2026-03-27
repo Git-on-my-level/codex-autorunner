@@ -265,7 +265,7 @@ async def _acknowledge_discord_progress_reuse(
     channel_id: str,
     message_id: str,
     acknowledgement: str,
-) -> None:
+) -> bool:
     try:
         await service._rest.edit_channel_message(
             channel_id=channel_id,
@@ -279,7 +279,8 @@ async def _acknowledge_discord_progress_reuse(
             },
         )
     except Exception:
-        return
+        return False
+    return True
 
 
 def _get_thread_runtime_binding(
@@ -1870,21 +1871,25 @@ async def _run_discord_orchestrated_turn_for_message(
                 thread_target_id=managed_thread_id,
             )
             if reuse_request is not None:
+                acknowledgement_delivered = False
                 if progress_message_id:
-                    _stash_discord_reusable_progress_message(
-                        service,
-                        thread_target_id=managed_thread_id,
-                        source_message_id=reuse_request.source_message_id,
-                        channel_id=channel_id,
-                        message_id=progress_message_id,
+                    acknowledgement_delivered = (
+                        await _acknowledge_discord_progress_reuse(
+                            service,
+                            channel_id=channel_id,
+                            message_id=progress_message_id,
+                            acknowledgement=reuse_request.acknowledgement,
+                        )
                     )
-                    await _acknowledge_discord_progress_reuse(
-                        service,
-                        channel_id=channel_id,
-                        message_id=progress_message_id,
-                        acknowledgement=reuse_request.acknowledgement,
-                    )
-                else:
+                    if acknowledgement_delivered:
+                        _stash_discord_reusable_progress_message(
+                            service,
+                            thread_target_id=managed_thread_id,
+                            source_message_id=reuse_request.source_message_id,
+                            channel_id=channel_id,
+                            message_id=progress_message_id,
+                        )
+                if not acknowledgement_delivered:
                     clear_discord_turn_progress_reuse(
                         service,
                         thread_target_id=managed_thread_id,
@@ -1893,7 +1898,7 @@ async def _run_discord_orchestrated_turn_for_message(
                     final_message=sanitize_discord_outbound_text(
                         reuse_request.acknowledgement
                     ),
-                    send_final_message=progress_message_id is None,
+                    send_final_message=not acknowledgement_delivered,
                 )
         raise RuntimeError(str(finalized.get("error") or public_execution_error))
     summary_snapshot = render_progress_text(
