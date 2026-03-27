@@ -5727,6 +5727,40 @@ def test_active_update_session_count_uses_live_running_executions() -> None:
             status: str,
             *,
             thread_kind: str | None = None,
+        ) -> None:
+            self.thread_target_id = thread_target_id
+            self.status = status
+            self.thread_kind = thread_kind
+
+    class _FakeThreadService:
+        def list_thread_targets(self, *, lifecycle_status: str) -> list[Any]:
+            assert lifecycle_status == "active"
+            return [
+                _FakeThread("thread-live", "running"),
+                _FakeThread("thread-flow", "running", thread_kind="ticket_flow"),
+                _FakeThread("thread-stale", "running"),
+                _FakeThread("thread-idle", "idle"),
+            ]
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            if thread_target_id == "thread-live":
+                return {"execution_id": "exec-live"}
+            return None
+
+    service = object.__new__(DiscordBotService)
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[method-assign]
+
+    assert DiscordBotService._active_update_session_count(service) == 1
+
+
+def test_active_update_session_count_does_not_skip_non_flow_threads_by_name() -> None:
+    class _FakeThread:
+        def __init__(
+            self,
+            thread_target_id: str,
+            status: str,
+            *,
+            thread_kind: str | None = None,
             display_name: str | None = None,
         ) -> None:
             self.thread_target_id = thread_target_id
@@ -5738,19 +5772,15 @@ def test_active_update_session_count_uses_live_running_executions() -> None:
         def list_thread_targets(self, *, lifecycle_status: str) -> list[Any]:
             assert lifecycle_status == "active"
             return [
-                _FakeThread("thread-live", "running"),
                 _FakeThread(
-                    "thread-flow",
+                    "thread-user-named",
                     "running",
-                    thread_kind="ticket_flow",
-                    display_name="ticket-flow:codex",
-                ),
-                _FakeThread("thread-stale", "running"),
-                _FakeThread("thread-idle", "idle"),
+                    display_name="ticket-flow:manual-session",
+                )
             ]
 
         def get_running_execution(self, thread_target_id: str) -> Any:
-            if thread_target_id == "thread-live":
+            if thread_target_id == "thread-user-named":
                 return {"execution_id": "exec-live"}
             return None
 

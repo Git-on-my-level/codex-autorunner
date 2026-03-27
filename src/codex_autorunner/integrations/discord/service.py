@@ -6974,10 +6974,7 @@ class DiscordBotService:
     @staticmethod
     def _update_thread_blocks_restart_warning(thread: Any) -> bool:
         thread_kind = str(getattr(thread, "thread_kind", "") or "").strip().lower()
-        if thread_kind == "ticket_flow":
-            return False
-        display_name = str(getattr(thread, "display_name", "") or "").strip().lower()
-        return not display_name.startswith("ticket-flow:")
+        return thread_kind != "ticket_flow"
 
     def _active_update_session_count(self) -> int:
         try:
