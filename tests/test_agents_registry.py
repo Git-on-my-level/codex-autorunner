@@ -254,6 +254,19 @@ class TestHermesHarness:
         assert isinstance(agents["hermes"], AgentDescriptor)
         assert agents["hermes"].id == "hermes"
 
+    def test_hermes_make_harness_reuses_bound_supervisor(self):
+        from codex_autorunner.agents.hermes.harness import HermesHarness
+
+        supervisor = object()
+
+        class MockContext:
+            hermes_supervisor = supervisor
+
+        harness = get_registered_agents()["hermes"].make_harness(MockContext())
+
+        assert isinstance(harness, HermesHarness)
+        assert harness._supervisor is supervisor
+
     def test_hermes_health_check_missing_binary(self, monkeypatch):
         monkeypatch.setattr(
             "codex_autorunner.agents.hermes.supervisor.hermes_binary_available",

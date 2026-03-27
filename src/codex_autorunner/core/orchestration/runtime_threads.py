@@ -26,7 +26,7 @@ def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
             message = raw_event.get("message")
             if isinstance(message, dict):
                 method = str(message.get("method") or "").strip().lower()
-        if method == "turn/completed":
+        if method in {"turn/completed", "prompt/completed"}:
             return True
     return False
 

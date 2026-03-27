@@ -134,7 +134,7 @@ def _make_hermes_harness(ctx: Any) -> AgentHarness:
             ctx.hermes_supervisor = supervisor
         except Exception:
             pass
-    return HermesHarness()
+    return HermesHarness(supervisor)
 
 
 def _check_hermes_health(ctx: Any) -> bool:

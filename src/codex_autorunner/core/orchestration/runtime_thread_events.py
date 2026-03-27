@@ -358,6 +358,100 @@ def normalize_runtime_thread_message(
             state.reasoning_buffers[key] = delta
         return [RunNotice(timestamp=event_timestamp, kind="thinking", message=delta)]
 
+    if method in {"prompt/output", "prompt/delta", "prompt/progress", "turn/progress"}:
+        output_events = _assistant_stream_events(
+            params,
+            state,
+            timestamp=event_timestamp,
+        )
+        if output_events:
+            return output_events
+        usage = _extract_usage(params)
+        if usage is not None:
+            state.token_usage = dict(usage)
+            return [TokenUsage(timestamp=event_timestamp, usage=dict(usage))]
+        progress_message = _extract_acp_progress_message(params)
+        if progress_message:
+            return [
+                RunNotice(
+                    timestamp=event_timestamp,
+                    kind="progress",
+                    message=progress_message,
+                )
+            ]
+        return []
+
+    if method in {"prompt/message", "turn/message"}:
+        content = _extract_acp_final_message(params)
+        if not content:
+            return []
+        state.note_message_text(content)
+        return [
+            OutputDelta(
+                timestamp=event_timestamp,
+                content=content,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+            )
+        ]
+
+    if method == "permission/requested":
+        request_id = _request_id_for_event(method, params)
+        description = str(
+            params.get("description") or params.get("message") or "Approval requested"
+        ).strip()
+        context = _coerce_dict(params.get("context")) or dict(params)
+        return [
+            ApprovalRequested(
+                timestamp=event_timestamp,
+                request_id=request_id,
+                description=description or "Approval requested",
+                context=context,
+            )
+        ]
+
+    if method == "token/usage":
+        usage = _extract_usage(params)
+        if usage is None:
+            return []
+        state.token_usage = dict(usage)
+        return [TokenUsage(timestamp=event_timestamp, usage=dict(usage))]
+
+    if method in {"prompt/failed", "turn/failed"}:
+        error_message = str(
+            params.get("error") or params.get("message") or "Turn error"
+        ).strip()
+        state.last_error_message = error_message or "Turn error"
+        return [
+            Failed(
+                timestamp=event_timestamp,
+                error_message=state.last_error_message,
+            )
+        ]
+
+    if method in {
+        "prompt/completed",
+        "turn/completed",
+        "prompt/cancelled",
+        "turn/cancelled",
+    }:
+        events: list[RunEvent] = []
+        content = _extract_acp_final_message(params)
+        if content:
+            state.note_message_text(content)
+            events.append(
+                OutputDelta(
+                    timestamp=event_timestamp,
+                    content=content,
+                    delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+                )
+            )
+        if _status_indicates_successful_completion(
+            params.get("status"),
+            assume_true_when_missing=method.endswith("completed"),
+        ):
+            state.completed_seen = True
+        return events
+
     if method == "item/completed":
         item = params.get("item")
         if not isinstance(item, dict):
@@ -513,19 +607,26 @@ def normalize_runtime_thread_message(
         return [TokenUsage(timestamp=event_timestamp, usage=dict(usage))]
 
     if method == "turn/error":
-        error_message = params.get("message")
-        if not isinstance(error_message, str) or not error_message.strip():
-            error_message = "Turn error"
-        state.last_error_message = str(error_message)
-        return [Failed(timestamp=event_timestamp, error_message=str(error_message))]
+        turn_error_message: Any = params.get("message")
+        if not isinstance(turn_error_message, str) or not turn_error_message.strip():
+            turn_error_message = "Turn error"
+        state.last_error_message = str(turn_error_message)
+        return [
+            Failed(timestamp=event_timestamp, error_message=str(turn_error_message))
+        ]
 
     if method == "error":
         error = _coerce_dict(params.get("error"))
-        error_message = error.get("message") or params.get("message")
-        if not isinstance(error_message, str) or not error_message.strip():
-            error_message = "Turn error"
-        state.last_error_message = str(error_message)
-        return [Failed(timestamp=event_timestamp, error_message=str(error_message))]
+        generic_error_message: Any = error.get("message") or params.get("message")
+        if (
+            not isinstance(generic_error_message, str)
+            or not generic_error_message.strip()
+        ):
+            generic_error_message = "Turn error"
+        state.last_error_message = str(generic_error_message)
+        return [
+            Failed(timestamp=event_timestamp, error_message=str(generic_error_message))
+        ]
 
     if method == "turn/completed":
         if _status_indicates_successful_completion(
@@ -695,6 +796,22 @@ def _extract_output_delta(params: dict[str, Any]) -> str:
         part_text = part.get("text")
         if isinstance(part_text, str) and part_text:
             return part_text
+    return ""
+
+
+def _extract_acp_progress_message(params: dict[str, Any]) -> str:
+    for key in ("message", "status"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_acp_final_message(params: dict[str, Any]) -> str:
+    for key in ("finalOutput", "final_output", "message"):
+        value = params.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
     return ""
 
 
