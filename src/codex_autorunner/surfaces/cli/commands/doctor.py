@@ -18,6 +18,7 @@ from ....core.managed_processes import list_process_records
 from ....core.runtime import (
     DoctorReport,
     doctor,
+    hermes_doctor_checks,
     hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
     pma_doctor_checks,
@@ -318,6 +319,7 @@ def register_doctor_commands(
                 + hub_worktree_checks
                 + hub_destination_checks
                 + zeroclaw_doctor_checks(hub_config)
+                + hermes_doctor_checks(hub_config)
                 + chat_checks
             )
         except ConfigError as exc:

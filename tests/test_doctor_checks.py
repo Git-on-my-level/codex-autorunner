@@ -14,6 +14,7 @@ from codex_autorunner.core.managed_processes.registry import ProcessRecord
 from codex_autorunner.core.runtime import (
     DoctorCheck,
     doctor,
+    hermes_doctor_checks,
     hub_destination_doctor_checks,
     hub_worktree_doctor_checks,
     pma_doctor_checks,
@@ -1028,6 +1029,117 @@ def test_zeroclaw_doctor_checks_skip_default_binary_without_workspaces(
     hub_config = load_hub_config(hub_root)
 
     assert zeroclaw_doctor_checks(hub_config) == []
+
+
+def test_hermes_doctor_checks_skip_default_binary_without_workspaces(tmp_path: Path):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    hub_config = load_hub_config(hub_root)
+
+    assert hermes_doctor_checks(hub_config) == []
+
+
+def test_hermes_doctor_checks_report_missing_binary_for_enabled_workspaces(
+    tmp_path: Path, monkeypatch
+):
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos: []",
+                "agent_workspaces:",
+                "  - id: hermes-main",
+                "    runtime: hermes",
+                "    path: .codex-autorunner/runtimes/hermes/hermes-main",
+                "    enabled: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    hub_config = load_hub_config(hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "missing_binary",
+                "version": None,
+                "launch_mode": None,
+                "message": "Hermes binary 'hermes' is not available on PATH.",
+                "fix": "Install Hermes on the host.",
+            },
+        )(),
+    )
+
+    checks = hermes_doctor_checks(hub_config)
+
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.check_id == "hub.hermes.binary"
+    assert check.passed is False
+    assert check.severity == "error"
+    assert "hermes-main" in check.message
+    assert "Install Hermes" in (check.fix or "")
+
+
+def test_hermes_doctor_checks_report_incompatible_runtime_for_enabled_workspaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos: []",
+                "agent_workspaces:",
+                "  - id: hermes-main",
+                "    runtime: hermes",
+                "    path: .codex-autorunner/runtimes/hermes/hermes-main",
+                "    enabled: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    hub_config = load_hub_config(hub_root)
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "incompatible",
+                "version": "hermes 0.1.0",
+                "launch_mode": None,
+                "message": "Hermes hermes 0.1.0 does not advertise `hermes acp` in `hermes --help`.",
+                "fix": "Install a compatible Hermes build.",
+            },
+        )(),
+    )
+
+    checks = hermes_doctor_checks(hub_config)
+
+    assert len(checks) == 1
+    check = checks[0]
+    assert check.passed is False
+    assert check.severity == "error"
+    assert "hermes acp" in check.message
+    assert "hermes-main" in check.message
 
 
 def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):

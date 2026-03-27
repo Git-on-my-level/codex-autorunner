@@ -11,6 +11,9 @@
     },
     "zeroclaw": {
       "binary": "zeroclaw"
+    },
+    "hermes": {
+      "binary": "hermes"
     }
   },
   "app_server": {

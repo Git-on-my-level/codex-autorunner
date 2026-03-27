@@ -443,9 +443,11 @@ def _normalize_agent_option(agent: Optional[str]) -> Optional[str]:
     normalized = agent.strip().lower()
     if not normalized:
         return None
-    allowed = {"codex", "opencode", "zeroclaw"}
+    allowed = {"codex", "opencode", "zeroclaw", "hermes"}
     if normalized not in allowed:
-        typer.echo("--agent must be one of: codex, opencode, zeroclaw", err=True)
+        typer.echo(
+            "--agent must be one of: codex, opencode, zeroclaw, hermes", err=True
+        )
         raise typer.Exit(code=1) from None
     return normalized
 
