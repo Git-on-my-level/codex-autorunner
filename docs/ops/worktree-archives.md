@@ -99,3 +99,24 @@ car cleanup archives --scope both
 ```
 
 Add `--dry-run` to preview deletions without removing anything.
+
+## Relation to State-Wide Cleanup
+
+Worktree archives are one of several retention families managed by CAR. The
+umbrella `car cleanup state` command orchestrates cleanup across all families:
+
+- **worktree_archives**: `.codex-autorunner/archive/worktrees/` (reviewable)
+- **run_archives**: `.codex-autorunner/archive/runs/` (reviewable)
+- **filebox**: `.codex-autorunner/filebox/` (ephemeral)
+- **reports**: `.codex-autorunner/reports/` (reviewable history)
+- **workspaces**: repo-local `app_server_workspaces/` and global
+  `~/.codex-autorunner/workspaces/` (ephemeral)
+
+To preview state-wide cleanup:
+
+```bash
+car cleanup state --dry-run --scope repo
+```
+
+For the full retention contract and artifact taxonomy, see
+[STATE_ROOTS.md](../STATE_ROOTS.md) and `.codex-autorunner/contextspace/spec.md`.
