@@ -5721,15 +5721,30 @@ async def test_component_update_prompts_for_confirmation_after_defer(
 
 def test_active_update_session_count_uses_live_running_executions() -> None:
     class _FakeThread:
-        def __init__(self, thread_target_id: str, status: str) -> None:
+        def __init__(
+            self,
+            thread_target_id: str,
+            status: str,
+            *,
+            thread_kind: str | None = None,
+            display_name: str | None = None,
+        ) -> None:
             self.thread_target_id = thread_target_id
             self.status = status
+            self.thread_kind = thread_kind
+            self.display_name = display_name
 
     class _FakeThreadService:
         def list_thread_targets(self, *, lifecycle_status: str) -> list[Any]:
             assert lifecycle_status == "active"
             return [
                 _FakeThread("thread-live", "running"),
+                _FakeThread(
+                    "thread-flow",
+                    "running",
+                    thread_kind="ticket_flow",
+                    display_name="ticket-flow:codex",
+                ),
                 _FakeThread("thread-stale", "running"),
                 _FakeThread("thread-idle", "idle"),
             ]

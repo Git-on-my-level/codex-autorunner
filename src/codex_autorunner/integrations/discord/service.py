@@ -6971,6 +6971,14 @@ class DiscordBotService:
             )
         self._update_status_notifier.schedule_watch({"chat_id": channel_id})
 
+    @staticmethod
+    def _update_thread_blocks_restart_warning(thread: Any) -> bool:
+        thread_kind = str(getattr(thread, "thread_kind", "") or "").strip().lower()
+        if thread_kind == "ticket_flow":
+            return False
+        display_name = str(getattr(thread, "display_name", "") or "").strip().lower()
+        return not display_name.startswith("ticket-flow:")
+
     def _active_update_session_count(self) -> int:
         try:
             orchestration_service = self._discord_thread_service()
@@ -6986,11 +6994,14 @@ class DiscordBotService:
             return sum(
                 1
                 for thread in threads
+                if self._update_thread_blocks_restart_warning(thread)
                 if str(getattr(thread, "status", "") or "").strip().lower() == "running"
             )
 
         active_count = 0
         for thread in threads:
+            if not self._update_thread_blocks_restart_warning(thread):
+                continue
             thread_target_id = str(
                 getattr(thread, "thread_target_id", "") or ""
             ).strip()

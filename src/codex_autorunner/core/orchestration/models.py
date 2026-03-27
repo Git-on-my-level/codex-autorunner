@@ -121,6 +121,7 @@ class ThreadTarget:
     last_execution_id: Optional[str] = None
     last_message_preview: Optional[str] = None
     compact_seed: Optional[str] = None
+    thread_kind: Optional[str] = None
     context_profile: Optional[CarContextProfile] = None
     approval_mode: Optional[str] = None
 
@@ -174,6 +175,9 @@ class ThreadTarget:
                 data.get("last_message_preview")
             ),
             compact_seed=_normalize_optional_text(data.get("compact_seed")),
+            thread_kind=_normalize_optional_text(
+                data.get("thread_kind") or metadata.get("thread_kind")
+            ),
             context_profile=normalize_car_context_profile(
                 data.get("context_profile") or metadata.get("context_profile")
             ),

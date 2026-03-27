@@ -44,6 +44,7 @@ def test_thread_target_normalizes_managed_thread_mapping() -> None:
             "workspace_root": "/tmp/repo",
             "name": "Backlog Thread",
             "normalized_status": "running",
+            "metadata": {"thread_kind": "ticket_flow"},
         }
     )
 
@@ -52,6 +53,7 @@ def test_thread_target_normalizes_managed_thread_mapping() -> None:
     assert target.resource_kind == "repo"
     assert target.resource_id == "repo-1"
     assert target.status == "running"
+    assert target.thread_kind == "ticket_flow"
     assert "backend_thread_id" not in target.to_dict()
 
 
