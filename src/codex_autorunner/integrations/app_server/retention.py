@@ -316,8 +316,12 @@ def execute_workspace_retention(
         )
         blocked_reasons.append(reason)
 
-    kept_count = plan.kept_count + (len(blocked_paths) - len(blocked_reasons))
-    bytes_after = plan.total_bytes - deleted_bytes
+    kept_count = plan.kept_count + len(plan.blocked_candidates)
+    bytes_after = (
+        plan.total_bytes - plan.reclaimable_bytes
+        if dry_run
+        else plan.total_bytes - deleted_bytes
+    )
 
     return WorkspacePruneSummary(
         kept=kept_count,
@@ -388,7 +392,15 @@ def adapt_workspace_summary_to_result(
             )
         )
 
-    plan = make_cleanup_plan(bucket, candidates)
+    plan = CleanupPlan(
+        bucket=bucket,
+        candidates=tuple(candidates),
+        total_bytes=summary.bytes_before,
+        reclaimable_bytes=summary.bytes_before - summary.bytes_after,
+        kept_count=summary.kept,
+        prune_count=summary.pruned,
+        blocked_count=len(summary.blocked_paths),
+    )
     deleted_paths = tuple(Path(p) for p in summary.pruned_paths) if not dry_run else ()
     deleted_bytes = 0 if dry_run else (summary.bytes_before - summary.bytes_after)
 

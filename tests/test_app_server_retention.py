@@ -218,6 +218,7 @@ class TestExecuteWorkspaceRetention:
         summary = execute_workspace_retention(plan, workspace_root=root, dry_run=True)
 
         assert summary.pruned == 1
+        assert summary.bytes_before > summary.bytes_after
         assert old_workspace.exists()
 
     def test_execution_deletes_stale_workspaces(self, tmp_path: Path):
@@ -318,6 +319,10 @@ class TestAdaptWorkspaceSummaryToResult:
         result = adapt_workspace_summary_to_result(summary, bucket, dry_run=False)
 
         assert result.bucket == bucket
+        assert result.plan.total_bytes == 1000
+        assert result.plan.reclaimable_bytes == 600
+        assert result.plan.prune_count == 3
+        assert result.plan.blocked_count == 1
         assert result.deleted_count == 3
         assert result.deleted_bytes == 600
         assert result.success is True
@@ -340,6 +345,7 @@ class TestAdaptWorkspaceSummaryToResult:
 
         result = adapt_workspace_summary_to_result(summary, bucket, dry_run=True)
 
+        assert result.plan.reclaimable_bytes == 600
         assert result.deleted_count == 0
         assert result.deleted_bytes == 0
 

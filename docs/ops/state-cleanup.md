@@ -96,9 +96,9 @@ Total: deleted=22 bytes=36700160
 
 ### Current/Live App-Server Workspaces
 
-- Workspaces attached to active supervisors
-- Workspaces with live handles or active threads
-- Docker destination workspaces under repo-local `.codex-autorunner/`
+- Workspaces with live `codex_app_server` process records in the current repo
+- Workspaces carrying `lock` or `run.json` guard markers
+- The current repo workspace when `app_server_threads.json` is present
 
 ### Canonical Source-of-Truth Stores
 
@@ -138,13 +138,14 @@ pma:
   worktree_archive_max_snapshots_per_repo: 10
   worktree_archive_max_age_days: 30
   worktree_archive_max_total_bytes: 1073741824
-  run_archive_max_entries: 100
+  run_archive_max_entries: 200
   run_archive_max_age_days: 30
-  run_archive_max_total_bytes: 536870912
-  filebox_max_age_hours: 24
+  run_archive_max_total_bytes: 1073741824
+  filebox_inbox_max_age_days: 7
+  filebox_outbox_max_age_days: 7
   report_max_history_files: 20
-  report_max_total_bytes: 104857600
-  workspace_max_age_days: 7
+  report_max_total_bytes: 5242880
+  app_server_workspace_max_age_days: 7
 ```
 
 ## Related Documentation

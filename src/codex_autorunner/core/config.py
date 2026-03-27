@@ -30,6 +30,10 @@ from .app_server_command import (
 from .config_contract import CONFIG_VERSION, ConfigError
 from .destinations import default_local_destination, resolve_effective_repo_destination
 from .path_utils import ConfigPathError, resolve_config_path
+from .report_retention import (
+    DEFAULT_REPORT_MAX_HISTORY_FILES,
+    DEFAULT_REPORT_MAX_TOTAL_BYTES,
+)
 from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.core.config")
@@ -750,6 +754,9 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "reactive_origin_blocklist": ["pma"],
         "filebox_inbox_max_age_days": 7,
         "filebox_outbox_max_age_days": 7,
+        "report_max_history_files": DEFAULT_REPORT_MAX_HISTORY_FILES,
+        "report_max_total_bytes": DEFAULT_REPORT_MAX_TOTAL_BYTES,
+        "app_server_workspace_max_age_days": 7,
         # Worktree cleanup policies
         "cleanup_require_archive": True,
         "cleanup_auto_delete_orphans": False,
@@ -938,6 +945,9 @@ class PmaConfig:
     reactive_origin_blocklist: List[str] = dataclasses.field(default_factory=list)
     filebox_inbox_max_age_days: int = 7
     filebox_outbox_max_age_days: int = 7
+    report_max_history_files: int = DEFAULT_REPORT_MAX_HISTORY_FILES
+    report_max_total_bytes: int = DEFAULT_REPORT_MAX_TOTAL_BYTES
+    app_server_workspace_max_age_days: int = 7
     # Worktree cleanup policies
     cleanup_require_archive: bool = True
     cleanup_auto_delete_orphans: bool = False
@@ -2027,6 +2037,15 @@ def _parse_pma_config(
     filebox_outbox_max_age_days = _parse_nonnegative_int(
         "filebox_outbox_max_age_days", 7
     )
+    report_max_history_files = _parse_nonnegative_int(
+        "report_max_history_files", DEFAULT_REPORT_MAX_HISTORY_FILES
+    )
+    report_max_total_bytes = _parse_nonnegative_int(
+        "report_max_total_bytes", DEFAULT_REPORT_MAX_TOTAL_BYTES
+    )
+    app_server_workspace_max_age_days = _parse_nonnegative_int(
+        "app_server_workspace_max_age_days", 7
+    )
     worktree_archive_max_snapshots_per_repo = _parse_nonnegative_int(
         "worktree_archive_max_snapshots_per_repo", 10
     )
@@ -2062,6 +2081,9 @@ def _parse_pma_config(
         reactive_origin_blocklist=reactive_origin_blocklist,
         filebox_inbox_max_age_days=filebox_inbox_max_age_days,
         filebox_outbox_max_age_days=filebox_outbox_max_age_days,
+        report_max_history_files=report_max_history_files,
+        report_max_total_bytes=report_max_total_bytes,
+        app_server_workspace_max_age_days=app_server_workspace_max_age_days,
         cleanup_require_archive=cleanup_require_archive,
         cleanup_auto_delete_orphans=cleanup_auto_delete_orphans,
         worktree_archive_profile=worktree_archive_profile,

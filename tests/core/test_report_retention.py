@@ -52,3 +52,27 @@ def test_prune_report_directory_keeps_stable_latest_even_when_budget_tight(
     names = sorted(p.name for p in reports.iterdir() if p.is_file())
     assert "latest-selfdescribe-smoke.md" in names
     assert len([n for n in names if n.startswith("history-")]) <= 1
+
+
+def test_prune_report_directory_dry_run_preserves_files(tmp_path: Path) -> None:
+    reports = tmp_path / ".codex-autorunner" / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+
+    _write(reports / "latest-selfdescribe-smoke.md", 200)
+    _write(reports / "history-a.md", 200)
+    _write(reports / "history-b.md", 200)
+
+    summary = prune_report_directory(
+        reports,
+        max_history_files=1,
+        max_total_bytes=1000,
+        dry_run=True,
+    )
+
+    names = sorted(p.name for p in reports.iterdir() if p.is_file())
+    assert names == [
+        "history-a.md",
+        "history-b.md",
+        "latest-selfdescribe-smoke.md",
+    ]
+    assert summary.pruned == 1

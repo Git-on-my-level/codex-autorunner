@@ -392,15 +392,18 @@ def adapt_report_prune_summary_to_plan(
 def adapt_report_prune_summary_to_result(
     summary: "PruneSummary",
     bucket: RetentionBucket,
+    dry_run: bool = False,
 ) -> CleanupResult:
     plan = adapt_report_prune_summary_to_plan(summary, bucket)
+    deleted_count = 0 if dry_run else summary.pruned
+    deleted_bytes = 0 if dry_run else (summary.bytes_before - summary.bytes_after)
 
     return CleanupResult(
         bucket=bucket,
         plan=plan,
         deleted_paths=(),
-        deleted_count=summary.pruned,
-        deleted_bytes=summary.bytes_before - summary.bytes_after,
+        deleted_count=deleted_count,
+        deleted_bytes=deleted_bytes,
         kept_bytes=summary.bytes_after,
         errors=(),
     )

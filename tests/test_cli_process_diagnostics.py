@@ -379,7 +379,7 @@ def test_cleanup_state_dry_run_reports_all_buckets(monkeypatch, repo: Path) -> N
         )
 
     def _fake_prune_reports(
-        path: Path, *, max_history_files=10, max_total_bytes=1000000
+        path: Path, *, max_history_files=10, max_total_bytes=1000000, dry_run=False
     ):
         captured["calls"].append(("reports",))
         from codex_autorunner.core.report_retention import PruneSummary
@@ -559,7 +559,7 @@ def test_cleanup_state_scope_all_includes_both_repo_and_global(
         )
 
     def _fake_prune_reports(
-        path: Path, *, max_history_files=10, max_total_bytes=1000000
+        path: Path, *, max_history_files=10, max_total_bytes=1000000, dry_run=False
     ):
         from codex_autorunner.core.report_retention import PruneSummary
 

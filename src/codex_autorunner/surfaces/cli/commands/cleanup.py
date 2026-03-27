@@ -16,7 +16,9 @@ from ....core.filebox_retention import (
     resolve_filebox_retention_policy,
 )
 from ....core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
+from ....core.locks import process_alive, process_command_matches
 from ....core.managed_processes import reap_managed_processes
+from ....core.managed_processes.registry import list_process_records
 from ....core.report_retention import (
     DEFAULT_REPORT_MAX_HISTORY_FILES,
     DEFAULT_REPORT_MAX_TOTAL_BYTES,
@@ -40,6 +42,7 @@ from ....integrations.app_server.retention import (
     resolve_repo_workspace_root,
     resolve_workspace_retention_policy,
 )
+from ....workspace import workspace_id_for_path
 
 
 def _build_force_attestation(
@@ -298,11 +301,14 @@ def register_cleanup_commands(
         reports_dir = repo_root / ".codex-autorunner" / "reports"
         report_summary = prune_report_directory(
             reports_dir,
-            max_history_files=DEFAULT_REPORT_MAX_HISTORY_FILES,
-            max_total_bytes=DEFAULT_REPORT_MAX_TOTAL_BYTES,
+            max_history_files=_report_max_history_files(engine),
+            max_total_bytes=_report_max_total_bytes(engine),
+            dry_run=dry_run,
         )
         results.append(
-            adapt_report_prune_summary_to_result(report_summary, reports_bucket)
+            adapt_report_prune_summary_to_result(
+                report_summary, reports_bucket, dry_run=dry_run
+            )
         )
 
         repo_workspace_bucket = RetentionBucket(
@@ -311,12 +317,15 @@ def register_cleanup_commands(
             retention_class=RetentionClass.EPHEMERAL,
         )
         repo_workspace_root = resolve_repo_workspace_root(repo_root)
+        active_workspace_ids, locked_workspace_ids, current_workspace_ids = (
+            _resolve_workspace_guards(engine, repo_workspace_root)
+        )
         repo_workspace_summary = prune_workspace_root(
             repo_workspace_root,
             policy=resolve_workspace_retention_policy(engine.config.pma),
-            active_workspace_ids=set(),
-            locked_workspace_ids=set(),
-            current_workspace_ids=set(),
+            active_workspace_ids=active_workspace_ids,
+            locked_workspace_ids=locked_workspace_ids,
+            current_workspace_ids=current_workspace_ids,
             dry_run=dry_run,
             scope=RetentionScope.REPO,
         )
@@ -335,12 +344,15 @@ def register_cleanup_commands(
             retention_class=RetentionClass.EPHEMERAL,
         )
         global_workspace_root = resolve_global_workspace_root()
+        active_workspace_ids, locked_workspace_ids, current_workspace_ids = (
+            _resolve_workspace_guards(engine, global_workspace_root)
+        )
         global_workspace_summary = prune_workspace_root(
             global_workspace_root,
             policy=resolve_workspace_retention_policy(engine.config.pma),
-            active_workspace_ids=set(),
-            locked_workspace_ids=set(),
-            current_workspace_ids=set(),
+            active_workspace_ids=active_workspace_ids,
+            locked_workspace_ids=locked_workspace_ids,
+            current_workspace_ids=current_workspace_ids,
             dry_run=dry_run,
             scope=RetentionScope.GLOBAL,
         )
@@ -362,29 +374,40 @@ def register_cleanup_commands(
             family = result.bucket.family
             if family not in by_family:
                 by_family[family] = {
-                    "deleted_count": 0,
-                    "deleted_bytes": 0,
-                    "kept_bytes": 0,
-                    "blocked_count": len(result.plan.blocked_candidates),
+                    "action_count": 0,
+                    "action_bytes": 0,
+                    "blocked_count": 0,
                 }
-            by_family[family]["deleted_count"] += result.deleted_count
-            by_family[family]["deleted_bytes"] += result.deleted_bytes
-            by_family[family]["kept_bytes"] += result.kept_bytes
+            action_count = result.plan.prune_count if dry_run else result.deleted_count
+            action_bytes = (
+                result.plan.reclaimable_bytes if dry_run else result.deleted_bytes
+            )
+            by_family[family]["action_count"] += action_count
+            by_family[family]["action_bytes"] += action_bytes
+            by_family[family]["blocked_count"] += len(result.plan.blocked_candidates)
 
         for family, stats in sorted(by_family.items()):
-            deleted_count = stats["deleted_count"]
-            deleted_bytes = stats["deleted_bytes"]
+            action_count = stats["action_count"]
+            action_bytes = stats["action_bytes"]
             blocked_count = stats["blocked_count"]
-            if deleted_count > 0 or blocked_count > 0:
+            if action_count > 0 or blocked_count > 0:
                 lines.append(f"{family}:")
-                lines.append(f"  pruned={deleted_count} bytes={deleted_bytes}")
+                lines.append(f"  pruned={action_count} bytes={action_bytes}")
                 if blocked_count > 0:
                     lines.append(f"  blocked={blocked_count}")
 
         lines.append("")
-        lines.append(
-            f"Total: deleted={aggregated.total_deleted_count} bytes={aggregated.total_deleted_bytes}"
+        total_count = (
+            sum(result.plan.prune_count for result in results)
+            if dry_run
+            else aggregated.total_deleted_count
         )
+        total_bytes = (
+            sum(result.plan.reclaimable_bytes for result in results)
+            if dry_run
+            else aggregated.total_deleted_bytes
+        )
+        lines.append(f"Total: pruned={total_count} bytes={total_bytes}")
         if aggregated.has_errors:
             lines.append("")
             lines.append("Errors:")
@@ -392,3 +415,72 @@ def register_cleanup_commands(
                 lines.append(f"  - {error}")
 
         typer.echo("\n".join(lines))
+
+    def _report_max_history_files(engine: RuntimeContext) -> int:
+        return max(
+            0,
+            int(
+                getattr(
+                    engine.config.pma,
+                    "report_max_history_files",
+                    DEFAULT_REPORT_MAX_HISTORY_FILES,
+                )
+            ),
+        )
+
+    def _report_max_total_bytes(engine: RuntimeContext) -> int:
+        return max(
+            0,
+            int(
+                getattr(
+                    engine.config.pma,
+                    "report_max_total_bytes",
+                    DEFAULT_REPORT_MAX_TOTAL_BYTES,
+                )
+            ),
+        )
+
+    def _resolve_workspace_guards(
+        engine: RuntimeContext, workspace_root: Path
+    ) -> tuple[set[str], set[str], set[str]]:
+        active_workspace_ids = _live_workspace_ids_from_process_registry(
+            engine.repo_root
+        )
+        locked_workspace_ids = _workspace_ids_with_marker(
+            workspace_root, marker_name="lock"
+        )
+        current_workspace_ids = _workspace_ids_with_marker(
+            workspace_root, marker_name="run.json"
+        )
+
+        thread_registry = (
+            engine.repo_root / ".codex-autorunner" / "app_server_threads.json"
+        )
+        if thread_registry.exists():
+            current_workspace_ids.add(workspace_id_for_path(engine.repo_root))
+
+        return active_workspace_ids, locked_workspace_ids, current_workspace_ids
+
+    def _live_workspace_ids_from_process_registry(repo_root: Path) -> set[str]:
+        workspace_ids: set[str] = set()
+        for record in list_process_records(repo_root, kind="codex_app_server"):
+            workspace_id = str(record.workspace_id or "").strip()
+            if not workspace_id or record.pid is None:
+                continue
+            if not process_alive(record.pid):
+                continue
+            if process_command_matches(record.pid, record.command) is False:
+                continue
+            workspace_ids.add(workspace_id)
+        return workspace_ids
+
+    def _workspace_ids_with_marker(root: Path, *, marker_name: str) -> set[str]:
+        if not root.exists() or not root.is_dir():
+            return set()
+        protected_ids: set[str] = set()
+        for path in root.iterdir():
+            if not path.is_dir():
+                continue
+            if (path / marker_name).exists():
+                protected_ids.add(path.name)
+        return protected_ids

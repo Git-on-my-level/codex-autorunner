@@ -8,6 +8,10 @@ from typer.testing import CliRunner
 
 from codex_autorunner.core.archive_retention import ArchivePruneSummary
 from codex_autorunner.core.filebox_retention import FileBoxPruneSummary
+from codex_autorunner.core.managed_processes.registry import (
+    ProcessRecord,
+    write_process_record,
+)
 from codex_autorunner.core.report_retention import PruneSummary
 from codex_autorunner.integrations.app_server.retention import WorkspacePruneSummary
 from codex_autorunner.surfaces.cli.commands import cleanup as cleanup_cmd
@@ -264,6 +268,204 @@ class TestCleanupStateRepoCleanup:
         assert result.exit_code == 0
         assert all(captured["dry_run_values"])
 
+    def test_repo_cleanup_uses_configured_report_and_workspace_retention(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_worktree_archive_root",
+            lambda *a, **kw: ArchivePruneSummary(
+                kept=1, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_run_archive_root",
+            lambda *a, **kw: ArchivePruneSummary(
+                kept=1, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_filebox_root",
+            lambda *a, **kw: FileBoxPruneSummary(
+                inbox_kept=1,
+                inbox_pruned=0,
+                outbox_kept=1,
+                outbox_pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+            ),
+        )
+
+        def _fake_prune_report_directory(path, **kwargs):
+            captured["report_kwargs"] = kwargs
+            return PruneSummary(kept=1, pruned=0, bytes_before=0, bytes_after=0)
+
+        def _fake_prune_workspace_root(
+            workspace_root,
+            *,
+            policy,
+            active_workspace_ids,
+            locked_workspace_ids,
+            current_workspace_ids,
+            dry_run=False,
+            **kwargs,
+        ):
+            captured["workspace_policy"] = policy.max_age_days
+            return WorkspacePruneSummary(
+                kept=1,
+                pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+                blocked_paths=(),
+                blocked_reasons=(),
+            )
+
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_report_directory",
+            _fake_prune_report_directory,
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_workspace_root",
+            _fake_prune_workspace_root,
+        )
+
+        cleanup_app = typer.Typer()
+        cleanup_cmd.register_cleanup_commands(
+            cleanup_app,
+            require_repo_config=lambda _repo, _hub: types.SimpleNamespace(  # type: ignore[arg-type]
+                repo_root=tmp_path,
+                config=types.SimpleNamespace(
+                    pma=types.SimpleNamespace(
+                        report_max_history_files=9,
+                        report_max_total_bytes=2048,
+                        app_server_workspace_max_age_days=13,
+                    )
+                ),
+            ),
+        )
+
+        result = runner.invoke(
+            cleanup_app,
+            ["state", "--repo", str(tmp_path), "--scope", "repo", "--dry-run"],
+        )
+
+        assert result.exit_code == 0
+        assert captured["report_kwargs"] == {
+            "max_history_files": 9,
+            "max_total_bytes": 2048,
+            "dry_run": True,
+        }
+        assert captured["workspace_policy"] == 13
+
+    def test_repo_cleanup_preserves_marked_workspaces(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        state_root = tmp_path / ".codex-autorunner"
+        workspace_root = state_root / "app_server_workspaces"
+        workspace_root.mkdir(parents=True)
+
+        stale_ws = workspace_root / "stale123456789"
+        stale_ws.mkdir()
+        (stale_ws / "data.txt").write_text("stale")
+
+        locked_ws = workspace_root / "locked123456"
+        locked_ws.mkdir()
+        (locked_ws / "lock").write_text("1")
+
+        current_ws = workspace_root / "current123456"
+        current_ws.mkdir()
+        (current_ws / "run.json").write_text("{}")
+
+        active_ws = workspace_root / "active123456"
+        active_ws.mkdir()
+        (active_ws / "state.json").write_text("{}")
+
+        registry_record = ProcessRecord(
+            kind="codex_app_server",
+            workspace_id="active123456",
+            pid=1,
+            pgid=None,
+            base_url=None,
+            command=["python"],
+            owner_pid=1,
+            started_at="2026-03-27T00:00:00Z",
+        )
+        write_process_record(tmp_path, registry_record)
+
+        import os
+        from datetime import datetime, timedelta, timezone
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+        for ws in (stale_ws, locked_ws, current_ws, active_ws):
+            os.utime(ws, (old_ts, old_ts))
+
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_worktree_archive_root",
+            lambda *a, **kw: ArchivePruneSummary(
+                kept=0, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_run_archive_root",
+            lambda *a, **kw: ArchivePruneSummary(
+                kept=0, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_filebox_root",
+            lambda *a, **kw: FileBoxPruneSummary(
+                inbox_kept=0,
+                inbox_pruned=0,
+                outbox_kept=0,
+                outbox_pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_report_directory",
+            lambda *a, **kw: PruneSummary(
+                kept=0, pruned=0, bytes_before=0, bytes_after=0
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.process_alive",
+            lambda pid: pid == 1,
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.process_command_matches",
+            lambda pid, command: True,
+        )
+
+        cleanup_app = typer.Typer()
+        cleanup_cmd.register_cleanup_commands(
+            cleanup_app,
+            require_repo_config=lambda _repo, _hub: types.SimpleNamespace(  # type: ignore[arg-type]
+                repo_root=tmp_path,
+                config=types.SimpleNamespace(
+                    pma=types.SimpleNamespace(
+                        app_server_workspace_max_age_days=7,
+                        report_max_history_files=20,
+                        report_max_total_bytes=1024,
+                    )
+                ),
+            ),
+        )
+
+        result = runner.invoke(
+            cleanup_app, ["state", "--repo", str(tmp_path), "--scope", "repo"]
+        )
+
+        assert result.exit_code == 0
+        assert not stale_ws.exists()
+        assert locked_ws.exists()
+        assert current_ws.exists()
+        assert active_ws.exists()
+
 
 class TestCleanupStateGlobalCleanup:
     def test_global_cleanup_prunes_global_workspaces(
@@ -349,7 +551,7 @@ class TestCleanupStateGlobalCleanup:
 
 
 class TestCleanupStateByteAccounting:
-    def test_dry_run_shows_zero_deleted_bytes_for_families_with_dry_run_support(
+    def test_dry_run_reports_prunable_bytes_without_deleting(
         self, monkeypatch, tmp_path: Path
     ) -> None:
         def _fake_prune_worktree_archive_root(path, *, policy, dry_run=False):
@@ -434,7 +636,83 @@ class TestCleanupStateByteAccounting:
 
         assert result.exit_code == 0
         assert "DRY RUN:" in result.output
-        assert "worktree_archives:" not in result.output
+        assert "filebox:" in result.output
+        assert "worktree_archives:" in result.output
+        assert "workspaces:" in result.output
+        assert "Total: pruned=6 bytes=1150" in result.output
+
+    def test_dry_run_does_not_delete_report_history_files(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        reports_dir = tmp_path / ".codex-autorunner" / "reports"
+        reports_dir.mkdir(parents=True)
+        (reports_dir / "latest-summary.md").write_text("stable")
+        (reports_dir / "history-a.md").write_text("old-a")
+        (reports_dir / "history-b.md").write_text("old-b")
+
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_worktree_archive_root",
+            lambda *a, **kw: ArchivePruneSummary(
+                kept=0, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_run_archive_root",
+            lambda *a, **kw: ArchivePruneSummary(
+                kept=0, pruned=0, bytes_before=0, bytes_after=0, pruned_paths=()
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_filebox_root",
+            lambda *a, **kw: FileBoxPruneSummary(
+                inbox_kept=0,
+                inbox_pruned=0,
+                outbox_kept=0,
+                outbox_pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+            ),
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.surfaces.cli.commands.cleanup.prune_workspace_root",
+            lambda *a, **kw: WorkspacePruneSummary(
+                kept=0,
+                pruned=0,
+                bytes_before=0,
+                bytes_after=0,
+                pruned_paths=(),
+                blocked_paths=(),
+                blocked_reasons=(),
+            ),
+        )
+
+        cleanup_app = typer.Typer()
+        cleanup_cmd.register_cleanup_commands(
+            cleanup_app,
+            require_repo_config=lambda _repo, _hub: types.SimpleNamespace(  # type: ignore[arg-type]
+                repo_root=tmp_path,
+                config=types.SimpleNamespace(
+                    pma=types.SimpleNamespace(
+                        report_max_history_files=1,
+                        report_max_total_bytes=10_000,
+                        app_server_workspace_max_age_days=7,
+                    )
+                ),
+            ),
+        )
+
+        result = runner.invoke(
+            cleanup_app,
+            ["state", "--repo", str(tmp_path), "--scope", "repo", "--dry-run"],
+        )
+
+        assert result.exit_code == 0
+        assert sorted(p.name for p in reports_dir.iterdir()) == [
+            "history-a.md",
+            "history-b.md",
+            "latest-summary.md",
+        ]
 
 
 class TestCleanupStateScope:

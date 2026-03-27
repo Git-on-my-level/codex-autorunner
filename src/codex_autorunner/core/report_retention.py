@@ -22,6 +22,7 @@ def prune_report_directory(
     max_history_files: int = DEFAULT_REPORT_MAX_HISTORY_FILES,
     max_total_bytes: int = DEFAULT_REPORT_MAX_TOTAL_BYTES,
     stable_prefixes: tuple[str, ...] = DEFAULT_REPORT_STABLE_PREFIXES,
+    dry_run: bool = False,
 ) -> PruneSummary:
     """Prune report history deterministically while preserving stable outputs.
 
@@ -81,19 +82,24 @@ def prune_report_directory(
                 bytes_after -= size
 
     pruned_count = 0
-    for path, _ in prune_history:
-        try:
-            path.unlink(missing_ok=True)
-            pruned_count += 1
-        except OSError:
-            continue
+    if dry_run:
+        pruned_count = len(prune_history)
+        final_kept = len(kept_paths)
+        final_bytes = bytes_after
+    else:
+        for path, _ in prune_history:
+            try:
+                path.unlink(missing_ok=True)
+                pruned_count += 1
+            except OSError:
+                continue
 
-    final_kept = 0
-    final_bytes = 0
-    for path, size in sized:
-        if path.exists():
-            final_kept += 1
-            final_bytes += size
+        final_kept = 0
+        final_bytes = 0
+        for path, size in sized:
+            if path.exists():
+                final_kept += 1
+                final_bytes += size
 
     return PruneSummary(
         kept=final_kept,
