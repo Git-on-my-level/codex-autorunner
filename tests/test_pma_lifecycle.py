@@ -386,3 +386,58 @@ async def test_lifecycle_router_codex_reset_preserves_opencode_scoped_keys(
     assert registry.get_thread_id("pma.-1001.1") is None
     assert registry.get_thread_id("pma.opencode") == "global-opencode-id"
     assert registry.get_thread_id("pma.opencode.-1001.2") == "topic-opencode-2-id"
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_router_codex_reset_preserves_hermes_scoped_state(
+    temp_hub_root: Path,
+) -> None:
+    """Codex PMA reset must preserve non-codex nested agent families."""
+    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+
+    registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
+    registry = AppServerThreadRegistry(registry_path)
+    registry.set_thread_id("pma", "global-codex-id")
+    registry.set_thread_id("pma.hermes", "global-hermes-id")
+    registry.set_thread_id("pma.hermes.-1001.7", "topic-hermes-7-id")
+
+    state_path = default_pma_prompt_state_path(temp_hub_root)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "updated_at": "2026-03-20T00:00:00Z",
+                "sessions": {
+                    "pma": {"version": 1},
+                    "pma.hermes": {"version": 1},
+                    "pma.hermes.-1001.7": {"version": 1},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    router = PmaLifecycleRouter(temp_hub_root)
+    result = await router.reset(agent="codex")
+
+    assert result.status == "ok"
+    cleared_threads = result.details.get("cleared_threads", [])
+    assert "pma" in cleared_threads
+    assert "pma.hermes" not in cleared_threads
+    assert "pma.hermes.-1001.7" not in cleared_threads
+
+    cleared_prompt_state_keys = result.details.get("cleared_prompt_state_keys", [])
+    assert "pma" in cleared_prompt_state_keys
+    assert "pma.hermes" not in cleared_prompt_state_keys
+    assert "pma.hermes.-1001.7" not in cleared_prompt_state_keys
+
+    assert registry.get_thread_id("pma") is None
+    assert registry.get_thread_id("pma.hermes") == "global-hermes-id"
+    assert registry.get_thread_id("pma.hermes.-1001.7") == "topic-hermes-7-id"
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    sessions = payload.get("sessions", {})
+    assert "pma" not in sessions
+    assert "pma.hermes" in sessions
+    assert "pma.hermes.-1001.7" in sessions

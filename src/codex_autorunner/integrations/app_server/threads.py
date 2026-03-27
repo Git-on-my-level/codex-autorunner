@@ -59,6 +59,15 @@ FEATURE_KEYS = {
 }
 
 
+def _normalize_pma_agent_family(agent: Optional[str]) -> Optional[str]:
+    if not isinstance(agent, str):
+        return None
+    normalized = agent.strip().lower()
+    if not normalized or normalized in {"all", "codex"}:
+        return None
+    return normalized
+
+
 def pma_base_key(agent: str) -> str:
     """
     Return the base PMA registry key for the given agent.
@@ -69,9 +78,10 @@ def pma_base_key(agent: str) -> str:
     Returns:
         PMA_OPENCODE_KEY if agent is "opencode", otherwise PMA_KEY.
     """
-    if isinstance(agent, str) and agent.strip().lower() == "opencode":
-        return PMA_OPENCODE_KEY
-    return PMA_KEY
+    normalized = _normalize_pma_agent_family(agent)
+    if normalized is None:
+        return PMA_KEY
+    return f"{PMA_KEY}.{normalized}"
 
 
 def pma_prefix_for_agent(agent: Optional[str]) -> str:
@@ -86,9 +96,10 @@ def pma_prefix_for_agent(agent: Optional[str]) -> str:
     Returns:
         PMA_OPENCODE_PREFIX if agent is "opencode", otherwise PMA_PREFIX.
     """
-    if isinstance(agent, str) and agent.strip().lower() == "opencode":
-        return PMA_OPENCODE_PREFIX
-    return PMA_PREFIX
+    normalized = _normalize_pma_agent_family(agent)
+    if normalized is None:
+        return PMA_PREFIX
+    return f"{PMA_KEY}.{normalized}."
 
 
 def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
@@ -105,11 +116,12 @@ def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
     Returns:
         List of prefixes to reset.
     """
-    if agent == "opencode":
-        return [PMA_OPENCODE_PREFIX]
-    if agent == "codex":
+    normalized = _normalize_pma_agent_family(agent)
+    if normalized is None:
+        if agent in {None, "", "all", "codex"}:
+            return [PMA_PREFIX]
         return [PMA_PREFIX]
-    return [PMA_PREFIX, PMA_OPENCODE_PREFIX]
+    return [f"{PMA_KEY}.{normalized}."]
 
 
 def pma_topic_scoped_key(

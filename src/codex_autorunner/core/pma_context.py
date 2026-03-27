@@ -441,6 +441,21 @@ def clear_pma_prompt_state_sessions(
     return sorted(cleared_keys)
 
 
+def list_pma_prompt_state_session_keys(hub_root: Path) -> list[str]:
+    """Return persisted PMA prompt-state session keys."""
+
+    path = default_pma_prompt_state_path(hub_root)
+    lock_path = _prompt_state_lock_path(path)
+    with file_lock(lock_path):
+        state = _read_pma_prompt_state_unlocked(path)
+        sessions = state.get("sessions")
+        if not isinstance(sessions, Mapping):
+            return []
+        return sorted(
+            key for key in sessions.keys() if isinstance(key, str) and key.strip()
+        )
+
+
 def _merge_prompt_session_state(
     hub_root: Path,
     *,

@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Optional
 
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
@@ -253,6 +256,138 @@ def test_managed_thread_tail_snapshot_treats_suppressed_agent_delta_as_activity(
     assert payload["phase"] not in {"no_stream_available", "likely_hung"}
     assert payload["activity"] == "running"
     assert payload["active_turn_diagnostics"]["stalled"] is False
+
+
+def test_managed_thread_tail_snapshot_marks_hermes_stream_available(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    fake_service = SimpleNamespace(
+        thread=SimpleNamespace(
+            thread_target_id="thread-hermes",
+            agent_id="hermes",
+            backend_thread_id="hermes-session-1",
+            workspace_root=str(hub_env.repo_root.resolve()),
+        ),
+        execution=SimpleNamespace(
+            execution_id="turn-hermes",
+            backend_id="hermes-turn-1",
+            status="running",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=None,
+            output_text="",
+        ),
+        harness_factory=lambda _agent_id: HermesHarness(object()),
+    )
+    fake_service.get_thread_target = lambda _thread_id: fake_service.thread
+    fake_service.get_running_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_latest_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_execution = (
+        lambda _thread_id, _execution_id: fake_service.execution
+    )
+    fake_service.get_queue_depth = lambda _thread_id: 0
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        lambda request: fake_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/hub/pma/threads/thread-hermes/tail")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["agent"] == "hermes"
+    assert payload["stream_available"] is True
+    assert payload["events"] == []
+    assert payload["phase"] == "booting_runtime"
+
+
+def test_managed_thread_tail_events_streams_hermes_runtime_events(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class _HermesSupervisor:
+        async def stream_turn_events(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {"method": "prompt/progress", "params": {"delta": "hello "}}
+            yield {"method": "prompt/completed", "params": {"finalOutput": "hello"}}
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def create_session(
+            self, workspace_root: Path, title: Optional[str] = None
+        ):
+            _ = workspace_root, title
+            return type("Session", (), {"session_id": "hermes-session-1"})()
+
+        async def resume_session(self, workspace_root: Path, conversation_id: str):
+            _ = workspace_root
+            return type("Session", (), {"session_id": conversation_id})()
+
+        async def start_turn(self, *_args: Any, **_kwargs: Any) -> str:
+            return "hermes-turn-1"
+
+        async def wait_for_turn(self, *_args: Any, **_kwargs: Any):
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "completed",
+                    "assistant_text": "hello",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def interrupt_turn(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    supervisor = _HermesSupervisor()
+    fake_service = SimpleNamespace(
+        thread=SimpleNamespace(
+            thread_target_id="thread-hermes",
+            agent_id="hermes",
+            backend_thread_id="hermes-session-1",
+            workspace_root=str(hub_env.repo_root.resolve()),
+        ),
+        execution=SimpleNamespace(
+            execution_id="turn-hermes",
+            backend_id="hermes-turn-1",
+            status="running",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=None,
+            output_text="",
+        ),
+        harness_factory=lambda _agent_id: HermesHarness(supervisor),
+    )
+    fake_service.get_thread_target = lambda _thread_id: fake_service.thread
+    fake_service.get_running_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_latest_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_execution = (
+        lambda _thread_id, _execution_id: fake_service.execution
+    )
+    fake_service.get_queue_depth = lambda _thread_id: 0
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        lambda request: fake_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/hub/pma/threads/thread-hermes/tail/events")
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert "assistant_update" in resp.text
+    assert "turn_completed" in resp.text
 
 
 def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> None:

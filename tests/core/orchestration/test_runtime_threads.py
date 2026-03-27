@@ -400,6 +400,31 @@ async def test_runtime_threads_allow_missing_interrupt_event(
     assert outcome.assistant_text == "assistant-output"
 
 
+async def test_runtime_threads_stream_events_support_hermes_harness(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithStream()
+    service = _build_service(tmp_path, harness, agent_id="hermes", name="Hermes")
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("hermes", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="hello hermes",
+        ),
+    )
+    events = [event async for event in stream_runtime_thread_events(started)]
+
+    assert started.thread.agent_id == "hermes"
+    assert started.thread.backend_thread_id == "session-1"
+    assert events
+    assert "message.completed" in events[-1]
+
+
 async def test_runtime_threads_allow_wait_results_without_raw_events(
     tmp_path: Path,
 ) -> None:

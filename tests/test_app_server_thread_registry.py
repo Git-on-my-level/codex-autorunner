@@ -54,6 +54,7 @@ def test_thread_registry_reset_all_clears_notice(tmp_path: Path) -> None:
 def test_normalize_feature_key_accepts_pma() -> None:
     assert normalize_feature_key("pma") == "pma"
     assert normalize_feature_key("pma.opencode") == "pma.opencode"
+    assert normalize_feature_key("pma.hermes") == "pma.hermes"
     assert normalize_feature_key("PMA:OPENCODE") == "pma.opencode"
 
 
@@ -256,11 +257,15 @@ class TestPmaBaseKeyHelper:
         assert pma_base_key("OpenCode") == PMA_OPENCODE_KEY
         assert pma_base_key("  OPENCODE  ") == PMA_OPENCODE_KEY
 
-    def test_returns_codex_key_for_other_agents(self) -> None:
+    def test_returns_codex_key_for_default_codex_family(self) -> None:
         assert pma_base_key("codex") == PMA_KEY
-        assert pma_base_key("codex-alt") == PMA_KEY
         assert pma_base_key("") == PMA_KEY
         assert pma_base_key(None) == PMA_KEY  # type: ignore
+
+    def test_returns_agent_scoped_key_for_other_runtimes(self) -> None:
+        assert pma_base_key("hermes") == "pma.hermes"
+        assert pma_base_key("zeroclaw") == "pma.zeroclaw"
+        assert pma_base_key("codex-alt") == "pma.codex-alt"
 
 
 class TestPmaTopicScopedKeyHelper:
@@ -394,11 +399,15 @@ class TestPmaPrefixForAgent:
         assert pma_prefix_for_agent("OpenCode") == PMA_OPENCODE_PREFIX
         assert pma_prefix_for_agent("  OPENCODE  ") == PMA_OPENCODE_PREFIX
 
-    def test_returns_codex_prefix_for_other_agents(self) -> None:
+    def test_returns_codex_prefix_for_default_codex_family(self) -> None:
         assert pma_prefix_for_agent("codex") == PMA_PREFIX
-        assert pma_prefix_for_agent("codex-alt") == PMA_PREFIX
         assert pma_prefix_for_agent("") == PMA_PREFIX
         assert pma_prefix_for_agent(None) == PMA_PREFIX
+
+    def test_returns_agent_scoped_prefix_for_other_runtimes(self) -> None:
+        assert pma_prefix_for_agent("hermes") == "pma.hermes."
+        assert pma_prefix_for_agent("zeroclaw") == "pma.zeroclaw."
+        assert pma_prefix_for_agent("codex-alt") == "pma.codex-alt."
 
 
 class TestPmaPrefixesForReset:
@@ -410,8 +419,11 @@ class TestPmaPrefixesForReset:
         result = pma_prefixes_for_reset("codex")
         assert result == [PMA_PREFIX]
 
-    def test_returns_both_prefixes_for_all_or_none(self) -> None:
+    def test_returns_agent_scoped_prefix_for_other_runtimes(self) -> None:
+        assert pma_prefixes_for_reset("hermes") == ["pma.hermes."]
+        assert pma_prefixes_for_reset("zeroclaw") == ["pma.zeroclaw."]
+
+    def test_returns_codex_family_prefix_for_all_or_none(self) -> None:
         for agent in (None, "all", ""):
             result = pma_prefixes_for_reset(agent)
-            assert PMA_PREFIX in result
-            assert PMA_OPENCODE_PREFIX in result
+            assert result == [PMA_PREFIX]
