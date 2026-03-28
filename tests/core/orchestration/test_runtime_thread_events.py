@@ -277,6 +277,71 @@ async def test_normalize_runtime_thread_raw_event_handles_acp_failure_and_usage(
     assert state.last_error_message == "boom"
 
 
+async def test_normalize_runtime_thread_raw_event_handles_official_session_updates() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    progress = await normalize_runtime_thread_raw_event(
+        {
+            "message": {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "update": {
+                        "sessionUpdate": "agent_thought_chunk",
+                        "content": {"type": "text", "text": "thinking"},
+                    },
+                },
+            }
+        },
+        state,
+    )
+    output = await normalize_runtime_thread_raw_event(
+        {
+            "message": {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "update": {
+                        "sessionUpdate": "agent_message_chunk",
+                        "content": {"type": "text", "text": "hello"},
+                    },
+                },
+            }
+        },
+        state,
+    )
+    usage = await normalize_runtime_thread_raw_event(
+        {
+            "message": {
+                "method": "session/update",
+                "params": {
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "update": {
+                        "sessionUpdate": "usage_update",
+                        "usage": {"total_tokens": 42},
+                    },
+                },
+            }
+        },
+        state,
+    )
+
+    assert isinstance(progress[0], RunNotice)
+    assert progress[0].kind == "progress"
+    assert progress[0].message == "thinking"
+    assert isinstance(output[0], OutputDelta)
+    assert output[0].content == "hello"
+    assert isinstance(usage[0], TokenUsage)
+    assert usage[0].usage == {"total_tokens": 42}
+    assert state.best_assistant_text() == "hello"
+    assert state.token_usage == {"total_tokens": 42}
+
+
 async def test_recover_post_completion_outcome_requires_canonical_final_message() -> (
     None
 ):

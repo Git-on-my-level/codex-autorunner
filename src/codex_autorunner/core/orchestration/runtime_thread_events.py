@@ -381,6 +381,43 @@ def normalize_runtime_thread_message(
             ]
         return []
 
+    if method == "session/update":
+        update = _extract_session_update(params)
+        update_kind = _extract_session_update_kind(update)
+        if update_kind == "agent_message_chunk":
+            session_update_content = _extract_session_update_content(update)
+            return _assistant_stream_events(
+                session_update_content,
+                state,
+                timestamp=event_timestamp,
+            )
+        if update_kind == "agent_thought_chunk":
+            session_update_content = _extract_session_update_content(update)
+            progress_message = _extract_acp_progress_message(
+                session_update_content
+            ) or _extract_output_delta(session_update_content)
+            if not progress_message:
+                return []
+            return [
+                RunNotice(
+                    timestamp=event_timestamp,
+                    kind="progress",
+                    message=progress_message,
+                )
+            ]
+        if update_kind == "usage_update":
+            session_usage = _extract_usage(update)
+            if session_usage is None:
+                return []
+            state.token_usage = dict(session_usage)
+            return [
+                TokenUsage(
+                    timestamp=event_timestamp,
+                    usage=dict(session_usage),
+                )
+            ]
+        return []
+
     if method in {"prompt/message", "turn/message"}:
         content = _extract_acp_final_message(params)
         if not content:
@@ -819,6 +856,22 @@ def _extract_output_delta(params: dict[str, Any]) -> str:
         if isinstance(part_text, str) and part_text:
             return part_text
     return ""
+
+
+def _extract_session_update(params: dict[str, Any]) -> dict[str, Any]:
+    return _coerce_dict(params.get("update"))
+
+
+def _extract_session_update_kind(update: dict[str, Any]) -> str:
+    for key in ("sessionUpdate", "session_update"):
+        value = update.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _extract_session_update_content(update: dict[str, Any]) -> dict[str, Any]:
+    return _coerce_dict(update.get("content"))
 
 
 def _extract_acp_progress_message(params: dict[str, Any]) -> str:
