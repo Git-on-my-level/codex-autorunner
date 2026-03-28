@@ -270,7 +270,7 @@ class TestHermesHarness:
 
     def test_hermes_health_check_missing_binary(self, monkeypatch):
         monkeypatch.setattr(
-            "codex_autorunner.agents.hermes.supervisor.hermes_binary_available",
+            "codex_autorunner.agents.registry.hermes_binary_available",
             lambda _config: False,
         )
 

@@ -116,6 +116,12 @@ class ACPSubprocessSupervisor:
             metadata=metadata,
         )
 
+    async def prompt_events_snapshot(
+        self, workspace_root: Path, turn_id: str
+    ) -> tuple[ACPEvent, ...]:
+        client = await self.get_client(workspace_root)
+        return client.prompt_events_snapshot(turn_id)
+
     async def cancel_prompt(
         self, workspace_root: Path, session_id: str, turn_id: str
     ) -> Any:

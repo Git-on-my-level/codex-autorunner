@@ -125,6 +125,13 @@ class AppServerEventBuffer:
                 selected = selected[-limit:]
             return [dict(event) for event in selected]
 
+    async def has_turn(self, thread_id: str, turn_id: str) -> bool:
+        if not thread_id or not turn_id:
+            return False
+        key = (thread_id, turn_id)
+        async with self._ensure_lock():
+            return key in self._entries
+
     async def stream_entries(
         self,
         thread_id: str,

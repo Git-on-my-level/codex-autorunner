@@ -116,6 +116,7 @@ async def test_hermes_supervisor_bridges_permission_requests_and_allows(
             "prompt/started",
             "prompt/progress",
             "session/request_permission",
+            "permission/decision",
             "prompt/progress",
             "prompt/completed",
         ]

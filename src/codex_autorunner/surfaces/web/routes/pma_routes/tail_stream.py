@@ -942,22 +942,28 @@ async def _build_managed_thread_tail_snapshot(
     backend_turn_id = normalize_optional_text(turn.backend_id)
     app_server_events = getattr(request.app.state, "app_server_events", None)
     harness = _managed_thread_harness(service, str(thread.agent_id or ""))
+    has_backend_binding = bool(backend_thread_id) and bool(backend_turn_id)
     can_stream_runtime = bool(
         harness is not None
-        and bool(backend_thread_id)
-        and bool(backend_turn_id)
+        and has_backend_binding
         and harness_supports_progress_event_stream(harness)
     )
     can_stream_buffered = bool(
-        can_stream_runtime
+        harness is not None
+        and has_backend_binding
         and isinstance(harness, CodexHarness)
         and app_server_events is not None
     )
-    list_runtime_events = getattr(
-        getattr(harness, "_supervisor", None), "list_turn_events", None
-    )
+    listed_supervisor = getattr(harness, "_supervisor", None)
+    if (
+        listed_supervisor is None
+        and str(thread.agent_id or "").strip().lower() == "zeroclaw"
+    ):
+        listed_supervisor = getattr(request.app.state, "zeroclaw_supervisor", None)
+    list_runtime_events = getattr(listed_supervisor, "list_turn_events", None)
     can_stream_listed = bool(
-        can_stream_runtime
+        harness is not None
+        and has_backend_binding
         and bool(thread.workspace_root)
         and callable(list_runtime_events)
     )
@@ -1039,7 +1045,7 @@ async def _build_managed_thread_tail_snapshot(
     elif turn_status == "error":
         activity = "failed"
 
-    stream_available = can_stream_runtime
+    stream_available = can_stream_buffered or can_stream_listed or can_stream_runtime
     phase, phase_source, guidance, last_tool = _derive_progress_phase(
         turn_status=turn_status,
         stream_available=stream_available,

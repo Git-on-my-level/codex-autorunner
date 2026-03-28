@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Optional, cast
@@ -23,6 +24,7 @@ from ..types import (
 )
 
 _INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
+logger = logging.getLogger(__name__)
 
 
 def _coerce_entries(result: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -229,10 +231,11 @@ class CodexHarness(AgentHarness):
             turn_kwargs["model"] = model
         if reasoning:
             turn_kwargs["effort"] = reasoning
+        if input_items is not None:
+            turn_kwargs["input_items"] = input_items
         handle = await client.turn_start(
             conversation_id,
             prompt,
-            input_items=input_items,
             approval_policy=approval_mode,
             sandbox_policy=sandbox_policy,
             **turn_kwargs,
@@ -243,7 +246,10 @@ class CodexHarness(AgentHarness):
         self._turn_handles[(resolved_thread_id, handle.turn_id)] = handle
         register_turn = getattr(self._events, "register_turn", None)
         if callable(register_turn):
-            await register_turn(resolved_thread_id, handle.turn_id)
+            try:
+                await register_turn(resolved_thread_id, handle.turn_id)
+            except Exception:
+                logger.debug("codex register_turn failed", exc_info=True)
         return TurnRef(conversation_id=resolved_thread_id, turn_id=handle.turn_id)
 
     async def start_review(

@@ -186,6 +186,9 @@ class ACPPromptHandle:
         async for event in self._client.iter_prompt_events(self.turn_id):
             yield event
 
+    def snapshot_events(self) -> tuple[ACPEvent, ...]:
+        return self._client.prompt_events_snapshot(self.turn_id)
+
 
 class ACPClient:
     def __init__(
@@ -638,6 +641,12 @@ class ACPClient:
             for event in self._orphan_events.pop(turn_id, []):
                 asyncio.create_task(self._record_prompt_event(state, event))
         return state
+
+    def prompt_events_snapshot(self, turn_id: str) -> tuple[ACPEvent, ...]:
+        state = self._prompts.get(turn_id)
+        if state is None:
+            return ()
+        return tuple(state.events)
 
     async def _record_prompt_event(self, state: _PromptState, event: ACPEvent) -> None:
         if state.closed:

@@ -544,7 +544,6 @@ async def _execute_harness_turn(
         reasoning,
         approval_mode="on-request",
         sandbox_policy="dangerFullAccess",
-        input_items=None,
     )
     resolved_conversation_id = str(
         getattr(turn, "conversation_id", None) or conversation_id or ""
@@ -1683,7 +1682,7 @@ def build_chat_runtime_router(
                 payload = (
                     raw_event if isinstance(raw_event, dict) else {"value": raw_event}
                 )
-                yield format_sse("event", payload)
+                yield format_sse("event", {"message": payload})
 
         return StreamingResponse(
             _stream_events(),

@@ -16,9 +16,6 @@ from ...core.filebox_retention import (
 )
 from ...core.logging_utils import safe_log
 from ...core.managed_processes import reap_managed_processes
-from ...core.orchestration.runtime_bindings import (
-    clear_runtime_thread_bindings_for_hub_root,
-)
 from ...housekeeping import reap_managed_docker_containers, run_housekeeping_once
 from .app_builders import create_app, create_repo_app
 from .app_factory import CacheStaticFiles, resolve_allowed_hosts, resolve_auth_token
@@ -132,7 +129,6 @@ def create_hub_app(
         registered_pma_lane_starter = False
         pma_lane_starter_register = None
         app.state.hub_started = True
-        clear_runtime_thread_bindings_for_hub_root(context.config.root)
         try:
             await recover_orphaned_managed_thread_executions(app)
             await restart_managed_thread_queue_workers(app)

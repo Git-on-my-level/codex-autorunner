@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.runtime_bindings import (
-    clear_runtime_thread_bindings_for_hub_root,
+    clear_runtime_thread_binding,
 )
 from codex_autorunner.core.pma_thread_store import (
     ManagedThreadNotActiveError,
@@ -222,7 +222,6 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     assert fake_supervisor.client.turn_start_calls[0]["turn_kwargs"] == {
         "model": "model-default",
         "effort": "high",
-        "input_items": None,
     }
     first_prompt = str(fake_supervisor.client.turn_start_calls[0]["prompt"])
     second_prompt = str(fake_supervisor.client.turn_start_calls[1]["prompt"])
@@ -697,7 +696,7 @@ def test_send_message_after_restart_does_not_duplicate_compact_seed(
         )
         assert compact_resp.status_code == 200
 
-        clear_runtime_thread_bindings_for_hub_root(hub_env.hub_root)
+        clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
 
         resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",

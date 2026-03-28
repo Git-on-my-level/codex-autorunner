@@ -60,9 +60,7 @@ def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
                     "id": fallback_descriptor.id,
                     "name": fallback_descriptor.name,
                     "protocol_version": "2.0",
-                    "capabilities": sorted(
-                        map_agent_capabilities(fallback_descriptor.capabilities)
-                    ),
+                    "capabilities": [],
                 }
             ]
             default_agent = fallback_descriptor.id

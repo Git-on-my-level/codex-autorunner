@@ -55,6 +55,7 @@ from .....core.pma_thread_store import (
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import Completed, Failed, RunEvent
 from .....core.time_utils import now_iso
+from .....integrations.app_server.event_buffer import AppServerEventBuffer
 from .....integrations.chat.approval_modes import resolve_approval_mode_policies
 from .....integrations.discord.rendering import (
     chunk_discord_message,
@@ -902,10 +903,51 @@ async def recover_orphaned_managed_thread_executions(app: Any) -> None:
         app,
         thread_store=thread_store,
     )
+    app_server_events = getattr(app.state, "app_server_events", None)
     for managed_thread_id in thread_store.list_thread_ids_with_running_executions(
         limit=None,
     ):
         try:
+            thread = service.get_thread_target(managed_thread_id)
+            execution = service.get_running_execution(managed_thread_id)
+            if thread is None or execution is None:
+                continue
+            has_turn = getattr(app_server_events, "has_turn", None)
+            if (
+                callable(has_turn)
+                and thread.backend_thread_id
+                and execution.backend_id
+                and await has_turn(thread.backend_thread_id, execution.backend_id)
+            ):
+                continue
+            if app_server_events is not None and not isinstance(
+                app_server_events, AppServerEventBuffer
+            ):
+                if callable(
+                    getattr(app_server_events, "list_events", None)
+                ) or callable(getattr(app_server_events, "stream_entries", None)):
+                    continue
+            if (
+                str(thread.agent_id or "").strip().lower() == "zeroclaw"
+                and thread.workspace_root
+                and thread.backend_thread_id
+                and execution.backend_id
+            ):
+                zeroclaw_supervisor = getattr(app.state, "zeroclaw_supervisor", None)
+                list_turn_events = getattr(
+                    zeroclaw_supervisor, "list_turn_events", None
+                )
+                if callable(list_turn_events):
+                    try:
+                        live_events = await list_turn_events(
+                            Path(str(thread.workspace_root)),
+                            thread.backend_thread_id,
+                            execution.backend_id,
+                        )
+                    except Exception:
+                        live_events = []
+                    if live_events:
+                        continue
             service.recover_running_execution_after_restart(managed_thread_id)
         except Exception:
             logger.exception(

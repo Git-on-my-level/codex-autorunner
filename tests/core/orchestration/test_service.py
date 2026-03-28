@@ -22,7 +22,7 @@ from codex_autorunner.core.orchestration import (
 )
 from codex_autorunner.core.orchestration.models import FlowTarget
 from codex_autorunner.core.orchestration.runtime_bindings import (
-    clear_runtime_thread_bindings_for_hub_root,
+    clear_runtime_thread_binding,
 )
 from codex_autorunner.core.orchestration.service import (
     build_harness_backed_orchestration_service,
@@ -712,7 +712,7 @@ async def test_send_message_rehydrates_from_transcripts_after_runtime_binding_re
         assistant_text="first answer",
     )
 
-    clear_runtime_thread_bindings_for_hub_root(tmp_path / "hub")
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
     harness.new_conversation_calls.clear()
     harness.resume_conversation_calls.clear()
     harness.start_turn_calls.clear()
@@ -766,7 +766,7 @@ async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_re
         assistant_text="done",
     )
 
-    clear_runtime_thread_bindings_for_hub_root(tmp_path / "hub")
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
     harness.new_conversation_calls.clear()
     harness.resume_conversation_calls.clear()
     harness.start_turn_calls.clear()
@@ -1007,7 +1007,7 @@ async def test_interrupt_thread_marks_execution_without_backend_binding(
         )
     )
 
-    clear_runtime_thread_bindings_for_hub_root(tmp_path / "hub")
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
 
     interrupted = await service.interrupt_thread(thread.thread_target_id)
 
@@ -1037,7 +1037,7 @@ async def test_stop_thread_marks_interrupted_when_backend_binding_is_missing(
         )
     )
 
-    clear_runtime_thread_bindings_for_hub_root(tmp_path / "hub")
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
     outcome = await service.stop_thread(thread.thread_target_id)
 
     assert harness.interrupt_calls == []
@@ -1108,7 +1108,7 @@ async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_
         )
     )
 
-    clear_runtime_thread_bindings_for_hub_root(tmp_path / "hub")
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
     restarted_service = _build_service(tmp_path, harness)
     outcome = await restarted_service.stop_thread(thread.thread_target_id)
 

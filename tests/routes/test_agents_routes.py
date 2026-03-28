@@ -94,6 +94,29 @@ def test_list_agents_includes_expected_capabilities() -> None:
         assert "event_streaming" in zeroclaw_caps
 
 
+def test_list_agents_fallback_does_not_advertise_unavailable_capabilities(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents.get_available_agents",
+        lambda _state: {},
+    )
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agents"] == [
+        {
+            "id": "codex",
+            "name": "Codex",
+            "protocol_version": "2.0",
+            "capabilities": [],
+        }
+    ]
+
+
 def test_list_agents_omits_zeroclaw_when_runtime_is_incompatible(
     monkeypatch,
 ) -> None:
