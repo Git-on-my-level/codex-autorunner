@@ -18,35 +18,35 @@ _UPDATE_TARGET_ORDER = ("all", "web", "chat", "telegram", "discord")
 _UPDATE_TARGET_DEFINITIONS = {
     "all": UpdateTargetDefinition(
         value="all",
-        label="All",
+        label="all",
         description="Web + Telegram + Discord",
         restart_notice="The web UI, Telegram, and Discord will restart.",
         includes_web=True,
     ),
     "web": UpdateTargetDefinition(
         value="web",
-        label="Web only",
+        label="web",
         description="Web UI only",
         restart_notice="The web UI will restart.",
         includes_web=True,
     ),
     "chat": UpdateTargetDefinition(
         value="chat",
-        label="Chat apps (Telegram + Discord)",
+        label="chat",
         description="Telegram + Discord",
         restart_notice="Telegram and Discord will restart.",
         includes_web=False,
     ),
     "telegram": UpdateTargetDefinition(
         value="telegram",
-        label="Telegram only",
+        label="telegram",
         description="Telegram only",
         restart_notice="Telegram will restart.",
         includes_web=False,
     ),
     "discord": UpdateTargetDefinition(
         value="discord",
-        label="Discord only",
+        label="discord",
         description="Discord only",
         restart_notice="Discord will restart.",
         includes_web=False,
@@ -72,7 +72,7 @@ _UPDATE_TARGET_ALIASES = {
 }
 _UPDATE_TARGET_STATUS = UpdateTargetDefinition(
     value="status",
-    label="Status",
+    label="status",
     description="Show update status",
     restart_notice="",
     includes_web=False,
@@ -100,7 +100,7 @@ def _all_target_definition(
         restart_services.append("Discord")
     return UpdateTargetDefinition(
         value="all",
-        label="All",
+        label="all",
         description=" + ".join(services),
         restart_notice=f"The {_format_service_list(tuple(restart_services))} will restart.",
         includes_web=True,

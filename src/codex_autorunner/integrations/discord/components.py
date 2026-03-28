@@ -385,7 +385,7 @@ def build_update_target_picker(
         for definition in definitions[: DISCORD_SELECT_OPTION_MAX_OPTIONS - 1]
     ]
     options.append(
-        build_select_option("Status", "status", description="Show update status")
+        build_select_option("status", "status", description="Show update status")
     )
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]

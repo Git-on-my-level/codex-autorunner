@@ -235,4 +235,4 @@ class TestBuildUpdateTargetPicker:
         values = {opt["value"] for opt in menu["options"]}
         assert values == {"all", "web", "chat", "telegram", "discord", "status"}
         all_option = next(opt for opt in menu["options"] if opt["value"] == "all")
-        assert all_option["label"] == "All"
+        assert all_option["label"] == "all"

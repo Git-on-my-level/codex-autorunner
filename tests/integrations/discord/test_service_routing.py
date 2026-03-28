@@ -5937,7 +5937,7 @@ async def test_car_update_acknowledges_before_spawning_restart_target(
         observed.update(kwargs)
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "preparing update (discord only)" in content
+        assert "preparing update (discord)" in content
 
     monkeypatch.setattr(
         discord_service_module,
@@ -5979,7 +5979,7 @@ async def test_component_update_acknowledges_before_spawning_restart_target(
         content = rest.edited_original_interaction_responses[0]["payload"][
             "content"
         ].lower()
-        assert "preparing update (discord only)" in content
+        assert "preparing update (discord)" in content
 
     monkeypatch.setattr(
         discord_service_module,
@@ -6039,7 +6039,7 @@ async def test_car_update_web_target_skips_confirmation_when_sessions_active(
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "update started (web only)" in content
+        assert "update started (web)" in content
     finally:
         await store.close()
 
@@ -6082,7 +6082,7 @@ async def test_car_update_restart_target_reports_lock_error_after_neutral_prep_t
         assert len(rest.followup_messages) == 2
         prep_text = rest.followup_messages[0]["payload"]["content"].lower()
         error_text = rest.followup_messages[1]["payload"]["content"].lower()
-        assert "preparing update (discord only)" in prep_text
+        assert "preparing update (discord)" in prep_text
         assert "starting update" not in prep_text
         assert "update already in progress" in error_text
     finally:

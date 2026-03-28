@@ -55,7 +55,7 @@ def test_available_update_target_options_web_only_when_no_chat_available(
         update_backend="systemd-user",
         linux_service_names={"hub": "car-hub"},
     )
-    assert options == (("web", "Web only"),)
+    assert options == (("web", "web"),)
     assert (
         system._default_update_target(
             raw_config={
@@ -90,9 +90,9 @@ def test_available_update_target_options_include_telegram_when_enableable(
         linux_service_names={"hub": "car-hub"},
     )
     assert options == (
-        ("all", "All"),
-        ("web", "Web only"),
-        ("telegram", "Telegram only"),
+        ("all", "all"),
+        ("web", "web"),
+        ("telegram", "telegram"),
     )
     definitions = system._available_update_target_definitions(
         raw_config={
@@ -126,9 +126,9 @@ def test_available_update_target_options_include_discord_when_active(
         linux_service_names={"hub": "car-hub", "discord": "car-discord"},
     )
     assert options == (
-        ("all", "All"),
-        ("web", "Web only"),
-        ("discord", "Discord only"),
+        ("all", "all"),
+        ("web", "web"),
+        ("discord", "discord"),
     )
     definitions = system._available_update_target_definitions(
         raw_config={
@@ -152,19 +152,19 @@ def test_update_target_helpers_share_the_same_core_definitions() -> None:
         "status",
     )
     assert update_target_label_pairs() == (
-        ("all", "All"),
-        ("web", "Web only"),
-        ("chat", "Chat apps (Telegram + Discord)"),
-        ("telegram", "Telegram only"),
-        ("discord", "Discord only"),
+        ("all", "all"),
+        ("web", "web"),
+        ("chat", "chat"),
+        ("telegram", "telegram"),
+        ("discord", "discord"),
     )
     assert update_target_command_choices(include_status=True) == (
-        {"name": "All", "value": "all"},
-        {"name": "Web only", "value": "web"},
-        {"name": "Chat apps (Telegram + Discord)", "value": "chat"},
-        {"name": "Telegram only", "value": "telegram"},
-        {"name": "Discord only", "value": "discord"},
-        {"name": "Status", "value": "status"},
+        {"name": "all", "value": "all"},
+        {"name": "web", "value": "web"},
+        {"name": "chat", "value": "chat"},
+        {"name": "telegram", "value": "telegram"},
+        {"name": "discord", "value": "discord"},
+        {"name": "status", "value": "status"},
     )
 
 
