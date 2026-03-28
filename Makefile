@@ -21,7 +21,7 @@ PIPX_ROOT ?= $(HOME)/.local/pipx
 PIPX_VENV ?= $(PIPX_ROOT)/venvs/codex-autorunner
 PIPX_PYTHON ?= $(PIPX_VENV)/bin/python
 
-.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners protocol-schemas-check protocol-schemas-refresh typecheck-strict
+.PHONY: install dev hooks build test test-chat-platform-contract test-managed-thread-cutover check check-extended preflight-hub-startup format serve serve-dev launchd-hub deadcode-baseline venv venv-dev setup npm-install car-artifacts lint-html dom-check frontend-check _inject-static-banners agent-compatibility-check agent-compatibility-refresh protocol-schemas-check protocol-schemas-refresh typecheck-strict
 
 _inject-static-banners:
 	pnpm run postbuild
@@ -129,10 +129,17 @@ dom-check: npm-install
 frontend-check: lint-html dom-check
 
 protocol-schemas-check:
+	$(MAKE) agent-compatibility-check PYTHON="$(PYTHON)"
+
+agent-compatibility-check:
 	$(PYTHON) -m pytest tests/test_protocol_schemas.py -q
 	$(PYTHON) scripts/check_protocol_drift.py
 
 protocol-schemas-refresh:
+	$(MAKE) agent-compatibility-refresh PYTHON="$(PYTHON)"
+
+agent-compatibility-refresh:
+	$(PYTHON) scripts/update_agent_compatibility_lock.py
 	$(PYTHON) -m codex_autorunner.cli protocol refresh
 
 format:

@@ -59,10 +59,15 @@ Verify the user has:
 1. **Python 3.9+** installed
 2. **At least one supported agent** installed and working:
    - [Codex CLI](https://github.com/openai/codex) — `codex --version`
+   - Hermes (ACP-backed) — `hermes --version` and `hermes acp --help`
    - [Opencode](https://github.com/opencode-ai/opencode) — `opencode --version`
 3. **A directory for the hub** — This can be a new empty directory; repositories can be created or cloned through the hub later
 
 If any prerequisites are missing, help them install what's needed.
+
+If the user wants Hermes, also have them read `docs/ops/hermes-acp.md` before
+continuing so they understand the shared `HERMES_HOME` model and ACP-specific
+compatibility checks.
 
 ### Step 3: Install CAR
 
@@ -174,6 +179,7 @@ Both you and the agents can read and write these. They're accessible from the we
 ### Agents
 CAR currently supports:
 - **Codex** — OpenAI's coding agent
+- **Hermes** — ACP-backed repo/worktree agent
 - **Opencode** — Open-source alternative
 
 CAR passes tickets to agents along with relevant context, and agents execute the work.
@@ -186,7 +192,10 @@ CAR's philosophy is that the file system is the source of truth. Tickets, contex
 ## Troubleshooting
 
 ### "Agent not found"
-Make sure the agent is installed and available in your PATH. Run `codex --version` or `opencode --version` to verify.
+Make sure the agent is installed and available in your PATH. Run
+`codex --version`, `hermes --version`, or `opencode --version` to verify.
+For Hermes specifically, also verify `hermes acp --help` works and review
+`docs/ops/hermes-acp.md`.
 
 Inside app-server-backed CAR sessions (web terminal/PMA and Telegram), `car` is
 resolved from each workspace shim path (`<workspace>/.codex-autorunner/bin`, plus

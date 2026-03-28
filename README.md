@@ -42,6 +42,8 @@ Today we support Telegram and Discord as first-class platforms, if you want to a
 ### Project Manager Agent
 The project manager agent (PMA) can be invoked in both the web UI and chat apps. It allows you to use CAR using a conversational interface instead of using the CLI yourself. The PMA is just an agent with access to special context about how to manage CAR, best practices for using the CAR CLI, and a set of helpers for things like file management, agent notification management, and more. The PMA has a basic memory system to learn from how you like to work and persist best practices and learnings over time.
 
+**Hermes makes an excellent PMA** because it maintains global memory across sessions via its shared `HERMES_HOME`, extending beyond CAR's basic context layer. This means Hermes can remember patterns, preferences, and learnings across all your CAR projects. See [the Hermes ACP runbook](docs/ops/hermes-acp.md) for setup and operational caveats.
+
 Example use-cases:
 - Create/edit CAR tickets
 - Set up new repos and manage worktrees
@@ -84,8 +86,10 @@ The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will 
 CAR currently supports:
 - Codex
 - Opencode
+- Hermes (ACP-backed runtime with durable threads)
 
 CAR is built to easily integrate any reasonable agent built for Agent Client Protocol (ACP). If you would like to see your agent supported, please reach out or open a PR.
+If you want to use Hermes, start with the [Hermes ACP runbook](docs/ops/hermes-acp.md).
 
 ## Examples
 Build out complex features and products by providing a series of tickets assigned to various agents.

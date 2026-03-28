@@ -38,6 +38,11 @@ pipx uninstall codex-autorunner
 pipx install "codex-autorunner[discord]"
 ```
 
+If the user wants Hermes as the backend agent for Discord, they should also
+complete `docs/ops/hermes-acp.md` first and ensure `hermes` is available on
+`PATH`. Discord then discovers Hermes through the normal agent registry and
+keeps unsupported actions capability-gated.
+
 ### Step 3: Create Discord App and Bot Credentials
 
 In Discord Developer Portal:

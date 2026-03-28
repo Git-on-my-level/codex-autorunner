@@ -39,24 +39,39 @@ APP_SERVER_THREADS_CORRUPT_SUFFIX = ".corrupt"
 APP_SERVER_THREADS_NOTICE_SUFFIX = ".corrupt.json"
 FILE_CHAT_KEY = "file_chat"
 FILE_CHAT_OPENCODE_KEY = "file_chat.opencode"
+FILE_CHAT_HERMES_KEY = "file_chat.hermes"
 FILE_CHAT_PREFIX = "file_chat."
 FILE_CHAT_OPENCODE_PREFIX = "file_chat.opencode."
+FILE_CHAT_HERMES_PREFIX = "file_chat.hermes."
 PMA_KEY = "pma"
 PMA_OPENCODE_KEY = "pma.opencode"
+PMA_HERMES_KEY = "pma.hermes"
 PMA_PREFIX = "pma."
 PMA_OPENCODE_PREFIX = "pma.opencode."
+PMA_HERMES_PREFIX = "pma.hermes."
 
 LOGGER = logging.getLogger("codex_autorunner.app_server")
 
-# Static keys that can be reset/managed via the UI.
 FEATURE_KEYS = {
     FILE_CHAT_KEY,
     FILE_CHAT_OPENCODE_KEY,
+    FILE_CHAT_HERMES_KEY,
     PMA_KEY,
     PMA_OPENCODE_KEY,
+    PMA_HERMES_KEY,
     "autorunner",
     "autorunner.opencode",
+    "autorunner.hermes",
 }
+
+
+def _normalize_pma_agent_family(agent: Optional[str]) -> Optional[str]:
+    if not isinstance(agent, str):
+        return None
+    normalized = agent.strip().lower()
+    if not normalized or normalized in {"all", "codex"}:
+        return None
+    return normalized
 
 
 def pma_base_key(agent: str) -> str:
@@ -69,9 +84,10 @@ def pma_base_key(agent: str) -> str:
     Returns:
         PMA_OPENCODE_KEY if agent is "opencode", otherwise PMA_KEY.
     """
-    if isinstance(agent, str) and agent.strip().lower() == "opencode":
-        return PMA_OPENCODE_KEY
-    return PMA_KEY
+    normalized = _normalize_pma_agent_family(agent)
+    if normalized is None:
+        return PMA_KEY
+    return f"{PMA_KEY}.{normalized}"
 
 
 def pma_prefix_for_agent(agent: Optional[str]) -> str:
@@ -86,9 +102,10 @@ def pma_prefix_for_agent(agent: Optional[str]) -> str:
     Returns:
         PMA_OPENCODE_PREFIX if agent is "opencode", otherwise PMA_PREFIX.
     """
-    if isinstance(agent, str) and agent.strip().lower() == "opencode":
-        return PMA_OPENCODE_PREFIX
-    return PMA_PREFIX
+    normalized = _normalize_pma_agent_family(agent)
+    if normalized is None:
+        return PMA_PREFIX
+    return f"{PMA_KEY}.{normalized}."
 
 
 def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
@@ -105,11 +122,12 @@ def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
     Returns:
         List of prefixes to reset.
     """
-    if agent == "opencode":
-        return [PMA_OPENCODE_PREFIX]
-    if agent == "codex":
+    normalized = _normalize_pma_agent_family(agent)
+    if normalized is None:
+        if agent in {None, "", "all", "codex"}:
+            return [PMA_PREFIX]
         return [PMA_PREFIX]
-    return [PMA_PREFIX, PMA_OPENCODE_PREFIX]
+    return [f"{PMA_KEY}.{normalized}."]
 
 
 def pma_topic_scoped_key(
@@ -146,15 +164,23 @@ def file_chat_discord_key(agent: str, channel_id: str, workspace_path: str) -> s
     multiple Discord channels to have independent file-chat threads per repo.
 
     Args:
-        agent: Agent identifier ("opencode" or "codex"/other).
+        agent: Agent identifier ("opencode", "hermes", "codex"/other).
         channel_id: Discord channel ID.
         workspace_path: Absolute workspace path (hashed for key stability).
 
     Returns:
         Registry key like "file_chat.discord.{channel}.{digest}" or
-        "file_chat.opencode.discord.{channel}.{digest}".
+        "file_chat.{agent}.discord.{channel}.{digest}".
     """
-    prefix = FILE_CHAT_OPENCODE_PREFIX if agent == "opencode" else FILE_CHAT_PREFIX
+    normalized_agent = (agent or "").strip().lower()
+    if normalized_agent in ("codex", ""):
+        prefix = FILE_CHAT_PREFIX
+    elif normalized_agent == "opencode":
+        prefix = FILE_CHAT_OPENCODE_PREFIX
+    elif normalized_agent == "hermes":
+        prefix = FILE_CHAT_HERMES_PREFIX
+    else:
+        prefix = f"{FILE_CHAT_PREFIX}{normalized_agent}."
     digest = hashlib.sha256(workspace_path.encode("utf-8")).hexdigest()[:12]
     return f"{prefix}discord.{channel_id.strip()}.{digest}"
 
@@ -172,12 +198,14 @@ def normalize_feature_key(raw: str) -> str:
     key = key.replace("/", ".").replace(":", ".")
     if key in FEATURE_KEYS:
         return key
-    # Allow per-target file chat threads (e.g. file_chat.ticket.1, file_chat.workspace.spec).
-    for prefix in (FILE_CHAT_PREFIX, FILE_CHAT_OPENCODE_PREFIX):
+    for prefix in (
+        FILE_CHAT_PREFIX,
+        FILE_CHAT_OPENCODE_PREFIX,
+        FILE_CHAT_HERMES_PREFIX,
+    ):
         if key.startswith(prefix) and len(key) > len(prefix):
             return key
-    # Allow per-topic PMA threads (e.g. pma.-1001234567890:42, pma.opencode.123:root).
-    for prefix in (PMA_PREFIX, PMA_OPENCODE_PREFIX):
+    for prefix in (PMA_PREFIX, PMA_OPENCODE_PREFIX, PMA_HERMES_PREFIX):
         if key.startswith(prefix) and len(key) > len(prefix):
             return key
     raise ValueError(f"invalid feature key: {raw}")
@@ -224,10 +252,13 @@ class AppServerThreadRegistry:
         payload: dict[str, object] = {
             "file_chat": threads.get(FILE_CHAT_KEY),
             "file_chat_opencode": threads.get(FILE_CHAT_OPENCODE_KEY),
+            "file_chat_hermes": threads.get(FILE_CHAT_HERMES_KEY),
             "autorunner": threads.get("autorunner"),
             "autorunner_opencode": threads.get("autorunner.opencode"),
+            "autorunner_hermes": threads.get("autorunner.hermes"),
             "pma": threads.get(PMA_KEY),
             "pma_opencode": threads.get(PMA_OPENCODE_KEY),
+            "pma_hermes": threads.get(PMA_HERMES_KEY),
         }
         notice = self.corruption_notice()
         if notice:

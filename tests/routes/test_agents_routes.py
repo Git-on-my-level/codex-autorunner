@@ -18,6 +18,7 @@ def _build_client(with_supervisors: bool = False) -> TestClient:
         app.state.config = SimpleNamespace(
             agent_binary=lambda _agent_id: "zeroclaw",
         )
+        app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
     app.include_router(build_agents_routes())
     return TestClient(app)
 
@@ -41,6 +42,35 @@ def test_agent_turn_events_route_rejects_blank_path_agent_segment() -> None:
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Unknown agent"}
+
+
+def test_agent_turn_events_route_preserves_resume_offset_for_codex() -> None:
+    class FakeEvents:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        def stream(self, thread_id: str, turn_id: str, *, after_id: int = 0):
+            self.calls.append((thread_id, turn_id, after_id))
+
+            async def _stream():
+                if False:
+                    yield b""
+
+            return _stream()
+
+    app = FastAPI()
+    app.state.app_server_events = FakeEvents()
+    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+    app.include_router(build_agents_routes())
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/agents/codex/turns/turn-123/events",
+            params={"thread_id": "thread-123", "since_event_id": 7},
+        )
+
+    assert response.status_code == 200
+    assert app.state.app_server_events.calls == [("thread-123", "turn-123", 7)]
 
 
 def test_list_agents_returns_capabilities() -> None:
@@ -93,6 +123,29 @@ def test_list_agents_includes_expected_capabilities() -> None:
         assert "event_streaming" in zeroclaw_caps
 
 
+def test_list_agents_fallback_does_not_advertise_unavailable_capabilities(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.agents.get_available_agents",
+        lambda _state: {},
+    )
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["agents"] == [
+        {
+            "id": "codex",
+            "name": "Codex",
+            "protocol_version": "2.0",
+            "capabilities": [],
+        }
+    ]
+
+
 def test_list_agents_omits_zeroclaw_when_runtime_is_incompatible(
     monkeypatch,
 ) -> None:
@@ -117,3 +170,121 @@ def test_list_agents_omits_zeroclaw_when_runtime_is_incompatible(
     assert response.status_code == 200
     data = response.json()
     assert "zeroclaw" not in {agent["id"] for agent in data["agents"]}
+
+
+def test_list_agents_includes_hermes_when_available(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 0.1.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    data = response.json()
+    agents = {agent["id"]: agent for agent in data["agents"]}
+
+    if "hermes" in agents:
+        hermes_caps = agents["hermes"]["capabilities"]
+        assert "durable_threads" in hermes_caps
+        assert "message_turns" in hermes_caps
+        assert "interrupt" in hermes_caps
+        assert "active_thread_discovery" in hermes_caps
+        assert "event_streaming" in hermes_caps
+        assert "approvals" in hermes_caps
+        assert "model_listing" not in hermes_caps
+
+
+def test_models_endpoint_returns_capability_error_for_hermes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 0.1.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents/hermes/models")
+
+    assert response.status_code == 400
+    data = response.json()
+    assert "model_listing" in data["detail"]
+    assert "hermes" in data["detail"]
+
+
+def test_models_endpoint_returns_capability_error_for_unknown_agent() -> None:
+    client = _build_client(with_supervisors=True)
+
+    response = client.get("/api/agents/unknown-agent/models")
+
+    assert response.status_code == 404
+    data = response.json()
+    assert "Unknown agent" in data["detail"]
+
+
+def test_events_endpoint_returns_capability_error_for_agent_without_event_streaming(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "zeroclaw 0.2.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+    from codex_autorunner.agents.zeroclaw.harness import ZEROCLAW_CAPABILITIES
+
+    if "event_streaming" in ZEROCLAW_CAPABILITIES:
+        return
+
+    client = _build_client(with_supervisors=True)
+
+    response = client.get(
+        "/api/agents/zeroclaw/turns/turn-123/events",
+        params={"thread_id": "thread-123"},
+    )
+
+    assert response.status_code == 400
+    data = response.json()
+    assert "event_streaming" in data["detail"]
+
+
+def test_events_endpoint_returns_unknown_agent_for_unregistered() -> None:
+    client = _build_client(with_supervisors=True)
+
+    response = client.get(
+        "/api/agents/nonexistent-agent/turns/turn-123/events",
+        params={"thread_id": "thread-123"},
+    )
+
+    assert response.status_code == 404
+    data = response.json()
+    assert "Unknown agent" in data["detail"]

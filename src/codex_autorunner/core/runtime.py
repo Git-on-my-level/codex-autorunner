@@ -123,6 +123,15 @@ def zeroclaw_runtime_preflight(hub_config: HubConfig):
     return _zeroclaw_runtime_preflight(hub_config)
 
 
+def _hermes_runtime_preflight(hub_config: HubConfig):
+    module = importlib.import_module("codex_autorunner.agents.hermes.supervisor")
+    return module.hermes_runtime_preflight(hub_config)
+
+
+def hermes_runtime_preflight(hub_config: HubConfig):
+    return _hermes_runtime_preflight(hub_config)
+
+
 def doctor(
     repo_root: Path,
     backend_orchestrator: Optional[Any] = None,
@@ -853,14 +862,18 @@ def pma_doctor_checks(
     )
 
     default_agent = pma_cfg.get("default_agent", "codex")
-    if default_agent not in ("codex", "opencode"):
+    from ..integrations.agents import get_registered_agents
+
+    registered_agents = get_registered_agents()
+    if default_agent not in registered_agents:
+        available = ", ".join(sorted(registered_agents.keys()))
         checks.append(
             DoctorCheck(
                 name="PMA default agent",
                 passed=False,
                 message=f"Invalid PMA default_agent: {default_agent}",
                 check_id="pma.default_agent",
-                fix="Set pma.default_agent to 'codex' or 'opencode' in config.",
+                fix=f"Set pma.default_agent to a registered agent. Available: {available}",
             )
         )
     else:
@@ -1044,8 +1057,7 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 name=f"Hub destination ({workspace.id})",
                 passed=True,
                 message=(
-                    f"{workspace.id}: effective destination '{kind}' "
-                    f"(source={source})"
+                    f"{workspace.id}: effective destination '{kind}' (source={source})"
                 ),
                 severity="info",
                 check_id="hub.destination",
@@ -1204,6 +1216,75 @@ def zeroclaw_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
             message=message,
             severity=severity,
             check_id="hub.zeroclaw.binary",
+            fix=fix,
+        )
+    )
+    return checks
+
+
+def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
+    """Report Hermes runtime compatibility when managed Hermes usage exists."""
+    checks: list[DoctorCheck] = []
+    try:
+        manifest = load_manifest(hub_config.manifest_path, hub_config.root)
+    except Exception:
+        manifest = None
+
+    enabled_workspaces: list[str] = []
+    if manifest is not None:
+        enabled_workspaces = sorted(
+            workspace.id
+            for workspace in manifest.agent_workspaces
+            if workspace.enabled and workspace.runtime.strip().lower() == "hermes"
+        )
+
+    try:
+        configured_binary = hub_config.agent_binary("hermes").strip()
+    except Exception:
+        configured_binary = ""
+
+    explicit_binary_override = bool(configured_binary and configured_binary != "hermes")
+    if not enabled_workspaces and not explicit_binary_override:
+        return checks
+
+    workspace_suffix = ""
+    if enabled_workspaces:
+        workspace_suffix = f" for enabled workspaces: {', '.join(enabled_workspaces)}"
+    result = hermes_runtime_preflight(hub_config)
+    severity = (
+        "info"
+        if result.status == "ready"
+        else ("error" if enabled_workspaces else "warning")
+    )
+    fix = result.fix
+    message = result.message
+    if workspace_suffix:
+        message = f"{message.rstrip('.')}{workspace_suffix}."
+    if result.status == "ready":
+        detail_parts = []
+        if result.version:
+            detail_parts.append(result.version)
+        if result.launch_mode:
+            detail_parts.append(f"launch_mode={result.launch_mode}")
+        suffix = f" ({', '.join(detail_parts)})" if detail_parts else ""
+        checks.append(
+            DoctorCheck(
+                name="Hermes runtime availability",
+                passed=True,
+                message=f"{message.rstrip('.')}{suffix}.",
+                severity="info",
+                check_id="hub.hermes.binary",
+            )
+        )
+        return checks
+
+    checks.append(
+        DoctorCheck(
+            name="Hermes runtime availability",
+            passed=False,
+            message=message,
+            severity=severity,
+            check_id="hub.hermes.binary",
             fix=fix,
         )
     )
@@ -1577,6 +1658,7 @@ __all__ = [
     "RuntimeContext",
     "clear_stale_lock",
     "doctor",
+    "hermes_doctor_checks",
     "hub_destination_doctor_checks",
     "hub_worktree_doctor_checks",
     "pma_doctor_checks",

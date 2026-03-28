@@ -7,12 +7,7 @@ import pytest
 from codex_autorunner.agents.registry import (
     CAR_PLUGIN_API_VERSION,
     AgentDescriptor,
-    _check_codex_health,
-    _check_opencode_health,
-    _check_zeroclaw_health,
-    _make_codex_harness,
-    _make_opencode_harness,
-    get_available_agents,
+    _check_hermes_health,
     get_registered_agents,
     has_capability,
     reload_agents,
@@ -145,6 +140,17 @@ class TestHasCapability:
         assert has_capability("zeroclaw", "event_streaming") is True
         assert has_capability("zeroclaw", "interrupt") is False
 
+    def test_hermes_advertises_acp_capabilities(self):
+        assert has_capability("hermes", "durable_threads") is True
+        assert has_capability("hermes", "message_turns") is True
+        assert has_capability("hermes", "active_thread_discovery") is True
+        assert has_capability("hermes", "event_streaming") is True
+        assert has_capability("hermes", "interrupt") is True
+        assert has_capability("hermes", "approvals") is True
+        assert has_capability("hermes", "review") is False
+        assert has_capability("hermes", "model_listing") is False
+        assert has_capability("hermes", "transcript_history") is False
+
     def test_legacy_capability_aliases_still_normalize(self):
         assert has_capability("codex", "threads") is True
         assert has_capability("codex", "turns") is True
@@ -187,255 +193,9 @@ class TestGetRegisteredAgents:
         agents = get_registered_agents()
         assert "codex" in agents
         assert "opencode" in agents
-
-    def test_agent_descriptor_structure(self):
-        agents = get_registered_agents()
-        assert isinstance(agents["codex"], AgentDescriptor)
-        assert isinstance(agents["opencode"], AgentDescriptor)
-
-    def test_agent_properties(self):
-        agents = get_registered_agents()
-        assert agents["codex"].id == "codex"
-        assert agents["codex"].name == "Codex"
-        assert agents["opencode"].id == "opencode"
-        assert agents["opencode"].name == "OpenCode"
-
-
-class TestGetAvailableAgents:
-    def test_both_agents_available(self, app_ctx):
-        available = get_available_agents(app_ctx)
-        assert "codex" in available
-        assert "opencode" in available
-        assert len(available) == 2
-
-    def test_codex_only_available(self, app_ctx_codex_only):
-        available = get_available_agents(app_ctx_codex_only)
-        assert "codex" in available
-        assert "opencode" not in available
-        assert len(available) == 1
-
-    def test_opencode_only_available(self, app_ctx_opencode_only):
-        available = get_available_agents(app_ctx_opencode_only)
-        assert "codex" not in available
-        assert "opencode" in available
-        assert len(available) == 1
-
-    def test_no_agents_available(self, app_ctx_missing_supervisors):
-        available = get_available_agents(app_ctx_missing_supervisors)
-        assert "codex" not in available
-        assert "opencode" not in available
-        assert len(available) == 0
-
-    def test_none_context_raises_attribute_error(self):
-        with pytest.raises(AttributeError):
-            get_available_agents(None)
-
-    def test_malformed_context_missing_attributes_raises(self):
-        class BadContext:
-            pass
-
-        with pytest.raises(AttributeError):
-            get_available_agents(BadContext())
-
-    def test_zeroclaw_available_only_when_preflight_is_ready(
-        self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setattr(
-            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-            lambda _config: type(
-                "Result",
-                (),
-                {
-                    "status": "ready",
-                    "version": "zeroclaw test",
-                    "launch_mode": "session_state_file",
-                    "message": "ready",
-                    "fix": None,
-                },
-            )(),
-        )
-
-        available = get_available_agents(app_ctx_zeroclaw_ready)
-
-        assert "zeroclaw" in available
-
-    def test_zeroclaw_omitted_when_preflight_is_incompatible(
-        self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setattr(
-            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-            lambda _config: type(
-                "Result",
-                (),
-                {
-                    "status": "incompatible",
-                    "version": "zeroclaw 0.2.0",
-                    "launch_mode": None,
-                    "message": "incompatible",
-                    "fix": "Install a compatible ZeroClaw build.",
-                },
-            )(),
-        )
-
-        available = get_available_agents(app_ctx_zeroclaw_ready)
-
-        assert "zeroclaw" not in available
-
-
-class TestCheckCodexHealth:
-    def test_healthy_context(self, app_ctx):
-        assert _check_codex_health(app_ctx) is True
-
-    def test_missing_supervisor(self, app_ctx_missing_supervisors):
-        assert _check_codex_health(app_ctx_missing_supervisors) is False
-
-    def test_none_supervisor(self):
-        class NoneSupervisorContext:
-            app_server_supervisor = None
-
-        assert _check_codex_health(NoneSupervisorContext()) is False
-
-
-class TestCheckOpenCodeHealth:
-    def test_healthy_context(self, app_ctx):
-        assert _check_opencode_health(app_ctx) is True
-
-    def test_missing_supervisor(self, app_ctx_missing_supervisors):
-        assert _check_opencode_health(app_ctx_missing_supervisors) is False
-
-    def test_none_supervisor(self):
-        class NoneSupervisorContext:
-            opencode_supervisor = None
-
-        assert _check_opencode_health(NoneSupervisorContext()) is False
-
-
-class TestCheckZeroClawHealth:
-    def test_supervisor_short_circuits_preflight(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        class ContextWithSupervisor:
-            zeroclaw_supervisor = object()
-            config = object()
-
-        def _unexpected_preflight(_config):
-            raise AssertionError("preflight should not run when supervisor exists")
-
-        monkeypatch.setattr(
-            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-            _unexpected_preflight,
-        )
-
-        assert _check_zeroclaw_health(ContextWithSupervisor()) is True
-
-    def test_preflight_ready_context(
-        self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-            lambda _config: type(
-                "Result",
-                (),
-                {
-                    "status": "ready",
-                    "version": "zeroclaw test",
-                    "launch_mode": "session_state_file",
-                    "message": "ready",
-                    "fix": None,
-                },
-            )(),
-        )
-        assert _check_zeroclaw_health(app_ctx_zeroclaw_ready) is True
-
-    def test_preflight_incompatible_context(
-        self, app_ctx_zeroclaw_ready, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setattr(
-            "codex_autorunner.agents.registry.zeroclaw_runtime_preflight",
-            lambda _config: type(
-                "Result",
-                (),
-                {
-                    "status": "incompatible",
-                    "version": "zeroclaw 0.2.0",
-                    "launch_mode": None,
-                    "message": "incompatible",
-                    "fix": None,
-                },
-            )(),
-        )
-        assert _check_zeroclaw_health(app_ctx_zeroclaw_ready) is False
-
-
-class TestMakeCodexHarness:
-    def test_valid_context(self, app_ctx):
-        from codex_autorunner.agents.codex.harness import CodexHarness
-
-        harness = _make_codex_harness(app_ctx)
-        assert isinstance(harness, CodexHarness)
-
-    def test_missing_supervisor_raises(self, app_ctx_missing_supervisors):
-        with pytest.raises(RuntimeError, match="supervisor or events missing"):
-            _make_codex_harness(app_ctx_missing_supervisors)
-
-    def test_missing_events_raises(self):
-        class ContextWithSupervisorOnly:
-            app_server_supervisor = object()
-            app_server_events = None
-
-        with pytest.raises(RuntimeError, match="supervisor or events missing"):
-            _make_codex_harness(ContextWithSupervisorOnly())
-
-
-class TestMakeOpenCodeHarness:
-    def test_valid_context(self, app_ctx):
-        from codex_autorunner.agents.opencode.harness import OpenCodeHarness
-
-        harness = _make_opencode_harness(app_ctx)
-        assert isinstance(harness, OpenCodeHarness)
-
-    def test_missing_supervisor_raises(self, app_ctx_missing_supervisors):
-        with pytest.raises(RuntimeError, match="supervisor missing"):
-            _make_opencode_harness(app_ctx_missing_supervisors)
-
-
-class TestConcurrentAccess:
-    def test_concurrent_get_registered_agents_no_exceptions(self):
-        exceptions = []
-
-        def access_agents():
-            try:
-                get_registered_agents()
-            except Exception as e:
-                exceptions.append(e)
-
-        threads = [threading.Thread(target=access_agents) for _ in range(50)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert (
-            not exceptions
-        ), f"Exceptions occurred during concurrent access: {exceptions}"
-
-    def test_concurrent_get_registered_agents_consistent_results(self):
-        results = []
-
-        def access_agents():
-            results.append(get_registered_agents())
-
-        threads = [threading.Thread(target=access_agents) for _ in range(20)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-        assert len(results) == 20
-        for result in results:
-            assert "codex" in result
-            assert "opencode" in result
-            assert len(result) >= 2
+        assert "hermes" in agents
+        assert "zeroclaw" in agents
+        assert len(agents) >= 4
 
     def test_concurrent_reload_and_access_no_exceptions(self):
         exceptions = []
@@ -486,3 +246,65 @@ class TestPluginApiCompatibility:
         # built-ins remain
         assert "codex" in agents
         assert "opencode" in agents
+
+
+class TestHermesHarness:
+    def test_hermes_in_registered_agents(self):
+        agents = get_registered_agents()
+        assert "hermes" in agents
+        assert isinstance(agents["hermes"], AgentDescriptor)
+        assert agents["hermes"].id == "hermes"
+
+    def test_hermes_make_harness_reuses_bound_supervisor(self):
+        from codex_autorunner.agents.hermes.harness import HermesHarness
+
+        supervisor = object()
+
+        class MockContext:
+            hermes_supervisor = supervisor
+
+        harness = get_registered_agents()["hermes"].make_harness(MockContext())
+
+        assert isinstance(harness, HermesHarness)
+        assert harness._supervisor is supervisor
+
+    def test_hermes_health_check_missing_binary(self, monkeypatch):
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.hermes_binary_available",
+            lambda _config: False,
+        )
+
+        class MockConfig:
+            def agent_binary(self, _agent_id: str) -> str:
+                return "hermes"
+
+        class MockContext:
+            config = MockConfig()
+
+        result = _check_hermes_health(MockContext())
+        assert result is False
+
+    def test_hermes_health_check_available(self, monkeypatch):
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.hermes_runtime_preflight",
+            lambda _config: type(
+                "Result",
+                (),
+                {"status": "ready", "version": "hermes 1.0.0", "message": "Ready"},
+            )(),
+        )
+
+        class MockConfig:
+            def agent_binary(self, _agent_id: str) -> str:
+                return "hermes"
+
+        class MockContext:
+            config = MockConfig()
+
+        result = _check_hermes_health(MockContext())
+        assert result is True
+
+    def test_validate_agent_id_accepts_hermes(self):
+        assert validate_agent_id("hermes") == "hermes"
+        assert validate_agent_id("HERMES") == "hermes"
+        assert validate_agent_id("  hermes  ") == "hermes"

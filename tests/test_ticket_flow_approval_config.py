@@ -21,9 +21,10 @@ from codex_autorunner.tickets.agent_pool import AgentTurnRequest
 
 
 class _FakeHarness:
-    def __init__(self):
+    def __init__(self, agent_id: str = "codex"):
         self.calls = []
         self._turn_id = 0
+        self.agent_id = agent_id
 
     display_name = "Fake Harness"
     capabilities = frozenset(
@@ -43,13 +44,13 @@ class _FakeHarness:
         self, workspace_root: Path, title: Optional[str] = None
     ) -> ConversationRef:
         _ = workspace_root, title
-        return ConversationRef(agent="codex", id="thread-1")
+        return ConversationRef(agent=self.agent_id, id="thread-1")
 
     async def resume_conversation(
         self, workspace_root: Path, conversation_id: str
     ) -> ConversationRef:
         _ = workspace_root
-        return ConversationRef(agent="codex", id=conversation_id)
+        return ConversationRef(agent=self.agent_id, id=conversation_id)
 
     async def start_turn(
         self,
@@ -87,14 +88,15 @@ class _FakeHarness:
         return TerminalTurnResult(status="ok", assistant_text="ok", raw_events=[])
 
 
-def _descriptor() -> AgentDescriptor:
+def _descriptor(agent_id: str = "codex", name: str = "Codex") -> AgentDescriptor:
     return AgentDescriptor(
-        id="codex",
-        name="Codex",
+        id=agent_id,
+        name=name,
         capabilities=frozenset(
             {
                 RuntimeCapability("durable_threads"),
                 RuntimeCapability("message_turns"),
+                RuntimeCapability("approvals"),
             }
         ),
         make_harness=lambda ctx: ctx.fake_harness,
@@ -156,6 +158,39 @@ async def test_agent_pool_uses_yolo_policy_for_ticket_flow(tmp_path: Path):
 
     assert fake.calls[0]["approval_mode"] == "never"
     assert fake.calls[0]["sandbox_policy"] == "dangerFullAccess"
+
+
+@pytest.mark.asyncio
+async def test_agent_pool_applies_ticket_flow_approval_policy_to_hermes(
+    tmp_path: Path,
+):
+    app_server_cfg = _parse_app_server_config(
+        None, tmp_path, DEFAULT_REPO_CONFIG["app_server"]
+    )
+    cfg = SimpleNamespace(
+        root=tmp_path,
+        app_server=app_server_cfg,
+        opencode=SimpleNamespace(session_stall_timeout_seconds=None),
+        ticket_flow=TicketFlowConfig(
+            approval_mode="review",
+            default_approval_decision="cancel",
+            include_previous_ticket_context=False,
+        ),
+    )
+    pool = DefaultAgentPool(cfg)  # type: ignore[arg-type]
+    fake = _FakeHarness(agent_id="hermes")
+    pool._agent_descriptors_override = {  # type: ignore[attr-defined]
+        "hermes": _descriptor("hermes", "Hermes")
+    }
+    pool._harness_context_override = SimpleNamespace(fake_harness=fake)  # type: ignore[attr-defined]
+
+    result = await pool.run_turn(
+        AgentTurnRequest(agent_id="hermes", prompt="hi", workspace_root=tmp_path)
+    )
+
+    assert result.agent_id == "hermes"
+    assert fake.calls[0]["approval_mode"] == "on-request"
+    assert fake.calls[0]["sandbox_policy"] == "workspaceWrite"
 
 
 def test_parse_app_server_output_policy_default(tmp_path: Path) -> None:

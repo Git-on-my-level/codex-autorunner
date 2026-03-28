@@ -80,7 +80,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "review": _spec(
             "review",
-            "run a code review",
+            "run a code review when supported by the active agent",
             handlers._handle_review,
         ),
         "flow": _spec(
@@ -100,7 +100,7 @@ def build_command_specs(handlers: Any) -> dict[str, CommandSpec]:
         ),
         "model": _spec(
             "model",
-            "list or set the model",
+            "list or set the active model when supported",
             handlers._handle_model,
         ),
         "approvals": _spec(

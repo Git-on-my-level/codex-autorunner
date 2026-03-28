@@ -47,6 +47,7 @@ from .wiring import build_app_server_supervisor_factory
 
 _logger = logging.getLogger(__name__)
 _DEFAULT_EXECUTION_ERROR = "Delegated turn failed"
+_TICKET_FLOW_REQUIRED_CAPABILITIES = ("durable_threads", "message_turns")
 
 
 def _normalize_model(model: Any) -> Optional[str]:
@@ -328,6 +329,21 @@ class DefaultAgentPool:
         )
         return self._orchestration_service
 
+    def _resolve_ticket_flow_agent_id(self, agent_id: str) -> str:
+        service = self._get_orchestration_service()
+        definition = service.get_agent_definition(agent_id)
+        if definition is None:
+            raise ValueError(f"Unknown agent_id: {agent_id}")
+        resolved_agent_id = cast(str, definition.agent_id)
+        for capability in _TICKET_FLOW_REQUIRED_CAPABILITIES:
+            if capability not in definition.capabilities:
+                raise ValueError(
+                    "Agent "
+                    f"'{resolved_agent_id}' does not support ticket-flow execution "
+                    f"(missing capability: {capability})"
+                )
+        return resolved_agent_id
+
     async def close_all(self) -> None:
         worker_lock = self._ensure_worker_lock()
         async with worker_lock:
@@ -354,6 +370,7 @@ class DefaultAgentPool:
         for supervisor in {
             getattr(context, "app_server_supervisor", None),
             getattr(context, "opencode_supervisor", None),
+            getattr(context, "hermes_supervisor", None),
             getattr(context, "zeroclaw_supervisor", None),
         }:
             close_all = getattr(supervisor, "close_all", None)
@@ -900,9 +917,7 @@ class DefaultAgentPool:
                     self._thread_workers.pop(thread_target_id, None)
 
     async def run_turn(self, req: AgentTurnRequest) -> AgentTurnResult:
-        if req.agent_id not in {"codex", "opencode"}:
-            raise ValueError(f"Unsupported agent_id: {req.agent_id}")
-
+        agent_id = self._resolve_ticket_flow_agent_id(req.agent_id)
         options = req.options if isinstance(req.options, dict) else {}
         model = _normalize_model(options.get("model"))
         reasoning = (
@@ -928,10 +943,10 @@ class DefaultAgentPool:
         ticket_flow_run_id = _normalize_optional_text(options.get("ticket_flow_run_id"))
         thread = service.resolve_thread_target(
             thread_target_id=_normalize_optional_text(req.conversation_id),
-            agent_id=req.agent_id,
+            agent_id=agent_id,
             workspace_root=req.workspace_root.resolve(),
             repo_id=self._repo_id,
-            display_name=f"ticket-flow:{req.agent_id}",
+            display_name=f"ticket-flow:{agent_id}",
             backend_thread_id=None,
             metadata={
                 "thread_kind": "ticket_flow",

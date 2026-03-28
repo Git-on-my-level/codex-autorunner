@@ -4,11 +4,18 @@ import importlib.metadata
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional, cast
 
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .base import AgentHarness
 from .codex.harness import CodexHarness
+from .hermes.harness import HERMES_CAPABILITIES, HermesHarness
+from .hermes.supervisor import (
+    HermesApprovalHandler,
+    build_hermes_supervisor_from_config,
+    hermes_binary_available,
+    hermes_runtime_preflight,
+)
 from .opencode.harness import OpenCodeHarness
 from .types import RuntimeCapability, normalize_runtime_capabilities
 from .zeroclaw.harness import ZEROCLAW_CAPABILITIES, ZeroClawHarness
@@ -114,6 +121,68 @@ def _check_zeroclaw_health(ctx: Any) -> bool:
     return False
 
 
+def _make_hermes_harness(ctx: Any) -> AgentHarness:
+    supervisor = getattr(ctx, "hermes_supervisor", None)
+    if supervisor is None:
+        config = getattr(ctx, "config", None)
+        if config is None:
+            config = getattr(ctx, "_config", None)
+        logger = getattr(ctx, "logger", None)
+        if config is None:
+            raise RuntimeError("Hermes harness unavailable: config missing")
+        supervisor = build_hermes_supervisor_from_config(
+            config,
+            logger=logger,
+            approval_handler=_resolve_surface_approval_handler(ctx),
+            default_approval_decision=_resolve_default_approval_decision(ctx),
+        )
+        if supervisor is None:
+            raise RuntimeError("Hermes harness unavailable: binary not configured")
+        try:
+            ctx.hermes_supervisor = supervisor
+        except Exception:
+            pass
+    return HermesHarness(supervisor)
+
+
+def _check_hermes_health(ctx: Any) -> bool:
+    supervisor = getattr(ctx, "hermes_supervisor", None)
+    if supervisor is not None:
+        return True
+    config = getattr(ctx, "config", None)
+    if config is not None:
+        return hermes_runtime_preflight(config).status == "ready"
+    binary = getattr(ctx, "hermes_binary", None)
+    if isinstance(binary, str) and binary.strip():
+        return hermes_binary_available(
+            type(
+                "_InlineConfig",
+                (),
+                {"agent_binary": staticmethod(lambda _agent_id: binary.strip())},
+            )()
+        )
+    return False
+
+
+def _resolve_surface_approval_handler(ctx: Any) -> Optional[HermesApprovalHandler]:
+    for attr in ("_handle_backend_approval_request", "_handle_approval_request"):
+        handler = getattr(ctx, attr, None)
+        if callable(handler):
+            return cast(HermesApprovalHandler, handler)
+    return None
+
+
+def _resolve_default_approval_decision(ctx: Any) -> str:
+    config = getattr(ctx, "config", None)
+    if config is None:
+        config = getattr(ctx, "_config", None)
+    ticket_flow = getattr(config, "ticket_flow", None)
+    value = getattr(ticket_flow, "default_approval_decision", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return "cancel"
+
+
 _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
     "codex": AgentDescriptor(
         id="codex",
@@ -156,6 +225,13 @@ _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
         capabilities=ZEROCLAW_CAPABILITIES,
         make_harness=_make_zeroclaw_harness,
         healthcheck=_check_zeroclaw_health,
+    ),
+    "hermes": AgentDescriptor(
+        id="hermes",
+        name="Hermes",
+        capabilities=HERMES_CAPABILITIES,
+        make_harness=_make_hermes_harness,
+        healthcheck=_check_hermes_health,
     ),
 }
 

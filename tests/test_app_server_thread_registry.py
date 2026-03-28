@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from codex_autorunner.core.app_server_threads import (
+    FILE_CHAT_HERMES_PREFIX,
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,
     PMA_KEY,
@@ -54,6 +55,7 @@ def test_thread_registry_reset_all_clears_notice(tmp_path: Path) -> None:
 def test_normalize_feature_key_accepts_pma() -> None:
     assert normalize_feature_key("pma") == "pma"
     assert normalize_feature_key("pma.opencode") == "pma.opencode"
+    assert normalize_feature_key("pma.hermes") == "pma.hermes"
     assert normalize_feature_key("PMA:OPENCODE") == "pma.opencode"
 
 
@@ -62,10 +64,13 @@ class TestFeatureKeyNormalization:
         static_keys = [
             "file_chat",
             "file_chat.opencode",
+            "file_chat.hermes",
             "pma",
             "pma.opencode",
+            "pma.hermes",
             "autorunner",
             "autorunner.opencode",
+            "autorunner.hermes",
         ]
         for key in static_keys:
             assert normalize_feature_key(key) == key
@@ -78,8 +83,22 @@ class TestFeatureKeyNormalization:
             == "file_chat.opencode.discord.123"
         )
         assert (
+            normalize_feature_key("file_chat.hermes.discord.456")
+            == "file_chat.hermes.discord.456"
+        )
+        assert (
             normalize_feature_key("FILE_CHAT/workspace.spec")
             == "file_chat.workspace.spec"
+        )
+
+    def test_accepts_hermes_prefixed_keys(self) -> None:
+        assert normalize_feature_key("file_chat.hermes") == "file_chat.hermes"
+        assert normalize_feature_key("pma.hermes") == "pma.hermes"
+        assert normalize_feature_key("autorunner.hermes") == "autorunner.hermes"
+        assert normalize_feature_key("pma.hermes.topic-abc") == "pma.hermes.topic-abc"
+        assert (
+            normalize_feature_key("file_chat.hermes.ticket.1")
+            == "file_chat.hermes.ticket.1"
         )
 
     def test_normalizes_separators(self) -> None:
@@ -256,11 +275,15 @@ class TestPmaBaseKeyHelper:
         assert pma_base_key("OpenCode") == PMA_OPENCODE_KEY
         assert pma_base_key("  OPENCODE  ") == PMA_OPENCODE_KEY
 
-    def test_returns_codex_key_for_other_agents(self) -> None:
+    def test_returns_codex_key_for_default_codex_family(self) -> None:
         assert pma_base_key("codex") == PMA_KEY
-        assert pma_base_key("codex-alt") == PMA_KEY
         assert pma_base_key("") == PMA_KEY
         assert pma_base_key(None) == PMA_KEY  # type: ignore
+
+    def test_returns_agent_scoped_key_for_other_runtimes(self) -> None:
+        assert pma_base_key("hermes") == "pma.hermes"
+        assert pma_base_key("zeroclaw") == "pma.zeroclaw"
+        assert pma_base_key("codex-alt") == "pma.codex-alt"
 
 
 class TestPmaTopicScopedKeyHelper:
@@ -306,6 +329,24 @@ class TestFileChatDiscordKeyHelper:
             workspace_path="/workspace/other-repo",
         )
         assert key.startswith(FILE_CHAT_OPENCODE_PREFIX + "discord.987654321.")
+        assert len(key.split(".")[-1]) == 12
+
+    def test_builds_hermes_discord_key(self) -> None:
+        key = file_chat_discord_key(
+            agent="hermes",
+            channel_id="111222333",
+            workspace_path="/workspace/hermes-repo",
+        )
+        assert key.startswith(FILE_CHAT_HERMES_PREFIX + "discord.111222333.")
+        assert len(key.split(".")[-1]) == 12
+
+    def test_builds_other_agent_discord_key(self) -> None:
+        key = file_chat_discord_key(
+            agent="custom-agent",
+            channel_id="999888777",
+            workspace_path="/workspace/custom-repo",
+        )
+        assert key.startswith("file_chat.custom-agent.discord.999888777.")
         assert len(key.split(".")[-1]) == 12
 
     def test_stable_hash_for_same_path(self) -> None:
@@ -394,11 +435,15 @@ class TestPmaPrefixForAgent:
         assert pma_prefix_for_agent("OpenCode") == PMA_OPENCODE_PREFIX
         assert pma_prefix_for_agent("  OPENCODE  ") == PMA_OPENCODE_PREFIX
 
-    def test_returns_codex_prefix_for_other_agents(self) -> None:
+    def test_returns_codex_prefix_for_default_codex_family(self) -> None:
         assert pma_prefix_for_agent("codex") == PMA_PREFIX
-        assert pma_prefix_for_agent("codex-alt") == PMA_PREFIX
         assert pma_prefix_for_agent("") == PMA_PREFIX
         assert pma_prefix_for_agent(None) == PMA_PREFIX
+
+    def test_returns_agent_scoped_prefix_for_other_runtimes(self) -> None:
+        assert pma_prefix_for_agent("hermes") == "pma.hermes."
+        assert pma_prefix_for_agent("zeroclaw") == "pma.zeroclaw."
+        assert pma_prefix_for_agent("codex-alt") == "pma.codex-alt."
 
 
 class TestPmaPrefixesForReset:
@@ -410,8 +455,11 @@ class TestPmaPrefixesForReset:
         result = pma_prefixes_for_reset("codex")
         assert result == [PMA_PREFIX]
 
-    def test_returns_both_prefixes_for_all_or_none(self) -> None:
+    def test_returns_agent_scoped_prefix_for_other_runtimes(self) -> None:
+        assert pma_prefixes_for_reset("hermes") == ["pma.hermes."]
+        assert pma_prefixes_for_reset("zeroclaw") == ["pma.zeroclaw."]
+
+    def test_returns_codex_family_prefix_for_all_or_none(self) -> None:
         for agent in (None, "all", ""):
             result = pma_prefixes_for_reset(agent)
-            assert PMA_PREFIX in result
-            assert PMA_OPENCODE_PREFIX in result
+            assert result == [PMA_PREFIX]

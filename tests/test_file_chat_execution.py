@@ -40,6 +40,21 @@ def _make_request(repo_root: Path) -> SimpleNamespace:
     )
 
 
+def _make_request_with_hermes(repo_root: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                app_server_supervisor=object(),
+                app_server_threads=None,
+                opencode_supervisor=None,
+                hermes_supervisor=object(),
+                engine=SimpleNamespace(repo_root=repo_root),
+                app_server_events=None,
+            )
+        )
+    )
+
+
 @pytest.mark.asyncio
 async def test_execute_file_chat_writes_draft_working_copy_without_touching_live_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -252,3 +267,39 @@ async def test_extracted_draft_handlers_reconstruct_content_from_artifacts(
     assert target_path.read_text(encoding="utf-8") == "drafted\n"
     assert target.state_key not in draft_utils.load_state(repo_root).get("drafts", {})
     assert not draft_utils.draft_dir(repo_root, target.state_key).exists()
+
+
+@pytest.mark.asyncio
+async def test_execute_file_chat_rejects_hermes_with_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path
+    target_path = repo_root / ".codex-autorunner" / "contextspace" / "spec.md"
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text("before\n", encoding="utf-8")
+    target = parse_target(repo_root, "contextspace:spec")
+
+    async def fake_get_or_create_interrupt_event(
+        _request, _state_key: str
+    ) -> asyncio.Event:
+        return asyncio.Event()
+
+    async def fake_update_turn_state(*args, **kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(
+        runtime, "get_or_create_interrupt_event", fake_get_or_create_interrupt_event
+    )
+    monkeypatch.setattr(runtime, "update_turn_state", fake_update_turn_state)
+
+    result = await execute_file_chat(
+        _make_request_with_hermes(repo_root),
+        repo_root,
+        target,
+        "edit the file",
+        agent="hermes",
+    )
+
+    assert result["status"] == "error"
+    assert "hermes" in result["detail"].lower()
+    assert "not supported" in result["detail"].lower()

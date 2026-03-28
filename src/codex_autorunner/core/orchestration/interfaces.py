@@ -126,7 +126,7 @@ class RuntimeThreadHarness(Protocol):
 
     def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
-    ) -> AsyncIterator[str]: ...
+    ) -> AsyncIterator[Any]: ...
 
 
 @runtime_checkable

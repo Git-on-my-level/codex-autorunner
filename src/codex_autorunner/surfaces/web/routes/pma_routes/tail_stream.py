@@ -9,8 +9,27 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from .....agents.base import (
+    harness_progress_event_stream,
+    harness_supports_progress_event_stream,
+)
+from .....agents.codex.harness import CodexHarness
 from .....core.app_server_logging import AppServerEventFormatter
+from .....core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_raw_event,
+)
 from .....core.pma_thread_store import PmaThreadStore
+from .....core.ports.run_event import (
+    ApprovalRequested,
+    Completed,
+    Failed,
+    OutputDelta,
+    RunNotice,
+    TokenUsage,
+    ToolCall,
+    ToolResult,
+)
 from .....core.redaction import redact_text
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
@@ -671,11 +690,208 @@ def _record_serialized_tail_event(
     return event_id
 
 
+def _managed_thread_harness(service: Any, agent_id: str) -> Any:
+    factory = getattr(service, "harness_factory", None)
+    if not callable(factory):
+        return None
+    try:
+        return factory(agent_id)
+    except Exception:
+        return None
+
+
+def _runtime_raw_payload(raw_event: Any) -> dict[str, Any]:
+    if isinstance(raw_event, dict):
+        return dict(raw_event)
+    if isinstance(raw_event, str):
+        _event_name, payload = _parse_inline_sse(raw_event)
+        return payload
+    return {}
+
+
+def _runtime_method_and_params(raw_event: Any) -> tuple[str, dict[str, Any]]:
+    payload = _runtime_raw_payload(raw_event)
+    message = coerce_dict(payload.get("message"))
+    if message:
+        return (
+            str(message.get("method") or "").strip().lower(),
+            coerce_dict(message.get("params")),
+        )
+    return (
+        str(payload.get("method") or "").strip().lower(),
+        coerce_dict(payload.get("params")),
+    )
+
+
+def _runtime_terminal_tail_event(
+    *,
+    raw_event: Any,
+    event_id: int,
+    received_at: str,
+) -> dict[str, Any] | None:
+    method, params = _runtime_method_and_params(raw_event)
+    if not method:
+        return None
+    status = str(params.get("status") or "").strip().lower()
+    if method in {"prompt/completed", "turn/completed", "session.idle"}:
+        event_type = "turn_completed"
+        summary = "Turn completed"
+        if status in {"interrupt", "interrupted", "cancelled", "canceled", "aborted"}:
+            event_type = "turn_interrupted"
+            summary = "Turn interrupted"
+        elif status in {"error", "failed"}:
+            event_type = "turn_failed"
+            summary = "Turn failed"
+        return {
+            "event_id": event_id,
+            "event_type": event_type,
+            "summary": summary,
+            "lines": [summary],
+            "received_at_ms": None,
+            "received_at": received_at,
+            "tool_name": None,
+            "tool_state": None,
+        }
+    if method in {"prompt/cancelled", "turn/cancelled"}:
+        return {
+            "event_id": event_id,
+            "event_type": "turn_interrupted",
+            "summary": "Turn interrupted",
+            "lines": ["Turn interrupted"],
+            "received_at_ms": None,
+            "received_at": received_at,
+            "tool_name": None,
+            "tool_state": None,
+        }
+    if method in {"prompt/failed", "turn/failed", "turn/error", "error"}:
+        detail = (
+            str(params.get("message") or params.get("error") or "Turn failed").strip()
+            or "Turn failed"
+        )
+        return {
+            "event_id": event_id,
+            "event_type": "turn_failed",
+            "summary": truncate_text(redact_text(detail), 220),
+            "lines": [truncate_text(redact_text(detail), 220)],
+            "received_at_ms": None,
+            "received_at": received_at,
+            "tool_name": None,
+            "tool_state": None,
+        }
+    return None
+
+
+def _tail_event_from_run_event(
+    run_event: Any,
+    *,
+    event_id: int,
+    received_at: str,
+) -> dict[str, Any] | None:
+    tool_name: str | None = None
+    tool_state: str | None = None
+    event_type = "progress"
+    summary = ""
+    if isinstance(run_event, OutputDelta):
+        event_type = "assistant_update"
+        summary = run_event.content or "Assistant update"
+    elif isinstance(run_event, ToolCall):
+        event_type = "tool_started"
+        tool_name = _truncate_tool_name(run_event.tool_name)
+        tool_state = "started"
+        summary = f"tool: {tool_name or 'unknown'}"
+    elif isinstance(run_event, ToolResult):
+        event_type = "tool_failed" if run_event.status == "error" else "tool_completed"
+        tool_name = _truncate_tool_name(run_event.tool_name)
+        tool_state = "failed" if run_event.status == "error" else "completed"
+        summary = f"tool: {tool_name or 'unknown'}"
+    elif isinstance(run_event, ApprovalRequested):
+        event_type = "progress"
+        summary = run_event.description or "Approval requested"
+    elif isinstance(run_event, TokenUsage):
+        event_type = "progress"
+        summary = "Token usage updated"
+    elif isinstance(run_event, RunNotice):
+        event_type = "assistant_update" if run_event.kind == "thinking" else "progress"
+        summary = run_event.message or run_event.kind.replace("_", " ").title()
+    elif isinstance(run_event, Completed):
+        event_type = "turn_completed"
+        summary = run_event.final_message or "Turn completed"
+    elif isinstance(run_event, Failed):
+        detail = run_event.error_message or "Turn failed"
+        lowered = detail.lower()
+        if "interrupt" in lowered or "cancel" in lowered or "abort" in lowered:
+            event_type = "turn_interrupted"
+            summary = "Turn interrupted"
+        else:
+            event_type = "turn_failed"
+            summary = detail
+    else:
+        return None
+
+    summary = truncate_text(redact_text(summary), 220)
+    return {
+        "event_id": event_id,
+        "event_type": event_type,
+        "summary": summary,
+        "lines": [summary] if summary else [],
+        "received_at_ms": None,
+        "received_at": received_at,
+        "tool_name": tool_name,
+        "tool_state": tool_state,
+    }
+
+
+async def _serialize_runtime_raw_tail_events(
+    raw_event: Any,
+    state: RuntimeThreadRunEventState,
+    *,
+    level: str,
+    event_id_start: int,
+) -> list[dict[str, Any]]:
+    received_at = datetime.now(timezone.utc).isoformat()
+    serialized: list[dict[str, Any]] = []
+    runtime_events = await normalize_runtime_thread_raw_event(
+        raw_event,
+        state,
+        timestamp=received_at,
+    )
+    next_event_id = event_id_start
+    for run_event in runtime_events:
+        next_event_id += 1
+        payload = _tail_event_from_run_event(
+            run_event,
+            event_id=next_event_id,
+            received_at=received_at,
+        )
+        if payload is None:
+            continue
+        if level == "debug":
+            payload["raw"] = _redact_nested(raw_event)
+        serialized.append(payload)
+    if any(
+        payload.get("event_type")
+        in {"turn_completed", "turn_failed", "turn_interrupted"}
+        for payload in serialized
+    ):
+        return serialized
+    terminal = _runtime_terminal_tail_event(
+        raw_event=raw_event,
+        event_id=next_event_id + 1,
+        received_at=received_at,
+    )
+    if terminal is not None:
+        if level == "debug":
+            terminal["raw"] = _redact_nested(raw_event)
+        serialized.append(terminal)
+    return serialized
+
+
 async def _build_managed_thread_tail_snapshot(
     *,
     request: Request,
     service: Any,
     managed_thread_id: str,
+    harness: Any | None = None,
     limit: int,
     level: str,
     since_ms: Optional[int],
@@ -726,30 +942,37 @@ async def _build_managed_thread_tail_snapshot(
     backend_thread_id = normalize_optional_text(thread.backend_thread_id)
     backend_turn_id = normalize_optional_text(turn.backend_id)
     app_server_events = getattr(request.app.state, "app_server_events", None)
-    agent_id = str(thread.agent_id or "").strip().lower()
-    can_stream_codex = (
-        agent_id == "codex"
-        and app_server_events is not None
-        and bool(backend_thread_id)
-        and bool(backend_turn_id)
+    if harness is None:
+        harness = _managed_thread_harness(service, str(thread.agent_id or ""))
+    has_backend_binding = bool(backend_thread_id) and bool(backend_turn_id)
+    can_stream_runtime = bool(
+        harness is not None
+        and has_backend_binding
+        and harness_supports_progress_event_stream(harness)
     )
-    can_stream_zeroclaw = (
-        agent_id == "zeroclaw"
+    can_stream_buffered = bool(
+        harness is not None
+        and has_backend_binding
+        and isinstance(harness, CodexHarness)
+        and app_server_events is not None
+    )
+    listed_supervisor = getattr(harness, "_supervisor", None)
+    if (
+        listed_supervisor is None
+        and str(thread.agent_id or "").strip().lower() == "zeroclaw"
+    ):
+        listed_supervisor = getattr(request.app.state, "zeroclaw_supervisor", None)
+    list_runtime_events = getattr(listed_supervisor, "list_turn_events", None)
+    can_stream_listed = bool(
+        harness is not None
+        and has_backend_binding
         and bool(thread.workspace_root)
-        and bool(backend_thread_id)
-        and bool(backend_turn_id)
-        and callable(
-            getattr(
-                getattr(request.app.state, "zeroclaw_supervisor", None),
-                "list_turn_events",
-                None,
-            )
-        )
+        and callable(list_runtime_events)
     )
     formatter = AppServerEventFormatter(redact_enabled=True)
     tail_events: list[dict[str, Any]] = []
     raw_last_activity_at: Optional[str] = None
-    if can_stream_codex and app_server_events is not None:
+    if can_stream_buffered and app_server_events is not None:
         raw_events = await app_server_events.list_events(
             str(backend_thread_id),
             str(backend_turn_id),
@@ -768,7 +991,7 @@ async def _build_managed_thread_tail_snapshot(
             )
             if serialized is not None:
                 tail_events.append(serialized)
-    elif can_stream_zeroclaw and thread.workspace_root:
+    elif can_stream_listed and thread.workspace_root:
         tail_events = await _list_zeroclaw_tail_events(
             request=request,
             workspace_root=str(thread.workspace_root),
@@ -824,7 +1047,7 @@ async def _build_managed_thread_tail_snapshot(
     elif turn_status == "error":
         activity = "failed"
 
-    stream_available = bool(can_stream_codex or can_stream_zeroclaw)
+    stream_available = can_stream_buffered or can_stream_listed or can_stream_runtime
     phase, phase_source, guidance, last_tool = _derive_progress_phase(
         turn_status=turn_status,
         stream_available=stream_available,
@@ -991,10 +1214,17 @@ def build_managed_thread_tail_routes(
         normalized_level = normalize_tail_level(level)
         since_ms = since_ms_from_duration(since)
         service = build_managed_thread_orchestration_service(request)
+        thread_target = service.get_thread_target(managed_thread_id)
+        harness = None
+        if thread_target is not None:
+            harness = _managed_thread_harness(
+                service, str(thread_target.agent_id or "")
+            )
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             service=service,
             managed_thread_id=managed_thread_id,
+            harness=harness,
             limit=min(limit, 200),
             level=normalized_level,
             since_ms=since_ms,
@@ -1065,147 +1295,195 @@ def build_managed_thread_tail_routes(
                         f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': 'running', 'elapsed_seconds': elapsed, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool, 'active_turn_diagnostics': active_turn_diagnostics}, ensure_ascii=True)}\n\n"
                     )
 
-            if str(snapshot.get("agent") or "").strip().lower() == "zeroclaw":
-                thread_target = service.get_thread_target(managed_thread_id)
-                workspace_root = (
-                    str(thread_target.workspace_root or "")
-                    if thread_target is not None
-                    else ""
-                )
-                if (
-                    workspace_root
-                    and snapshot.get("backend_thread_id")
-                    and snapshot.get("backend_turn_id")
-                ):
-                    last_event_id = int(snapshot.get("last_event_id") or 0)
-                    while True:
-                        await asyncio.sleep(2.0)
-                        incremental_events = await _list_zeroclaw_tail_events(
-                            request=request,
-                            workspace_root=workspace_root,
-                            session_id=str(snapshot.get("backend_thread_id") or ""),
-                            turn_id=str(snapshot.get("backend_turn_id") or ""),
-                            resume_after=last_event_id,
-                            since_ms=since_ms,
-                            limit=min(limit, 200),
-                        )
-                        for serialized in incremental_events:
-                            event_id = int(serialized.get("event_id") or 0)
-                            if event_id > 0:
-                                last_event_id = event_id
-                            snapshot_events = snapshot.get("events")
-                            if isinstance(snapshot_events, list):
-                                snapshot_events.append(serialized)
-                            snapshot["last_event_at"] = serialized.get("received_at")
-                            yield (
-                                "event: tail\n"
-                                f"id: {event_id}\n"
-                                f"data: {json.dumps(serialized, ensure_ascii=True)}\n\n"
-                            )
-
-                        refreshed = await _build_managed_thread_tail_snapshot(
-                            request=request,
-                            service=service,
-                            managed_thread_id=managed_thread_id,
-                            limit=min(limit, 200),
-                            level=normalized_level,
-                            since_ms=since_ms,
-                            resume_after=None,
-                        )
-                        yield (
-                            "event: progress\ndata: "
-                            f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': refreshed.get('managed_turn_id'), 'turn_status': refreshed.get('turn_status') or 'running', 'elapsed_seconds': refreshed.get('elapsed_seconds'), 'idle_seconds': refreshed.get('idle_seconds'), 'phase': refreshed.get('phase'), 'phase_source': refreshed.get('phase_source'), 'guidance': refreshed.get('guidance'), 'last_tool': refreshed.get('last_tool'), 'active_turn_diagnostics': refreshed.get('active_turn_diagnostics')}, ensure_ascii=True)}\n\n"
-                        )
-                        if (
-                            str(refreshed.get("turn_status") or "").strip().lower()
-                            != "running"
-                        ):
-                            return
-                return
-
+            workspace_root = (
+                str(thread_target.workspace_root or "")
+                if thread_target is not None
+                else ""
+            )
             app_server_events = getattr(request.app.state, "app_server_events", None)
-            if app_server_events is None:
-                return
             backend_thread_id = str(snapshot.get("backend_thread_id") or "")
             backend_turn_id = str(snapshot.get("backend_turn_id") or "")
-            if not backend_thread_id or not backend_turn_id:
+            if not backend_thread_id or not backend_turn_id or harness is None:
                 return
 
-            formatter = AppServerEventFormatter(redact_enabled=True)
-            last_event_id = int(snapshot.get("last_event_id") or 0)
-            async for entry in app_server_events.stream_entries(
-                backend_thread_id,
-                backend_turn_id,
-                after_id=last_event_id,
-                heartbeat_interval=10.0,
+            list_runtime_events = getattr(
+                getattr(harness, "_supervisor", None),
+                "list_turn_events",
+                None,
+            )
+            if (
+                workspace_root
+                and callable(list_runtime_events)
+                and not isinstance(harness, CodexHarness)
             ):
-                if entry is None:
-                    turn = service.get_execution(
-                        managed_thread_id,
-                        str(snapshot.get("managed_turn_id") or ""),
+                last_event_id = int(snapshot.get("last_event_id") or 0)
+                while True:
+                    await asyncio.sleep(2.0)
+                    incremental_events = await _list_zeroclaw_tail_events(
+                        request=request,
+                        workspace_root=workspace_root,
+                        session_id=backend_thread_id,
+                        turn_id=backend_turn_id,
+                        resume_after=last_event_id,
+                        since_ms=since_ms,
+                        limit=min(limit, 200),
                     )
-                    status = (
-                        str((turn.status if turn is not None else "") or "")
-                        .strip()
-                        .lower()
-                    )
-                    now = datetime.now(timezone.utc)
-                    started_dt = parse_iso_datetime(snapshot.get("started_at"))
-                    elapsed = None
-                    if started_dt is not None:
-                        elapsed = max(0, int((now - started_dt).total_seconds()))
-                    idle = None
-                    activity_at = snapshot.get("last_activity_at") or snapshot.get(
-                        "last_event_at"
-                    )
-                    if activity_at:
-                        last_event_dt = parse_iso_datetime(activity_at)
-                        if last_event_dt is not None:
-                            idle = max(0, int((now - last_event_dt).total_seconds()))
-                    phase, phase_source, guidance, last_tool = _derive_progress_phase(
-                        turn_status=status or "running",
-                        stream_available=True,
-                        events=[
-                            event
-                            for event in snapshot.get("events", [])
-                            if isinstance(event, dict)
-                        ],
-                        idle_seconds=idle,
-                    )
-                    active_turn_diagnostics = _refresh_active_turn_diagnostics(
-                        snapshot,
-                        turn_status=status or "running",
-                        idle_seconds=idle,
-                        phase=phase,
-                        guidance=guidance,
+                    for serialized in incremental_events:
+                        event_id = int(serialized.get("event_id") or 0)
+                        if event_id > 0:
+                            last_event_id = event_id
+                        snapshot_events = snapshot.get("events")
+                        if isinstance(snapshot_events, list):
+                            snapshot_events.append(serialized)
+                        snapshot["last_event_at"] = serialized.get("received_at")
+                        yield (
+                            "event: tail\n"
+                            f"id: {event_id}\n"
+                            f"data: {json.dumps(serialized, ensure_ascii=True)}\n\n"
+                        )
+
+                    refreshed = await _build_managed_thread_tail_snapshot(
+                        request=request,
+                        service=service,
+                        managed_thread_id=managed_thread_id,
+                        harness=harness,
+                        limit=min(limit, 200),
+                        level=normalized_level,
+                        since_ms=since_ms,
+                        resume_after=None,
                     )
                     yield (
                         "event: progress\ndata: "
-                        f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': status or 'running', 'elapsed_seconds': elapsed, 'idle_seconds': idle, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool, 'active_turn_diagnostics': active_turn_diagnostics}, ensure_ascii=True)}\n\n"
+                        f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': refreshed.get('managed_turn_id'), 'turn_status': refreshed.get('turn_status') or 'running', 'elapsed_seconds': refreshed.get('elapsed_seconds'), 'idle_seconds': refreshed.get('idle_seconds'), 'phase': refreshed.get('phase'), 'phase_source': refreshed.get('phase_source'), 'guidance': refreshed.get('guidance'), 'last_tool': refreshed.get('last_tool'), 'active_turn_diagnostics': refreshed.get('active_turn_diagnostics')}, ensure_ascii=True)}\n\n"
                     )
-                    if status != "running":
+                    if (
+                        str(refreshed.get("turn_status") or "").strip().lower()
+                        != "running"
+                    ):
                         return
-                    continue
+                return
 
-                serialized_entry: Optional[dict[str, Any]] = _serialize_tail_event(
-                    entry,
+            if app_server_events is not None and isinstance(harness, CodexHarness):
+                formatter = AppServerEventFormatter(redact_enabled=True)
+                last_event_id = int(snapshot.get("last_event_id") or 0)
+                async for entry in app_server_events.stream_entries(
+                    backend_thread_id,
+                    backend_turn_id,
+                    after_id=last_event_id,
+                    heartbeat_interval=10.0,
+                ):
+                    if entry is None:
+                        turn = service.get_execution(
+                            managed_thread_id,
+                            str(snapshot.get("managed_turn_id") or ""),
+                        )
+                        status = (
+                            str((turn.status if turn is not None else "") or "")
+                            .strip()
+                            .lower()
+                        )
+                        now = datetime.now(timezone.utc)
+                        started_dt = parse_iso_datetime(snapshot.get("started_at"))
+                        elapsed = None
+                        if started_dt is not None:
+                            elapsed = max(0, int((now - started_dt).total_seconds()))
+                        idle = None
+                        activity_at = snapshot.get("last_activity_at") or snapshot.get(
+                            "last_event_at"
+                        )
+                        if activity_at:
+                            last_event_dt = parse_iso_datetime(activity_at)
+                            if last_event_dt is not None:
+                                idle = max(
+                                    0, int((now - last_event_dt).total_seconds())
+                                )
+                        phase, phase_source, guidance, last_tool = (
+                            _derive_progress_phase(
+                                turn_status=status or "running",
+                                stream_available=True,
+                                events=[
+                                    event
+                                    for event in snapshot.get("events", [])
+                                    if isinstance(event, dict)
+                                ],
+                                idle_seconds=idle,
+                            )
+                        )
+                        active_turn_diagnostics = _refresh_active_turn_diagnostics(
+                            snapshot,
+                            turn_status=status or "running",
+                            idle_seconds=idle,
+                            phase=phase,
+                            guidance=guidance,
+                        )
+                        yield (
+                            "event: progress\ndata: "
+                            f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': status or 'running', 'elapsed_seconds': elapsed, 'idle_seconds': idle, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool, 'active_turn_diagnostics': active_turn_diagnostics}, ensure_ascii=True)}\n\n"
+                        )
+                        if status != "running":
+                            return
+                        continue
+
+                    serialized_entry: Optional[dict[str, Any]] = _serialize_tail_event(
+                        entry,
+                        level=normalized_level,
+                        formatter=formatter,
+                        since_ms=since_ms,
+                    )
+                    activity_at = _event_received_at_iso(entry)
+                    if activity_at:
+                        snapshot["last_activity_at"] = activity_at
+                    if serialized_entry is None:
+                        continue
+                    event_id = _record_serialized_tail_event(snapshot, serialized_entry)
+                    if event_id > 0:
+                        last_event_id = event_id
+                    yield (
+                        "event: tail\n"
+                        f"id: {event_id}\n"
+                        f"data: {json.dumps(serialized_entry, ensure_ascii=True)}\n\n"
+                    )
+                return
+
+            state = RuntimeThreadRunEventState()
+            last_event_id = int(snapshot.get("last_event_id") or 0)
+            async for raw_event in harness_progress_event_stream(
+                harness,
+                Path(workspace_root),
+                backend_thread_id,
+                backend_turn_id,
+            ):
+                serialized_entries = await _serialize_runtime_raw_tail_events(
+                    raw_event,
+                    state,
                     level=normalized_level,
-                    formatter=formatter,
-                    since_ms=since_ms,
+                    event_id_start=last_event_id,
                 )
-                activity_at = _event_received_at_iso(entry)
-                if activity_at:
-                    snapshot["last_activity_at"] = activity_at
-                if serialized_entry is None:
-                    continue
-                event_id = _record_serialized_tail_event(snapshot, serialized_entry)
-                if event_id > 0:
-                    last_event_id = event_id
-                yield (
-                    "event: tail\n"
-                    f"id: {event_id}\n"
-                    f"data: {json.dumps(serialized_entry, ensure_ascii=True)}\n\n"
-                )
+                for serialized_entry in serialized_entries:
+                    event_id = _record_serialized_tail_event(snapshot, serialized_entry)
+                    if event_id > 0:
+                        last_event_id = event_id
+                    yield (
+                        "event: tail\n"
+                        f"id: {event_id}\n"
+                        f"data: {json.dumps(serialized_entry, ensure_ascii=True)}\n\n"
+                    )
+
+            refreshed = await _build_managed_thread_tail_snapshot(
+                request=request,
+                service=service,
+                managed_thread_id=managed_thread_id,
+                harness=harness,
+                limit=min(limit, 200),
+                level=normalized_level,
+                since_ms=since_ms,
+                resume_after=None,
+            )
+            yield (
+                "event: progress\ndata: "
+                f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': refreshed.get('managed_turn_id'), 'turn_status': refreshed.get('turn_status') or 'running', 'elapsed_seconds': refreshed.get('elapsed_seconds'), 'idle_seconds': refreshed.get('idle_seconds'), 'phase': refreshed.get('phase'), 'phase_source': refreshed.get('phase_source'), 'guidance': refreshed.get('guidance'), 'last_tool': refreshed.get('last_tool'), 'active_turn_diagnostics': refreshed.get('active_turn_diagnostics')}, ensure_ascii=True)}\n\n"
+            )
+            return
 
         return StreamingResponse(
             _stream(),

@@ -13,6 +13,7 @@ Protocol schema snapshots are stored in `vendor/protocols/` and are used for:
 
 - **Codex app-server**: `vendor/protocols/codex.json`
 - **OpenCode server**: `vendor/protocols/opencode_openapi.json`
+- **Pinned CI tool versions**: `vendor/protocols/agent-compatibility.lock.json`
 
 ## Refreshing Schemas
 
@@ -24,6 +25,7 @@ When upgrading Codex or OpenCode, refresh the protocol schemas before updating p
 # Refresh both schemas (requires binaries)
 car protocol refresh
 make protocol-schemas-refresh
+make agent-compatibility-refresh
 
 # Refresh only Codex schema
 car protocol refresh --no-opencode
@@ -46,11 +48,15 @@ If binaries are not in PATH, set:
 - `CODEX_BIN` - Path to codex binary
 - `OPENCODE_BIN` - Path to opencode binary
 
+`make agent-compatibility-refresh` updates the pinned tool-version lock file and
+the vendor schema snapshots together so CI and local drift checks stay aligned.
+
 ## Validation Tests
 
 Run schema validation tests:
 
 ```bash
+make agent-compatibility-check
 make protocol-schemas-check
 python -m pytest tests/test_protocol_schemas.py -v
 ```
@@ -73,10 +79,12 @@ After refreshing schema snapshots:
 ## CI Drift Detection
 
 The `scripts/check_protocol_drift.py` script compares current binaries against
-committed snapshots in `vendor/protocols`:
+committed snapshots in `vendor/protocols`. The repo-level CI parity command is:
 
 ```bash
+make agent-compatibility-check
 python scripts/check_protocol_drift.py
 ```
 
-This is used in CI to detect when upstream protocols have changed.
+CI installs Codex and OpenCode from `vendor/protocols/agent-compatibility.lock.json`
+before running the check so drift results stay reproducible across environments.

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import ActiveWorkSummary, ThreadTarget
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
@@ -104,6 +106,42 @@ def test_create_managed_thread_with_workspace_root(hub_env) -> None:
     assert thread["name"] == "Workspace thread"
     assert thread["context_profile"] == "car_ambient"
     assert thread["approval_mode"] == "yolo"
+
+
+def test_build_managed_thread_orchestration_service_reuses_cached_harnesses(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    created: list[object] = []
+
+    def _make_harness(_ctx: object) -> object:
+        harness = object()
+        created.append(harness)
+        return harness
+
+    descriptor = AgentDescriptor(
+        id="opencode",
+        name="OpenCode",
+        capabilities=frozenset({"durable_threads", "message_turns"}),
+        make_harness=_make_harness,
+    )
+    monkeypatch.setattr(
+        managed_threads,
+        "get_registered_agents",
+        lambda: {"opencode": descriptor},
+    )
+
+    request_a = SimpleNamespace(app=SimpleNamespace(state=app.state))
+    request_b = SimpleNamespace(app=SimpleNamespace(state=app.state))
+
+    service_a = managed_threads.build_managed_thread_orchestration_service(request_a)
+    service_b = managed_threads.build_managed_thread_orchestration_service(request_b)
+
+    harness_a = service_a.harness_factory("opencode")
+    harness_b = service_b.harness_factory("opencode")
+
+    assert harness_a is harness_b
+    assert len(created) == 1
 
 
 def test_create_managed_thread_with_agent_workspace_owner(

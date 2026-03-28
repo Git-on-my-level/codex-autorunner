@@ -3,6 +3,7 @@
 """Check for protocol drift in Codex and OpenCode vendor snapshots.
 
 Usage:
+    make agent-compatibility-check
     python scripts/check_protocol_drift.py
 
 This script compares the current Codex/OpenCode protocol artifacts against
@@ -34,6 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.protocol_utils import validate_binary_path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+RECOMMENDED_REFRESH_COMMAND = "make agent-compatibility-refresh"
 
 
 def get_codex_bin() -> str | None:
@@ -133,7 +136,8 @@ def compare_codex_schema(vendor_path: Path) -> tuple[int, list[str]]:
     if not vendor_path.exists():
         return 2, [
             f"Vendor schema not found: {vendor_path}",
-            "Run: python scripts/update_vendor_codex_schema.py",
+            f"Run: {RECOMMENDED_REFRESH_COMMAND}",
+            "Fallback: python scripts/update_vendor_codex_schema.py",
         ]
 
     vendor_schema = json.loads(vendor_path.read_text(encoding="utf-8"))
@@ -152,7 +156,8 @@ def compare_codex_schema(vendor_path: Path) -> tuple[int, list[str]]:
             "Codex schema drift detected:",
             *differences,
             "",
-            "Run: python scripts/update_vendor_codex_schema.py",
+            f"Run: {RECOMMENDED_REFRESH_COMMAND}",
+            "Fallback: python scripts/update_vendor_codex_schema.py",
             "Then commit: vendor/protocols/codex.json",
         ]
 
@@ -268,7 +273,8 @@ def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
     if not vendor_path.exists():
         return 2, [
             f"Vendor OpenAPI spec not found: {vendor_path}",
-            "Run: python scripts/update_vendor_opencode_openapi.py",
+            f"Run: {RECOMMENDED_REFRESH_COMMAND}",
+            "Fallback: python scripts/update_vendor_opencode_openapi.py",
         ]
 
     vendor_spec = json.loads(vendor_path.read_text(encoding="utf-8"))
@@ -296,7 +302,8 @@ def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
                 "",
                 "Set OPENCODE_BIN to a binary matching the vendor snapshot, "
                 "or regenerate the vendor snapshot with the current binary:",
-                "  python scripts/update_vendor_opencode_openapi.py",
+                f"  {RECOMMENDED_REFRESH_COMMAND}",
+                "  Fallback: python scripts/update_vendor_opencode_openapi.py",
             ]
         )
         return 0, messages
@@ -308,7 +315,8 @@ def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
             "OpenCode OpenAPI drift detected:",
             *differences,
             "",
-            "Run: python scripts/update_vendor_opencode_openapi.py",
+            f"Run: {RECOMMENDED_REFRESH_COMMAND}",
+            "Fallback: python scripts/update_vendor_opencode_openapi.py",
             "Then commit: vendor/protocols/opencode_openapi.json",
         ]
 

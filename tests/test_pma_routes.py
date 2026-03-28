@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
+from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
@@ -21,6 +22,9 @@ from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
+from codex_autorunner.integrations.app_server.client import (
+    CodexAppServerResponseError,
+)
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
@@ -843,6 +847,114 @@ async def test_pma_interrupt_route_interrupts_running_turn(hub_env) -> None:
 
 
 @pytest.mark.anyio
+async def test_pma_interrupt_route_interrupts_running_hermes_turn(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    interrupted = asyncio.Event()
+
+    class _HermesSupervisor:
+        def __init__(self) -> None:
+            self.interrupt_calls: list[tuple[Path, str, Optional[str]]] = []
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def create_session(
+            self, workspace_root: Path, title: Optional[str] = None
+        ):
+            _ = workspace_root, title
+            return type("Session", (), {"session_id": "hermes-session-1"})()
+
+        async def resume_session(self, workspace_root: Path, conversation_id: str):
+            _ = workspace_root
+            return type("Session", (), {"session_id": conversation_id})()
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str] = None,
+            approval_mode: Optional[str] = None,
+        ) -> str:
+            _ = workspace_root, conversation_id, prompt, model, approval_mode
+            return "hermes-turn-1"
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+            timeout: Optional[float] = None,
+        ):
+            _ = workspace_root, conversation_id, turn_id, timeout
+            await interrupted.wait()
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "cancelled",
+                    "assistant_text": "",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def interrupt_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+        ) -> None:
+            self.interrupt_calls.append((workspace_root, conversation_id, turn_id))
+            interrupted.set()
+
+        async def stream_turn_events(self, *_args: Any, **_kwargs: Any):
+            if False:
+                yield {}
+
+    supervisor = _HermesSupervisor()
+    app.state.hermes_supervisor = supervisor
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        chat_task = asyncio.create_task(
+            client.post(
+                "/hub/pma/chat",
+                json={"message": "interrupt hermes", "agent": "hermes"},
+            )
+        )
+        with anyio.fail_after(2):
+            while True:
+                active_resp = await client.get("/hub/pma/active")
+                payload = active_resp.json()
+                current = payload.get("current") or {}
+                if (
+                    payload.get("active")
+                    and current.get("thread_id") == "hermes-session-1"
+                    and current.get("turn_id") == "hermes-turn-1"
+                ):
+                    break
+                await anyio.sleep(0.05)
+
+        interrupt_resp = await client.post("/hub/pma/interrupt")
+        assert interrupt_resp.status_code == 200
+        assert interrupt_resp.json()["agent"] == "hermes"
+
+        with anyio.fail_after(5):
+            chat_resp = await chat_task
+
+    assert chat_resp.status_code == 200
+    assert chat_resp.json()["status"] == "interrupted"
+    assert supervisor.interrupt_calls
+    assert set(supervisor.interrupt_calls) == {
+        (hub_env.hub_root, "hermes-session-1", "hermes-turn-1")
+    }
+
+
+@pytest.mark.anyio
 async def test_pma_active_updates_during_running_turn(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -1388,6 +1500,7 @@ def test_pma_thread_reset_clears_registry(hub_env) -> None:
     registry = app.state.app_server_threads
     registry.set_thread_id(PMA_KEY, "thread-codex")
     registry.set_thread_id(PMA_OPENCODE_KEY, "thread-opencode")
+    registry.set_thread_id("pma.hermes", "thread-hermes")
 
     client = TestClient(app)
     resp = client.post("/hub/pma/thread/reset", json={"agent": "opencode"})
@@ -1397,6 +1510,11 @@ def test_pma_thread_reset_clears_registry(hub_env) -> None:
     assert artifact_path.exists()
     assert registry.get_thread_id(PMA_KEY) == "thread-codex"
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
+    assert registry.get_thread_id("pma.hermes") == "thread-hermes"
+
+    resp = client.post("/hub/pma/thread/reset", json={"agent": "hermes"})
+    assert resp.status_code == 200
+    assert registry.get_thread_id("pma.hermes") is None
 
     resp = client.post("/hub/pma/thread/reset", json={"agent": "all"})
     assert resp.status_code == 200
@@ -1499,6 +1617,271 @@ def test_pma_turn_events_stream_codex_respects_resume_cursor(hub_env) -> None:
     assert "event: app-server" in resp.text
     assert '"seq":2' in resp.text
     assert fake_events.calls == [("thread-1", "turn-1", 1)]
+
+
+def test_pma_turn_events_stream_hermes_uses_runtime_harness(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class _HermesSupervisor:
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def create_session(
+            self, workspace_root: Path, title: Optional[str] = None
+        ):
+            _ = workspace_root, title
+            return type("Session", (), {"session_id": "hermes-session-1"})()
+
+        async def resume_session(self, workspace_root: Path, conversation_id: str):
+            _ = workspace_root
+            return type("Session", (), {"session_id": conversation_id})()
+
+        async def start_turn(self, *_args: Any, **_kwargs: Any) -> str:
+            return "hermes-turn-1"
+
+        async def wait_for_turn(self, *_args: Any, **_kwargs: Any):
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "completed",
+                    "assistant_text": "done",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def interrupt_turn(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        async def stream_turn_events(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {"method": "prompt/progress", "params": {"delta": "hello "}}
+            yield {"method": "prompt/completed", "params": {"finalOutput": "hello"}}
+
+    app.state.hermes_supervisor = _HermesSupervisor()
+
+    client = TestClient(app)
+    resp = client.get(
+        "/hub/pma/turns/turn-1/events",
+        params={"thread_id": "hermes-session-1", "agent": "hermes"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert "prompt/progress" in resp.text
+    assert "prompt/completed" in resp.text
+
+
+def test_pma_chat_hermes_reuses_agent_scoped_registry_binding(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    registry = app.state.app_server_threads
+    registry.set_thread_id("pma.hermes", "hermes-session-stored")
+    observed: dict[str, Any] = {}
+
+    class _HermesSupervisor:
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def create_session(
+            self, workspace_root: Path, title: Optional[str] = None
+        ):
+            _ = workspace_root, title
+            raise AssertionError("should resume stored Hermes session")
+
+        async def resume_session(self, workspace_root: Path, conversation_id: str):
+            observed["resume"] = (workspace_root, conversation_id)
+            return type("Session", (), {"session_id": conversation_id})()
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str] = None,
+            approval_mode: Optional[str] = None,
+        ) -> str:
+            observed["start_turn"] = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                approval_mode,
+            )
+            return "hermes-turn-2"
+
+        async def wait_for_turn(self, *_args: Any, **_kwargs: Any):
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "completed",
+                    "assistant_text": "hermes reply",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def interrupt_turn(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        async def stream_turn_events(self, *_args: Any, **_kwargs: Any):
+            if False:
+                yield {}
+
+    app.state.hermes_supervisor = _HermesSupervisor()
+
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/pma/chat", json={"message": "hello hermes", "agent": "hermes"}
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert observed["resume"] == (hub_env.hub_root, "hermes-session-stored")
+    assert observed["start_turn"][1] == "hermes-session-stored"
+
+
+def test_pma_chat_codex_retries_with_fresh_conversation_after_stale_resume(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    registry = app.state.app_server_threads
+    registry.set_thread_id(PMA_KEY, "stale-codex-thread")
+    observed: dict[str, Any] = {}
+
+    class _CodexHarness:
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            observed["new_conversation"] = (
+                workspace_root,
+                title,
+            )
+            return SimpleNamespace(id="fresh-codex-thread")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            observed["resume"] = (workspace_root, conversation_id)
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            observed.setdefault("start_turn_calls", []).append(conversation_id)
+            if conversation_id == "stale-codex-thread":
+                raise CodexAppServerResponseError(
+                    method="turn/start",
+                    code=-32600,
+                    message="thread not found: stale-codex-thread",
+                )
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id="codex-turn-2",
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="codex reply after stale resume recovery",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    monkeypatch.setattr(
+        chat_runtime,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=_CodexHarness.capabilities,
+                make_harness=lambda _ctx: _CodexHarness(),
+            )
+        },
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/pma/chat",
+        json={"message": "hello codex", "agent": "codex"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert "codex reply after stale resume recovery" in payload["message"]
+    assert observed["resume"] == (hub_env.hub_root, "stale-codex-thread")
+    assert observed["start_turn_calls"] == [
+        "stale-codex-thread",
+        "fresh-codex-thread",
+    ]
+    assert registry.get_thread_id(PMA_KEY) == "fresh-codex-thread"
 
 
 def test_pma_turn_events_stream_opencode_returns_conflict_when_live_streaming_disabled(

@@ -7,6 +7,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 VENDOR_PROTOCOL_DIR = REPO_ROOT / "vendor" / "protocols"
 CODEX_SCHEMA_PATH = VENDOR_PROTOCOL_DIR / "codex.json"
 OPENCODE_SCHEMA_PATH = VENDOR_PROTOCOL_DIR / "opencode_openapi.json"
+AGENT_COMPATIBILITY_LOCK_PATH = VENDOR_PROTOCOL_DIR / "agent-compatibility.lock.json"
 
 
 class TestProtocolSchemaSnapshots:
@@ -78,3 +79,13 @@ class TestProtocolSchemaSnapshots:
         assert (
             OPENCODE_SCHEMA_PATH.exists()
         ), f"Expected snapshot at {OPENCODE_SCHEMA_PATH}"
+
+    def test_agent_compatibility_lock_exists(self):
+        """Pinned agent compatibility tool versions should be committed."""
+        assert AGENT_COMPATIBILITY_LOCK_PATH.exists()
+
+    def test_agent_compatibility_lock_has_expected_keys(self):
+        """Pinned agent compatibility tool versions should be valid JSON."""
+        lock = json.loads(AGENT_COMPATIBILITY_LOCK_PATH.read_text(encoding="utf-8"))
+        assert lock["codex"]
+        assert lock["opencode"]

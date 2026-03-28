@@ -12,7 +12,7 @@ from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.runtime_bindings import (
-    clear_runtime_thread_bindings_for_hub_root,
+    clear_runtime_thread_binding,
 )
 from codex_autorunner.core.orchestration.runtime_threads import RuntimeThreadOutcome
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
@@ -82,7 +82,7 @@ async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue
     running = store.create_turn(managed_thread_id, prompt="running")
     queued = store.create_turn(managed_thread_id, prompt="queued", busy_policy="queue")
     store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
-    clear_runtime_thread_bindings_for_hub_root(hub_env.hub_root)
+    clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
     with open_orchestration_sqlite(hub_env.hub_root) as conn:
         with conn:
             conn.execute(

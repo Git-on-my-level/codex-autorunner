@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration.runtime_bindings import (
-    clear_runtime_thread_bindings_for_hub_root,
+    clear_runtime_thread_binding,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
@@ -197,7 +197,7 @@ def test_interrupt_managed_thread_recovers_when_runtime_binding_is_lost_after_re
     managed_turn_id = turn["managed_turn_id"]
     store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
     store.set_turn_backend_turn_id(managed_turn_id, "backend-turn-1")
-    clear_runtime_thread_bindings_for_hub_root(hub_env.hub_root)
+    clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
 
     with TestClient(app) as client:
         interrupt_resp = client.post(

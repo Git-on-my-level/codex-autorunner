@@ -123,17 +123,9 @@ def clear_runtime_thread_binding(hub_root: Path, thread_target_id: str) -> None:
     )
 
 
-def clear_runtime_thread_bindings_for_hub_root(hub_root: Path) -> None:
-    _ensure_runtime_bindings_table(hub_root)
-    with open_orchestration_sqlite(hub_root) as conn:
-        with conn:
-            conn.execute("DELETE FROM orch_runtime_thread_bindings")
-
-
 __all__ = [
     "RuntimeThreadBinding",
     "clear_runtime_thread_binding",
-    "clear_runtime_thread_bindings_for_hub_root",
     "get_runtime_thread_binding",
     "set_runtime_thread_binding",
 ]

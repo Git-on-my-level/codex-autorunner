@@ -4,10 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from .....agents.codex.harness import CodexHarness
-from .....agents.opencode.harness import OpenCodeHarness
-from .....agents.opencode.supervisor import OpenCodeSupervisorError
-from .....agents.registry import get_available_agents
+from .....agents.registry import get_agent_descriptor, get_available_agents
 from ...services.pma.common import pma_config_from_raw
 from ..agents import _available_agents, _serialize_model_catalog
 
@@ -75,26 +72,18 @@ def build_pma_meta_routes(
     async def list_pma_agent_models(agent: str, request: Request):
         agent_id = (agent or "").strip().lower()
         hub_root = request.app.state.config.root
-        if agent_id == "codex":
-            supervisor = request.app.state.app_server_supervisor
-            events = request.app.state.app_server_events
-            if supervisor is None:
-                raise HTTPException(status_code=404, detail="Codex harness unavailable")
-            return _serialize_model_catalog(
-                await CodexHarness(supervisor, events).model_catalog(hub_root)
+        descriptor = get_agent_descriptor(agent_id)
+        if descriptor is None:
+            raise HTTPException(status_code=404, detail="Unknown agent")
+        if "model_listing" not in descriptor.capabilities:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Agent '{agent_id}' does not support capability 'model_listing'",
             )
-        if agent_id == "opencode":
-            supervisor = getattr(request.app.state, "opencode_supervisor", None)
-            if supervisor is None:
-                raise HTTPException(
-                    status_code=404, detail="OpenCode harness unavailable"
-                )
-            try:
-                return _serialize_model_catalog(
-                    await OpenCodeHarness(supervisor).model_catalog(hub_root)
-                )
-            except OpenCodeSupervisorError as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=str(exc)) from exc
-        raise HTTPException(status_code=404, detail="Unknown agent")
+        try:
+            harness = descriptor.make_harness(request.app.state)
+            return _serialize_model_catalog(await harness.model_catalog(hub_root))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc

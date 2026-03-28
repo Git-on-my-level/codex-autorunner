@@ -150,6 +150,7 @@ def is_forbidden_import(
             "ApprovalRequested",
             "Completed",
             "Failed",
+            "get_registered_agents",
         }
         parts = module.split(".")
         if len(parts) >= 4:

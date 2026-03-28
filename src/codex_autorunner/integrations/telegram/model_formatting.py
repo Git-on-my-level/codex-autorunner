@@ -132,7 +132,11 @@ def _format_model_list(
     if len(entries) > DEFAULT_MODEL_LIST_LIMIT:
         lines.append(f"...and {len(entries) - DEFAULT_MODEL_LIST_LIMIT} more.")
     if set_hint is None:
-        set_hint = "Use /model <id> [effort] to set." if include_efforts else None
+        set_hint = (
+            "Use /model set <model> [effort] to override manually."
+            if include_efforts
+            else "Use /model set <model> to override manually."
+        )
     if set_hint:
         lines.append(set_hint)
     return "\n".join(lines)

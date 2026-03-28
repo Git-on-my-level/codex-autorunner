@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Optional
+from typing import Literal, Optional, Tuple
 
 DEFAULT_CHAT_AGENT = "codex"
-VALID_CHAT_AGENT_VALUES = ("codex", "opencode")
 DEFAULT_CHAT_AGENT_MODELS = MappingProxyType(
     {
         "codex": "gpt-5.3-codex",
@@ -16,6 +15,9 @@ DEFAULT_CHAT_AGENT_MODELS = MappingProxyType(
 )
 
 AgentModelResetMode = Literal["clear", "agent_default"]
+CHAT_EFFORT_CAPABILITY = "review"
+
+VALID_CHAT_AGENT_VALUES: Tuple[str, ...] = ("codex", "opencode", "hermes", "zeroclaw")
 
 
 @dataclass(frozen=True)
@@ -25,11 +27,10 @@ class ChatAgentDefinition:
 
 
 CHAT_AGENT_DEFINITIONS: tuple[ChatAgentDefinition, ...] = (
-    ChatAgentDefinition(value="codex", description="Default Codex agent"),
-    ChatAgentDefinition(
-        value="opencode",
-        description="OpenCode agent (requires opencode binary)",
-    ),
+    ChatAgentDefinition(value="codex", description="Codex"),
+    ChatAgentDefinition(value="opencode", description="OpenCode"),
+    ChatAgentDefinition(value="hermes", description="Hermes"),
+    ChatAgentDefinition(value="zeroclaw", description="ZeroClaw"),
 )
 
 
@@ -42,6 +43,17 @@ class ChatAgentSwitchState:
     effort: Optional[str]
 
 
+def _valid_chat_agent_values() -> tuple[str, ...]:
+    values = set(VALID_CHAT_AGENT_VALUES)
+    try:
+        from ...agents.registry import get_registered_agents
+
+        values.update(get_registered_agents().keys())
+    except Exception:
+        pass
+    return tuple(sorted(values))
+
+
 def normalize_chat_agent(
     value: object, *, default: Optional[str] = None
 ) -> Optional[str]:
@@ -49,15 +61,27 @@ def normalize_chat_agent(
         return default
     normalized = value.strip().lower()
     compact = "".join(ch for ch in normalized if ch.isalnum())
-    if normalized in VALID_CHAT_AGENT_VALUES:
+    valid_values = _valid_chat_agent_values()
+    if normalized in valid_values:
         return normalized
-    if compact in VALID_CHAT_AGENT_VALUES:
+    if compact in valid_values:
         return compact
     return default
 
 
 def chat_agent_supports_effort(agent: object) -> bool:
-    return normalize_chat_agent(agent, default=DEFAULT_CHAT_AGENT) == "codex"
+    normalized = normalize_chat_agent(agent, default=DEFAULT_CHAT_AGENT)
+    if normalized is None:
+        return False
+    try:
+        from ...agents.registry import get_agent_descriptor
+
+        descriptor = get_agent_descriptor(normalized)
+    except Exception:
+        descriptor = None
+    if descriptor is None:
+        return normalized == "codex"
+    return CHAT_EFFORT_CAPABILITY in descriptor.capabilities
 
 
 def default_chat_model_for_agent(agent: object) -> Optional[str]:
@@ -68,14 +92,22 @@ def default_chat_model_for_agent(agent: object) -> Optional[str]:
 
 
 def chat_agent_command_choices() -> tuple[dict[str, str], ...]:
-    return tuple(
-        {"name": definition.value, "value": definition.value}
-        for definition in CHAT_AGENT_DEFINITIONS
-    )
+    from ...agents.registry import get_registered_agents
+
+    definitions = []
+    for agent_id, descriptor in get_registered_agents().items():
+        definitions.append(
+            ChatAgentDefinition(
+                value=agent_id,
+                description=descriptor.name,
+            )
+        )
+    definitions.sort(key=lambda d: d.value)
+    return tuple({"name": d.value, "value": d.value} for d in definitions)
 
 
 def chat_agent_description() -> str:
-    return " or ".join(VALID_CHAT_AGENT_VALUES)
+    return " or ".join(sorted(_valid_chat_agent_values()))
 
 
 def build_agent_switch_state(

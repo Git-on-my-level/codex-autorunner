@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -21,6 +22,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .app_server_threads import (
+    PMA_KEY,
+    PMA_PREFIX,
     AppServerThreadRegistry,
     pma_prefixes_for_reset,
 )
@@ -29,13 +32,17 @@ from .logging_utils import log_event
 from .orchestration.migrate_legacy_state import backfill_legacy_pma_lifecycle_events
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_audit import PmaActionType
-from .pma_context import clear_pma_prompt_state_sessions
+from .pma_context import (
+    clear_pma_prompt_state_sessions,
+    list_pma_prompt_state_session_keys,
+)
 from .pma_queue import PmaQueue
 from .pma_safety import PmaSafetyChecker, PmaSafetyConfig
 from .time_utils import now_iso
 from .utils import atomic_write
 
 logger = logging.getLogger(__name__)
+_PMA_NESTED_AGENT_FAMILY_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
 class LifecycleCommand(Enum):
@@ -94,13 +101,22 @@ class PmaLifecycleRouter:
         cleared_prompt_state_keys: list[str] = []
         prefixes = pma_prefixes_for_reset(agent)
         codex_prefix = pma_prefixes_for_reset("codex")[0]
-        opencode_prefix = pma_prefixes_for_reset("opencode")[0]
-        preserve_opencode = agent not in ("all", None, "")
+        preserve_nested_agent_families = agent not in ("all", None, "")
+        active_nested_agent_prefixes = self._discover_nested_pma_agent_prefixes(
+            tuple(registry.load().keys()),
+            tuple(list_pma_prompt_state_session_keys(self._hub_root)),
+        )
 
         for prefix in prefixes:
             exclude_prefixes = (
-                (opencode_prefix,)
-                if prefix == codex_prefix and preserve_opencode
+                tuple(
+                    sorted(
+                        nested_prefix
+                        for nested_prefix in active_nested_agent_prefixes
+                        if nested_prefix != codex_prefix
+                    )
+                )
+                if prefix == codex_prefix and preserve_nested_agent_families
                 else ()
             )
             cleared_thread_keys.extend(
@@ -111,6 +127,15 @@ class PmaLifecycleRouter:
             base_key = prefix.rstrip(".")
             if registry.reset_thread(base_key):
                 cleared_thread_keys.append(base_key)
+            if prefix == codex_prefix and not exclude_prefixes:
+                for key in tuple(registry.load().keys()):
+                    if not isinstance(key, str) or not key.startswith(prefix):
+                        continue
+                    remainder = key[len(prefix) :]
+                    if not remainder or "." in remainder:
+                        continue
+                    if registry.reset_thread(key):
+                        cleared_thread_keys.append(key)
             cleared_prompt_state_keys.extend(
                 clear_pma_prompt_state_sessions(
                     self._hub_root,
@@ -123,6 +148,23 @@ class PmaLifecycleRouter:
         return list(dict.fromkeys(cleared_thread_keys)), list(
             dict.fromkeys(cleared_prompt_state_keys)
         )
+
+    def _discover_nested_pma_agent_prefixes(
+        self, *key_sets: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        prefixes: set[str] = set()
+        for keys in key_sets:
+            for key in keys:
+                if not isinstance(key, str) or not key.startswith(PMA_PREFIX):
+                    continue
+                suffix = key[len(PMA_PREFIX) :]
+                if not suffix:
+                    continue
+                family = suffix.split(".", 1)[0].strip().lower()
+                if not _PMA_NESTED_AGENT_FAMILY_RE.fullmatch(family):
+                    continue
+                prefixes.add(f"{PMA_KEY}.{family}.")
+        return tuple(sorted(prefixes))
 
     async def new(
         self,

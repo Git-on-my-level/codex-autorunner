@@ -10,6 +10,7 @@ from typing import Any, Optional
 import httpx
 import typer
 
+from ...agents.registry import get_registered_agents
 from ...bootstrap import ensure_pma_docs, pma_doc_path
 from ...core.car_context import (
     default_managed_thread_context_profile,
@@ -443,9 +444,13 @@ def _normalize_agent_option(agent: Optional[str]) -> Optional[str]:
     normalized = agent.strip().lower()
     if not normalized:
         return None
-    allowed = {"codex", "opencode", "zeroclaw"}
-    if normalized not in allowed:
-        typer.echo("--agent must be one of: codex, opencode, zeroclaw", err=True)
+    registered = get_registered_agents()
+    if normalized not in registered:
+        available = ", ".join(sorted(registered.keys()))
+        typer.echo(
+            f"--agent must be a registered agent. Available: {available}",
+            err=True,
+        )
         raise typer.Exit(code=1) from None
     return normalized
 
@@ -679,7 +684,7 @@ def _render_compacted_active_context(
 def pma_chat(
     message: str = typer.Argument(..., help="Message to send to PMA"),
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Agent to use (codex|opencode)"
+        None, "--agent", help="Agent to use (codex|opencode|hermes)"
     ),
     model: Optional[str] = typer.Option(None, "--model", help="Model override"),
     reasoning: Optional[str] = typer.Option(
@@ -900,7 +905,7 @@ def pma_interrupt(
 @pma_app.command("reset")
 def pma_reset(
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Agent thread to reset (opencode|codex|all)"
+        None, "--agent", help="Agent thread to reset (opencode|codex|hermes|all)"
     ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
@@ -1045,7 +1050,7 @@ def pma_agents(
 
 @pma_app.command("models")
 def pma_models(
-    agent: str = typer.Argument(..., help="Agent ID (codex|opencode)"),
+    agent: str = typer.Argument(..., help="Agent ID (codex|opencode|hermes)"),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
@@ -1097,7 +1102,7 @@ def pma_models(
 @thread_app.command("create")
 def pma_thread_spawn(
     agent: Optional[str] = typer.Option(
-        None, "--agent", help="Thread agent to use (codex|opencode|zeroclaw)"
+        None, "--agent", help="Thread agent to use (codex|opencode|hermes|zeroclaw)"
     ),
     repo_id: Optional[str] = typer.Option(
         None, "--repo", help="Hub repo id for the target workspace"

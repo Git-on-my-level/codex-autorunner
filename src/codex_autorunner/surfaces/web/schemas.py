@@ -260,12 +260,17 @@ class AppServerThreadArchiveRequest(Payload):
 class PmaManagedThreadCreateRequest(Payload):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    agent: Optional[Literal["codex", "opencode", "zeroclaw"]] = None
+    agent: Optional[Literal["codex", "hermes", "opencode", "zeroclaw"]] = None
     resource_kind: Optional[Literal["repo", "agent_workspace"]] = Field(
         default=None, validation_alias=AliasChoices("resource_kind", "resourceKind")
     )
     resource_id: Optional[str] = Field(
         default=None, validation_alias=AliasChoices("resource_id", "resourceId")
+    )
+    repo_id: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("repo_id", "repoId"),
+        exclude=True,
     )
     workspace_root: Optional[str] = None
     name: Optional[str] = None
@@ -311,6 +316,19 @@ class PmaManagedThreadCreateRequest(Payload):
         if not isinstance(value, dict):
             return value
         payload = dict(value)
+        repo_id = payload.get("repo_id", payload.get("repoId"))
+        if (
+            repo_id is not None
+            and payload.get("resource_id") is None
+            and payload.get("resourceId") is None
+        ):
+            payload["resource_id"] = repo_id
+        if (
+            repo_id is not None
+            and payload.get("resource_kind") is None
+            and payload.get("resourceKind") is None
+        ):
+            payload["resource_kind"] = "repo"
         payload["notify_on_explicit"] = any(
             key in value for key in ("notify_on", "notifyOn")
         )

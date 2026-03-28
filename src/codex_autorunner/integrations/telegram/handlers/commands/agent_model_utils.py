@@ -42,6 +42,20 @@ async def _handle_agent_command(
         )
         return
     desired = normalize_agent(argv[0])
+    if desired is None:
+        choices = ", ".join(
+            sorted(commands._agents_supporting_capability("message_turns"))
+        )
+        await commands._send_message(
+            message.chat_id,
+            (
+                f"Unknown agent '{argv[0]}'."
+                + (f" Available agents: {choices}." if choices else "")
+            ),
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        return
     workspace_path, error = commands._resolve_workspace_path(record, allow_pma=True)
     if workspace_path is None:
         await commands._send_message(
@@ -136,9 +150,7 @@ def _build_agent_options(
     availability: str,
 ) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
-    for agent in ("codex", "opencode"):
-        if agent not in VALID_AGENT_VALUES:
-            continue
+    for agent in sorted(VALID_AGENT_VALUES):
         label = agent
         if agent == current:
             label = f"{label} (current)"

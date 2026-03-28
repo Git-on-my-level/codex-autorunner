@@ -181,16 +181,16 @@ class AgentHarness(ABC):
 
     def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[Any]:
         _ = workspace_root, conversation_id, turn_id
 
-        async def _unsupported() -> AsyncIterator[str]:
+        async def _unsupported() -> AsyncIterator[Any]:
             raise UnsupportedAgentCapabilityError(
                 "event_streaming",
                 agent_id=str(self.agent_id),
             )
             if False:
-                yield ""
+                yield None
 
         return _unsupported()
 

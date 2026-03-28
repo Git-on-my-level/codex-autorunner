@@ -10,15 +10,22 @@ from typing import Any, Optional, cast
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from .....agents.base import harness_allows_parallel_event_stream
+from .....agents.base import (
+    harness_allows_parallel_event_stream,
+    harness_progress_event_stream,
+    harness_supports_progress_event_stream,
+)
 from .....agents.codex.harness import CodexHarness
 from .....agents.opencode.harness import OpenCodeHarness
+from .....agents.registry import get_registered_agents
 from .....core.orchestration import (
+    FreshConversationRequiredError,
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
 )
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
+    merge_runtime_thread_raw_events,
     normalize_runtime_thread_message,
     normalize_runtime_thread_raw_event,
 )
@@ -44,8 +51,10 @@ from .....core.ports.run_event import (
     OutputDelta,
     RunEvent,
 )
+from .....core.sse import format_sse
 from .....core.time_utils import now_iso
-from .....integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
+from .....integrations.app_server import is_missing_thread_error
+from .....integrations.app_server.threads import pma_base_key
 from .....integrations.github.context_injection import maybe_inject_github_context
 from ...services.pma.common import (
     build_idempotency_key as service_build_idempotency_key,
@@ -61,10 +70,19 @@ from .tail_stream import resolve_resume_after
 logger = logging.getLogger(__name__)
 
 PMA_TIMEOUT_SECONDS = 7200
+_SUCCESSFUL_COMPLETION_STATUSES = frozenset(
+    {"ok", "completed", "complete", "done", "success"}
+)
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
     return normalize_optional_text(value)
+
+
+def _requires_fresh_pma_conversation(exc: Exception) -> bool:
+    if isinstance(exc, FreshConversationRequiredError):
+        return True
+    return is_missing_thread_error(exc)
 
 
 def _get_pma_config(request: Request) -> dict[str, Any]:
@@ -392,20 +410,17 @@ async def _interrupt_active(
         source=source,
     )
 
-    if agent_id == "opencode":
-        supervisor = getattr(request.app.state, "opencode_supervisor", None)
-        if supervisor is not None and thread_id:
-            opencode_harness = OpenCodeHarness(supervisor)
-            await opencode_harness.interrupt(hub_root, thread_id, turn_id)
-    else:
-        supervisor = getattr(request.app.state, "app_server_supervisor", None)
-        events = getattr(request.app.state, "app_server_events", None)
-        if supervisor is not None and events is not None and thread_id and turn_id:
-            codex_harness = CodexHarness(supervisor, events)
-            try:
-                await codex_harness.interrupt(hub_root, thread_id, turn_id)
-            except Exception:
-                logger.exception("Failed to interrupt Codex turn")
+    if agent_id and thread_id:
+        try:
+            harness = _build_runtime_harness(request, agent_id)
+        except HTTPException:
+            harness = None
+        if harness is not None and callable(getattr(harness, "supports", None)):
+            if harness.supports("interrupt"):
+                try:
+                    await harness.interrupt(hub_root, thread_id, turn_id)
+                except Exception:
+                    logger.exception("Failed to interrupt PMA turn")
     return {
         "status": "ok",
         "interrupted": bool(event.is_set()),
@@ -444,6 +459,278 @@ def _timeline_has_assistant_output(events: list[RunEvent]) -> bool:
         }
         for event in events
     )
+
+
+def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
+    for raw_event in raw_events:
+        if not isinstance(raw_event, dict):
+            continue
+        method = str(raw_event.get("method") or "").strip().lower()
+        if not method:
+            message = raw_event.get("message")
+            if isinstance(message, dict):
+                method = str(message.get("method") or "").strip().lower()
+        if method in {
+            "turn/completed",
+            "prompt/completed",
+            "session.idle",
+        }:
+            return True
+    return False
+
+
+def _build_runtime_harness(request: Request, agent_id: str) -> Any:
+    descriptor = get_registered_agents().get(agent_id)
+    if descriptor is None:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_id}")
+    try:
+        return descriptor.make_harness(request.app.state)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+async def _timeline_from_raw_events(
+    raw_events: tuple[Any, ...],
+) -> tuple[list[RunEvent], RuntimeThreadRunEventState]:
+    state = RuntimeThreadRunEventState()
+    timeline_events: list[RunEvent] = []
+    for raw_event in raw_events:
+        timeline_events.extend(
+            await normalize_runtime_thread_raw_event(
+                raw_event, state, timestamp=now_iso()
+            )
+        )
+    return timeline_events, state
+
+
+async def _execute_harness_turn(
+    harness: Any,
+    hub_root: Path,
+    prompt: str,
+    interrupt_event: asyncio.Event,
+    *,
+    model: Optional[str] = None,
+    reasoning: Optional[str] = None,
+    backend_thread_id: Optional[str] = None,
+    thread_registry: Optional[Any] = None,
+    thread_key: Optional[str] = None,
+    on_meta: Optional[Any] = None,
+) -> dict[str, Any]:
+    await harness.ensure_ready(hub_root)
+
+    conversation_id = backend_thread_id
+    if conversation_id is None and thread_registry is not None and thread_key:
+        conversation_id = thread_registry.get_thread_id(thread_key)
+    had_existing_conversation = bool(conversation_id)
+
+    if conversation_id:
+        try:
+            resumed = await harness.resume_conversation(hub_root, conversation_id)
+        except Exception:
+            conversation_id = None
+        else:
+            resolved_conversation_id = getattr(resumed, "id", None)
+            if isinstance(resolved_conversation_id, str) and resolved_conversation_id:
+                conversation_id = resolved_conversation_id
+                had_existing_conversation = True
+
+    async def _create_fresh_conversation() -> str:
+        conversation = await harness.new_conversation(hub_root, title="PMA")
+        fresh_conversation_id = str(getattr(conversation, "id", "") or "").strip()
+        if not fresh_conversation_id:
+            raise HTTPException(
+                status_code=502,
+                detail="Runtime did not return a conversation id",
+            )
+        return fresh_conversation_id
+
+    if not conversation_id:
+        conversation_id = await _create_fresh_conversation()
+
+    if thread_registry is not None and thread_key and conversation_id:
+        thread_registry.set_thread_id(thread_key, conversation_id)
+
+    try:
+        turn = await harness.start_turn(
+            hub_root,
+            conversation_id,
+            prompt,
+            model,
+            reasoning,
+            approval_mode="on-request",
+            sandbox_policy="dangerFullAccess",
+        )
+    except Exception as exc:
+        if not had_existing_conversation or not _requires_fresh_pma_conversation(exc):
+            raise
+        if thread_registry is not None and thread_key:
+            try:
+                thread_registry.reset_thread(thread_key)
+            except Exception:
+                logger.debug(
+                    "Failed to clear stale PMA conversation binding for %s",
+                    thread_key,
+                    exc_info=True,
+                )
+        conversation_id = await _create_fresh_conversation()
+        if thread_registry is not None and thread_key:
+            thread_registry.set_thread_id(thread_key, conversation_id)
+        turn = await harness.start_turn(
+            hub_root,
+            conversation_id,
+            prompt,
+            model,
+            reasoning,
+            approval_mode="on-request",
+            sandbox_policy="dangerFullAccess",
+        )
+    resolved_conversation_id = str(
+        getattr(turn, "conversation_id", None) or conversation_id or ""
+    ).strip()
+    if not resolved_conversation_id:
+        raise HTTPException(
+            status_code=502,
+            detail="Runtime did not return a conversation id",
+        )
+    turn_id = str(getattr(turn, "turn_id", "") or "").strip()
+    if not turn_id:
+        raise HTTPException(status_code=502, detail="Runtime did not return a turn id")
+
+    if thread_registry is not None and thread_key:
+        thread_registry.set_thread_id(thread_key, resolved_conversation_id)
+
+    if on_meta is not None:
+        try:
+            maybe = on_meta(resolved_conversation_id, turn_id)
+            if asyncio.iscoroutine(maybe):
+                await maybe
+        except Exception:
+            logger.exception("pma meta callback failed")
+
+    if interrupt_event.is_set():
+        try:
+            await harness.interrupt(hub_root, resolved_conversation_id, turn_id)
+        except Exception:
+            logger.exception("Failed to interrupt PMA runtime turn")
+        return {"status": "interrupted", "detail": "PMA chat interrupted"}
+
+    streamed_raw_events: list[Any] = []
+    stream_task: Optional[asyncio.Task[None]] = None
+    if harness_supports_progress_event_stream(
+        harness
+    ) and harness_allows_parallel_event_stream(harness):
+
+        async def _collect_events() -> None:
+            async for raw_event in harness_progress_event_stream(
+                harness,
+                hub_root,
+                resolved_conversation_id,
+                turn_id,
+            ):
+                streamed_raw_events.append(raw_event)
+
+        stream_task = asyncio.create_task(_collect_events())
+
+    turn_task = asyncio.create_task(
+        harness.wait_for_turn(
+            hub_root,
+            resolved_conversation_id,
+            turn_id,
+            timeout=None,
+        )
+    )
+    timeout_task = asyncio.create_task(asyncio.sleep(PMA_TIMEOUT_SECONDS))
+    interrupt_task = asyncio.create_task(interrupt_event.wait())
+    try:
+        done, _ = await asyncio.wait(
+            {turn_task, timeout_task, interrupt_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if timeout_task in done:
+            try:
+                await harness.interrupt(hub_root, resolved_conversation_id, turn_id)
+            except Exception:
+                logger.exception("Failed to interrupt PMA runtime turn")
+            _cancel_background_task(turn_task, name="pma.runtime.turn.wait")
+            return {"status": "error", "detail": "PMA chat timed out"}
+        if interrupt_task in done:
+            try:
+                await harness.interrupt(hub_root, resolved_conversation_id, turn_id)
+            except Exception:
+                logger.exception("Failed to interrupt PMA runtime turn")
+            _cancel_background_task(turn_task, name="pma.runtime.turn.wait")
+            return {"status": "interrupted", "detail": "PMA chat interrupted"}
+        turn_result = await turn_task
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        _cancel_background_task(timeout_task, name="pma.runtime.timeout.wait")
+        _cancel_background_task(interrupt_task, name="pma.runtime.interrupt.wait")
+        if stream_task is not None:
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
+
+    raw_events = tuple(getattr(turn_result, "raw_events", ()) or ())
+    merged_raw_events = tuple(
+        merge_runtime_thread_raw_events(streamed_raw_events, raw_events)
+    )
+    timeline_events, timeline_state = await _timeline_from_raw_events(merged_raw_events)
+
+    assistant_text = str(getattr(turn_result, "assistant_text", "") or "").strip()
+    if not assistant_text:
+        assistant_text = timeline_state.best_assistant_text().strip()
+
+    status = str(getattr(turn_result, "status", "") or "").strip().lower()
+    errors = tuple(getattr(turn_result, "errors", ()) or ())
+    successful_completion = status in _SUCCESSFUL_COMPLETION_STATUSES
+    if errors:
+        detail = next(
+            (str(error or "").strip() for error in errors if str(error or "").strip()),
+            "",
+        )
+        if (
+            assistant_text
+            and (successful_completion or timeline_state.completed_seen)
+            and (
+                timeline_state.completed_seen
+                or _raw_events_show_completion(merged_raw_events)
+            )
+        ):
+            timeline_events.append(
+                Completed(timestamp=now_iso(), final_message=assistant_text)
+            )
+            return {
+                "status": "ok",
+                "message": assistant_text,
+                "thread_id": resolved_conversation_id,
+                "backend_thread_id": resolved_conversation_id,
+                "turn_id": turn_id,
+                "raw_events": list(merged_raw_events),
+                "timeline_events": timeline_events,
+            }
+        return {"status": "error", "detail": detail or "PMA chat failed"}
+
+    if status in {"interrupted", "cancelled", "canceled", "aborted"}:
+        return {"status": "interrupted", "detail": "PMA chat interrupted"}
+    if status and not successful_completion:
+        return {"status": "error", "detail": "PMA chat failed"}
+
+    if assistant_text:
+        timeline_events.append(
+            Completed(timestamp=now_iso(), final_message=assistant_text)
+        )
+    return {
+        "status": "ok",
+        "message": assistant_text,
+        "thread_id": resolved_conversation_id,
+        "backend_thread_id": resolved_conversation_id,
+        "turn_id": turn_id,
+        "raw_events": list(merged_raw_events),
+        "timeline_events": timeline_events,
+    }
 
 
 async def _execute_app_server(
@@ -930,7 +1217,7 @@ async def _execute_queue_item(
         )
 
         snapshot = await snapshot_builder(supervisor, hub_root=hub_root)
-        prompt_state_key = PMA_OPENCODE_KEY if agent_id == "opencode" else PMA_KEY
+        prompt_state_key = pma_base_key(agent_id)
         prompt = format_pma_prompt(
             prompt_base,
             snapshot,
@@ -990,17 +1277,7 @@ async def _execute_queue_item(
             turn_id=turn_id,
         )
 
-    supervisor = getattr(request.app.state, "app_server_supervisor", None)
-    events = getattr(request.app.state, "app_server_events", None)
-    opencode = getattr(request.app.state, "opencode_supervisor", None)
     registry = getattr(request.app.state, "app_server_threads", None)
-    stall_timeout_seconds = None
-    try:
-        stall_timeout_seconds = (
-            request.app.state.config.opencode.session_stall_timeout_seconds
-        )
-    except Exception:
-        stall_timeout_seconds = None
 
     ingress = build_surface_orchestration_ingress(
         event_sink=lambda orchestration_event: logger.info(
@@ -1027,33 +1304,28 @@ async def _execute_queue_item(
     async def _submit_thread_message(
         _request: SurfaceThreadMessageRequest,
     ) -> dict[str, Any]:
-        if agent_id == "opencode":
-            if opencode is None:
-                return {"status": "error", "detail": "OpenCode unavailable"}
-            return await _execute_opencode(
-                opencode,
-                hub_root,
-                prompt,
-                interrupt_event,
-                model=model,
-                reasoning=reasoning,
-                thread_registry=registry,
-                thread_key=PMA_OPENCODE_KEY,
-                stall_timeout_seconds=stall_timeout_seconds,
-                on_meta=_meta,
-            )
-        if supervisor is None or events is None:
-            return {"status": "error", "detail": "App-server unavailable"}
-        return await _execute_app_server(
-            supervisor,
-            events,
+        try:
+            harness = _build_runtime_harness(request, agent_id)
+        except HTTPException as exc:
+            return {"status": "error", "detail": str(exc.detail)}
+        if not callable(getattr(harness, "supports", None)):
+            return {"status": "error", "detail": "Runtime harness unavailable"}
+        if not harness.supports("durable_threads") or not harness.supports(
+            "message_turns"
+        ):
+            return {
+                "status": "error",
+                "detail": f"Agent '{agent_id}' does not support PMA message turns",
+            }
+        return await _execute_harness_turn(
+            harness,
             hub_root,
             prompt,
             interrupt_event,
             model=model,
             reasoning=reasoning,
             thread_registry=registry,
-            thread_key=PMA_KEY,
+            thread_key=pma_base_key(agent_id),
             on_meta=_meta,
         )
 
@@ -1423,34 +1695,36 @@ def build_chat_runtime_router(
     ):
         agent_id = (agent or "").strip().lower()
         resume_after = resolve_resume_after(request, since_event_id)
-        if agent_id == "codex":
-            events = getattr(request.app.state, "app_server_events", None)
-            if events is None:
-                raise HTTPException(status_code=404, detail="Codex events unavailable")
-            if not thread_id:
-                raise HTTPException(status_code=400, detail="thread_id is required")
+        if not thread_id:
+            raise HTTPException(status_code=400, detail="thread_id is required")
+        harness = _build_runtime_harness(request, agent_id)
+        events = getattr(request.app.state, "app_server_events", None)
+        if isinstance(harness, CodexHarness) and events is not None:
             return StreamingResponse(
                 events.stream(thread_id, turn_id, after_id=(resume_after or 0)),
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
-        if agent_id == "opencode":
-            if not thread_id:
-                raise HTTPException(status_code=400, detail="thread_id is required")
-            supervisor = getattr(request.app.state, "opencode_supervisor", None)
-            if supervisor is None:
-                raise HTTPException(status_code=404, detail="OpenCode unavailable")
-            harness = OpenCodeHarness(supervisor)
-            if not harness_allows_parallel_event_stream(harness):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Live turn events unavailable for this agent",
-                )
-            return StreamingResponse(
-                harness.stream_events(
-                    request.app.state.config.root, thread_id, turn_id
-                ),
-                media_type="text/event-stream",
-                headers=SSE_HEADERS,
+        if not harness_allows_parallel_event_stream(harness):
+            raise HTTPException(
+                status_code=409,
+                detail="Live turn events unavailable for this agent",
             )
-        raise HTTPException(status_code=404, detail="Unknown agent")
+
+        async def _stream_events() -> Any:
+            async for raw_event in harness.stream_events(
+                request.app.state.config.root, thread_id, turn_id
+            ):
+                if isinstance(raw_event, str):
+                    yield raw_event
+                    continue
+                payload = (
+                    raw_event if isinstance(raw_event, dict) else {"value": raw_event}
+                )
+                yield format_sse("event", {"message": payload})
+
+        return StreamingResponse(
+            _stream_events(),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )

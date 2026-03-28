@@ -261,7 +261,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                             "type": STRING,
                             "name": "effort",
                             "description": (
-                                "Reasoning effort (codex only): "
+                                "Reasoning effort (when supported): "
                                 f"{reasoning_effort_description()}"
                             ),
                             "required": False,

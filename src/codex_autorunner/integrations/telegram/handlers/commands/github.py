@@ -1463,6 +1463,22 @@ class GitHubCommands(TelegramCommandSupportMixin):
         delivery: str,
     ) -> None:
         agent = self._effective_agent(record)
+        if not self._agent_supports_capability(agent, "review"):
+            supported = ", ".join(self._agents_supporting_capability("review"))
+            await self._send_message(
+                message.chat_id,
+                (
+                    f"{self._agent_display_name(agent)} does not support /review in Telegram."
+                    + (
+                        f" Switch to an agent with review support: {supported}."
+                        if supported
+                        else ""
+                    )
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
         if agent == "opencode":
             await self._start_opencode_review(
                 message,
@@ -1487,6 +1503,23 @@ class GitHubCommands(TelegramCommandSupportMixin):
     ) -> None:
         record = await self._require_bound_record(message)
         if not record:
+            return
+        agent = self._effective_agent(record)
+        if not self._agent_supports_capability(agent, "review"):
+            supported = ", ".join(self._agents_supporting_capability("review"))
+            await self._send_message(
+                message.chat_id,
+                (
+                    f"{self._agent_display_name(agent)} does not support /review in Telegram."
+                    + (
+                        f" Switch to an agent with review support: {supported}."
+                        if supported
+                        else ""
+                    )
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
             return
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         raw_args = args.strip()

@@ -1,16 +1,24 @@
+from types import SimpleNamespace
+
+import pytest
+
 from codex_autorunner.integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     build_agent_switch_state,
+    chat_agent_command_choices,
+    chat_agent_description,
     chat_agent_supports_effort,
     default_chat_model_for_agent,
     normalize_chat_agent,
 )
 
 
-def test_normalize_chat_agent_accepts_compact_values() -> None:
+def test_normalize_chat_agent_accepts_registered_agents() -> None:
     assert normalize_chat_agent(" OpenCode ") == "opencode"
     assert normalize_chat_agent("Open Code") == "opencode"
     assert normalize_chat_agent("codex") == "codex"
+    assert normalize_chat_agent("hermes") == "hermes"
+    assert normalize_chat_agent(" Hermes ") == "hermes"
 
 
 def test_normalize_chat_agent_falls_back_to_default() -> None:
@@ -36,6 +44,45 @@ def test_build_agent_switch_state_applies_agent_default_model() -> None:
     assert state.effort is None
 
 
-def test_chat_agent_supports_effort_only_for_codex() -> None:
+def test_chat_agent_supports_effort_for_review_capable_agents() -> None:
     assert chat_agent_supports_effort("codex") is True
-    assert chat_agent_supports_effort("opencode") is False
+    assert chat_agent_supports_effort("opencode") is True
+    assert chat_agent_supports_effort("hermes") is False
+    assert chat_agent_supports_effort("zeroclaw") is False
+
+
+def test_chat_agent_command_choices_is_registry_driven() -> None:
+    choices = chat_agent_command_choices()
+    values = {c["value"] for c in choices}
+    assert "codex" in values
+    assert "opencode" in values
+    assert "hermes" in values
+    assert all("name" in c and "value" in c for c in choices)
+
+
+def test_chat_agent_description_includes_registered_agents() -> None:
+    description = chat_agent_description()
+    assert "codex" in description
+    assert "opencode" in description
+    assert "hermes" in description
+
+
+def test_hermes_is_accepted_by_normalize_chat_agent() -> None:
+    assert normalize_chat_agent("hermes") == "hermes"
+    assert normalize_chat_agent("HERMES") == "hermes"
+    assert normalize_chat_agent(" Hermes ") == "hermes"
+
+
+def test_normalize_chat_agent_accepts_registered_command_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda: {
+            "plugin-agent": SimpleNamespace(name="Plugin Agent"),
+        },
+    )
+
+    assert normalize_chat_agent("plugin-agent") == "plugin-agent"
+    choices = chat_agent_command_choices()
+    assert {"name": "plugin-agent", "value": "plugin-agent"} in choices

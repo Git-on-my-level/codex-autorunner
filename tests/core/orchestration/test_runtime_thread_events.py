@@ -159,6 +159,124 @@ async def test_normalize_runtime_thread_raw_event_marks_only_successful_turn_com
     assert completed_state.completed_seen is True
 
 
+async def test_normalize_runtime_thread_raw_event_handles_acp_progress_approval_and_completion() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    progress = await normalize_runtime_thread_raw_event(
+        {
+            "method": "prompt/progress",
+            "params": {"delta": "hello "},
+        },
+        state,
+    )
+    notice = await normalize_runtime_thread_raw_event(
+        {
+            "method": "prompt/progress",
+            "params": {"message": "thinking"},
+        },
+        state,
+    )
+    approval = await normalize_runtime_thread_raw_event(
+        {
+            "method": "permission/requested",
+            "params": {
+                "requestId": "perm-1",
+                "description": "Need approval",
+                "context": {"tool": "shell"},
+            },
+        },
+        state,
+    )
+    final_message = await normalize_runtime_thread_raw_event(
+        {
+            "method": "prompt/completed",
+            "params": {"status": "completed", "finalOutput": "done"},
+        },
+        state,
+    )
+
+    assert isinstance(progress[0], OutputDelta)
+    assert progress[0].content == "hello "
+    assert isinstance(notice[0], RunNotice)
+    assert notice[0].kind == "progress"
+    assert notice[0].message == "thinking"
+    assert isinstance(approval[0], ApprovalRequested)
+    assert approval[0].request_id == "perm-1"
+    assert approval[0].context == {"tool": "shell"}
+    assert isinstance(final_message[0], OutputDelta)
+    assert final_message[0].delta_type == "assistant_message"
+    assert final_message[0].content == "done"
+    assert state.best_assistant_text() == "done"
+    assert state.completed_seen is True
+
+
+async def test_normalize_runtime_thread_raw_event_handles_request_style_permission_and_decision() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    approval = await normalize_runtime_thread_raw_event(
+        {
+            "id": "perm-1",
+            "method": "session/request_permission",
+            "params": {
+                "turnId": "turn-1",
+                "requestId": "perm-1",
+                "description": "Need approval",
+                "context": {"tool": "shell"},
+            },
+        },
+        state,
+    )
+    decision = await normalize_runtime_thread_raw_event(
+        {
+            "method": "permission/decision",
+            "params": {
+                "turnId": "turn-1",
+                "requestId": "perm-1",
+                "decision": "decline",
+                "description": "Need approval",
+            },
+        },
+        state,
+    )
+
+    assert isinstance(approval[0], ApprovalRequested)
+    assert approval[0].request_id == "perm-1"
+    assert isinstance(decision[0], RunNotice)
+    assert decision[0].kind == "approval"
+    assert "declined" in decision[0].message.lower()
+
+
+async def test_normalize_runtime_thread_raw_event_handles_acp_failure_and_usage() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    usage = await normalize_runtime_thread_raw_event(
+        {
+            "method": "token/usage",
+            "params": {"usage": {"total_tokens": 42}},
+        },
+        state,
+    )
+    failure = await normalize_runtime_thread_raw_event(
+        {
+            "method": "prompt/failed",
+            "params": {"message": "boom"},
+        },
+        state,
+    )
+
+    assert isinstance(usage[0], TokenUsage)
+    assert usage[0].usage == {"total_tokens": 42}
+    assert isinstance(failure[0], Failed)
+    assert failure[0].error_message == "boom"
+    assert state.last_error_message == "boom"
+
+
 async def test_recover_post_completion_outcome_requires_canonical_final_message() -> (
     None
 ):

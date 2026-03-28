@@ -20,6 +20,11 @@
       "importer": "src/codex_autorunner/core/scm_reaction_router.py",
       "imported": "codex_autorunner.integrations.github.reaction_prompts",
       "reason": "SCM reaction routing is provider-neutral, but v1 prompt text is GitHub-specific and kept in the GitHub integration module."
+    },
+    {
+      "importer": "src/codex_autorunner/core/runtime.py",
+      "imported": "codex_autorunner.integrations.agents",
+      "reason": "PMA doctor checks validate default agent against registered agents via the integrations interface."
     }
   ]
 }

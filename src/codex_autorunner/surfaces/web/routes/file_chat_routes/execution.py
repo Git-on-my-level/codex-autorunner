@@ -70,7 +70,7 @@ async def execute_file_chat(
         editable_rel_path=relative_to_repo(repo_root, draft_path),
     )
 
-    from .runtime import get_or_create_interrupt_event
+    from .runtime import get_or_create_interrupt_event, update_turn_state
 
     interrupt_event = await get_or_create_interrupt_event(request, target.state_key)
     if interrupt_event.is_set():
@@ -81,10 +81,13 @@ async def execute_file_chat(
     except ValueError:
         agent_id = "codex"
 
+    if agent_id not in ("codex", "opencode"):
+        return {
+            "status": "error",
+            "detail": f"Agent '{agent_id}' is not supported on file-chat surface yet",
+        }
+
     thread_key = f"file_chat.{target.state_key}"
-
-    from .runtime import update_turn_state
-
     await update_turn_state(request, target, status="running", agent=agent_id)
 
     if agent_id == "opencode":
@@ -105,10 +108,7 @@ async def execute_file_chat(
         )
     else:
         if supervisor is None:
-            return {
-                "status": "error",
-                "detail": "App-server supervisor unavailable",
-            }
+            return {"status": "error", "detail": "App-server supervisor unavailable"}
         result = await execute_app_server(
             supervisor,
             repo_root,
