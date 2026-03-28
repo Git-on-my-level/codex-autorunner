@@ -293,7 +293,7 @@
         }
       },
       "enabled": true,
-      "pr_draft_default": true,
+      "pr_draft_default": false,
       "sync_agent_timeout_seconds": 1800,
       "sync_commit_mode": "auto"
     },
