@@ -2812,6 +2812,36 @@ class DiscordBotService:
         eviction_candidates: list[tuple[str, _OpenCodeSupervisorCacheEntry]] = []
 
         for workspace_path, entry in cached_entries:
+            workspace_root = canonicalize_path(Path(workspace_path))
+            execution_running = self._workspace_has_running_opencode_execution(
+                workspace_root
+            )
+            if execution_running is not False:
+                entry.last_requested_at = now
+                try:
+                    snapshot = await entry.supervisor.lifecycle_snapshot()
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.opencode.prune_failed",
+                        workspace_path=workspace_path,
+                        exc=exc,
+                    )
+                else:
+                    live_handles += snapshot.cached_handles
+                log_event(
+                    self._logger,
+                    logging.DEBUG,
+                    "discord.opencode.prune_deferred",
+                    workspace_path=workspace_path,
+                    reason=(
+                        "active_runtime_execution"
+                        if execution_running
+                        else "execution_state_unknown"
+                    ),
+                )
+                continue
             try:
                 killed_processes += await entry.supervisor.prune_idle()
                 snapshot = await entry.supervisor.lifecycle_snapshot()
@@ -7014,6 +7044,49 @@ class DiscordBotService:
                 ):
                     active_count += 1
         return active_count
+
+    def _workspace_has_running_opencode_execution(
+        self, workspace_root: Path
+    ) -> Optional[bool]:
+        try:
+            orchestration_service = self._discord_thread_service()
+            threads = orchestration_service.list_thread_targets(
+                lifecycle_status="active"
+            )
+        except Exception:
+            return None
+        get_running_execution = getattr(
+            orchestration_service, "get_running_execution", None
+        )
+        canonical_workspace = str(canonicalize_path(Path(workspace_root)).resolve())
+        for thread in threads:
+            if str(getattr(thread, "agent_id", "") or "").strip().lower() != "opencode":
+                continue
+            thread_workspace = str(getattr(thread, "workspace_root", "") or "").strip()
+            if not thread_workspace:
+                continue
+            try:
+                normalized_thread_workspace = str(
+                    canonicalize_path(Path(thread_workspace)).resolve()
+                )
+            except Exception:
+                normalized_thread_workspace = thread_workspace
+            if normalized_thread_workspace != canonical_workspace:
+                continue
+            thread_target_id = str(
+                getattr(thread, "thread_target_id", "") or ""
+            ).strip()
+            if not thread_target_id:
+                continue
+            if callable(get_running_execution):
+                try:
+                    if get_running_execution(thread_target_id) is not None:
+                        return True
+                except Exception:
+                    return None
+            if str(getattr(thread, "status", "") or "").strip().lower() == "running":
+                return True
+        return False
 
     def _build_update_confirmation_components(
         self,

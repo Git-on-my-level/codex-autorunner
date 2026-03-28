@@ -56,11 +56,15 @@ class _StubOpenCodeSupervisor:
         self._handles_after_prune = handles_after_prune
         self.session_stall_timeout_seconds = session_stall_timeout_seconds
         self.close_all_calls = 0
+        self.prune_idle_calls = 0
+        self.lifecycle_snapshot_calls = 0
 
     async def prune_idle(self) -> int:
+        self.prune_idle_calls += 1
         return self._pruned_handles
 
     async def lifecycle_snapshot(self) -> Any:
+        self.lifecycle_snapshot_calls += 1
         return SimpleNamespace(
             cached_handles=self._handles_after_prune,
             active_turns=0,
@@ -177,6 +181,196 @@ async def test_opencode_prune_sweep_evicts_idle_supervisors_and_logs_metrics(
             "killed_processes": 1,
             "evicted_supervisors": 1,
         }
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_opencode_prune_sweep_defers_workspace_with_running_opencode_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace_active = tmp_path / "workspace-active"
+    workspace_idle = tmp_path / "workspace-idle"
+    workspace_active.mkdir()
+    workspace_idle.mkdir()
+
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    def _fake_log_event(_logger, _level, event: str, **kwargs: Any) -> None:
+        events.append((event, kwargs))
+
+    monkeypatch.setattr(discord_service_module, "log_event", _fake_log_event)
+    monkeypatch.setattr(
+        discord_service_module,
+        "load_repo_config",
+        lambda workspace_root, hub_path=None: SimpleNamespace(
+            opencode=SimpleNamespace(idle_ttl_seconds=120),
+        ),
+    )
+
+    supervisors: dict[str, _StubOpenCodeSupervisor] = {
+        str(workspace_active): _StubOpenCodeSupervisor(
+            pruned_handles=0,
+            handles_after_prune=1,
+        ),
+        str(workspace_idle): _StubOpenCodeSupervisor(
+            pruned_handles=1,
+            handles_after_prune=0,
+        ),
+    }
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_opencode_supervisor_from_repo_config",
+        lambda repo_config, *, workspace_root, logger, base_env=None: supervisors[
+            str(workspace_root)
+        ],
+    )
+
+    class _FakeThread:
+        def __init__(self, thread_target_id: str, workspace_root: Path) -> None:
+            self.thread_target_id = thread_target_id
+            self.workspace_root = str(workspace_root.resolve())
+            self.agent_id = "opencode"
+            self.status = "running"
+
+    class _FakeThreadService:
+        def list_thread_targets(self, *, lifecycle_status: str) -> list[Any]:
+            assert lifecycle_status == "active"
+            return [_FakeThread("thread-active", workspace_active)]
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            if thread_target_id == "thread-active":
+                return {"execution_id": "exec-active"}
+            return None
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.opencode"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[method-assign]
+
+    try:
+        await service._opencode_supervisor_for_workspace(workspace_active)
+        await service._opencode_supervisor_for_workspace(workspace_idle)
+
+        for entry in service._opencode_supervisors.values():
+            entry.last_requested_at = time.monotonic() - 120.0
+
+        await service._prune_opencode_supervisors()
+
+        assert set(service._opencode_supervisors.keys()) == {str(workspace_active)}
+        assert supervisors[str(workspace_active)].prune_idle_calls == 0
+        assert supervisors[str(workspace_active)].lifecycle_snapshot_calls == 1
+        assert supervisors[str(workspace_active)].close_all_calls == 0
+        assert supervisors[str(workspace_idle)].prune_idle_calls == 1
+        assert supervisors[str(workspace_idle)].close_all_calls == 1
+
+        deferred_events = [
+            payload
+            for event, payload in events
+            if event == "discord.opencode.prune_deferred"
+        ]
+        assert deferred_events == [
+            {
+                "workspace_path": str(workspace_active),
+                "reason": "active_runtime_execution",
+            }
+        ]
+        prune_events = [
+            payload
+            for event, payload in events
+            if event == "discord.opencode.prune_sweep"
+        ]
+        assert prune_events
+        assert prune_events[-1] == {
+            "cached_supervisors": 2,
+            "cached_supervisors_after": 1,
+            "live_handles": 1,
+            "killed_processes": 1,
+            "evicted_supervisors": 1,
+        }
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_opencode_prune_sweep_defers_when_execution_state_lookup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    def _fake_log_event(_logger, _level, event: str, **kwargs: Any) -> None:
+        events.append((event, kwargs))
+
+    monkeypatch.setattr(discord_service_module, "log_event", _fake_log_event)
+    monkeypatch.setattr(
+        discord_service_module,
+        "load_repo_config",
+        lambda workspace_root, hub_path=None: SimpleNamespace(
+            opencode=SimpleNamespace(idle_ttl_seconds=120),
+        ),
+    )
+
+    supervisor = _StubOpenCodeSupervisor(
+        pruned_handles=1,
+        handles_after_prune=1,
+    )
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_opencode_supervisor_from_repo_config",
+        lambda repo_config, *, workspace_root, logger, base_env=None: supervisor,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.opencode"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    def _broken_thread_service() -> Any:
+        raise RuntimeError("thread store unavailable")
+
+    service._discord_thread_service = _broken_thread_service  # type: ignore[method-assign]
+
+    try:
+        await service._opencode_supervisor_for_workspace(workspace)
+        for entry in service._opencode_supervisors.values():
+            entry.last_requested_at = time.monotonic() - 120.0
+
+        await service._prune_opencode_supervisors()
+
+        assert set(service._opencode_supervisors.keys()) == {str(workspace)}
+        assert supervisor.prune_idle_calls == 0
+        assert supervisor.lifecycle_snapshot_calls == 1
+        assert supervisor.close_all_calls == 0
+
+        deferred_events = [
+            payload
+            for event, payload in events
+            if event == "discord.opencode.prune_deferred"
+        ]
+        assert deferred_events == [
+            {
+                "workspace_path": str(workspace),
+                "reason": "execution_state_unknown",
+            }
+        ]
     finally:
         await store.close()
 
