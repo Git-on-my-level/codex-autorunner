@@ -479,6 +479,71 @@ If your agent exposes a machine-readable protocol spec:
 
 3. Document how to update the spec when agent protocol changes
 
+If CI installs external agent tooling to perform compatibility checks, pin those
+tool versions in a repo-tracked lock file and refresh that lock together with
+the vendor protocol snapshots. Prefer one human-facing refresh command and one
+CI-facing check command instead of a loose collection of ad hoc scripts. The
+current `agent-compatibility` flow is the reference pattern:
+
+- `make agent-compatibility-refresh`
+- `make agent-compatibility-check`
+
+That keeps local refreshes, documentation, and CI aligned.
+
+## ACP Integration Documentation Checklist
+
+For ACP-backed runtimes, do not stop at harness/supervisor wiring. Hermes
+showed that most late churn comes from missing operator docs and stale
+surface-specific assumptions.
+
+Before calling an ACP integration done, update or verify all of the following:
+
+- **Architecture contract**: freeze capability boundaries and non-goals in an
+  architecture note before implementation if the runtime introduces a new
+  resource model or partial capability surface.
+- **Operator runbook**: add `docs/ops/<agent>-acp.md` covering binary
+  prerequisites, launch contract, config, shared-state or memory model,
+  supported and unsupported capabilities, PMA/chat/ticket-flow usage, and
+  troubleshooting.
+- **README**: update any supported-agent lists and any PMA or workflow guidance
+  that should call out why this agent is a good fit.
+- **Base setup guide**: update `docs/AGENT_SETUP_GUIDE.md` prerequisites,
+  supported-agent lists, and troubleshooting so the new runtime is discoverable
+  from the default onboarding path.
+- **Surface setup guides**: if Telegram or Discord can route to the new agent,
+  update `docs/AGENT_SETUP_TELEGRAM_GUIDE.md` and
+  `docs/AGENT_SETUP_DISCORD_GUIDE.md` with any runtime-specific prerequisites
+  and capability caveats.
+- **Capability/reference docs**: update broader reference docs only when the new
+  agent becomes a canonical example there, for example `docs/plugin-api.md` or
+  this guide.
+
+## ACP Integration Search Sweep
+
+After wiring the runtime, run a targeted doc sweep for stale hardcoded
+assumptions. Hermes integration surfaced that these usually hide in setup docs,
+runbooks, and troubleshooting sections rather than in the main implementation
+guide.
+
+Suggested search passes:
+
+```bash
+rg -n "CAR currently supports|supported agents|Agent not found|PMA|Telegram|Discord" README.md docs -g '!vendor/**'
+rg -n "Codex|OpenCode|opencode|codex" README.md docs -g '!vendor/**'
+rg -n "review|model listing|transcript|approvals|interrupt" README.md docs -g '!vendor/**'
+```
+
+Then manually classify each hit:
+
+- intentionally backend-specific docs, such as `docs/codex/**`
+- user-facing docs that should mention the new runtime
+- surface docs that should mention capability-gated unsupported actions instead
+  of silently implying Codex/OpenCode behavior
+
+The goal is not to replace every mention of older runtimes. The goal is to find
+places where CAR is still implicitly documented as a two-agent system or where
+unsupported operations are described as if they were universally available.
+
 ## Testing Checklist
 
 Before submitting, verify:
@@ -495,6 +560,10 @@ Before submitting, verify:
 - [ ] Version info is accessible (if agent supports it)
 - [ ] Unsupported actions fail with capability-driven errors rather than
   pretending to work
+- [ ] README/setup/runbook docs are updated for the new runtime where relevant
+- [ ] A doc/search sweep was run for stale Codex/OpenCode-only assumptions
+- [ ] If protocol drift CI exists, the canonical refresh/check commands and any
+  pinned compatibility lock files were updated together
 
 ## Troubleshooting
 

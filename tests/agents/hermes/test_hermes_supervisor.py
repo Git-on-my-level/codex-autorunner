@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from codex_autorunner.agents.acp.errors import (
 from codex_autorunner.agents.hermes.supervisor import (
     HermesSupervisor,
     HermesSupervisorError,
+    hermes_runtime_preflight,
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
@@ -20,6 +22,12 @@ FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_serv
 
 def fixture_command(scenario: str) -> list[str]:
     return [sys.executable, "-u", str(FIXTURE_PATH), "--scenario", scenario]
+
+
+class _HermesPreflightConfig:
+    def agent_binary(self, agent_id: str) -> str:
+        assert agent_id == "hermes"
+        return "hermes"
 
 
 async def _collect_events(
@@ -83,6 +91,40 @@ async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
         ]
     finally:
         await supervisor.close_all()
+
+
+def test_hermes_runtime_preflight_accepts_stderr_only_help(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.hermes.supervisor.resolve_executable",
+        lambda _name: "/usr/bin/hermes",
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):  # type: ignore[no-untyped-def]
+        if cmd == ["hermes", "--version"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout="hermes 1.2.3\n",
+                stderr="",
+            )
+        if cmd == ["hermes", "acp", "--help"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout="",
+                stderr="Usage: hermes acp [OPTIONS]\n  --session-state-file TEXT\n",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = hermes_runtime_preflight(_HermesPreflightConfig())
+
+    assert result.status == "ready"
+    assert result.launch_mode == "session_state_file"
+    assert result.version == "hermes 1.2.3"
 
 
 @pytest.mark.asyncio

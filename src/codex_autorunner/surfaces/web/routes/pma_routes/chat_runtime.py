@@ -19,6 +19,7 @@ from .....agents.codex.harness import CodexHarness
 from .....agents.opencode.harness import OpenCodeHarness
 from .....agents.registry import get_registered_agents
 from .....core.orchestration import (
+    FreshConversationRequiredError,
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
 )
@@ -52,6 +53,7 @@ from .....core.ports.run_event import (
 )
 from .....core.sse import format_sse
 from .....core.time_utils import now_iso
+from .....integrations.app_server import is_missing_thread_error
 from .....integrations.app_server.threads import pma_base_key
 from .....integrations.github.context_injection import maybe_inject_github_context
 from ...services.pma.common import (
@@ -75,6 +77,12 @@ _SUCCESSFUL_COMPLETION_STATUSES = frozenset(
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
     return normalize_optional_text(value)
+
+
+def _requires_fresh_pma_conversation(exc: Exception) -> bool:
+    if isinstance(exc, FreshConversationRequiredError):
+        return True
+    return is_missing_thread_error(exc)
 
 
 def _get_pma_config(request: Request) -> dict[str, Any]:
@@ -513,6 +521,7 @@ async def _execute_harness_turn(
     conversation_id = backend_thread_id
     if conversation_id is None and thread_registry is not None and thread_key:
         conversation_id = thread_registry.get_thread_id(thread_key)
+    had_existing_conversation = bool(conversation_id)
 
     if conversation_id:
         try:
@@ -523,28 +532,58 @@ async def _execute_harness_turn(
             resolved_conversation_id = getattr(resumed, "id", None)
             if isinstance(resolved_conversation_id, str) and resolved_conversation_id:
                 conversation_id = resolved_conversation_id
+                had_existing_conversation = True
 
-    if not conversation_id:
+    async def _create_fresh_conversation() -> str:
         conversation = await harness.new_conversation(hub_root, title="PMA")
-        conversation_id = str(getattr(conversation, "id", "") or "").strip()
-        if not conversation_id:
+        fresh_conversation_id = str(getattr(conversation, "id", "") or "").strip()
+        if not fresh_conversation_id:
             raise HTTPException(
                 status_code=502,
                 detail="Runtime did not return a conversation id",
             )
+        return fresh_conversation_id
+
+    if not conversation_id:
+        conversation_id = await _create_fresh_conversation()
 
     if thread_registry is not None and thread_key and conversation_id:
         thread_registry.set_thread_id(thread_key, conversation_id)
 
-    turn = await harness.start_turn(
-        hub_root,
-        conversation_id,
-        prompt,
-        model,
-        reasoning,
-        approval_mode="on-request",
-        sandbox_policy="dangerFullAccess",
-    )
+    try:
+        turn = await harness.start_turn(
+            hub_root,
+            conversation_id,
+            prompt,
+            model,
+            reasoning,
+            approval_mode="on-request",
+            sandbox_policy="dangerFullAccess",
+        )
+    except Exception as exc:
+        if not had_existing_conversation or not _requires_fresh_pma_conversation(exc):
+            raise
+        if thread_registry is not None and thread_key:
+            try:
+                thread_registry.reset_thread(thread_key)
+            except Exception:
+                logger.debug(
+                    "Failed to clear stale PMA conversation binding for %s",
+                    thread_key,
+                    exc_info=True,
+                )
+        conversation_id = await _create_fresh_conversation()
+        if thread_registry is not None and thread_key:
+            thread_registry.set_thread_id(thread_key, conversation_id)
+        turn = await harness.start_turn(
+            hub_root,
+            conversation_id,
+            prompt,
+            model,
+            reasoning,
+            approval_mode="on-request",
+            sandbox_policy="dangerFullAccess",
+        )
     resolved_conversation_id = str(
         getattr(turn, "conversation_id", None) or conversation_id or ""
     ).strip()

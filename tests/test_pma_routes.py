@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
+from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core import filebox
 from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
@@ -21,6 +22,9 @@ from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
 from codex_autorunner.core.pma_queue import PmaQueue, QueueItemState
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
+from codex_autorunner.integrations.app_server.client import (
+    CodexAppServerResponseError,
+)
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app
@@ -1743,6 +1747,141 @@ def test_pma_chat_hermes_reuses_agent_scoped_registry_binding(hub_env) -> None:
     assert resp.json()["status"] == "ok"
     assert observed["resume"] == (hub_env.hub_root, "hermes-session-stored")
     assert observed["start_turn"][1] == "hermes-session-stored"
+
+
+def test_pma_chat_codex_retries_with_fresh_conversation_after_stale_resume(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    registry = app.state.app_server_threads
+    registry.set_thread_id(PMA_KEY, "stale-codex-thread")
+    observed: dict[str, Any] = {}
+
+    class _CodexHarness:
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            observed["new_conversation"] = (
+                workspace_root,
+                title,
+            )
+            return SimpleNamespace(id="fresh-codex-thread")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            observed["resume"] = (workspace_root, conversation_id)
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            observed.setdefault("start_turn_calls", []).append(conversation_id)
+            if conversation_id == "stale-codex-thread":
+                raise CodexAppServerResponseError(
+                    method="turn/start",
+                    code=-32600,
+                    message="thread not found: stale-codex-thread",
+                )
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id="codex-turn-2",
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="codex reply after stale resume recovery",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    monkeypatch.setattr(
+        chat_runtime,
+        "get_registered_agents",
+        lambda: {
+            "codex": AgentDescriptor(
+                id="codex",
+                name="Codex",
+                capabilities=_CodexHarness.capabilities,
+                make_harness=lambda _ctx: _CodexHarness(),
+            )
+        },
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/pma/chat",
+        json={"message": "hello codex", "agent": "codex"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert "codex reply after stale resume recovery" in payload["message"]
+    assert observed["resume"] == (hub_env.hub_root, "stale-codex-thread")
+    assert observed["start_turn_calls"] == [
+        "stale-codex-thread",
+        "fresh-codex-thread",
+    ]
+    assert registry.get_thread_id(PMA_KEY) == "fresh-codex-thread"
 
 
 def test_pma_turn_events_stream_opencode_returns_conflict_when_live_streaming_disabled(

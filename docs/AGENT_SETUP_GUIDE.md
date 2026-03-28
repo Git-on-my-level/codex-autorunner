@@ -65,6 +65,10 @@ Verify the user has:
 
 If any prerequisites are missing, help them install what's needed.
 
+If the user wants Hermes, also have them read `docs/ops/hermes-acp.md` before
+continuing so they understand the shared `HERMES_HOME` model and ACP-specific
+compatibility checks.
+
 ### Step 3: Install CAR
 
 CAR can be installed via pip or pipx:
@@ -188,7 +192,10 @@ CAR's philosophy is that the file system is the source of truth. Tickets, contex
 ## Troubleshooting
 
 ### "Agent not found"
-Make sure the agent is installed and available in your PATH. Run `codex --version` or `opencode --version` to verify.
+Make sure the agent is installed and available in your PATH. Run
+`codex --version`, `hermes --version`, or `opencode --version` to verify.
+For Hermes specifically, also verify `hermes acp --help` works and review
+`docs/ops/hermes-acp.md`.
 
 Inside app-server-backed CAR sessions (web terminal/PMA and Telegram), `car` is
 resolved from each workspace shim path (`<workspace>/.codex-autorunner/bin`, plus

@@ -671,7 +671,8 @@ def hermes_runtime_preflight(
             text=True,
             timeout=10,
         )
-        if result.returncode not in (0, 1) or not result.stdout:
+        help_text = result.stdout + result.stderr
+        if result.returncode not in (0, 1) or not help_text.strip():
             return RuntimePreflightResult(
                 runtime_id=HERMES_RUNTIME_ID,
                 status="incompatible",
@@ -680,7 +681,6 @@ def hermes_runtime_preflight(
                 message="Hermes ACP mode is not supported by this binary.",
                 fix="Install a Hermes build that supports the `hermes acp` command.",
             )
-        help_text = result.stdout + result.stderr
         if "--session-state-file" not in help_text:
             return RuntimePreflightResult(
                 runtime_id=HERMES_RUNTIME_ID,

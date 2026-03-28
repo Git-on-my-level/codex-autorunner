@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Operate and troubleshoot the Telegram polling bot that proxies Codex app-server sessions.
+Operate and troubleshoot the Telegram polling bot that proxies CAR-backed agent sessions.
 
 ## Prerequisites
 
@@ -46,7 +46,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 - `/bind <repo_id|path>`: bind the topic to a repo workspace root; CAR then
   keeps routing messages to that topic's durable thread under the bound
   resource.
-- `/new`: start a new Codex thread for the bound workspace.
+- `/new`: start a new durable thread for the bound workspace.
 - `/resume`: list recent threads and resume one.
 - `/interrupt`: stop the active turn.
 - `/approvals yolo|safe`: toggle approval mode.
@@ -58,7 +58,7 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
 ## Media Support
 
 - Telegram media handling is controlled by `telegram_bot.media` (enabled by default).
-- Images are downloaded to `<workspace>/.codex-autorunner/uploads/telegram-images/` and sent to Codex as `localImage` inputs.
+- Images are downloaded to `<workspace>/.codex-autorunner/uploads/telegram-images/` and forwarded to the selected agent as attachment context.
 - Voice notes are transcribed via the configured Whisper provider and sent as text inputs.
 - Ensure `voice` configuration (and API key env) is set if you want voice note transcription.
 
@@ -89,14 +89,14 @@ Operate and troubleshoot the Telegram polling bot that proxies Codex app-server 
   - If only some topics should be active, add explicit `collaboration_policy.telegram.destinations` and silence or deny the root chat.
   - Check `telegram.allowlist.denied` events for chat/user ids.
 - Turns failing:
-  - Check `telegram.turn.failed` and `app_server.*` logs.
-  - Verify the Codex app-server is installed and in `telegram_bot.app_server_command` or `CAR_TELEGRAM_APP_SERVER_COMMAND`.
+  - Check `telegram.turn.failed` and runtime logs for the selected backend.
+  - Verify the configured backend runtime is installed and healthy. For Codex specifically, confirm the app-server is available via `telegram_bot.app_server_command` or `CAR_TELEGRAM_APP_SERVER_COMMAND`. For Hermes, also verify `hermes acp --help` and review `docs/ops/hermes-acp.md`.
 - Turns hanging:
   - Look for `telegram.turn.timeout` in the hub log.
   - Adjust `telegram_bot.app_server.turn_timeout_seconds` if longer turns are expected.
 - App-server disconnect loops:
   - Look for repeated `app_server.disconnected` or `telegram.app_server.start_failed` events.
-  - Confirm the `codex app-server` binary is healthy/compatible with this autorunner build.
+  - Confirm the active backend runtime is healthy and compatible with this autorunner build. For Codex, specifically confirm `codex app-server` is healthy.
 - Approvals not appearing:
   - Ensure `/approvals safe` is set on the topic.
 - Formatting not applied:
