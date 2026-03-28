@@ -61,7 +61,7 @@ native target, and it is not an `agent_workspace` runtime in v1.
 | `durable_threads` | Supported | Hermes sessions are durable and can be created, resumed, and bound to CAR thread targets. |
 | `message_turns` | Supported | Hermes can execute normal message turns against a durable session. |
 | `interrupt` | Supported | Hermes can cancel an in-flight turn for a bound session. |
-| `active_thread_discovery` | Supported | Hermes can list resumable sessions/threads through ACP. |
+| `active_thread_discovery` | Unsupported on the current stable ACP surface | Hermes stable ACP does not currently expose session listing, so CAR must not advertise discovery support. |
 | `event_streaming` | Supported | Hermes can stream progress/events for active turns. |
 | `approvals` | Supported target for v1 | Hermes permission requests are part of the v1 contract, but CAR must not advertise this capability until TICKET-160 delivers the full approval bridge end to end. |
 

@@ -9,6 +9,7 @@ import pytest
 from codex_autorunner.agents.acp import (
     ACPClient,
     ACPInitializationError,
+    ACPMethodNotFoundError,
     ACPPermissionRequestEvent,
 )
 from codex_autorunner.agents.acp.errors import ACPProcessCrashedError
@@ -51,6 +52,35 @@ async def test_client_initialize_failure_surfaces_as_initialization_error(
     try:
         with pytest.raises(ACPInitializationError, match="initialize failed"):
             await client.start()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_supports_official_acp_session_and_prompt_flow(
+    tmp_path: Path,
+) -> None:
+    client = ACPClient(fixture_command("official"), cwd=tmp_path)
+    try:
+        initialize = await client.start()
+        created = await client.create_session(cwd=str(tmp_path))
+        loaded = await client.load_session(created.session_id)
+        with pytest.raises(ACPMethodNotFoundError, match="session/list"):
+            await client.list_sessions()
+        handle = await client.start_prompt(created.session_id, "Reply with exactly OK.")
+        events = [event async for event in handle.events()]
+        result = await handle.wait()
+
+        assert initialize.server_name == "fake-hermes"
+        assert created.session_id == loaded.session_id
+        assert result.status == "completed"
+        assert result.final_output == "OK"
+        assert [event.kind for event in events] == [
+            "turn_started",
+            "progress",
+            "output_delta",
+            "turn_terminal",
+        ]
     finally:
         await client.close()
 

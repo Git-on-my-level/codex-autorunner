@@ -14,7 +14,8 @@ Reference points in-tree today:
 - **Codex**: full-featured repo/worktree runtime
 - **OpenCode**: full-featured repo/worktree runtime without approvals
 - **Hermes**: ACP-backed repo/worktree runtime with durable threads, approvals,
-  and event streaming, but without review/model-listing/transcript-history
+  and event streaming, but without active-thread discovery,
+  review/model-listing/transcript-history
 - **ZeroClaw**: narrower `agent_workspace` runtime with detect-only durability
   requirements
 
@@ -54,9 +55,10 @@ Before adding a new agent, ensure:
 3. The agent supports durable thread/session operations: create, resume, and execute turns
 4. You have tested the agent works independently of CAR
 
-For ACP-backed runtimes like Hermes, verify the runtime advertises the exact
-launch contract CAR depends on before wiring it in. For Hermes that means
-`hermes acp --help` advertises `--session-state-file`.
+For ACP-backed runtimes like Hermes, verify the runtime exposes the ACP command
+surface CAR depends on before wiring it in. For Hermes that means
+`hermes acp --help` works, while durable session persistence remains Hermes'
+native responsibility under shared `HERMES_HOME`.
 
 **Important**: CAR detects configured runtimes; it does not install them. Single-session or volatile wrapper-only runtimes are out of scope for CAR v1 orchestration. See "Single-Session Runtimes (Out of Scope for v1)" below.
 
@@ -400,8 +402,7 @@ Optional capabilities:
 
 Hermes is a useful example of a deliberately partial capability surface:
 
-- supports `active_thread_discovery`, `interrupt`, `event_streaming`, and
-  `approvals`
+- supports `interrupt`, `event_streaming`, and `approvals`
 - does not support `review`, `model_listing`, or `transcript_history`
 
 ## Durable-Thread Contract (Must-Support)

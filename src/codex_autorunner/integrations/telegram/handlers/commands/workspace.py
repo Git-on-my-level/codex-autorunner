@@ -234,9 +234,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         return chat_agent_supports_effort(agent)
 
     def _agent_supports_resume(self, agent: str) -> bool:
-        return self._agent_supports_capability(
-            agent, "durable_threads"
-        ) and self._agent_supports_capability(agent, "active_thread_discovery")
+        return self._agent_supports_capability(agent, "durable_threads")
 
     def _agent_rate_limit_source(self, agent: str) -> Optional[str]:
         if agent == "codex":

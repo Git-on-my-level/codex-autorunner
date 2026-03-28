@@ -5,6 +5,7 @@ from typing import Any, Optional
 
 import pytest
 
+from codex_autorunner.agents.base import UnsupportedAgentCapabilityError
 from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.agents.registry import get_registered_agents
 from codex_autorunner.agents.types import TerminalTurnResult
@@ -108,7 +109,7 @@ async def test_hermes_harness_reports_capabilities_from_contract() -> None:
     assert harness.capabilities == get_registered_agents()["hermes"].capabilities
     assert harness.supports("durable_threads") is True
     assert harness.supports("message_turns") is True
-    assert harness.supports("active_thread_discovery") is True
+    assert harness.supports("active_thread_discovery") is False
     assert harness.supports("interrupt") is True
     assert harness.supports("event_streaming") is True
     assert harness.supports("approvals") is True
@@ -127,7 +128,6 @@ async def test_hermes_harness_session_lifecycle_and_model_override() -> None:
     await harness.ensure_ready(workspace_root)
     conversation = await harness.new_conversation(workspace_root, title="Hermes Test")
     resumed = await harness.resume_conversation(workspace_root, conversation.id)
-    listed = await harness.list_conversations(workspace_root)
     turn = await harness.start_turn(
         workspace_root,
         resumed.id,
@@ -156,7 +156,6 @@ async def test_hermes_harness_session_lifecycle_and_model_override() -> None:
     assert supervisor.ready_workspace == workspace_root
     assert conversation.id == "hermes-session-1"
     assert resumed.id == "hermes-session-1"
-    assert [item.id for item in listed] == ["hermes-session-1", "hermes-session-2"]
     assert turn.turn_id == "hermes-turn-1"
     assert terminal.status == "completed"
     assert terminal.assistant_text == "Hermes reply"
@@ -178,6 +177,16 @@ async def test_hermes_harness_session_lifecycle_and_model_override() -> None:
         (workspace_root, "hermes-session-1", "hermes-turn-1")
     ]
     assert streamed[0]["method"] == "prompt/progress"
+
+
+@pytest.mark.asyncio
+async def test_hermes_harness_list_conversations_requires_capability() -> None:
+    harness = HermesHarness(_StubSupervisor())
+
+    with pytest.raises(
+        UnsupportedAgentCapabilityError, match="active_thread_discovery"
+    ):
+        await harness.list_conversations(Path("."))
 
 
 @pytest.mark.asyncio

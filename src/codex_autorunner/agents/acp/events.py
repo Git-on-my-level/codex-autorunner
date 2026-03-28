@@ -34,6 +34,13 @@ def _extract_text(payload: Mapping[str, Any], *keys: str) -> Optional[str]:
     return None
 
 
+def _session_update_kind(payload: Mapping[str, Any]) -> Optional[str]:
+    value = payload.get("sessionUpdate")
+    if value is None:
+        value = payload.get("session_update")
+    return _normalize_optional_text(value)
+
+
 def _permission_description(payload: Mapping[str, Any]) -> str:
     description = _extract_text(payload, "description", "message")
     if description:
@@ -158,6 +165,53 @@ def normalize_notification(message: Mapping[str, Any]) -> ACPEvent:
             action=action,
             session=session,
         )
+
+    if method == "session/update":
+        update = _coerce_mapping(payload.get("update"))
+        update_kind = _session_update_kind(update) or ""
+        content = _coerce_mapping(update.get("content"))
+        text = _extract_text(content, "text") or ""
+        if update_kind == "agent_message_chunk":
+            return ACPOutputDeltaEvent(
+                kind="output_delta",
+                method=method,
+                session_id=session_id,
+                turn_id=turn_id,
+                payload=payload,
+                raw_notification=raw_notification,
+                delta=text,
+            )
+        if update_kind == "agent_thought_chunk":
+            return ACPProgressEvent(
+                kind="progress",
+                method=method,
+                session_id=session_id,
+                turn_id=turn_id,
+                payload=payload,
+                raw_notification=raw_notification,
+                message=text,
+            )
+        if update_kind == "usage_update":
+            return ACPTokenUsageEvent(
+                kind="token_usage",
+                method=method,
+                session_id=session_id,
+                turn_id=turn_id,
+                payload=payload,
+                raw_notification=raw_notification,
+                usage=update,
+            )
+        if update_kind == "session_info_update":
+            return ACPSessionEvent(
+                kind="session",
+                method=method,
+                session_id=session_id,
+                turn_id=turn_id,
+                payload=payload,
+                raw_notification=raw_notification,
+                action="updated",
+                session=update,
+            )
 
     if method in {"prompt/started", "turn/started"}:
         return ACPTurnStartedEvent(

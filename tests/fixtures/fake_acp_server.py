@@ -190,7 +190,22 @@ class FakeACPServer:
             if self._scenario == "initialize_error":
                 self._send_error(request_id, -32001, "initialize failed")
                 return
+            if self._scenario == "official" and "protocolVersion" not in params:
+                self._send_error(request_id, -32602, "Invalid params")
+                return
             self._initialized = True
+            if self._scenario == "official":
+                self._send_result(
+                    request_id,
+                    {
+                        "protocolVersion": 1,
+                        "agentInfo": {"name": "fake-hermes", "version": "0.4.0"},
+                        "agentCapabilities": {
+                            "sessionCapabilities": {"fork": {}, "list": {}}
+                        },
+                    },
+                )
+                return
             self._send_result(
                 request_id,
                 {
@@ -233,10 +248,54 @@ class FakeACPServer:
             self._send_result(request_id, {"session": session})
             return
         if method == "session/list":
+            if self._scenario == "official":
+                self._send_error(request_id, -32601, "Method not found: session/list")
+                return
             self._send_result(
                 request_id,
                 {"sessions": list(self._sessions.values())},
             )
+            return
+        if method == "session/new":
+            session_id = f"session-{self._next_session}"
+            self._next_session += 1
+            session = {
+                "sessionId": session_id,
+                "cwd": params.get("cwd"),
+            }
+            self._sessions[session_id] = session
+            self._send_result(request_id, {"sessionId": session_id})
+            return
+        if method == "session/prompt":
+            session_id = str(params.get("sessionId") or "")
+            if session_id not in self._sessions:
+                self._send_error(request_id, -32004, "session not found")
+                return
+            self.send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "agent_thought_chunk",
+                            "content": {"type": "text", "text": "thinking"},
+                        },
+                    },
+                }
+            )
+            self.send(
+                {
+                    "method": "session/update",
+                    "params": {
+                        "sessionId": session_id,
+                        "update": {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": "OK"},
+                        },
+                    },
+                }
+            )
+            self._send_result(request_id, {"stopReason": "end_turn"})
             return
         if method == "prompt/start":
             session_id = str(params.get("sessionId") or "")
@@ -296,6 +355,8 @@ class FakeACPServer:
         method = message.get("method")
         if method == "initialized":
             self._initialized_notification = True
+            return
+        if method == "session/cancel":
             return
         if method == "exit":
             self._running = False

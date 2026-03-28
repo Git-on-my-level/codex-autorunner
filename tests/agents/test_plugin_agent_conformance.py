@@ -405,7 +405,6 @@ def test_hermes_descriptor_supports_approval_capability() -> None:
     assert RuntimeCapability("durable_threads") in descriptor.capabilities
     assert RuntimeCapability("message_turns") in descriptor.capabilities
     assert RuntimeCapability("interrupt") in descriptor.capabilities
-    assert RuntimeCapability("active_thread_discovery") in descriptor.capabilities
     assert RuntimeCapability("event_streaming") in descriptor.capabilities
     assert RuntimeCapability("approvals") in descriptor.capabilities
 

@@ -25,7 +25,6 @@ HERMES_CAPABILITIES = frozenset(
         RuntimeCapability("durable_threads"),
         RuntimeCapability("message_turns"),
         RuntimeCapability("interrupt"),
-        RuntimeCapability("active_thread_discovery"),
         RuntimeCapability("event_streaming"),
         RuntimeCapability("approvals"),
     ]
@@ -54,13 +53,6 @@ class HermesHarness(AgentHarness):
     ) -> ConversationRef:
         session = await self._supervisor.create_session(workspace_root, title=title)
         return ConversationRef(agent=self.agent_id, id=session.session_id)
-
-    async def list_conversations(self, workspace_root: Path) -> list[ConversationRef]:
-        sessions = await self._supervisor.list_sessions(workspace_root)
-        return [
-            ConversationRef(agent=self.agent_id, id=session.session_id)
-            for session in sessions
-        ]
 
     async def resume_conversation(
         self, workspace_root: Path, conversation_id: str

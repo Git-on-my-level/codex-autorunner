@@ -87,3 +87,24 @@ def test_normalize_notification_maps_terminal_event() -> None:
     assert isinstance(event, ACPTurnTerminalEvent)
     assert event.status == "completed"
     assert event.final_output == "done"
+
+
+def test_normalize_notification_maps_session_update_message_chunk() -> None:
+    event = normalize_notification(
+        {
+            "method": "session/update",
+            "params": {
+                "sessionId": "session-1",
+                "turnId": "turn-1",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": {"type": "text", "text": "hello"},
+                },
+            },
+        }
+    )
+
+    assert isinstance(event, ACPOutputDeltaEvent)
+    assert event.session_id == "session-1"
+    assert event.turn_id == "turn-1"
+    assert event.delta == "hello"

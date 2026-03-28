@@ -66,8 +66,9 @@ Verify the user has:
 If any prerequisites are missing, help them install what's needed.
 
 If the user wants Hermes, also have them read `docs/ops/hermes-acp.md` before
-continuing so they understand the shared `HERMES_HOME` model and ACP-specific
-compatibility checks.
+continuing so they understand the shared `HERMES_HOME` model and that CAR only
+checks for working ACP support, not a CAR-managed session-state-file launch
+contract.
 
 ### Step 3: Install CAR
 

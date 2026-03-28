@@ -20,16 +20,15 @@ Before enabling Hermes in CAR:
 1. Install a Hermes build on the host and make `hermes` available on `PATH`, or
    set an explicit binary path in CAR config.
 2. Complete Hermes' own host-side login/provider setup outside CAR.
-3. Verify the installed build supports ACP mode and durable session-state
-   launches:
+3. Verify the installed build supports ACP mode:
 
 ```bash
 hermes --version
-hermes acp --help | rg -- --session-state-file
+hermes acp --help
 ```
 
-CAR will treat Hermes as incompatible if `hermes acp --help` does not advertise
-`--session-state-file`.
+CAR treats Hermes as incompatible only when the binary cannot run `hermes acp`
+successfully enough for CAR to confirm ACP mode exists.
 
 ## Configuration
 
@@ -62,8 +61,9 @@ The CAR Hermes supervisor launches:
 ```
 
 Compatibility checks expect the installed Hermes build to advertise durable
-session-state-file support through `hermes acp --help`. `car doctor` reports
-Hermes as ready only when that ACP contract is present.
+ACP support through `hermes acp --help`. `car doctor` reports Hermes as ready
+when ACP mode is present; Hermes-native session durability remains owned by the
+shared `HERMES_HOME` state.
 
 Validate the runtime from CAR:
 
@@ -110,13 +110,13 @@ Hermes currently supports:
 - Durable thread/session create and resume
 - Message turns
 - Interrupt
-- Active thread discovery
 - Event streaming
 - Approval requests
 - Manual model override strings
 
 Hermes currently does not support:
 
+- Active thread discovery on the current stable ACP surface
 - Review mode
 - Model catalog listing
 - Transcript history as a public CAR contract
@@ -209,10 +209,13 @@ used by ticket flow and chat surfaces instead of bypassing them.
 - Upgrade Hermes to a build that supports `hermes acp`.
 - Verify `hermes acp --help` works outside CAR.
 
-### `Hermes does not advertise --session-state-file support`
+### Hermes loses durable session history unexpectedly
 
-- Upgrade Hermes to a build that supports durable session-state-file launches.
-- CAR will not treat older ACP builds as durable-thread compatible.
+- Hermes durability comes from Hermes-native state under the shared
+  `HERMES_HOME`, not from a CAR-passed `--session-state-file` flag.
+- If session resume starts failing, inspect the Hermes installation/profile in
+  use by CAR and verify that the expected `HERMES_HOME` still contains the
+  Hermes session database/state for the same operator account.
 
 ### A PMA or ticket-flow turn starts fresh instead of resuming
 

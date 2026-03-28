@@ -50,6 +50,8 @@ _PERMISSION_NOTIFICATION_METHODS = (
     "permission/reply",
     "permission/resolve",
 )
+_ACP_PROTOCOL_VERSION = 1
+_OFFICIAL_ACP_INIT_KEYS = frozenset({"agentInfo", "agentCapabilities"})
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,7 @@ class _PromptState:
     final_output: str = ""
     closed: bool = False
     replay_task: Optional[asyncio.Task[None]] = None
+    request_task: Optional[asyncio.Task[Any]] = None
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -209,7 +212,8 @@ class ACPClient:
         self._command = [str(part) for part in command]
         self._cwd = str(cwd) if cwd is not None else None
         self._env = dict(env) if env is not None else None
-        self._initialize_params = dict(initialize_params or {})
+        self._initialize_params = {"protocolVersion": _ACP_PROTOCOL_VERSION}
+        self._initialize_params.update(dict(initialize_params or {}))
         self._request_timeout = request_timeout
         self._notification_handler = notification_handler
         self._permission_handler = permission_handler
@@ -233,6 +237,9 @@ class ACPClient:
         self._initialize_result: Optional[ACPInitializeResult] = None
         self._disconnect_error: Optional[ACPError] = None
         self._closing = False
+        self._turn_counter = 0
+        self._session_active_turns: dict[str, str] = {}
+        self._background_tasks: set[asyncio.Task[Any]] = set()
 
     @property
     def initialize_result(self) -> Optional[ACPInitializeResult]:
@@ -352,6 +359,16 @@ class ACPClient:
         title: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ACPSessionDescriptor:
+        await self.start()
+        if self._uses_official_session_protocol():
+            result = await self.request(
+                "session/new",
+                {
+                    "cwd": cwd or self._cwd or str(Path.cwd()),
+                    "mcpServers": [],
+                },
+            )
+            return ACPSessionDescriptor.from_result(result)
         params: dict[str, Any] = {}
         if cwd:
             params["cwd"] = cwd
@@ -363,10 +380,31 @@ class ACPClient:
         return ACPSessionDescriptor.from_result(result)
 
     async def load_session(self, session_id: str) -> ACPSessionDescriptor:
+        await self.start()
+        if self._uses_official_session_protocol():
+            result = await self.request(
+                "session/load",
+                {
+                    "cwd": self._cwd or str(Path.cwd()),
+                    "mcpServers": [],
+                    "sessionId": session_id,
+                },
+            )
+            return ACPSessionDescriptor(
+                session_id=session_id,
+                raw=_coerce_mapping(result),
+            )
         result = await self.request("session/load", {"sessionId": session_id})
         return ACPSessionDescriptor.from_result(result)
 
     async def list_sessions(self) -> list[ACPSessionDescriptor]:
+        await self.start()
+        if self._uses_official_session_protocol():
+            result = await self.request(
+                "session/list",
+                {"cwd": self._cwd or str(Path.cwd())},
+            )
+            return coerce_session_list(result)
         result = await self.request("session/list", {})
         return coerce_session_list(result)
 
@@ -378,6 +416,13 @@ class ACPClient:
         model: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> ACPPromptHandle:
+        await self.start()
+        if self._uses_official_session_protocol():
+            return await self._start_prompt_official(
+                session_id,
+                prompt,
+                model=model,
+            )
         params: dict[str, Any] = {"sessionId": session_id, "prompt": prompt}
         if model:
             params["model"] = model
@@ -392,6 +437,10 @@ class ACPClient:
         return ACPPromptHandle(self, prompt_info.turn_id)
 
     async def cancel_prompt(self, session_id: str, turn_id: str) -> Any:
+        await self.start()
+        if self._uses_official_session_protocol():
+            await self.notify("session/cancel", {"sessionId": session_id})
+            return None
         return await self.request(
             "prompt/cancel",
             {"sessionId": session_id, "turnId": turn_id},
@@ -455,11 +504,25 @@ class ACPClient:
             self._closed = True
             self._closing = False
             self._process = None
-            for task in (self._reader_task, self._stderr_task, self._wait_task):
-                if task is not None and not task.done():
-                    task.cancel()
+            background_tasks = list(self._background_tasks)
+            self._background_tasks.clear()
+            for task in background_tasks:
+                if task.done():
+                    continue
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            for transport_task in (
+                self._reader_task,
+                self._stderr_task,
+                self._wait_task,
+            ):
+                if transport_task is not None and not transport_task.done():
+                    transport_task.cancel()
                     try:
-                        await task
+                        await transport_task
                     except asyncio.CancelledError:
                         pass
             await self._finalize_disconnect(self._disconnect_error)
@@ -528,6 +591,7 @@ class ACPClient:
             await self._finalize_disconnect(error)
 
     async def _dispatch_message(self, message: dict[str, Any]) -> None:
+        message = self._message_with_mapped_turn_id(message)
         request_id = _normalize_optional_text(message.get("id"))
         method = _normalize_optional_text(message.get("method"))
         if (
@@ -686,6 +750,8 @@ class ACPClient:
         if not isinstance(event, ACPTurnTerminalEvent):
             return
         state.closed = True
+        if self._session_active_turns.get(state.session_id) == state.turn_id:
+            self._session_active_turns.pop(state.session_id, None)
         if not state.future.done():
             final_output = event.final_output or state.final_output
             state.future.set_result(
@@ -699,6 +765,149 @@ class ACPClient:
                 )
             )
         await state.queue.put(_QUEUE_SENTINEL)
+
+    async def _start_prompt_official(
+        self,
+        session_id: str,
+        prompt: str,
+        *,
+        model: Optional[str] = None,
+    ) -> ACPPromptHandle:
+        self._turn_counter += 1
+        turn_id = f"turn-{self._turn_counter}"
+        state = self._ensure_prompt_state(session_id, turn_id)
+        self._session_active_turns[session_id] = turn_id
+        await self._record_prompt_event(
+            state,
+            normalize_notification(
+                {
+                    "method": "prompt/started",
+                    "params": {
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                    },
+                }
+            ),
+        )
+        task = asyncio.create_task(
+            self._run_official_prompt_request(
+                state,
+                prompt=prompt,
+                model=model,
+            )
+        )
+        state.request_task = task
+        self._track_background_task(task)
+        return ACPPromptHandle(self, turn_id)
+
+    async def _run_official_prompt_request(
+        self,
+        state: _PromptState,
+        *,
+        prompt: str,
+        model: Optional[str] = None,
+    ) -> None:
+        try:
+            if model:
+                await self.call_optional(
+                    "session/set_model",
+                    {"sessionId": state.session_id, "modelId": model},
+                )
+            result = await self.request(
+                "session/prompt",
+                {
+                    "sessionId": state.session_id,
+                    "prompt": [{"type": "text", "text": prompt}],
+                },
+            )
+        except Exception as exc:
+            self._session_active_turns.pop(state.session_id, None)
+            if not state.future.done():
+                state.future.set_exception(exc)
+            await state.queue.put(_QUEUE_SENTINEL)
+            return
+        await self._record_prompt_event(
+            state,
+            normalize_notification(
+                {
+                    "method": self._official_prompt_terminal_method(result),
+                    "params": {
+                        "sessionId": state.session_id,
+                        "turnId": state.turn_id,
+                        "status": self._official_prompt_terminal_status(result),
+                        "finalOutput": state.final_output,
+                        "message": self._official_prompt_terminal_error(result),
+                    },
+                }
+            ),
+        )
+
+    def _official_prompt_terminal_method(self, payload: Any) -> str:
+        status = self._official_prompt_terminal_status(payload)
+        if status == "cancelled":
+            return "prompt/cancelled"
+        if status == "failed":
+            return "prompt/failed"
+        return "prompt/completed"
+
+    def _official_prompt_terminal_status(self, payload: Any) -> str:
+        result = _coerce_mapping(payload)
+        stop_reason = _normalize_optional_text(
+            result.get("stopReason") or result.get("stop_reason")
+        )
+        if stop_reason == "cancelled":
+            return "cancelled"
+        if stop_reason == "refusal":
+            return "failed"
+        return "completed"
+
+    def _official_prompt_terminal_error(self, payload: Any) -> Optional[str]:
+        if self._official_prompt_terminal_status(payload) != "failed":
+            return None
+        result = _coerce_mapping(payload)
+        return _normalize_optional_text(
+            result.get("message")
+            or result.get("error")
+            or result.get("stopReason")
+            or result.get("stop_reason")
+        )
+
+    def _message_with_mapped_turn_id(self, message: dict[str, Any]) -> dict[str, Any]:
+        method = _normalize_optional_text(message.get("method"))
+        if method not in {"session/update", "session/request_permission"}:
+            return message
+        params = _coerce_mapping(message.get("params"))
+        if _normalize_optional_text(params.get("turnId") or params.get("turn_id")):
+            return message
+        session_id = _normalize_optional_text(
+            params.get("sessionId") or params.get("session_id")
+        )
+        if not session_id:
+            return message
+        turn_id = self._session_active_turns.get(session_id)
+        if not turn_id:
+            return message
+        enriched = dict(message)
+        enriched_params = dict(params)
+        enriched_params["turnId"] = turn_id
+        enriched["params"] = enriched_params
+        return enriched
+
+    def _uses_official_session_protocol(self) -> bool:
+        if self._initialize_result is None:
+            return False
+        return any(
+            key in self._initialize_result.raw for key in _OFFICIAL_ACP_INIT_KEYS
+        )
+
+    def _track_background_task(self, task: asyncio.Task[Any]) -> None:
+        self._background_tasks.add(task)
+
+        def _discard(done: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(done)
+            self._log_background_task_result(done)
+
+        task.add_done_callback(_discard)
 
     def _response_error(
         self, method: Optional[str], payload: dict[str, Any]

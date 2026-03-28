@@ -93,7 +93,7 @@ async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
         await supervisor.close_all()
 
 
-def test_hermes_runtime_preflight_accepts_stderr_only_help(
+def test_hermes_runtime_preflight_accepts_plain_acp_help(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -114,7 +114,7 @@ def test_hermes_runtime_preflight_accepts_stderr_only_help(
                 cmd,
                 0,
                 stdout="",
-                stderr="Usage: hermes acp [OPTIONS]\n  --session-state-file TEXT\n",
+                stderr="Usage: hermes acp [OPTIONS]\n  Start the ACP server.\n",
             )
         raise AssertionError(f"unexpected command: {cmd}")
 
@@ -123,8 +123,9 @@ def test_hermes_runtime_preflight_accepts_stderr_only_help(
     result = hermes_runtime_preflight(_HermesPreflightConfig())
 
     assert result.status == "ready"
-    assert result.launch_mode == "session_state_file"
+    assert result.launch_mode is None
     assert result.version == "hermes 1.2.3"
+    assert "Hermes-native durable sessions" in result.message
 
 
 @pytest.mark.asyncio

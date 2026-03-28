@@ -5,6 +5,9 @@ from typing import Any, Optional
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
+    if isinstance(value, (int, float)):
+        text = str(value).strip()
+        return text or None
     if not isinstance(value, str):
         return None
     text = value.strip()
@@ -38,11 +41,15 @@ class ACPInitializeResult:
     def from_result(cls, payload: Any) -> "ACPInitializeResult":
         result = _coerce_mapping(payload)
         server_info = _coerce_mapping(result.get("serverInfo"))
+        if not server_info:
+            server_info = _coerce_mapping(result.get("agentInfo"))
         return cls(
             server_name=_normalize_optional_text(server_info.get("name")),
             server_version=_normalize_optional_text(server_info.get("version")),
             protocol_version=_normalize_optional_text(result.get("protocolVersion")),
-            capabilities=_coerce_mapping(result.get("capabilities")),
+            capabilities=_coerce_mapping(
+                result.get("capabilities") or result.get("agentCapabilities")
+            ),
             raw=result,
         )
 

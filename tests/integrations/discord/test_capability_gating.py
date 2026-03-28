@@ -28,7 +28,6 @@ class TestAgentPickerIncludesHermes:
         assert "message_turns" in caps
         assert "durable_threads" in caps
         assert "interrupt" in caps
-        assert "active_thread_discovery" in caps
         assert "event_streaming" in caps
         assert "approvals" in caps
 

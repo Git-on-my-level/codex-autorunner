@@ -15,14 +15,13 @@ from ..acp import (
     ACPSubprocessSupervisor,
     ACPTurnTerminalEvent,
 )
-from ..managed_runtime import RuntimeLaunchMode, RuntimePreflightResult
+from ..managed_runtime import RuntimePreflightResult
 from ..types import TerminalTurnResult
 
 _logger = logging.getLogger(__name__)
 
 HERMES_RUNTIME_ID = "hermes"
 HERMES_ACP_COMMAND = "acp"
-HERMES_SESSION_STATE_FILE_MODE: RuntimeLaunchMode = "session_state_file"
 HERMES_APPROVAL_TIMEOUT_SECONDS = 300.0
 
 
@@ -681,15 +680,6 @@ def hermes_runtime_preflight(
                 message="Hermes ACP mode is not supported by this binary.",
                 fix="Install a Hermes build that supports the `hermes acp` command.",
             )
-        if "--session-state-file" not in help_text:
-            return RuntimePreflightResult(
-                runtime_id=HERMES_RUNTIME_ID,
-                status="incompatible",
-                version=version,
-                launch_mode=None,
-                message="Hermes does not advertise --session-state-file support in `hermes acp --help`.",
-                fix="Install a Hermes build that supports durable session state file launches.",
-            )
     except Exception as exc:
         return RuntimePreflightResult(
             runtime_id=HERMES_RUNTIME_ID,
@@ -703,15 +693,17 @@ def hermes_runtime_preflight(
         runtime_id=HERMES_RUNTIME_ID,
         status="ready",
         version=version,
-        launch_mode=HERMES_SESSION_STATE_FILE_MODE,
-        message=f"Hermes {version or 'version unknown'} supports durable ACP sessions.",
+        launch_mode=None,
+        message=(
+            f"Hermes {version or 'version unknown'} supports ACP mode and "
+            "uses Hermes-native durable sessions."
+        ),
     )
 
 
 __all__ = [
     "HERMES_ACP_COMMAND",
     "HERMES_RUNTIME_ID",
-    "HERMES_SESSION_STATE_FILE_MODE",
     "HermesSessionHandle",
     "HermesSupervisor",
     "HermesSupervisorError",

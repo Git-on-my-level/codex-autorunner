@@ -143,7 +143,7 @@ class TestHasCapability:
     def test_hermes_advertises_acp_capabilities(self):
         assert has_capability("hermes", "durable_threads") is True
         assert has_capability("hermes", "message_turns") is True
-        assert has_capability("hermes", "active_thread_discovery") is True
+        assert has_capability("hermes", "active_thread_discovery") is False
         assert has_capability("hermes", "event_streaming") is True
         assert has_capability("hermes", "interrupt") is True
         assert has_capability("hermes", "approvals") is True
@@ -270,8 +270,18 @@ class TestHermesHarness:
 
     def test_hermes_health_check_missing_binary(self, monkeypatch):
         monkeypatch.setattr(
-            "codex_autorunner.agents.registry.hermes_binary_available",
-            lambda _config: False,
+            "codex_autorunner.agents.registry.hermes_runtime_preflight",
+            lambda _config: type(
+                "Result",
+                (),
+                {
+                    "status": "missing_binary",
+                    "version": None,
+                    "launch_mode": None,
+                    "message": "missing",
+                    "fix": None,
+                },
+            )(),
         )
 
         class MockConfig:
