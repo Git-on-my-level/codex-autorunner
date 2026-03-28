@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/agent-compatibility.yml'
+      - 'Makefile'
       - 'src/codex_autorunner/agents/**'
       - 'scripts/check_protocol_drift.py'
       - 'scripts/update_vendor_codex_schema.py'
@@ -38,8 +39,8 @@ jobs:
       - name: Install OpenCode
         run: npm install -g opencode-ai
 
-      - name: Check protocol drift
-        run: python scripts/check_protocol_drift.py
+      - name: Check agent compatibility
+        run: make agent-compatibility-check
 
       - name: Summary
         run: |
