@@ -7051,7 +7051,9 @@ class DiscordBotService:
         try:
             orchestration_service = self._discord_thread_service()
             threads = orchestration_service.list_thread_targets(
-                lifecycle_status="active"
+                agent_id="opencode",
+                lifecycle_status="active",
+                limit=10_000,
             )
         except Exception:
             return None
@@ -7060,8 +7062,6 @@ class DiscordBotService:
         )
         canonical_workspace = str(canonicalize_path(Path(workspace_root)).resolve())
         for thread in threads:
-            if str(getattr(thread, "agent_id", "") or "").strip().lower() != "opencode":
-                continue
             thread_workspace = str(getattr(thread, "workspace_root", "") or "").strip()
             if not thread_workspace:
                 continue

@@ -235,8 +235,16 @@ async def test_opencode_prune_sweep_defers_workspace_with_running_opencode_execu
             self.status = "running"
 
     class _FakeThreadService:
-        def list_thread_targets(self, *, lifecycle_status: str) -> list[Any]:
+        def list_thread_targets(
+            self,
+            *,
+            agent_id: str | None = None,
+            lifecycle_status: str,
+            limit: int = 200,
+        ) -> list[Any]:
+            assert agent_id == "opencode"
             assert lifecycle_status == "active"
+            assert limit == 10_000
             return [_FakeThread("thread-active", workspace_active)]
 
         def get_running_execution(self, thread_target_id: str) -> Any:
