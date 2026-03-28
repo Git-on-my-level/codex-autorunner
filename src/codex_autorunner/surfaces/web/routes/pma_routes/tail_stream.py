@@ -891,6 +891,7 @@ async def _build_managed_thread_tail_snapshot(
     request: Request,
     service: Any,
     managed_thread_id: str,
+    harness: Any | None = None,
     limit: int,
     level: str,
     since_ms: Optional[int],
@@ -941,7 +942,8 @@ async def _build_managed_thread_tail_snapshot(
     backend_thread_id = normalize_optional_text(thread.backend_thread_id)
     backend_turn_id = normalize_optional_text(turn.backend_id)
     app_server_events = getattr(request.app.state, "app_server_events", None)
-    harness = _managed_thread_harness(service, str(thread.agent_id or ""))
+    if harness is None:
+        harness = _managed_thread_harness(service, str(thread.agent_id or ""))
     has_backend_binding = bool(backend_thread_id) and bool(backend_turn_id)
     can_stream_runtime = bool(
         harness is not None
@@ -1212,10 +1214,17 @@ def build_managed_thread_tail_routes(
         normalized_level = normalize_tail_level(level)
         since_ms = since_ms_from_duration(since)
         service = build_managed_thread_orchestration_service(request)
+        thread_target = service.get_thread_target(managed_thread_id)
+        harness = None
+        if thread_target is not None:
+            harness = _managed_thread_harness(
+                service, str(thread_target.agent_id or "")
+            )
         snapshot = await _build_managed_thread_tail_snapshot(
             request=request,
             service=service,
             managed_thread_id=managed_thread_id,
+            harness=harness,
             limit=min(limit, 200),
             level=normalized_level,
             since_ms=since_ms,
@@ -1286,12 +1295,6 @@ def build_managed_thread_tail_routes(
                         f"{json.dumps({'managed_thread_id': managed_thread_id, 'managed_turn_id': snapshot.get('managed_turn_id'), 'turn_status': 'running', 'elapsed_seconds': elapsed, 'phase': phase, 'phase_source': phase_source, 'guidance': guidance, 'last_tool': last_tool, 'active_turn_diagnostics': active_turn_diagnostics}, ensure_ascii=True)}\n\n"
                     )
 
-            thread_target = service.get_thread_target(managed_thread_id)
-            harness = (
-                _managed_thread_harness(service, str(thread_target.agent_id or ""))
-                if thread_target is not None
-                else None
-            )
             workspace_root = (
                 str(thread_target.workspace_root or "")
                 if thread_target is not None
@@ -1343,6 +1346,7 @@ def build_managed_thread_tail_routes(
                         request=request,
                         service=service,
                         managed_thread_id=managed_thread_id,
+                        harness=harness,
                         limit=min(limit, 200),
                         level=normalized_level,
                         since_ms=since_ms,
@@ -1469,6 +1473,7 @@ def build_managed_thread_tail_routes(
                 request=request,
                 service=service,
                 managed_thread_id=managed_thread_id,
+                harness=harness,
                 limit=min(limit, 200),
                 level=normalized_level,
                 since_ms=since_ms,

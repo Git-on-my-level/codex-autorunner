@@ -283,10 +283,19 @@ def build_managed_thread_orchestration_service(request: Request):
     descriptors = get_registered_agents()
 
     def _make_harness(agent_id: str):
+        cache = getattr(request.app.state, "_managed_thread_harness_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            request.app.state._managed_thread_harness_cache = cache
+        cached = cache.get(agent_id)
+        if cached is not None:
+            return cached
         descriptor = descriptors.get(agent_id)
         if descriptor is None:
             raise KeyError(f"Unknown agent definition '{agent_id}'")
-        return descriptor.make_harness(request.app.state)
+        harness = descriptor.make_harness(request.app.state)
+        cache[agent_id] = harness
+        return harness
 
     return build_harness_backed_orchestration_service(
         descriptors=cast(dict[str, RuntimeAgentDescriptor], descriptors),

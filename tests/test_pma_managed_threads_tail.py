@@ -390,6 +390,85 @@ def test_managed_thread_tail_events_streams_hermes_runtime_events(
     assert "turn_completed" in resp.text
 
 
+def test_managed_thread_tail_events_reuses_active_harness_state(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class _StatefulHarness:
+        def __init__(self, events: list[dict[str, Any]]) -> None:
+            self._events = list(events)
+
+        def progress_event_stream(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ):
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _stream():
+                for event in self._events:
+                    yield event
+
+            return _stream()
+
+    harnesses = [
+        _StatefulHarness(
+            [
+                {
+                    "method": "prompt/progress",
+                    "params": {"delta": "tail-update"},
+                }
+            ]
+        ),
+        _StatefulHarness([]),
+    ]
+    factory_calls: list[str] = []
+
+    fake_service = SimpleNamespace(
+        thread=SimpleNamespace(
+            thread_target_id="thread-opencode",
+            agent_id="opencode",
+            backend_thread_id="opencode-session-1",
+            workspace_root=str(hub_env.repo_root.resolve()),
+        ),
+        execution=SimpleNamespace(
+            execution_id="turn-opencode",
+            backend_id="opencode-turn-1",
+            status="running",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=None,
+            output_text="",
+        ),
+        harness_factory=lambda _agent_id: (
+            factory_calls.append(_agent_id)
+            or harnesses[min(len(factory_calls) - 1, len(harnesses) - 1)]
+        ),
+    )
+    fake_service.get_thread_target = lambda _thread_id: fake_service.thread
+    fake_service.get_running_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_latest_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_execution = (
+        lambda _thread_id, _execution_id: fake_service.execution
+    )
+    fake_service.get_queue_depth = lambda _thread_id: 0
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        lambda request: fake_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/hub/pma/threads/thread-opencode/tail/events")
+
+    assert resp.status_code == 200
+    assert factory_calls == ["opencode"]
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    assert "event: tail" in resp.text
+    assert "assistant_update" in resp.text
+
+
 def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
