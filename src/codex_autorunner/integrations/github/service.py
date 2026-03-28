@@ -1050,7 +1050,7 @@ class GitHubService:
     def sync_pr(
         self,
         *,
-        draft: bool = True,
+        draft: Optional[bool] = None,
         title: Optional[str] = None,
         body: Optional[str] = None,
     ) -> dict:
@@ -1077,6 +1077,11 @@ class GitHubService:
             (self.raw_config.get("github") or {})
             if isinstance(self.raw_config, dict)
             else {}
+        )
+        resolved_draft = (
+            draft
+            if draft is not None
+            else bool(github_cfg.get("pr_draft_default", False))
         )
         commit_mode = str(github_cfg.get("sync_commit_mode", "auto")).lower()
         if commit_mode not in ("none", "auto", "always"):
@@ -1113,7 +1118,7 @@ class GitHubService:
         pr = self.pr_for_branch(branch=head_branch, cwd=cwd)
         if not pr:
             args = ["pr", "create", "--base", base]
-            if draft:
+            if resolved_draft:
                 args.append("--draft")
             if title:
                 args += ["--title", title]
@@ -1133,7 +1138,7 @@ class GitHubService:
             pr = {
                 "url": url,
                 "state": "OPEN",
-                "isDraft": bool(draft),
+                "isDraft": bool(resolved_draft),
                 "headRefName": head_branch,
                 "baseRefName": base,
             }

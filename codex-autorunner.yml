@@ -80,8 +80,8 @@ repo_defaults:
   github:
     # Enable GitHub integration endpoints.
     enabled: true
-    # Default to draft PRs.
-    pr_draft_default: true
+    # Default to ready-for-review PRs unless the user explicitly asks for draft.
+    pr_draft_default: false
     # none|auto|always
     sync_commit_mode: auto
     # Bounds the agentic sync step (seconds).

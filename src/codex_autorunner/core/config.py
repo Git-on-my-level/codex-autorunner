@@ -627,7 +627,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     },
     "github": {
         "enabled": True,
-        "pr_draft_default": True,
+        "pr_draft_default": False,
         "sync_commit_mode": "auto",  # none|auto|always
         # Bounds the agentic sync step in GitHubService.sync_pr (seconds).
         "sync_agent_timeout_seconds": 1800,

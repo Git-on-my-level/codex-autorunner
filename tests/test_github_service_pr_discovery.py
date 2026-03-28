@@ -170,6 +170,159 @@ def test_sync_pr_does_not_append_duplicate_close_keyword(
     assert edit_calls == []
 
 
+def test_sync_pr_defaults_to_ready_for_review_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = GitHubService(tmp_path, raw_config={})
+    create_calls: list[list[str]] = []
+
+    monkeypatch.setattr(service, "gh_authenticated", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "repo_info",
+        lambda: RepoInfo(
+            name_with_owner="acme/widgets",
+            url="https://github.com/acme/widgets",
+            default_branch="main",
+        ),
+    )
+    monkeypatch.setattr(service, "read_link_state", lambda: {})
+    monkeypatch.setattr(service, "current_branch", lambda *, cwd=None: "feature/login")
+    monkeypatch.setattr(service, "is_clean", lambda *, cwd=None: True)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        lambda **_: None,
+    )
+
+    pr_lookup_count = {"value": 0}
+
+    def _fake_pr_for_branch(
+        *, branch: str, cwd: Path | None = None
+    ) -> dict[str, object] | None:
+        pr_lookup_count["value"] += 1
+        if pr_lookup_count["value"] == 1:
+            return None
+        return {
+            "url": "https://github.com/acme/widgets/pull/17",
+            "number": 17,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": branch,
+            "baseRefName": "main",
+            "title": "Login flow",
+        }
+
+    monkeypatch.setattr(service, "pr_for_branch", _fake_pr_for_branch)
+
+    def _fake_gh(
+        args: list[str], *, cwd=None, check=True, timeout_seconds=None
+    ):  # type: ignore[no-untyped-def]
+        if args[:2] == ["pr", "create"]:
+            create_calls.append(list(args))
+            return type(
+                "Proc", (), {"stdout": "https://github.com/acme/widgets/pull/17\n"}
+            )()
+        if args[:3] == ["pr", "view", "https://github.com/acme/widgets/pull/17"]:
+            return type("Proc", (), {"stdout": json.dumps({"body": ""})})()
+        raise AssertionError(f"unexpected gh args: {args}")
+
+    monkeypatch.setattr(service, "_gh", _fake_gh)
+    monkeypatch.setattr(service, "write_link_state", lambda state: state)
+
+    result = service.sync_pr(title="Login flow", body="Initial body")
+
+    assert create_calls == [
+        [
+            "pr",
+            "create",
+            "--base",
+            "main",
+            "--title",
+            "Login flow",
+            "--body",
+            "Initial body",
+        ]
+    ]
+    assert result["links"]["url"] == "https://github.com/acme/widgets/pull/17"
+
+
+def test_sync_pr_uses_configured_draft_default_when_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = GitHubService(tmp_path, raw_config={"github": {"pr_draft_default": True}})
+    create_calls: list[list[str]] = []
+
+    monkeypatch.setattr(service, "gh_authenticated", lambda: True)
+    monkeypatch.setattr(
+        service,
+        "repo_info",
+        lambda: RepoInfo(
+            name_with_owner="acme/widgets",
+            url="https://github.com/acme/widgets",
+            default_branch="main",
+        ),
+    )
+    monkeypatch.setattr(service, "read_link_state", lambda: {})
+    monkeypatch.setattr(service, "current_branch", lambda *, cwd=None: "feature/login")
+    monkeypatch.setattr(service, "is_clean", lambda *, cwd=None: True)
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.github.service._run_codex_sync_agent",
+        lambda **_: None,
+    )
+
+    pr_lookup_count = {"value": 0}
+
+    def _fake_pr_for_branch(
+        *, branch: str, cwd: Path | None = None
+    ) -> dict[str, object] | None:
+        pr_lookup_count["value"] += 1
+        if pr_lookup_count["value"] == 1:
+            return None
+        return {
+            "url": "https://github.com/acme/widgets/pull/18",
+            "number": 18,
+            "state": "OPEN",
+            "isDraft": True,
+            "headRefName": branch,
+            "baseRefName": "main",
+            "title": "Login flow",
+        }
+
+    monkeypatch.setattr(service, "pr_for_branch", _fake_pr_for_branch)
+
+    def _fake_gh(
+        args: list[str], *, cwd=None, check=True, timeout_seconds=None
+    ):  # type: ignore[no-untyped-def]
+        if args[:2] == ["pr", "create"]:
+            create_calls.append(list(args))
+            return type(
+                "Proc", (), {"stdout": "https://github.com/acme/widgets/pull/18\n"}
+            )()
+        if args[:3] == ["pr", "view", "https://github.com/acme/widgets/pull/18"]:
+            return type("Proc", (), {"stdout": json.dumps({"body": ""})})()
+        raise AssertionError(f"unexpected gh args: {args}")
+
+    monkeypatch.setattr(service, "_gh", _fake_gh)
+    monkeypatch.setattr(service, "write_link_state", lambda state: state)
+
+    result = service.sync_pr(title="Login flow", body="Initial body")
+
+    assert create_calls == [
+        [
+            "pr",
+            "create",
+            "--base",
+            "main",
+            "--draft",
+            "--title",
+            "Login flow",
+            "--body",
+            "Initial body",
+        ]
+    ]
+    assert result["links"]["url"] == "https://github.com/acme/widgets/pull/18"
+
+
 def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -> None:
     manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
