@@ -2240,16 +2240,13 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             supported_agents = set(
                 self._agents_supporting_capability("durable_threads")
             )
-            supported_agents &= set(
-                self._agents_supporting_capability("active_thread_discovery")
-            )
             supported = ", ".join(sorted(supported_agents))
             agent_label = self._agent_display_name(agent)
             await self._send_message(
                 message.chat_id,
                 (
                     f"Resume is unavailable for {agent_label}. "
-                    "The active agent must support durable threads and thread discovery."
+                    "The active agent must support durable threads."
                     + (f" Available agents: {supported}." if supported else "")
                 ),
                 thread_id=message.thread_id,

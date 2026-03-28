@@ -18,7 +18,7 @@ native target, and it is not an `agent_workspace` runtime in v1.
 - CAR stores the binding from `thread_target_id` to Hermes `session_id` in the
   existing runtime-binding path (`backend_thread_id` plus optional
   `backend_runtime_instance_id` metadata).
-- Hermes owns native session durability, resume semantics, and session listing.
+- Hermes owns native session durability and resume semantics.
 - CAR must not treat Hermes as a first-class CAR-managed `agent_workspace`.
 - CAR must not infer extra isolation guarantees from session selection alone.
 
@@ -42,8 +42,8 @@ native target, and it is not an `agent_workspace` runtime in v1.
   session ID as `backend_thread_id`.
 - `resume_conversation()` resumes that Hermes session ID; if Hermes reports the
   session as missing, CAR clears the binding and starts fresh.
-- `list_conversations()` is the only supported source for active-thread
-  discovery in v1.
+- `list_conversations()` is not part of the stable Hermes ACP contract in v1,
+  so CAR must not advertise active-thread discovery for Hermes.
 - `start_turn()` sends the user prompt plus any CAR-injected context to the
   bound Hermes session.
 - `interrupt()` targets the active Hermes turn for the bound session.
