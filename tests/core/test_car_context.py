@@ -10,6 +10,10 @@ from codex_autorunner.core.car_context import (
     render_runtime_compat_agents_md,
     resolve_effective_car_context_profile,
 )
+from codex_autorunner.core.context_awareness import (
+    CAR_AWARENESS_BLOCK,
+    maybe_inject_filebox_hint,
+)
 
 
 def test_default_managed_thread_context_profile_for_repo_threads() -> None:
@@ -68,6 +72,30 @@ def test_runtime_projection_for_core_profile_mentions_car_artifacts() -> None:
     assert "# AGENTS" in rendered
     assert ".codex-autorunner/ABOUT_CAR.md" in rendered
     assert ".codex-autorunner/tickets/" in rendered
+
+
+def test_filebox_hint_uses_raw_user_input_not_injected_context() -> None:
+    prompt, injected = maybe_inject_filebox_hint(
+        CAR_AWARENESS_BLOCK,
+        hint_text="hint",
+        user_input_texts=["please summarize"],
+    )
+
+    assert injected is False
+    assert prompt == CAR_AWARENESS_BLOCK
+
+
+def test_filebox_hint_triggers_from_raw_user_keyword_even_with_injected_context() -> (
+    None
+):
+    prompt, injected = maybe_inject_filebox_hint(
+        CAR_AWARENESS_BLOCK,
+        hint_text="hint",
+        user_input_texts=["check outbox"],
+    )
+
+    assert injected is True
+    assert prompt.endswith("hint")
 
 
 def test_normalize_car_context_profile_rejects_unknown_values() -> None:

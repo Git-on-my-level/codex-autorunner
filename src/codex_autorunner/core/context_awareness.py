@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import Literal
 
 from .car_context import (
@@ -24,6 +25,10 @@ PROMPT_WRITING_HINT = (
 _PROMPT_CONTEXT_RE = re.compile(r"\bprompt\b", re.IGNORECASE)
 _FILE_CONTEXT_SIGNAL_RE = re.compile(
     r"(?:<file\s+path=|Inbound Discord attachments:|PMA File Inbox:)",
+    re.IGNORECASE,
+)
+_FILEBOX_HINT_KEYWORD_RE = re.compile(
+    r"\b(?:filebox|inbox|outbox)\b",
     re.IGNORECASE,
 )
 
@@ -53,13 +58,18 @@ def maybe_inject_car_awareness(
     return f"{injection}\n\n{prompt_text}", True
 
 
-def maybe_inject_prompt_writing_hint(prompt_text: str) -> tuple[str, bool]:
+def maybe_inject_prompt_writing_hint(
+    prompt_text: str,
+    *,
+    trigger_text: str | None = None,
+) -> tuple[str, bool]:
     """Inject prompt-writing formatting hint when the message is about prompts."""
     if not prompt_text or not prompt_text.strip():
         return prompt_text, False
     if PROMPT_WRITING_HINT in prompt_text:
         return prompt_text, False
-    if not _PROMPT_CONTEXT_RE.search(prompt_text):
+    trigger_text = trigger_text if isinstance(trigger_text, str) else prompt_text
+    if not _PROMPT_CONTEXT_RE.search(trigger_text):
         return prompt_text, False
     return _append_injected_context(
         prompt_text,
@@ -74,17 +84,32 @@ def has_file_context_signal(prompt_text: str) -> bool:
     return bool(_FILE_CONTEXT_SIGNAL_RE.search(prompt_text))
 
 
+def has_user_filebox_hint_request(
+    user_input_texts: Sequence[str | None] | None,
+) -> bool:
+    """Return True when raw user-supplied text explicitly mentions FileBox terms."""
+    if not user_input_texts:
+        return False
+    for text in user_input_texts:
+        if not isinstance(text, str):
+            continue
+        if _FILEBOX_HINT_KEYWORD_RE.search(text):
+            return True
+    return False
+
+
 def should_inject_filebox_hint(
     prompt_text: str,
     *,
     has_file_context: bool = False,
+    user_input_texts: Sequence[str | None] | None = None,
 ) -> bool:
-    """Gate filebox hints to turns with concrete file context."""
+    """Gate filebox hints to raw user requests or turns with concrete file context."""
     if not prompt_text or not prompt_text.strip():
         return False
     if "Outbox (pending):" in prompt_text or "Inbox:" in prompt_text:
         return False
-    if not has_file_context and not has_file_context_signal(prompt_text):
+    if not has_file_context and not has_user_filebox_hint_request(user_input_texts):
         return False
     return True
 
@@ -94,11 +119,13 @@ def maybe_inject_filebox_hint(
     *,
     hint_text: str,
     has_file_context: bool = False,
+    user_input_texts: Sequence[str | None] | None = None,
 ) -> tuple[str, bool]:
-    """Inject filebox guidance only when file context is available."""
+    """Inject filebox guidance for explicit user requests or real file context."""
     if not should_inject_filebox_hint(
         prompt_text,
         has_file_context=has_file_context,
+        user_input_texts=user_input_texts,
     ):
         return prompt_text, False
     return _append_injected_context(prompt_text, hint_text)

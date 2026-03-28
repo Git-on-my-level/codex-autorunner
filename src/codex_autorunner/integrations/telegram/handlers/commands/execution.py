@@ -1561,8 +1561,16 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             allow_cross_repo=allow_cross_repo,
         )
 
-    def _maybe_inject_prompt_context(self, prompt_text: str) -> tuple[str, bool]:
-        return maybe_inject_prompt_writing_hint(prompt_text)
+    def _maybe_inject_prompt_context(
+        self,
+        prompt_text: str,
+        *,
+        trigger_text: Optional[str] = None,
+    ) -> tuple[str, bool]:
+        return maybe_inject_prompt_writing_hint(
+            prompt_text,
+            trigger_text=trigger_text,
+        )
 
     def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
         return maybe_inject_car_awareness(
@@ -1576,6 +1584,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         *,
         record: "TelegramTopicRecord",
         topic_key: str,
+        has_file_context: bool = False,
+        user_input_text: Optional[str] = None,
     ) -> tuple[str, bool]:
         inbox_dir = self._files_inbox_dir(record.workspace_path, topic_key)
         outbox_dir = self._files_outbox_pending_dir(record.workspace_path, topic_key)
@@ -1591,7 +1601,8 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     max_bytes=self._config.media.max_file_bytes,
                 )
             ),
-            has_file_context=True,
+            has_file_context=has_file_context,
+            user_input_texts=[user_input_text],
         )
 
     def _has_turn_file_context(
@@ -1599,8 +1610,11 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         message: TelegramMessage,
         prompt_text: str,
         input_items: Optional[list[dict[str, Any]]],
+        *,
+        user_input_text: Optional[str] = None,
     ) -> bool:
-        if has_file_context_signal(prompt_text):
+        source_text = user_input_text if user_input_text is not None else prompt_text
+        if has_file_context_signal(source_text):
             return True
         if message.photos or message.document or message.audio or message.voice:
             return True
@@ -3588,11 +3602,17 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         record: "TelegramTopicRecord",
         *,
         input_items: Optional[list[dict[str, Any]]] = None,
+        user_input_text: Optional[str] = None,
     ) -> tuple[str, str]:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        raw_user_input = (
+            user_input_text if user_input_text is not None else message.text
+        )
 
         prompt_text, injected = await self._maybe_inject_github_context(
-            prompt_text, record
+            prompt_text,
+            record,
+            link_source_text=raw_user_input,
         )
         if injected:
             await self._send_message(
@@ -3613,7 +3633,10 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 message_id=message.message_id,
             )
 
-        prompt_text, injected = self._maybe_inject_prompt_context(prompt_text)
+        prompt_text, injected = self._maybe_inject_prompt_context(
+            prompt_text,
+            trigger_text=raw_user_input,
+        )
         if injected:
             log_event(
                 self._logger,
@@ -3624,19 +3647,28 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 message_id=message.message_id,
             )
 
-        if self._has_turn_file_context(message, prompt_text, input_items):
-            prompt_text, injected = self._maybe_inject_outbox_context(
-                prompt_text, record=record, topic_key=key
+        has_file_context = self._has_turn_file_context(
+            message,
+            prompt_text,
+            input_items,
+            user_input_text=user_input_text,
+        )
+        prompt_text, injected = self._maybe_inject_outbox_context(
+            prompt_text,
+            record=record,
+            topic_key=key,
+            has_file_context=has_file_context,
+            user_input_text=raw_user_input,
+        )
+        if injected:
+            log_event(
+                self._logger,
+                logging.INFO,
+                "telegram.outbox_context.injected",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                message_id=message.message_id,
             )
-            if injected:
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "telegram.outbox_context.injected",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                    message_id=message.message_id,
-                )
 
         return prompt_text, key
 
@@ -3802,7 +3834,13 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 )
         else:
             prompt_text, key = await self._prepare_turn_context(
-                message, prompt_text, record, input_items=input_items
+                message,
+                prompt_text,
+                record,
+                input_items=input_items,
+                user_input_text=(
+                    text_override if text_override is not None else message.text
+                ),
             )
 
         if (

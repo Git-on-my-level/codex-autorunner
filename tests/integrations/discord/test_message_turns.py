@@ -1253,8 +1253,9 @@ def _message_create(
     guild_id: str = "guild-1",
     channel_id: str = "channel-1",
     attachments: Optional[list[dict[str, Any]]] = None,
+    extra_payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "id": message_id,
         "channel_id": channel_id,
         "guild_id": guild_id,
@@ -1262,6 +1263,9 @@ def _message_create(
         "author": {"id": "user-1", "bot": False},
         "attachments": attachments or [],
     }
+    if extra_payload:
+        payload.update(extra_payload)
+    return payload
 
 
 @pytest.mark.anyio
@@ -2056,6 +2060,223 @@ async def test_message_create_non_pma_injects_prompt_context_hints(
         assert CAR_AWARENESS_BLOCK not in captured_prompts[0]
         assert PROMPT_WRITING_HINT in captured_prompts[0]
         assert "please write a prompt for triage" in captured_prompts[0]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_non_pma_prompt_hint_ignores_reply_context_prompt_text(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create(
+                    "please review this",
+                    extra_payload={
+                        "message_reference": {
+                            "message_id": "parent-1",
+                            "channel_id": "channel-1",
+                        },
+                        "referenced_message": {
+                            "content": "write a prompt for this later",
+                            "author": {"id": "user-2", "username": "alice"},
+                        },
+                    },
+                ),
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "please review this" in prompt
+        assert "Replying to message" in prompt
+        assert "write a prompt for this later" in prompt
+        assert PROMPT_WRITING_HINT not in prompt
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("outbox me"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "outbox me" in prompt
+        assert str(inbox_dir(workspace.resolve())) in prompt
+        assert str(outbox_dir(workspace.resolve())) in prompt
+        assert str(outbox_pending_dir(workspace.resolve())) in prompt
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_non_pma_injects_filebox_hint_for_inbox_keyword(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("check inbox"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    captured_prompts: list[str] = []
+
+    async def _fake_run_turn(
+        self,
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> str:
+        _ = (
+            workspace_root,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        captured_prompts.append(prompt_text)
+        return "Done from fake turn"
+
+    service._run_agent_turn_for_message = _fake_run_turn.__get__(
+        service, DiscordBotService
+    )
+
+    try:
+        await service.run_forever()
+        assert captured_prompts
+        prompt = captured_prompts[0]
+        assert "check inbox" in prompt
+        assert str(inbox_dir(workspace.resolve())) in prompt
+        assert str(outbox_dir(workspace.resolve())) in prompt
+        assert str(outbox_pending_dir(workspace.resolve())) in prompt
     finally:
         await store.close()
 

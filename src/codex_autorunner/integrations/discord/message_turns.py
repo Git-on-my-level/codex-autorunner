@@ -19,8 +19,11 @@ from ...agents.base import (
 from ...agents.registry import get_registered_agents
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
+    maybe_inject_filebox_hint,
     maybe_inject_prompt_writing_hint,
 )
+from ...core.filebox import inbox_dir, outbox_dir, outbox_pending_dir
+from ...core.injected_context import wrap_injected_context
 from ...core.orchestration import (
     FlowTarget,
     MessageRequest,
@@ -228,6 +231,30 @@ def _stash_discord_reusable_progress_message(
             channel_id=normalized_channel_id,
             message_id=normalized_message_id,
         )
+    )
+
+
+def _maybe_inject_discord_filebox_hint(
+    prompt_text: str,
+    *,
+    user_text: str,
+    workspace_root: Path,
+) -> tuple[str, bool]:
+    """Inject repo FileBox paths when the raw Discord turn requests them."""
+    hint_text = wrap_injected_context(
+        "\n".join(
+            [
+                f"Inbox: {inbox_dir(workspace_root)}",
+                f"Outbox: {outbox_dir(workspace_root)}",
+                f"Outbox (pending): {outbox_pending_dir(workspace_root)}",
+                "Use inbox files as local inputs and place reply files in outbox.",
+            ]
+        )
+    )
+    return maybe_inject_filebox_hint(
+        prompt_text,
+        hint_text=hint_text,
+        user_input_texts=[user_text],
     )
 
 
@@ -649,12 +676,28 @@ async def handle_message_event(
                     channel_id=channel_id,
                     message_id=event.message.message_id,
                 )
-            prompt_text, injected = maybe_inject_prompt_writing_hint(prompt_text)
+            prompt_text, injected = maybe_inject_prompt_writing_hint(
+                prompt_text,
+                trigger_text=text,
+            )
             if injected:
                 log_event_fn(
                     service._logger,
                     logging.INFO,
                     "discord.prompt_context.injected",
+                    channel_id=channel_id,
+                    message_id=event.message.message_id,
+                )
+            prompt_text, injected = _maybe_inject_discord_filebox_hint(
+                prompt_text,
+                user_text=text,
+                workspace_root=workspace_root,
+            )
+            if injected:
+                log_event_fn(
+                    service._logger,
+                    logging.INFO,
+                    "discord.filebox_context.injected",
                     channel_id=channel_id,
                     message_id=event.message.message_id,
                 )
