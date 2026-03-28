@@ -139,6 +139,17 @@ def build_agents_routes() -> APIRouter:
                     resume_after = int(last_event_id)
                 except ValueError:
                     resume_after = None
+        events = getattr(request.app.state, "app_server_events", None)
+        if agent_id == "codex":
+            if events is None:
+                raise HTTPException(status_code=404, detail="Codex events unavailable")
+            if not thread_id:
+                raise HTTPException(status_code=400, detail="thread_id is required")
+            return StreamingResponse(
+                events.stream(thread_id, turn_id, after_id=(resume_after or 0)),
+                media_type="text/event-stream",
+                headers=SSE_HEADERS,
+            )
         descriptor = get_agent_descriptor(agent_id)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")

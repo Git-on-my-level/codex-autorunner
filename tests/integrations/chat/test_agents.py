@@ -1,3 +1,7 @@
+from types import SimpleNamespace
+
+import pytest
+
 from codex_autorunner.integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     build_agent_switch_state,
@@ -40,9 +44,9 @@ def test_build_agent_switch_state_applies_agent_default_model() -> None:
     assert state.effort is None
 
 
-def test_chat_agent_supports_effort_only_for_codex() -> None:
+def test_chat_agent_supports_effort_for_review_capable_agents() -> None:
     assert chat_agent_supports_effort("codex") is True
-    assert chat_agent_supports_effort("opencode") is False
+    assert chat_agent_supports_effort("opencode") is True
     assert chat_agent_supports_effort("hermes") is False
     assert chat_agent_supports_effort("zeroclaw") is False
 
@@ -67,3 +71,18 @@ def test_hermes_is_accepted_by_normalize_chat_agent() -> None:
     assert normalize_chat_agent("hermes") == "hermes"
     assert normalize_chat_agent("HERMES") == "hermes"
     assert normalize_chat_agent(" Hermes ") == "hermes"
+
+
+def test_normalize_chat_agent_accepts_registered_command_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda: {
+            "plugin-agent": SimpleNamespace(name="Plugin Agent"),
+        },
+    )
+
+    assert normalize_chat_agent("plugin-agent") == "plugin-agent"
+    choices = chat_agent_command_choices()
+    assert {"name": "plugin-agent", "value": "plugin-agent"} in choices

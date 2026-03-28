@@ -250,6 +250,47 @@ class TestCapabilityHelpers:
         assert service._agent_supports_resume("hermes") is True
         assert service._agent_supports_resume("zeroclaw") is True
 
+    def test_agent_supports_effort_uses_chat_capability_helper(self) -> None:
+        import logging
+        from pathlib import Path
+
+        from codex_autorunner.integrations.discord.config import (
+            DiscordBotConfig,
+            DiscordCommandRegistration,
+        )
+        from codex_autorunner.integrations.discord.service import DiscordBotService
+
+        config = DiscordBotConfig(
+            root=Path("/tmp"),
+            enabled=True,
+            bot_token_env="TOKEN",
+            app_id_env="APP",
+            bot_token="token",
+            application_id="app",
+            allowed_guild_ids=frozenset(),
+            allowed_channel_ids=frozenset(),
+            allowed_user_ids=frozenset(),
+            command_registration=DiscordCommandRegistration(
+                enabled=True,
+                scope="guild",
+                guild_ids=(),
+            ),
+            state_file=Path("/tmp/state.sqlite3"),
+            intents=1,
+            max_message_length=2000,
+            message_overflow="split",
+            pma_enabled=False,
+        )
+
+        service = DiscordBotService(
+            config,
+            logger=logging.getLogger("test"),
+        )
+
+        assert service._agent_supports_effort("codex") is True
+        assert service._agent_supports_effort("opencode") is True
+        assert service._agent_supports_effort("hermes") is False
+
 
 class TestWebAgentSelectorIncludesHermes:
     def test_available_agents_uses_registry(self) -> None:

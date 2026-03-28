@@ -175,7 +175,7 @@ def test_agent_and_effort_options_include_choices() -> None:
     model = _find_option(car_options, "model")
     model_effort = _find_option(model["options"], "effort")
     assert model_effort["description"] == (
-        f"Reasoning effort (codex only): {reasoning_effort_description()}"
+        f"Reasoning effort (when supported): {reasoning_effort_description()}"
     )
     assert model_effort.get("choices", []) == list(reasoning_effort_command_choices())
 

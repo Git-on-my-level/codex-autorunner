@@ -90,6 +90,19 @@ Hermes v1 runs against a shared `HERMES_HOME`.
 Treat `HERMES_HOME` as shared operator-managed state, not as an isolated CAR
 resource.
 
+## Surface Guidance
+
+Hermes appears in CAR-backed surfaces only after the surface-specific setup is
+complete.
+
+- For Telegram, follow `docs/AGENT_SETUP_TELEGRAM_GUIDE.md` for allowlists,
+  topics, and collaboration policy.
+- For Discord, follow `docs/AGENT_SETUP_DISCORD_GUIDE.md` for bot credentials,
+  command registration, and collaboration policy.
+- Hermes capability gating still applies in both surfaces: unsupported actions
+  such as review or model listing fail explicitly instead of being rewritten
+  into a Codex/OpenCode-only path.
+
 ## Supported Capabilities
 
 Hermes currently supports:

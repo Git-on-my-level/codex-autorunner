@@ -71,6 +71,7 @@ class _PromptState:
     events: list[ACPEvent] = field(default_factory=list)
     final_output: str = ""
     closed: bool = False
+    replay_task: Optional[asyncio.Task[None]] = None
 
 
 def _normalize_optional_text(value: Any) -> Optional[str]:
@@ -384,7 +385,10 @@ class ACPClient:
             params["metadata"] = dict(metadata)
         result = await self.request("prompt/start", params)
         prompt_info = ACPPromptDescriptor.from_result(result, session_id=session_id)
-        self._ensure_prompt_state(prompt_info.session_id, prompt_info.turn_id)
+        state = self._ensure_prompt_state(prompt_info.session_id, prompt_info.turn_id)
+        replay_task = state.replay_task
+        if replay_task is not None:
+            await asyncio.shield(replay_task)
         return ACPPromptHandle(self, prompt_info.turn_id)
 
     async def cancel_prompt(self, session_id: str, turn_id: str) -> Any:
@@ -556,9 +560,10 @@ class ACPClient:
         ):
             decision = await self._permission_handler(event)
             if decision is not None and event.method == "permission/requested":
-                asyncio.create_task(
+                task = asyncio.create_task(
                     self._respond_to_permission_notification(event, decision)
                 )
+                task.add_done_callback(self._log_background_task_result)
         if self._notification_handler is not None:
             await self._notification_handler(event)
         if event.turn_id:
@@ -638,9 +643,30 @@ class ACPClient:
             state = _PromptState(session_id=session_id, turn_id=turn_id)
             state.future = asyncio.get_running_loop().create_future()
             self._prompts[turn_id] = state
-            for event in self._orphan_events.pop(turn_id, []):
-                asyncio.create_task(self._record_prompt_event(state, event))
+            orphan_events = self._orphan_events.pop(turn_id, [])
+            if orphan_events:
+                task = asyncio.create_task(
+                    self._replay_orphan_prompt_events(state, orphan_events)
+                )
+                state.replay_task = task
+                task.add_done_callback(self._log_background_task_result)
         return state
+
+    async def _replay_orphan_prompt_events(
+        self,
+        state: _PromptState,
+        events: list[ACPEvent],
+    ) -> None:
+        for event in events:
+            await self._record_prompt_event(state, event)
+
+    def _log_background_task_result(self, task: asyncio.Task[Any]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            self._logger.exception("Unhandled ACP background task failure")
 
     def prompt_events_snapshot(self, turn_id: str) -> tuple[ACPEvent, ...]:
         state = self._prompts.get(turn_id)

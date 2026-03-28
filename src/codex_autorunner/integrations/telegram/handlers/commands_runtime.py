@@ -1332,7 +1332,7 @@ class TelegramCommandHandlers(
         if effort and not supports_effort:
             await self._send_message(
                 message.chat_id,
-                "Reasoning effort is only supported for the codex agent.",
+                f"Reasoning effort is not supported for {agent}.",
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )

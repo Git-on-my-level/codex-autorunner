@@ -151,10 +151,14 @@ class HermesSupervisor:
             prompt,
             model=_normalize_optional_text(model),
         )
+        previous_state: Optional[_HermesTurnState] = None
         async with self._lock:
             previous_turn_id = self._session_turns.get((workspace, session_id))
             if previous_turn_id:
-                self._turn_states.pop((workspace, previous_turn_id), None)
+                previous_state = self._turn_states.pop(
+                    (workspace, previous_turn_id),
+                    None,
+                )
             state = _HermesTurnState(
                 session_id=session_id,
                 turn_id=handle.turn_id,
@@ -163,6 +167,8 @@ class HermesSupervisor:
             )
             self._turn_states[(workspace, handle.turn_id)] = state
             self._session_turns[(workspace, session_id)] = handle.turn_id
+        if previous_state is not None:
+            await self._retire_turn_state(previous_state)
         for event in await self._acp.prompt_events_snapshot(
             workspace_root, handle.turn_id
         ):
@@ -238,14 +244,29 @@ class HermesSupervisor:
             turn_id,
         )
         state = await self._require_turn_state(workspace_root, resolved_turn_id)
-        pending_task = state.pending_approval_task
+        async with self._lock:
+            pending_task = state.pending_approval_task
         if pending_task is not None and not pending_task.done():
             pending_task.cancel()
+            try:
+                await pending_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                self._logger.debug(
+                    "Hermes approval task raised while cancelling turn %s",
+                    resolved_turn_id,
+                    exc_info=True,
+                )
         await self._acp.cancel_prompt(workspace_root, session_id, resolved_turn_id)
 
     async def close_workspace(self, workspace_root: Path) -> None:
         workspace = _workspace_key(workspace_root)
+        retired_states: list[_HermesTurnState] = []
         async with self._lock:
+            for (state_workspace, _turn_id), state in list(self._turn_states.items()):
+                if state_workspace == workspace:
+                    retired_states.append(state)
             self._turn_states = {
                 key: value
                 for key, value in self._turn_states.items()
@@ -256,12 +277,18 @@ class HermesSupervisor:
                 for key, value in self._session_turns.items()
                 if key[0] != workspace
             }
+        for state in retired_states:
+            await self._retire_turn_state(state)
         await self._acp.close_workspace(workspace_root)
 
     async def close_all(self) -> None:
+        retired_states: list[_HermesTurnState] = []
         async with self._lock:
+            retired_states = list(self._turn_states.values())
             self._turn_states.clear()
             self._session_turns.clear()
+        for state in retired_states:
+            await self._retire_turn_state(state)
         await self._acp.close_all()
 
     async def _resolve_turn_id(
@@ -323,6 +350,26 @@ class HermesSupervisor:
                 state.stream_closed = True
             state.stream_condition.notify_all()
 
+    async def _retire_turn_state(self, state: _HermesTurnState) -> None:
+        async with self._lock:
+            pending_task = state.pending_approval_task
+            state.pending_approval_task = None
+        if pending_task is not None and not pending_task.done():
+            pending_task.cancel()
+            try:
+                await pending_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                self._logger.debug(
+                    "Hermes approval task raised during cleanup for turn %s",
+                    state.turn_id,
+                    exc_info=True,
+                )
+        async with state.stream_condition:
+            state.stream_closed = True
+            state.stream_condition.notify_all()
+
     async def _handle_acp_event(
         self,
         workspace_root: Path,
@@ -379,7 +426,8 @@ class HermesSupervisor:
         task: asyncio.Future[Any] = asyncio.ensure_future(
             self._approval_handler(request)
         )
-        state.pending_approval_task = task
+        async with self._lock:
+            state.pending_approval_task = task
         try:
             if self._approval_timeout_seconds > 0:
                 decision = await asyncio.wait_for(
@@ -409,6 +457,13 @@ class HermesSupervisor:
             return decision
         except Exception:
             task.cancel()
+            self._logger.warning(
+                "Hermes approval handler raised for session=%s turn=%s request=%s",
+                state.session_id,
+                state.turn_id,
+                event.request_id,
+                exc_info=True,
+            )
             decision = "cancel"
             await self._record_approval_decision(
                 state,
@@ -418,8 +473,9 @@ class HermesSupervisor:
             )
             return decision
         finally:
-            if state.pending_approval_task is task:
-                state.pending_approval_task = None
+            async with self._lock:
+                if state.pending_approval_task is task:
+                    state.pending_approval_task = None
 
         normalized = _normalize_approval_decision(decision, default="cancel")
         await self._record_approval_decision(

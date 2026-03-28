@@ -44,7 +44,14 @@ class ChatAgentSwitchState:
 
 
 def _valid_chat_agent_values() -> tuple[str, ...]:
-    return VALID_CHAT_AGENT_VALUES
+    values = set(VALID_CHAT_AGENT_VALUES)
+    try:
+        from ...agents.registry import get_registered_agents
+
+        values.update(get_registered_agents().keys())
+    except Exception:
+        pass
+    return tuple(sorted(values))
 
 
 def normalize_chat_agent(
@@ -64,7 +71,17 @@ def normalize_chat_agent(
 
 def chat_agent_supports_effort(agent: object) -> bool:
     normalized = normalize_chat_agent(agent, default=DEFAULT_CHAT_AGENT)
-    return normalized == "codex"
+    if normalized is None:
+        return False
+    try:
+        from ...agents.registry import get_agent_descriptor
+
+        descriptor = get_agent_descriptor(normalized)
+    except Exception:
+        descriptor = None
+    if descriptor is None:
+        return normalized == "codex"
+    return CHAT_EFFORT_CAPABILITY in descriptor.capabilities
 
 
 def default_chat_model_for_agent(agent: object) -> Optional[str]:

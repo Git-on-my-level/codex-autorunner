@@ -59,6 +59,7 @@ Verify the user has:
 1. **Python 3.9+** installed
 2. **At least one supported agent** installed and working:
    - [Codex CLI](https://github.com/openai/codex) — `codex --version`
+   - Hermes (ACP-backed) — `hermes --version` and `hermes acp --help`
    - [Opencode](https://github.com/opencode-ai/opencode) — `opencode --version`
 3. **A directory for the hub** — This can be a new empty directory; repositories can be created or cloned through the hub later
 
@@ -174,6 +175,7 @@ Both you and the agents can read and write these. They're accessible from the we
 ### Agents
 CAR currently supports:
 - **Codex** — OpenAI's coding agent
+- **Hermes** — ACP-backed repo/worktree agent
 - **Opencode** — Open-source alternative
 
 CAR passes tickets to agents along with relevant context, and agents execute the work.

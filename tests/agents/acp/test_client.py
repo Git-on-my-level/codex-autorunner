@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -154,5 +155,51 @@ async def test_client_reports_subprocess_crash_during_prompt(tmp_path: Path) -> 
 
         with pytest.raises(ACPProcessCrashedError, match="exited with code 17"):
             await handle.wait()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_logs_background_permission_notification_task_failures(
+    tmp_path: Path,
+) -> None:
+    async def permission_handler(_event: ACPPermissionRequestEvent) -> str:
+        return "accept"
+
+    failures: list[str] = []
+
+    client = ACPClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        permission_handler=permission_handler,
+    )
+
+    async def boom(_event, _decision):
+        raise RuntimeError("background task boom")
+
+    def capture(task: asyncio.Task[object]) -> None:
+        try:
+            task.result()
+        except Exception as exc:
+            failures.append(str(exc))
+
+    try:
+        client._respond_to_permission_notification = boom  # type: ignore[assignment]
+        client._log_background_task_result = capture  # type: ignore[assignment]
+        await client._dispatch_message(
+            {
+                "method": "permission/requested",
+                "params": {
+                    "sessionId": "session-1",
+                    "turnId": "turn-1",
+                    "requestId": "req-1",
+                    "description": "Need approval",
+                    "options": [],
+                },
+            }
+        )
+        await asyncio.sleep(0.05)
+
+        assert failures == ["background task boom"]
     finally:
         await client.close()

@@ -3126,7 +3126,9 @@ async def test_car_flow_resume_status_text_prompts_picker_instead_of_auto_resolv
 
 
 @pytest.mark.anyio
-async def test_component_interaction_model_select_updates_model(tmp_path: Path) -> None:
+async def test_component_interaction_model_select_prompts_effort_for_opencode(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3155,10 +3157,15 @@ async def test_component_interaction_model_select_updates_model(tmp_path: Path) 
         await service.run_forever()
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
-        assert binding.get("model_override") == "openai/gpt-4o"
+        assert binding.get("model_override") is None
+        assert service._pending_model_effort["channel-1:user-1"] == "openai/gpt-4o"
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "model set to openai/gpt-4o" in content
+        data = rest.interaction_responses[0]["payload"]["data"]
+        assert "select reasoning effort" in data["content"].lower()
+        components = data.get("components") or []
+        assert components
+        menu = components[0]["components"][0]
+        assert menu["custom_id"] == "model_effort_select"
     finally:
         await store.close()
 
@@ -3493,7 +3500,9 @@ async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -
 
 
 @pytest.mark.anyio
-async def test_normalized_component_model_select_updates_model(tmp_path: Path) -> None:
+async def test_normalized_component_model_select_prompts_effort_for_opencode(
+    tmp_path: Path,
+) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
@@ -3524,10 +3533,15 @@ async def test_normalized_component_model_select_updates_model(tmp_path: Path) -
         await service._handle_normalized_interaction(event, context)
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
-        assert binding.get("model_override") == "openai/gpt-4o"
+        assert binding.get("model_override") is None
+        assert service._pending_model_effort["channel-1:user-1"] == "openai/gpt-4o"
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "model set to openai/gpt-4o" in content
+        data = rest.interaction_responses[0]["payload"]["data"]
+        assert "select reasoning effort" in data["content"].lower()
+        components = data.get("components") or []
+        assert components
+        menu = components[0]["components"][0]
+        assert menu["custom_id"] == "model_effort_select"
     finally:
         await store.close()
 

@@ -133,6 +133,7 @@ from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     VALID_CHAT_AGENT_VALUES,
     build_agent_switch_state,
+    chat_agent_supports_effort,
     normalize_chat_agent,
 )
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
@@ -4898,7 +4899,7 @@ class DiscordBotService:
         )
 
     def _agent_supports_effort(self, agent: str) -> bool:
-        return agent == "codex"
+        return chat_agent_supports_effort(agent)
 
     def _agent_supports_resume(self, agent: str) -> bool:
         return self._agent_supports_capability(agent, "durable_threads")
@@ -7301,7 +7302,7 @@ class DiscordBotService:
                     [
                         "",
                         "Use `/car model name:<id>` to set a model.",
-                        "Use `/car model name:<id> effort:<value>` to set model with reasoning effort (codex only).",
+                        "Use `/car model name:<id> effort:<value>` when the current agent supports reasoning effort.",
                         "",
                         f"Valid efforts: {', '.join(self.VALID_REASONING_EFFORTS)}",
                     ]
@@ -7450,7 +7451,7 @@ class DiscordBotService:
                     "",
                     "Select a model override:",
                     "(default model) clears the override.",
-                    "Use `/car model name:<id> effort:<value>` to set reasoning effort (codex only).",
+                    "Use `/car model name:<id> effort:<value>` when the current agent supports reasoning effort.",
                 ]
             )
             await _send_model_picker_or_fallback(
@@ -7533,11 +7534,11 @@ class DiscordBotService:
             return
 
         if effort:
-            if current_agent != "codex":
+            if not self._agent_supports_effort(current_agent):
                 await self._respond_ephemeral(
                     interaction_id,
                     interaction_token,
-                    "Reasoning effort is only supported for the codex agent.",
+                    f"Reasoning effort is not supported for {self._agent_display_name(current_agent)}.",
                 )
                 return
             effort = effort.lower().strip()
@@ -7596,7 +7597,7 @@ class DiscordBotService:
         binding = await self._store.get_binding(channel_id=channel_id)
         current_agent = self._normalize_agent(binding.get("agent") if binding else None)
 
-        if current_agent == "codex":
+        if self._agent_supports_effort(current_agent):
             pending_key = self._pending_interaction_scope_key(
                 channel_id=channel_id,
                 user_id=user_id,

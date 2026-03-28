@@ -44,6 +44,35 @@ def test_agent_turn_events_route_rejects_blank_path_agent_segment() -> None:
     assert response.json() == {"detail": "Unknown agent"}
 
 
+def test_agent_turn_events_route_preserves_resume_offset_for_codex() -> None:
+    class FakeEvents:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str, int]] = []
+
+        def stream(self, thread_id: str, turn_id: str, *, after_id: int = 0):
+            self.calls.append((thread_id, turn_id, after_id))
+
+            async def _stream():
+                if False:
+                    yield b""
+
+            return _stream()
+
+    app = FastAPI()
+    app.state.app_server_events = FakeEvents()
+    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+    app.include_router(build_agents_routes())
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/agents/codex/turns/turn-123/events",
+            params={"thread_id": "thread-123", "since_event_id": 7},
+        )
+
+    assert response.status_code == 200
+    assert app.state.app_server_events.calls == [("thread-123", "turn-123", 7)]
+
+
 def test_list_agents_returns_capabilities() -> None:
     client = _build_client(with_supervisors=True)
 

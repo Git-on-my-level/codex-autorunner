@@ -6,7 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.agents.hermes.supervisor import HermesSupervisor
+from codex_autorunner.agents.acp.errors import (
+    ACPInitializationError,
+    ACPProcessCrashedError,
+)
+from codex_autorunner.agents.hermes.supervisor import (
+    HermesSupervisor,
+    HermesSupervisorError,
+)
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 
@@ -288,12 +295,173 @@ async def test_hermes_supervisor_interrupt_cancels_pending_permission_wait(
 
 
 @pytest.mark.asyncio
+async def test_hermes_supervisor_replacing_turn_cancels_previous_pending_approval(
+    tmp_path: Path,
+) -> None:
+    approval_started = asyncio.Event()
+    approval_cancelled = asyncio.Event()
+    approval_gate = asyncio.Event()
+
+    async def approval_handler(_request: dict[str, object]) -> str:
+        approval_started.set()
+        try:
+            await approval_gate.wait()
+        except asyncio.CancelledError:
+            approval_cancelled.set()
+            raise
+        return "accept"
+
+    supervisor = HermesSupervisor(
+        fixture_command("basic"),
+        approval_handler=approval_handler,
+        default_approval_decision="cancel",
+        approval_timeout_seconds=5.0,
+    )
+    try:
+        session = await supervisor.create_session(tmp_path)
+        first_turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "needs permission",
+            approval_mode="on-request",
+        )
+        await asyncio.wait_for(approval_started.wait(), timeout=1.0)
+
+        second_turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "hello again",
+            approval_mode="never",
+        )
+
+        assert second_turn_id != first_turn_id
+        await asyncio.wait_for(approval_cancelled.wait(), timeout=1.0)
+        second_result = await supervisor.wait_for_turn(
+            tmp_path,
+            session.session_id,
+            second_turn_id,
+        )
+
+        with pytest.raises(HermesSupervisorError, match="Unknown Hermes turn"):
+            await supervisor.wait_for_turn(tmp_path, session.session_id, first_turn_id)
+        assert second_result.status == "completed"
+    finally:
+        approval_gate.set()
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_hermes_supervisor_close_workspace_retires_pending_turn_state(
+    tmp_path: Path,
+) -> None:
+    approval_started = asyncio.Event()
+    approval_cancelled = asyncio.Event()
+    approval_gate = asyncio.Event()
+
+    async def approval_handler(_request: dict[str, object]) -> str:
+        approval_started.set()
+        try:
+            await approval_gate.wait()
+        except asyncio.CancelledError:
+            approval_cancelled.set()
+            raise
+        return "accept"
+
+    supervisor = HermesSupervisor(
+        fixture_command("basic"),
+        approval_handler=approval_handler,
+        default_approval_decision="cancel",
+        approval_timeout_seconds=5.0,
+    )
+    try:
+        session = await supervisor.create_session(tmp_path)
+        turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "needs permission",
+            approval_mode="on-request",
+        )
+        await asyncio.wait_for(approval_started.wait(), timeout=1.0)
+
+        await supervisor.close_workspace(tmp_path)
+
+        await asyncio.wait_for(approval_cancelled.wait(), timeout=1.0)
+        with pytest.raises(HermesSupervisorError, match="Unknown Hermes turn"):
+            await supervisor.wait_for_turn(tmp_path, session.session_id, turn_id)
+    finally:
+        approval_gate.set()
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_hermes_supervisor_propagates_approval_handler_exception(
+    tmp_path: Path,
+) -> None:
+    async def approval_handler(_request: dict[str, object]) -> str:
+        raise RuntimeError("approval handler boom")
+
+    supervisor = HermesSupervisor(
+        fixture_command("basic"),
+        approval_handler=approval_handler,
+        default_approval_decision="cancel",
+        approval_timeout_seconds=5.0,
+    )
+    try:
+        session = await supervisor.create_session(tmp_path)
+        turn_id = await supervisor.start_turn(
+            tmp_path,
+            session.session_id,
+            "needs permission",
+            approval_mode="on-request",
+        )
+        result = await supervisor.wait_for_turn(tmp_path, session.session_id, turn_id)
+
+        assert result.status == "cancelled"
+        assert any(
+            event.get("method") == "permission/decision"
+            and event.get("params", {}).get("reason") == "handler_error"
+            for event in result.raw_events
+        )
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_hermes_supervisor_propagates_initialize_error(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("initialize_error"))
+    try:
+        with pytest.raises(ACPInitializationError, match="initialize failed"):
+            await supervisor.ensure_ready(tmp_path)
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_hermes_supervisor_propagates_subprocess_crash_during_wait(
+    tmp_path: Path,
+) -> None:
+    supervisor = HermesSupervisor(fixture_command("crash"))
+    try:
+        session = await supervisor.create_session(tmp_path)
+        turn_id = await supervisor.start_turn(tmp_path, session.session_id, "crash")
+
+        with pytest.raises(ACPProcessCrashedError, match="exited with code 17"):
+            await supervisor.wait_for_turn(tmp_path, session.session_id, turn_id)
+    finally:
+        await supervisor.close_all()
+
+
+@pytest.mark.asyncio
 async def test_hermes_supervisor_rejects_unknown_turn_lookup(tmp_path: Path) -> None:
     supervisor = HermesSupervisor(fixture_command("basic"))
     try:
         session = await supervisor.create_session(tmp_path)
 
-        with pytest.raises(Exception, match="No active Hermes turn tracked"):
+        with pytest.raises(
+            HermesSupervisorError, match="No active Hermes turn tracked"
+        ):
             await supervisor.interrupt_turn(tmp_path, session.session_id, None)
     finally:
         await supervisor.close_all()
