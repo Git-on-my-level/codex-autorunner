@@ -139,6 +139,7 @@ protocol-schemas-refresh:
 	$(MAKE) agent-compatibility-refresh PYTHON="$(PYTHON)"
 
 agent-compatibility-refresh:
+	$(PYTHON) scripts/update_agent_compatibility_lock.py
 	$(PYTHON) -m codex_autorunner.cli protocol refresh
 
 format:

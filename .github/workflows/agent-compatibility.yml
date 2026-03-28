@@ -12,8 +12,10 @@ on:
       - 'Makefile'
       - 'src/codex_autorunner/agents/**'
       - 'scripts/check_protocol_drift.py'
+      - 'scripts/update_agent_compatibility_lock.py'
       - 'scripts/update_vendor_codex_schema.py'
       - 'scripts/update_vendor_opencode_openapi.py'
+      - 'vendor/protocols/agent-compatibility.lock.json'
       - 'vendor/protocols/**'
 
 jobs:
@@ -33,11 +35,26 @@ jobs:
       - name: Install Python deps
         run: pip install -e .[dev]
 
+      - name: Load pinned agent tool versions
+        run: |
+          python - <<'PY' >> "$GITHUB_ENV"
+          import json
+          from pathlib import Path
+
+          lock = json.loads(
+              Path("vendor/protocols/agent-compatibility.lock.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print(f"CODEX_NPM_VERSION={lock['codex']}")
+          print(f"OPENCODE_NPM_VERSION={lock['opencode']}")
+          PY
+
       - name: Install Codex
-        run: npm install -g @openai/codex
+        run: npm install -g "@openai/codex@${CODEX_NPM_VERSION}"
 
       - name: Install OpenCode
-        run: npm install -g opencode-ai
+        run: npm install -g "opencode-ai@${OPENCODE_NPM_VERSION}"
 
       - name: Check agent compatibility
         run: make agent-compatibility-check
@@ -48,4 +65,6 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **OS:** ${{ runner.os }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Python:** 3.11" >> $GITHUB_STEP_SUMMARY
+          echo "- **Codex:** ${CODEX_NPM_VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "- **OpenCode:** ${OPENCODE_NPM_VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Protocol drift check: PASSED" >> $GITHUB_STEP_SUMMARY
