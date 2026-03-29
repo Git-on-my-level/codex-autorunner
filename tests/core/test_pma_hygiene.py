@@ -153,7 +153,6 @@ def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
         if isinstance(item, dict)
     }
 
-    assert "files:inbox:forgotten.txt" in safe_ids
     assert f"automation:subscription:{inactive_sub['subscription_id']}" in safe_ids
     assert f"automation:timer:{cancelled_timer['timer_id']}" in safe_ids
     assert f"automation:wakeup:{dispatched_wakeup.wakeup_id}" in safe_ids
@@ -165,9 +164,10 @@ def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
     assert f"automation:wakeup:{pending_wakeup.wakeup_id}" in protected_ids
     assert "alerts:open-alert" in protected_ids
 
+    assert "files:inbox:forgotten.txt" in needs_confirmation_ids
     assert f"threads:{unbound['managed_thread_id']}" in needs_confirmation_ids
     assert resolved_dispatch.exists()
-    assert report["summary"]["safe_apply_count"] >= 5
+    assert report["summary"]["safe_apply_count"] >= 4
 
 
 def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
@@ -217,7 +217,7 @@ def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
 
     assert apply_result["failed"] == 0
     assert apply_result["applied"] == apply_result["attempted"]
-    assert not stale_file.exists()
+    assert stale_file.exists()
     assert not resolved_dispatch.exists()
     assert automation_store.list_subscriptions(include_inactive=True) == []
     assert automation_store.list_timers(include_inactive=True) == []

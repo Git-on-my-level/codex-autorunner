@@ -120,12 +120,12 @@ def _build_file_candidates(
             continue
         candidates.append(
             _build_candidate(
-                group="safe",
+                group="needs-confirmation",
                 category="files",
                 candidate_id=f"files:inbox:{entry.name}",
                 label=f"inbox/{entry.name}",
-                action="delete_filebox_file",
-                reason="Stale PMA inbox upload is likely leftover state.",
+                action="review_stale_uploaded_file",
+                reason=("Stale PMA inbox upload requires review before deletion."),
                 evidence={
                     "modified_at": entry.modified_at,
                     "source": entry.source,
