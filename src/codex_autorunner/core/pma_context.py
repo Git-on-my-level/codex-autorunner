@@ -965,134 +965,137 @@ def _thread_group_owner_label(
     return "unowned threads"
 
 
-def _thread_grouping_key(entry: Mapping[str, Any]) -> Optional[tuple[str, str]]:
-    repo_id = str(entry.get("repo_id") or "").strip()
-    if repo_id:
-        return ("repo", repo_id)
-    resource_kind = str(entry.get("resource_kind") or "").strip()
-    resource_id = str(entry.get("resource_id") or "").strip()
-    if resource_kind and resource_id:
-        return (resource_kind, resource_id)
-    workspace_root = str(entry.get("workspace_root") or "").strip()
-    if workspace_root:
-        return ("workspace_root", workspace_root)
-    return None
+def _collect_thread_owner_labels(items: Sequence[Mapping[str, Any]]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        label = _thread_group_owner_label(
+            repo_id=str(item.get("repo_id") or "").strip() or None,
+            resource_kind=str(item.get("resource_kind") or "").strip() or None,
+            resource_id=str(item.get("resource_id") or "").strip() or None,
+            workspace_root=str(item.get("workspace_root") or "").strip() or None,
+        )
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels
+
+
+def _build_low_signal_thread_summary_item(
+    *,
+    followup_state: str,
+    items: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    newest = max(items, key=lambda item: float(item.get("sort_timestamp") or 0.0))
+    owner_labels = _collect_thread_owner_labels(items)
+    repo_ids = sorted(
+        {
+            str(item.get("repo_id") or "").strip()
+            for item in items
+            if str(item.get("repo_id") or "").strip()
+        }
+    )
+    if followup_state == "idle_archive_candidate":
+        name = f"Dormant cleanup candidates ({len(items)})"
+        operator_need = "cleanup"
+        why_selected = (
+            f"Collapsed {len(items)} dormant cleanup candidates into a counts-first "
+            "summary so cleanup inventory does not dominate the main queue"
+        )
+        recommended_action = "show_cleanup_candidates"
+        recommended_detail = (
+            "Show cleanup candidates to inspect the dormant managed threads before "
+            "archiving any of them."
+        )
+        drilldown_commands = ["show cleanup candidates"]
+    else:
+        name = f"Reusable managed threads ({len(items)})"
+        operator_need = "optional"
+        why_selected = (
+            f"Collapsed {len(items)} reusable managed threads into a counts-first "
+            "summary so optional reuse stays behind true next-action work"
+        )
+        recommended_action = "show_reusable_threads"
+        recommended_detail = (
+            "Show reusable threads to inspect the available managed threads before "
+            "reusing one."
+        )
+        drilldown_commands = ["show reusable threads"]
+
+    if owner_labels:
+        owner_preview = ", ".join(owner_labels[:3])
+        if len(owner_labels) > 3:
+            owner_preview += ", ..."
+        recommended_detail += f" Owners: {owner_preview}."
+
+    return {
+        "item_type": "managed_thread_followup_summary",
+        "queue_source": "managed_thread_followup",
+        "action_queue_id": f"managed_thread_followup_summary:{followup_state}",
+        "precedence": dict(newest.get("precedence") or {}),
+        "repo_id": repo_ids[0] if len(repo_ids) == 1 else None,
+        "name": name,
+        "thread_count": len(items),
+        "managed_thread_ids": [
+            item.get("managed_thread_id")
+            for item in items
+            if item.get("managed_thread_id")
+        ],
+        "followup_state": followup_state,
+        "followup_state_counts": {followup_state: len(items)},
+        "operator_need": operator_need,
+        "operator_need_rank": _thread_followup_state_rank(followup_state),
+        "why_selected": why_selected,
+        "recommended_action": recommended_action,
+        "recommended_detail": recommended_detail,
+        "drilldown_commands": drilldown_commands,
+        "owner_count": len(owner_labels),
+        "owner_labels": owner_labels,
+        "freshness": (
+            dict(newest.get("freshness") or {})
+            if isinstance(newest.get("freshness"), Mapping)
+            else None
+        ),
+        "scope": {
+            "kind": "thread_summary",
+            "key": f"thread_summary:{followup_state}",
+        },
+        "sort_timestamp": newest.get("sort_timestamp"),
+    }
 
 
 def _collapse_low_signal_thread_queue_items(
     items: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    grouped_keys: dict[tuple[str, str], list[dict[str, Any]]] = {}
     passthrough: list[dict[str, Any]] = []
+    reusable_items: list[dict[str, Any]] = []
+    cleanup_items: list[dict[str, Any]] = []
 
     for item in items:
         followup_state = str(item.get("followup_state") or "").strip().lower()
-        grouping_key = _thread_grouping_key(item)
-        if (
-            followup_state not in {"reusable", "idle_archive_candidate"}
-            or grouping_key is None
-        ):
-            passthrough.append(item)
+        if followup_state == "reusable":
+            reusable_items.append(item)
             continue
-        grouped_keys.setdefault(grouping_key, []).append(item)
+        if followup_state == "idle_archive_candidate":
+            cleanup_items.append(item)
+            continue
+        passthrough.append(item)
 
     collapsed: list[dict[str, Any]] = list(passthrough)
-    for (group_kind, group_value), group_items in grouped_keys.items():
-        if len(group_items) < 2:
-            collapsed.extend(group_items)
-            continue
-
-        repo_id = str(group_items[0].get("repo_id") or "").strip() or None
-        resource_kind = str(group_items[0].get("resource_kind") or "").strip() or None
-        resource_id = str(group_items[0].get("resource_id") or "").strip() or None
-        workspace_root = str(group_items[0].get("workspace_root") or "").strip() or None
-        state_counts: dict[str, int] = {}
-        newest = max(
-            group_items, key=lambda item: float(item.get("sort_timestamp") or 0)
-        )
-        for item in group_items:
-            state = str(item.get("followup_state") or "").strip().lower() or "unknown"
-            state_counts[state] = state_counts.get(state, 0) + 1
-
-        reusable_count = state_counts.get("reusable", 0)
-        archive_count = state_counts.get("idle_archive_candidate", 0)
-        if reusable_count and archive_count:
-            group_state = "reusable"
-            operator_need = "optional"
-            why_selected = (
-                f"Grouped {len(group_items)} low-signal managed threads for "
-                f"{_thread_group_owner_label(repo_id=repo_id, resource_kind=resource_kind, resource_id=resource_id, workspace_root=workspace_root)} "
-                f"to reduce queue noise ({reusable_count} reusable, {archive_count} cleanup candidates)"
-            )
-            recommended_action = "review_managed_thread_group"
-            recommended_detail = (
-                "Review the grouped managed threads and decide which to reuse now "
-                "versus archive as dormant cleanup."
-            )
-        elif reusable_count:
-            group_state = "reusable"
-            operator_need = "optional"
-            why_selected = (
-                f"Grouped {len(group_items)} reusable managed threads for "
-                f"{_thread_group_owner_label(repo_id=repo_id, resource_kind=resource_kind, resource_id=resource_id, workspace_root=workspace_root)} "
-                "to reduce queue noise"
-            )
-            recommended_action = "review_managed_thread_group"
-            recommended_detail = (
-                "Optional review: pick a grouped managed thread to reuse if new work "
-                "arrives for that repo or resource."
-            )
-        else:
-            group_state = "idle_archive_candidate"
-            operator_need = "cleanup"
-            why_selected = (
-                f"Grouped {len(group_items)} dormant managed threads for "
-                f"{_thread_group_owner_label(repo_id=repo_id, resource_kind=resource_kind, resource_id=resource_id, workspace_root=workspace_root)} "
-                "so cleanup candidates do not dominate the queue"
-            )
-            recommended_action = "review_or_archive_managed_thread_group"
-            recommended_detail = (
-                "Review the grouped dormant threads and archive the ones that no "
-                "longer need to stay reusable."
-            )
-
+    if reusable_items:
         collapsed.append(
-            {
-                "item_type": "managed_thread_followup_group",
-                "queue_source": "managed_thread_followup",
-                "action_queue_id": (
-                    f"managed_thread_followup_group:{group_kind}:{group_value}"
-                ),
-                "precedence": dict(newest.get("precedence") or {}),
-                "repo_id": repo_id,
-                "resource_kind": resource_kind,
-                "resource_id": resource_id,
-                "workspace_root": workspace_root,
-                "name": f"{len(group_items)} managed threads",
-                "thread_count": len(group_items),
-                "managed_thread_ids": [
-                    item.get("managed_thread_id")
-                    for item in group_items
-                    if item.get("managed_thread_id")
-                ],
-                "followup_state": group_state,
-                "followup_state_counts": state_counts,
-                "operator_need": operator_need,
-                "operator_need_rank": _thread_followup_state_rank(group_state),
-                "why_selected": why_selected,
-                "recommended_action": recommended_action,
-                "recommended_detail": recommended_detail,
-                "freshness": (
-                    dict(newest.get("freshness") or {})
-                    if isinstance(newest.get("freshness"), Mapping)
-                    else None
-                ),
-                "scope": {
-                    "kind": "thread_group",
-                    "key": f"{group_kind}:{group_value}",
-                },
-                "sort_timestamp": newest.get("sort_timestamp"),
-            }
+            _build_low_signal_thread_summary_item(
+                followup_state="reusable",
+                items=reusable_items,
+            )
+        )
+    if cleanup_items:
+        collapsed.append(
+            _build_low_signal_thread_summary_item(
+                followup_state="idle_archive_candidate",
+                items=cleanup_items,
+            )
         )
 
     return collapsed
@@ -1236,6 +1239,7 @@ def _build_file_queue_items(
     pma_files_detail: Mapping[str, list[dict[str, Any]]],
 ) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
+    stale_items: list[dict[str, Any]] = []
     rank, label = _queue_precedence("pma_file_inbox")
     for entry in pma_files_detail.get("inbox") or []:
         if not isinstance(entry, dict):
@@ -1259,7 +1263,54 @@ def _build_file_queue_items(
                 ),
             }
         )
+        if copied.get("next_action") == PMA_FILE_NEXT_ACTION_REVIEW_STALE:
+            stale_items.append(copied)
+            continue
         items.append(copied)
+    if stale_items:
+        newest = max(
+            stale_items, key=lambda item: float(item.get("sort_timestamp") or 0.0)
+        )
+        items.append(
+            {
+                "item_type": "pma_file_summary",
+                "queue_source": "pma_file_inbox",
+                "action_queue_id": "pma_file_inbox_summary:stale_uploaded_files",
+                "precedence": {"rank": rank, "label": label},
+                "name": f"Stale uploaded files ({len(stale_items)})",
+                "file_count": len(stale_items),
+                "file_names": [
+                    str(item.get("name") or "").strip()
+                    for item in stale_items
+                    if str(item.get("name") or "").strip()
+                ],
+                "next_action": PMA_FILE_NEXT_ACTION_REVIEW_STALE,
+                "recommended_action": "show_stale_uploaded_files",
+                "recommended_detail": (
+                    "Show stale uploaded files to inspect likely leftovers before "
+                    "deleting or routing any of them."
+                ),
+                "why_selected": (
+                    f"Collapsed {len(stale_items)} stale uploaded files into a "
+                    "counts-first summary so likely leftovers do not dominate the "
+                    "main queue"
+                ),
+                "operator_need": "review",
+                "operator_need_rank": 40,
+                "likely_false_positive": True,
+                "drilldown_commands": ["show stale uploaded files"],
+                "freshness": (
+                    dict(newest.get("freshness") or {})
+                    if isinstance(newest.get("freshness"), Mapping)
+                    else None
+                ),
+                "scope": {
+                    "kind": "filebox_summary",
+                    "key": "filebox_summary:stale_uploaded_files",
+                },
+                "sort_timestamp": newest.get("sort_timestamp"),
+            }
+        )
     return items
 
 
@@ -1625,13 +1676,18 @@ def _render_hub_snapshot(
             source = _truncate(str(item.get("queue_source") or ""), max_field_chars)
             queue_rank = _truncate(str(item.get("queue_rank") or ""), max_field_chars)
             item_type = _truncate(str(item.get("item_type") or ""), max_field_chars)
+            item_name = _truncate(str(item.get("name") or ""), max_field_chars)
             repo_id = _truncate(str(item.get("repo_id") or ""), max_field_chars)
             run_id = _truncate(str(item.get("run_id") or ""), max_field_chars)
             managed_thread_id = _truncate(
                 str(item.get("managed_thread_id") or item.get("thread_id") or ""),
                 max_field_chars,
             )
-            file_name = _truncate(str(item.get("name") or ""), max_field_chars)
+            file_name = (
+                _truncate(str(item.get("name") or ""), max_field_chars)
+                if item.get("item_type") == "pma_file"
+                else ""
+            )
             recommended_action = _truncate(
                 str(item.get("recommended_action") or ""), max_field_chars
             )
@@ -1644,6 +1700,7 @@ def _render_hub_snapshot(
             thread_count = _truncate(
                 str(item.get("thread_count") or ""), max_field_chars
             )
+            file_count = _truncate(str(item.get("file_count") or ""), max_field_chars)
             precedence = item.get("precedence") or {}
             precedence_rank = _truncate(
                 str(precedence.get("rank") or ""), max_field_chars
@@ -1668,10 +1725,12 @@ def _render_hub_snapshot(
                     if managed_thread_id
                     else ""
                 )
+                + (f" name={item_name}" if item_name and item_name != file_name else "")
                 + (f" file={file_name}" if file_name else "")
                 + (f" followup_state={followup_state}" if followup_state else "")
                 + (f" operator_need={operator_need}" if operator_need else "")
                 + (f" thread_count={thread_count}" if thread_count else "")
+                + (f" file_count={file_count}" if file_count else "")
                 + (
                     f" recommended_action={recommended_action}"
                     if recommended_action
@@ -1689,6 +1748,15 @@ def _render_hub_snapshot(
                     "  recommended_detail: "
                     f"{_truncate(str(recommended_detail), max_text_chars)}"
                 )
+            drilldown_commands = item.get("drilldown_commands")
+            if isinstance(drilldown_commands, Sequence):
+                visible_commands = [
+                    _truncate(str(command), max_text_chars)
+                    for command in drilldown_commands
+                    if str(command).strip()
+                ]
+                if visible_commands:
+                    lines.append(f"  drilldown: {', '.join(visible_commands)}")
             if superseded_by:
                 lines.append(f"  superseded_by: {superseded_by}")
             supersession_reason = supersession.get("reason")
