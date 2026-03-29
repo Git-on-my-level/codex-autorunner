@@ -18,6 +18,11 @@ from ...core.car_context import (
 )
 from ...core.config import load_hub_config
 from ...core.filebox import BOXES
+from ...core.pma_hygiene import (
+    apply_pma_hygiene_report,
+    build_pma_hygiene_report,
+    render_pma_hygiene_report,
+)
 from .commands.utils import format_hub_request_error
 
 logger = logging.getLogger(__name__)
@@ -998,6 +1003,67 @@ def pma_active(
             typer.echo(
                 f"Last result: status={status}, agent={agent}, finished={finished}"
             )
+
+
+@pma_app.command("hygiene")
+def pma_hygiene(
+    category: list[str] = typer.Option(
+        None,
+        "--category",
+        help=(
+            "Limit to one or more hygiene categories: files, threads, automation, "
+            "alerts. Repeat the option or pass a comma-separated list."
+        ),
+    ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply only safe PMA hygiene candidates after showing the report.",
+    ),
+    stale_threshold_seconds: Optional[int] = typer.Option(
+        None,
+        "--stale-threshold-seconds",
+        min=1,
+        help="Override the stale-age threshold used for PMA hygiene classification.",
+    ),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
+):
+    """Review PMA hygiene candidates and optionally clean only the safe ones."""
+    hub_root = _resolve_hub_path(path)
+    try:
+        report = build_pma_hygiene_report(
+            hub_root,
+            categories=category or None,
+            stale_threshold_seconds=stale_threshold_seconds,
+        )
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+    except Exception as exc:
+        typer.echo(f"Failed to build PMA hygiene report: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    apply_result: Optional[dict[str, Any]] = None
+    if apply:
+        try:
+            apply_result = apply_pma_hygiene_report(hub_root, report)
+        except Exception as exc:
+            typer.echo(f"Failed to apply PMA hygiene cleanup: {exc}", err=True)
+            raise typer.Exit(code=1) from None
+
+    if output_json:
+        typer.echo(json.dumps({"report": report, "apply": apply_result}, indent=2))
+        return
+
+    typer.echo(render_pma_hygiene_report(report, apply=apply))
+    if apply_result is not None:
+        typer.echo(
+            "Applied safe cleanup: "
+            f"attempted={apply_result['attempted']} "
+            f"applied={apply_result['applied']} "
+            f"failed={apply_result['failed']}"
+        )
 
 
 @pma_app.command("agents")

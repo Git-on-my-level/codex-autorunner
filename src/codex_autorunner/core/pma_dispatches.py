@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -70,6 +70,24 @@ def _normalize_links(value: Any) -> list[dict[str, str]]:
     return links
 
 
+def _normalize_iso_field(value: Any) -> Optional[str]:
+    if isinstance(value, datetime):
+        normalized = value
+        if normalized.tzinfo is None:
+            normalized = normalized.replace(tzinfo=timezone.utc)
+        else:
+            normalized = normalized.astimezone(timezone.utc)
+        return normalized.isoformat()
+    if isinstance(value, date):
+        return datetime(
+            value.year, value.month, value.day, tzinfo=timezone.utc
+        ).isoformat()
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    return None
+
+
 def _created_at_from_path(path: Path) -> str:
     try:
         stamp = path.stat().st_mtime
@@ -103,12 +121,8 @@ def parse_pma_dispatch(path: Path) -> tuple[Optional[PmaDispatch], list[str]]:
     body = body or ""
     priority = _normalize_priority(data.get("priority"))
     links = _normalize_links(data.get("links"))
-    created_at = (
-        data.get("created_at") if isinstance(data.get("created_at"), str) else None
-    )
-    resolved_at = (
-        data.get("resolved_at") if isinstance(data.get("resolved_at"), str) else None
-    )
+    created_at = _normalize_iso_field(data.get("created_at"))
+    resolved_at = _normalize_iso_field(data.get("resolved_at"))
     source_turn_id = (
         data.get("source_turn_id")
         if isinstance(data.get("source_turn_id"), str)

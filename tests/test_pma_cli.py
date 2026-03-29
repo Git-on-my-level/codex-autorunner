@@ -23,6 +23,7 @@ def test_pma_cli_has_required_commands():
     assert "chat" in output, "PMA CLI should have 'chat' command"
     assert "interrupt" in output, "PMA CLI should have 'interrupt' command"
     assert "reset" in output, "PMA CLI should have 'reset' command"
+    assert "hygiene" in output, "PMA CLI should have 'hygiene' command"
 
     # File operations
     assert "files" in output, "PMA CLI should have 'files' command"
@@ -196,6 +197,16 @@ def test_pma_active_help_shows_json_option():
     assert result.exit_code == 0
     output = result.stdout
     assert "--json" in output, "PMA active should support --json output mode"
+
+
+def test_pma_hygiene_help_shows_apply_and_category_options():
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["hygiene", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "--apply" in output
+    assert "--category" in output
+    assert "--json" in output
 
 
 def test_pma_agents_help_shows_json_option():

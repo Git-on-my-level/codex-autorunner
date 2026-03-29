@@ -921,6 +921,28 @@ class PmaAutomationStore:
     def remove_subscription(self, subscription_id: str, **_: Any) -> bool:
         return self.cancel_subscription(subscription_id)
 
+    def purge_subscription(
+        self, subscription_id: str, *, require_inactive: bool = True
+    ) -> bool:
+        target_id = _normalize_text(subscription_id)
+        if target_id is None:
+            return False
+        with file_lock(self._lock_path()):
+            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
+            retained: list[PmaLifecycleSubscription] = []
+            removed = False
+            for entry in subscriptions:
+                if entry.subscription_id != target_id:
+                    retained.append(entry)
+                    continue
+                if require_inactive and entry.state == "active":
+                    retained.append(entry)
+                    continue
+                removed = True
+            if removed:
+                self._save_structured_unlocked(state, retained, timers, wakeups)
+            return removed
+
     def list_subscriptions(
         self,
         *,
@@ -1116,6 +1138,26 @@ class PmaAutomationStore:
 
     def remove_timer(self, timer_id: str, **_: Any) -> bool:
         return self.cancel_timer(timer_id)
+
+    def purge_timer(self, timer_id: str, *, require_inactive: bool = True) -> bool:
+        target_id = _normalize_text(timer_id)
+        if target_id is None:
+            return False
+        with file_lock(self._lock_path()):
+            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
+            retained: list[PmaAutomationTimer] = []
+            removed = False
+            for entry in timers:
+                if entry.timer_id != target_id:
+                    retained.append(entry)
+                    continue
+                if require_inactive and entry.state == "pending":
+                    retained.append(entry)
+                    continue
+                removed = True
+            if removed:
+                self._save_structured_unlocked(state, subscriptions, retained, wakeups)
+            return removed
 
     def list_timers(
         self,
@@ -1535,6 +1577,26 @@ class PmaAutomationStore:
         self, wakeup_id: str, *, dispatched_at: Optional[str] = None
     ) -> bool:
         return self.mark_wakeup_dispatched(wakeup_id, dispatched_at=dispatched_at)
+
+    def purge_wakeup(self, wakeup_id: str, *, require_inactive: bool = True) -> bool:
+        target_id = _normalize_text(wakeup_id)
+        if target_id is None:
+            return False
+        with file_lock(self._lock_path()):
+            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
+            retained: list[PmaAutomationWakeup] = []
+            removed = False
+            for entry in wakeups:
+                if entry.wakeup_id != target_id:
+                    retained.append(entry)
+                    continue
+                if require_inactive and entry.state == "pending":
+                    retained.append(entry)
+                    continue
+                removed = True
+            if removed:
+                self._save_structured_unlocked(state, subscriptions, timers, retained)
+            return removed
 
 
 __all__ = [

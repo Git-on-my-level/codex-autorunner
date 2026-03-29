@@ -504,8 +504,23 @@ Do NOT copy `.codex-autorunner/` between worktrees:
   - `created_at`: ISO 8601 timestamp
   - `source_turn_id`: PMA turn id (for notifications)
   - `links`: optional list of `{label, href}` objects
-  - `resolved_at`: leave empty/omit until resolved
+- `resolved_at`: leave empty/omit until resolved
 - The web UI lists unresolved dispatches; resolve via UI or set `resolved_at`.
+
+## PMA hygiene (safe cleanup workflow)
+
+- Preview categorized PMA cleanup candidates:
+  `car pma hygiene --path <hub_root>`
+- Limit to specific categories:
+  `car pma hygiene --category files --category automation --path <hub_root>`
+- Apply only the `safe` candidates after review:
+  `car pma hygiene --apply --path <hub_root>`
+- Categories are grouped as:
+  - `safe`
+  - `protected`
+  - `needs-confirmation`
+- Initial hygiene categories cover stale PMA inbox files, dormant managed-thread
+  followups, automation artifacts, and PMA dispatch alerts.
 
 ## PMA automation wake-ups (subscriptions + timers)
 
