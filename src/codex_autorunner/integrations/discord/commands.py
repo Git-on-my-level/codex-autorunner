@@ -253,7 +253,7 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "name",
-                            "description": "Model name (e.g., gpt-5.3-codex or provider/model)",
+                            "description": "Model name (e.g., gpt-5.4 or provider/model)",
                             "required": False,
                             "autocomplete": True,
                         },

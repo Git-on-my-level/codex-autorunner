@@ -25,6 +25,7 @@ from ...core.locks import (
 from ...core.runtime import RuntimeContext
 from ...core.state import now_iso
 from ...core.utils import atomic_write, read_json
+from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 
 REVIEW_STATE_VERSION = 1
 REVIEW_TIMEOUT_SECONDS = 3600
@@ -665,7 +666,9 @@ class ReviewService:
             ) from exc
 
         state["model"] = (
-            payload.get("model") or review_cfg.get("model") or "zai-coding-plan/glm-5"
+            payload.get("model")
+            or review_cfg.get("model")
+            or DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         )
         state["reasoning"] = payload.get("reasoning") or review_cfg.get("reasoning")
         state["max_wallclock_seconds"] = payload.get(

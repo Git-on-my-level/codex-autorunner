@@ -9,8 +9,8 @@ from typing import Literal, Optional, Tuple
 DEFAULT_CHAT_AGENT = "codex"
 DEFAULT_CHAT_AGENT_MODELS = MappingProxyType(
     {
-        "codex": "gpt-5.3-codex",
-        "opencode": "zai-coding-plan/glm-5",
+        "codex": "gpt-5.4",
+        "opencode": "zai-coding-plan/glm-5.1",
     }
 )
 

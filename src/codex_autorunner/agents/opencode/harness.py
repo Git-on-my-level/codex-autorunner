@@ -13,6 +13,7 @@ import httpx
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.sse import format_sse, parse_sse_lines
+from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..base import AgentHarness
 from ..types import (
     AgentId,
@@ -23,7 +24,6 @@ from ..types import (
     TerminalTurnResult,
     TurnRef,
 )
-from .constants import DEFAULT_TICKET_MODEL
 from .runtime import (
     build_turn_id,
     collect_opencode_output_from_events,
@@ -755,7 +755,7 @@ class OpenCodeHarness(AgentHarness):
         _ = input_items
         client = await self._supervisor.get_client(workspace_root)
         if model is None:
-            model = DEFAULT_TICKET_MODEL
+            model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         model_payload = split_model_id(model)
         turn_id = build_turn_id(conversation_id)
         try:
@@ -799,7 +799,7 @@ class OpenCodeHarness(AgentHarness):
     ) -> TurnRef:
         client = await self._supervisor.get_client(workspace_root)
         if model is None:
-            model = DEFAULT_TICKET_MODEL
+            model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         arguments = prompt if prompt else ""
         turn_id = build_turn_id(conversation_id)
         try:
