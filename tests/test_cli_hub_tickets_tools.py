@@ -124,3 +124,16 @@ def test_hub_tickets_setup_pack_creates_final_tickets(
     assert "final-review" in payload
     assert "open-pr" in payload
     assert "preflight" in payload
+
+    pr_ticket = (
+        hub_env.hub_root
+        / "worktrees"
+        / f"{hub_env.repo_id}--feature/setup-pack"
+        / ".codex-autorunner"
+        / "tickets"
+        / "TICKET-003-open-pr.md"
+    )
+    _frontmatter, body = parse_markdown_frontmatter(
+        pr_ticket.read_text(encoding="utf-8")
+    )
+    assert "ready-for-review PR unless the user explicitly asked for a draft" in body

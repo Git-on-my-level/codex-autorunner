@@ -71,6 +71,7 @@ async def test_issue_only_link_injects_branch_and_pr_workflow_hint(
     )
     assert "Issue-only GitHub message detected" in injected_prompt
     assert "latest head branch" in injected_prompt
+    assert "ready-for-review PR" in injected_prompt
     assert "Closes #321" in injected_prompt
 
 

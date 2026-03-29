@@ -22,6 +22,9 @@ _ISSUE_ONLY_LINK_WRAPPERS = (
 _ISSUE_ONLY_LEADING_MENTION_RE = re.compile(
     r"^(?:(?:<@!?\d+>|<@&\d+>|<#\d+>)\s*[:,]?\s*)+"
 )
+READY_FOR_REVIEW_PR_DEFAULT_HINT = (
+    "Default to a ready-for-review PR unless the user explicitly asks for a draft."
+)
 
 
 def issue_only_link(prompt_text: str, links: list[str]) -> Optional[str]:
@@ -47,6 +50,7 @@ def issue_only_workflow_hint(issue_number: int) -> str:
         "Create a new branch from the latest head branch, "
         "sync with the current origin default branch first,\n"
         "implement the fix, and open a PR.\n"
+        f"{READY_FOR_REVIEW_PR_DEFAULT_HINT}\n"
         f"Ensure the PR description includes `Closes #{issue_number}` "
         "so GitHub auto-closes the issue when merged."
     )
