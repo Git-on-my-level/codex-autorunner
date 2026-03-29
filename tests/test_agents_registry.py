@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -267,6 +269,75 @@ class TestHermesHarness:
 
         assert isinstance(harness, HermesHarness)
         assert harness._supervisor is supervisor
+
+    def test_hermes_make_harness_loads_hub_config_from_context_root(self, monkeypatch):
+        from codex_autorunner.agents.hermes.harness import HermesHarness
+
+        class HubLikeConfig:
+            def agent_binary(self, _agent_id: str) -> str:
+                return "hermes"
+
+        sentinel_supervisor = object()
+        observed = {}
+
+        def _fake_load_hub_config(root: Path):
+            observed["root"] = root
+            return HubLikeConfig()
+
+        def _fake_build_supervisor(config, **kwargs):
+            observed["config"] = config
+            observed["kwargs"] = kwargs
+            return sentinel_supervisor
+
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.load_hub_config",
+            _fake_load_hub_config,
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.build_hermes_supervisor_from_config",
+            _fake_build_supervisor,
+        )
+
+        ctx = SimpleNamespace(
+            _config=SimpleNamespace(root=Path("/tmp/car-hub")),
+            logger=None,
+        )
+
+        harness = get_registered_agents()["hermes"].make_harness(ctx)
+
+        assert isinstance(harness, HermesHarness)
+        assert harness._supervisor is sentinel_supervisor
+        assert observed["root"] == Path("/tmp/car-hub")
+        assert isinstance(observed["config"], HubLikeConfig)
+
+    def test_hermes_health_check_loads_hub_config_from_context_root(self, monkeypatch):
+        class HubLikeConfig:
+            def agent_binary(self, _agent_id: str) -> str:
+                return "hermes"
+
+        observed = {}
+
+        def _fake_load_hub_config(root: Path):
+            observed["root"] = root
+            return HubLikeConfig()
+
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.load_hub_config",
+            _fake_load_hub_config,
+        )
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.hermes_runtime_preflight",
+            lambda config: type(
+                "Result",
+                (),
+                {"status": "ready", "version": "hermes 1.0.0", "message": str(config)},
+            )(),
+        )
+
+        ctx = SimpleNamespace(_config=SimpleNamespace(root=Path("/tmp/car-hub")))
+
+        assert _check_hermes_health(ctx) is True
+        assert observed["root"] == Path("/tmp/car-hub")
 
     def test_hermes_health_check_missing_binary(self, monkeypatch):
         monkeypatch.setattr(

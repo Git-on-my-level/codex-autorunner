@@ -4,8 +4,10 @@ import importlib.metadata
 import logging
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, cast
 
+from ..core.config import load_hub_config, load_repo_config
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .base import AgentHarness
 from .codex.harness import CodexHarness
@@ -88,7 +90,7 @@ def _check_opencode_health(ctx: Any) -> bool:
 def _make_zeroclaw_harness(ctx: Any) -> AgentHarness:
     supervisor = getattr(ctx, "zeroclaw_supervisor", None)
     if supervisor is None:
-        config = getattr(ctx, "config", None)
+        config = _resolve_runtime_agent_config(ctx)
         logger = getattr(ctx, "logger", None)
         if config is None:
             raise RuntimeError("ZeroClaw harness unavailable: config missing")
@@ -106,7 +108,7 @@ def _check_zeroclaw_health(ctx: Any) -> bool:
     supervisor = getattr(ctx, "zeroclaw_supervisor", None)
     if supervisor is not None:
         return True
-    config = getattr(ctx, "config", None)
+    config = _resolve_runtime_agent_config(ctx)
     if config is not None:
         return zeroclaw_runtime_preflight(config).status == "ready"
     binary = getattr(ctx, "zeroclaw_binary", None)
@@ -124,9 +126,7 @@ def _check_zeroclaw_health(ctx: Any) -> bool:
 def _make_hermes_harness(ctx: Any) -> AgentHarness:
     supervisor = getattr(ctx, "hermes_supervisor", None)
     if supervisor is None:
-        config = getattr(ctx, "config", None)
-        if config is None:
-            config = getattr(ctx, "_config", None)
+        config = _resolve_runtime_agent_config(ctx)
         logger = getattr(ctx, "logger", None)
         if config is None:
             raise RuntimeError("Hermes harness unavailable: config missing")
@@ -149,7 +149,7 @@ def _check_hermes_health(ctx: Any) -> bool:
     supervisor = getattr(ctx, "hermes_supervisor", None)
     if supervisor is not None:
         return True
-    config = getattr(ctx, "config", None)
+    config = _resolve_runtime_agent_config(ctx)
     if config is not None:
         return hermes_runtime_preflight(config).status == "ready"
     binary = getattr(ctx, "hermes_binary", None)
@@ -173,14 +173,45 @@ def _resolve_surface_approval_handler(ctx: Any) -> Optional[HermesApprovalHandle
 
 
 def _resolve_default_approval_decision(ctx: Any) -> str:
-    config = getattr(ctx, "config", None)
-    if config is None:
-        config = getattr(ctx, "_config", None)
+    config = _resolve_runtime_agent_config(ctx)
     ticket_flow = getattr(config, "ticket_flow", None)
     value = getattr(ticket_flow, "default_approval_decision", None)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return "cancel"
+
+
+def _resolve_runtime_agent_config(ctx: Any) -> Any:
+    for attr in ("config", "_config"):
+        config = getattr(ctx, attr, None)
+        if callable(getattr(config, "agent_binary", None)):
+            return config
+
+    root = _resolve_context_root(ctx)
+    if root is None:
+        return None
+
+    for loader in (load_hub_config, load_repo_config):
+        try:
+            config = loader(root)
+        except Exception:
+            continue
+        if callable(getattr(config, "agent_binary", None)):
+            return config
+    return None
+
+
+def _resolve_context_root(ctx: Any) -> Optional[Path]:
+    for attr in ("root", "repo_root"):
+        root = getattr(ctx, attr, None)
+        if isinstance(root, Path):
+            return root
+    for attr in ("config", "_config"):
+        config = getattr(ctx, attr, None)
+        root = getattr(config, "root", None)
+        if isinstance(root, Path):
+            return root
+    return None
 
 
 _BUILTIN_AGENTS: dict[str, AgentDescriptor] = {
