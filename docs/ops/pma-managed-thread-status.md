@@ -136,9 +136,11 @@ On subsequent turns, when:
 
 The prompt builder switches to delta mode:
 
-- Unchanged sections are referenced by digest via `<what_changed_since_last_turn>`
-  with `status=unchanged`.
-- Changed sections (e.g., active_context.md) are re-injected inline.
+- Stable prompt sections (`prompt.md`, discoverability pointers,
+  `<pma_fastpath>`, durable docs, and unchanged hub snapshots) are omitted from
+  the repeated turn payload and summarized compactly in
+  `<what_changed_since_last_turn>`.
+- Changed sections (e.g., `active_context.md`) are re-injected inline.
 - The full hub snapshot is replaced with `<hub_snapshot_ref>` referencing the
   cached digest.
 - The `<current_actionable_state>` block always includes the current action queue

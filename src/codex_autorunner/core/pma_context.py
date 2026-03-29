@@ -75,12 +75,21 @@ PMA_PROMPT_STATE_MAX_SESSIONS = 200
 PMA_PROMPT_DIGEST_PREVIEW = 12
 
 PMA_PROMPT_SECTION_ORDER = (
+    "prompt",
+    "discoverability",
+    "fastpath",
     "agents",
     "active_context",
     "context_log_tail",
     "hub_snapshot",
 )
 PMA_PROMPT_SECTION_META: dict[str, dict[str, str]] = {
+    "prompt": {"label": "PMA_PROMPT_MD", "tag": "PMA_PROMPT_MD"},
+    "discoverability": {
+        "label": "PMA_DISCOVERABILITY",
+        "tag": "PMA_DISCOVERABILITY",
+    },
+    "fastpath": {"label": "PMA_FASTPATH", "tag": "PMA_FASTPATH"},
     "agents": {"label": "AGENTS_MD", "tag": "AGENTS_MD"},
     "active_context": {
         "label": "ACTIVE_CONTEXT_MD",
@@ -2157,10 +2166,27 @@ def _render_pma_workspace_docs(resolved_docs: Mapping[str, Any]) -> str:
 
 def _build_prompt_sections(
     *,
+    base_prompt: str,
+    discoverability_text: str,
     pma_docs: Optional[Mapping[str, Any]],
     snapshot_text: str,
 ) -> dict[str, dict[str, str]]:
     sections: dict[str, dict[str, str]] = {
+        "prompt": {
+            "label": PMA_PROMPT_SECTION_META["prompt"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["prompt"]["tag"],
+            "content": base_prompt,
+        },
+        "discoverability": {
+            "label": PMA_PROMPT_SECTION_META["discoverability"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["discoverability"]["tag"],
+            "content": discoverability_text,
+        },
+        "fastpath": {
+            "label": PMA_PROMPT_SECTION_META["fastpath"]["label"],
+            "tag": PMA_PROMPT_SECTION_META["fastpath"]["tag"],
+            "content": PMA_FASTPATH,
+        },
         "agents": {
             "label": PMA_PROMPT_SECTION_META["agents"]["label"],
             "tag": PMA_PROMPT_SECTION_META["agents"]["tag"],
@@ -2227,6 +2253,16 @@ def _render_prompt_delta_header(
     reason: str,
     prior_updated_at: Optional[str],
 ) -> str:
+    def _section_label(name: str) -> str:
+        section = sections.get(name) or {}
+        return str(section.get("label") or name)
+
+    def _format_section_list(labels: Sequence[str]) -> str:
+        filtered = [
+            label for label in labels if isinstance(label, str) and label.strip()
+        ]
+        return ", ".join(filtered) if filtered else "none"
+
     attrs = [
         f"mode='{current_mode}'",
         f"reason='{reason}'",
@@ -2236,6 +2272,7 @@ def _render_prompt_delta_header(
         attrs.append(f"prior_updated_at='{prior_updated_at}'")
     lines = [f"<what_changed_since_last_turn {' '.join(attrs)}>"]
     prior_section_map = prior_sections if isinstance(prior_sections, Mapping) else {}
+    statuses_by_name: dict[str, str] = {}
 
     for name in PMA_PROMPT_SECTION_ORDER:
         section = sections.get(name) or {}
@@ -2254,14 +2291,38 @@ def _render_prompt_delta_header(
             status = "changed"
         else:
             status = "new"
-        line = (
-            f"- section={section.get('label') or name} status={status} "
-            f"digest={_digest_preview(current_digest)}"
-        )
-        if previous_digest and previous_digest != current_digest:
-            line += f" previous={_digest_preview(previous_digest)}"
-        lines.append(line)
-        if current_mode == "delta" and status == "changed" and name != "hub_snapshot":
+        statuses_by_name[name] = status
+
+    if current_mode == "delta":
+        unchanged_labels = [
+            _section_label(name)
+            for name in PMA_PROMPT_SECTION_ORDER
+            if statuses_by_name.get(name) == "unchanged"
+        ]
+        changed_labels = [
+            _section_label(name)
+            for name in PMA_PROMPT_SECTION_ORDER
+            if statuses_by_name.get(name) in {"changed", "new"}
+        ]
+        lines.append(f"- cached={_format_section_list(unchanged_labels)}")
+        changed_line = f"- changed={_format_section_list(changed_labels)}"
+        if changed_labels == [_section_label("hub_snapshot")]:
+            changed_line += " (see <current_actionable_state>)"
+        lines.append(changed_line)
+    else:
+        full_context_labels = [
+            _section_label(name) for name in PMA_PROMPT_SECTION_ORDER
+        ]
+        lines.append(f"- full_context={_format_section_list(full_context_labels)}")
+
+    for name in PMA_PROMPT_SECTION_ORDER:
+        status = statuses_by_name.get(name, "")
+        section = sections.get(name) or {}
+        if (
+            current_mode == "delta"
+            and status in {"changed", "new"}
+            and name != "hub_snapshot"
+        ):
             tag = section.get("tag") or str(name)
             lines.append(f"<{tag}>")
             lines.append(str(section.get("content") or ""))
@@ -2295,6 +2356,7 @@ def format_pma_prompt(
         max_messages=max_messages,
         max_text_chars=max_text_chars,
     )
+    discoverability_text = format_pma_discoverability_preamble(hub_root=None)
     pma_docs: Optional[dict[str, Any]] = None
     if hub_root is not None:
         try:
@@ -2302,7 +2364,12 @@ def format_pma_prompt(
         except Exception as exc:
             _logger.warning("Could not load PMA workspace docs: %s", exc)
 
-    sections = _build_prompt_sections(pma_docs=pma_docs, snapshot_text=snapshot_text)
+    sections = _build_prompt_sections(
+        base_prompt=base_prompt,
+        discoverability_text=discoverability_text,
+        pma_docs=pma_docs,
+        snapshot_text=snapshot_text,
+    )
     use_delta = False
     delta_reason = "state_key_missing"
     prior_sections: Optional[Mapping[str, Any]] = None
@@ -2321,11 +2388,13 @@ def format_pma_prompt(
             force_full_context=force_full_context,
         )
 
-    prompt = f"{base_prompt}\n\n"
-    prompt += format_pma_discoverability_preamble(hub_root=None)
+    prompt = f"{base_prompt}\n\n" if base_prompt else ""
+    if not use_delta:
+        prompt += discoverability_text
     if not use_delta and pma_docs:
         prompt += _render_pma_workspace_docs(pma_docs)
-    prompt += f"{PMA_FASTPATH}\n\n"
+    if not use_delta:
+        prompt += f"{PMA_FASTPATH}\n\n"
     if prompt_state_key:
         prompt += _render_prompt_delta_header(
             sections=sections,

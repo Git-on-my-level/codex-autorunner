@@ -3,6 +3,7 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Optional
+from unittest.mock import patch
 
 import yaml
 
@@ -258,6 +259,28 @@ def test_format_pma_prompt_without_hub_root(tmp_path: Path) -> None:
 
     assert "<pma_workspace_docs>" not in result
     assert "</pma_workspace_docs>" not in result
+    assert "<pma_fastpath>" in result
+
+
+def test_format_pma_prompt_load_failure_still_includes_fastpath(
+    tmp_path: Path,
+) -> None:
+    """Fastpath remains available even when PMA docs cannot be loaded."""
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {"test": "data"}
+    base_prompt = "Base prompt"
+    message = "User message"
+
+    with patch(
+        "codex_autorunner.core.pma_context.load_pma_workspace_docs",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+
+    assert "<pma_workspace_docs>" not in result
+    assert "</pma_workspace_docs>" not in result
+    assert "<pma_fastpath>" in result
 
 
 def test_truncation_applied_to_long_agents(tmp_path: Path) -> None:
@@ -1629,12 +1652,21 @@ class TestIssue975DeltaPmaPromptAssembly:
 
         assert "# Durable Agent Guidance" in result1
         assert "# Current Context" in result1
+        assert "<pma_fastpath>" in result1
         assert "<pma_workspace_docs>" not in result2
+        assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in result2
+        assert "<pma_fastpath>" not in result2
         assert "\n<hub_snapshot>\n" not in result2
         assert "<hub_snapshot_ref " in result2
-        assert "section=AGENTS_MD status=unchanged" in result2
-        assert "section=ACTIVE_CONTEXT_MD status=unchanged" in result2
-        assert "section=HUB_SNAPSHOT status=unchanged" in result2
+        assert "- cached=" in result2
+        assert "PMA_PROMPT_MD" in result2
+        assert "PMA_DISCOVERABILITY" in result2
+        assert "PMA_FASTPATH" in result2
+        assert "AGENTS_MD" in result2
+        assert "ACTIVE_CONTEXT_MD" in result2
+        assert "CONTEXT_LOG_TAIL_MD" in result2
+        assert "HUB_SNAPSHOT" in result2
+        assert "- changed=none" in result2
         assert "PMA Action Queue:" in result2
         assert "recommended_action=reply_and_resume" in result2
 
@@ -1683,12 +1715,72 @@ class TestIssue975DeltaPmaPromptAssembly:
             prompt_state_key="pma.test-changed-docs",
         )
 
-        assert "section=AGENTS_MD status=unchanged" in result
-        assert "section=ACTIVE_CONTEXT_MD status=changed" in result
+        assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in result
+        assert "<pma_fastpath>" not in result
+        assert "- cached=" in result
+        assert "AGENTS_MD" in result
+        assert "- changed=ACTIVE_CONTEXT_MD" in result
         assert "<ACTIVE_CONTEXT_MD>" in result
         assert "Next: wire delta prompt." in result
         assert "Rule 1: Be concise." not in result
         assert "\n<hub_snapshot>\n" not in result
+
+    def test_format_pma_prompt_delta_surfaces_changed_hub_snapshot_without_repeating_stable_blocks(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+
+        snapshot1 = {
+            "generated_at": "2026-03-16T00:00:00Z",
+            "action_queue": [],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+            "pma_files_detail": {"inbox": [], "outbox": []},
+        }
+        snapshot2 = {
+            "generated_at": "2026-03-16T00:01:00Z",
+            "action_queue": [
+                {
+                    "action_queue_id": "managed_thread_followup:thread-1",
+                    "queue_source": "managed_thread_followup",
+                    "queue_rank": 1,
+                    "item_type": "managed_thread",
+                    "managed_thread_id": "thread-1",
+                    "recommended_action": "inspect_thread_result",
+                    "precedence": {"rank": 20, "label": "managed_thread_followup"},
+                    "supersession": {"status": "primary", "is_primary": True},
+                }
+            ],
+            "inbox": [],
+            "repos": [],
+            "pma_files": {"inbox": [], "outbox": []},
+            "pma_files_detail": {"inbox": [], "outbox": []},
+        }
+
+        _ = format_pma_prompt(
+            "Base prompt",
+            snapshot1,
+            "Turn 1",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-changed-hub-snapshot",
+        )
+        result = format_pma_prompt(
+            "Base prompt",
+            snapshot2,
+            "Turn 2",
+            hub_root=tmp_path,
+            prompt_state_key="pma.test-changed-hub-snapshot",
+        )
+
+        assert "Ops guide: `.codex-autorunner/pma/docs/ABOUT_CAR.md`." not in result
+        assert "<pma_workspace_docs>" not in result
+        assert "<pma_fastpath>" not in result
+        assert "- changed=HUB_SNAPSHOT (see <current_actionable_state>)" in result
+        assert "\n<hub_snapshot>\n" not in result
+        assert "<hub_snapshot_ref " in result
+        assert "PMA Action Queue:" in result
+        assert "recommended_action=inspect_thread_result" in result
 
     def test_format_pma_prompt_force_full_context_refresh(self, tmp_path: Path) -> None:
         seed_hub_files(tmp_path, force=True)
@@ -1778,7 +1870,7 @@ class TestIssue975DeltaPmaPromptAssembly:
     def test_format_pma_prompt_delta_header_includes_all_sections(
         self, tmp_path: Path
     ) -> None:
-        """Delta header lists all four sections with status and digest."""
+        """Delta header summarizes all cached sections compactly."""
         seed_hub_files(tmp_path, force=True)
 
         snapshot = {"inbox": [], "repos": [], "pma_files": {"inbox": [], "outbox": []}}
@@ -1797,11 +1889,15 @@ class TestIssue975DeltaPmaPromptAssembly:
             prompt_state_key="pma.test-header-sections",
         )
 
-        assert "section=AGENTS_MD status=unchanged" in result
-        assert "section=ACTIVE_CONTEXT_MD status=unchanged" in result
-        assert "section=CONTEXT_LOG_TAIL_MD status=unchanged" in result
-        assert "section=HUB_SNAPSHOT status=unchanged" in result
-        assert "digest=" in result
+        assert "- cached=" in result
+        assert "PMA_PROMPT_MD" in result
+        assert "PMA_DISCOVERABILITY" in result
+        assert "PMA_FASTPATH" in result
+        assert "AGENTS_MD" in result
+        assert "ACTIVE_CONTEXT_MD" in result
+        assert "CONTEXT_LOG_TAIL_MD" in result
+        assert "HUB_SNAPSHOT" in result
+        assert "- changed=none" in result
         assert "state_key='pma.test-header-sections'" in result
 
     def test_format_pma_prompt_compacted_context_stays_within_budget(
