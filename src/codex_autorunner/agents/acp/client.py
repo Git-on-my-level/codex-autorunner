@@ -635,7 +635,7 @@ class ACPClient:
             if state is None:
                 self._orphan_events[event.turn_id].append(event)
             else:
-                await self._record_prompt_event(state, event)
+                await self._record_prompt_event_in_order(state, event)
 
     async def _handle_server_request(
         self, message: dict[str, Any], *, request_id: str
@@ -648,7 +648,7 @@ class ACPClient:
             if state is None:
                 self._orphan_events[event.turn_id].append(event)
             else:
-                await self._record_prompt_event(state, event)
+                await self._record_prompt_event_in_order(state, event)
         if self._notification_handler is not None:
             await self._notification_handler(event)
 
@@ -723,6 +723,21 @@ class ACPClient:
     ) -> None:
         for event in events:
             await self._record_prompt_event(state, event)
+
+    async def _record_prompt_event_in_order(
+        self,
+        state: _PromptState,
+        event: ACPEvent,
+    ) -> None:
+        replay_task = state.replay_task
+        current_task = asyncio.current_task()
+        if (
+            replay_task is not None
+            and replay_task is not current_task
+            and not replay_task.done()
+        ):
+            await asyncio.shield(replay_task)
+        await self._record_prompt_event(state, event)
 
     def _log_background_task_result(self, task: asyncio.Task[Any]) -> None:
         try:
