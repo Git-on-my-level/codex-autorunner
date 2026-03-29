@@ -125,6 +125,7 @@ def _append_setup_pack_final_tickets(
     }
     pr_body = (
         "Open or update the pull request.\n"
+        "Default to a ready-for-review PR unless the user explicitly asked for a draft.\n"
         "Add `pr_url` to this ticket frontmatter after the PR exists so hub summaries can surface it."
     )
     atomic_write(pr_path, render_ticket_markdown(pr_frontmatter, pr_body))

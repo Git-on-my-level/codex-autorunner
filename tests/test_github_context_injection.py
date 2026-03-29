@@ -91,6 +91,7 @@ async def test_pma_injection_falls_back_to_workspace_when_repo_not_found(
     assert injected is True
     assert "Context: injected" in injected_prompt
     assert "Issue-only GitHub message detected" in injected_prompt
+    assert "Default to a ready-for-review PR" in injected_prompt
     assert "Closes #123" in injected_prompt
 
 
@@ -119,6 +120,7 @@ async def test_pma_injection_issue_only_with_discord_mention_prefix(
 
     assert injected is True
     assert "Issue-only GitHub message detected" in injected_prompt
+    assert "Default to a ready-for-review PR" in injected_prompt
     assert "Closes #123" in injected_prompt
 
 
