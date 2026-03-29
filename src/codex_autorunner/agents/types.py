@@ -10,6 +10,11 @@ RuntimeCapability = NewType("RuntimeCapability", str)
 _RUNTIME_CAPABILITY_ALIASES = {
     "threads": "durable_threads",
     "turns": "message_turns",
+    "session_resume": "durable_threads",
+    "pma_thread_reset": "durable_threads",
+    "conversation_compaction": "message_turns",
+    "code_review": "review",
+    "turn_control": "interrupt",
 }
 
 

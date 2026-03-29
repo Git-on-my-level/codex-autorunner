@@ -411,7 +411,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         discord_paths=(("car", "session", "resume"),),
         discord_ack_policy="defer_ephemeral",
         discord_exposure="public",
-        required_capabilities=("session_resume",),
+        required_capabilities=("durable_threads",),
     ),
     CommandContractEntry(
         id="car.reset",
@@ -422,7 +422,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         discord_paths=(("car", "session", "reset"),),
         discord_ack_policy="defer_ephemeral",
         discord_exposure="public",
-        required_capabilities=("pma_thread_reset",),
+        required_capabilities=("durable_threads",),
     ),
     CommandContractEntry(
         id="car.review",
@@ -433,7 +433,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         discord_paths=(("car", "review"),),
         discord_ack_policy="defer_ephemeral",
         discord_exposure="public",
-        required_capabilities=("code_review",),
+        required_capabilities=("review",),
     ),
     CommandContractEntry(
         id="car.approvals",
@@ -474,7 +474,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         discord_paths=(("car", "session", "compact"),),
         discord_ack_policy="defer_ephemeral",
         discord_exposure="public",
-        required_capabilities=("conversation_compaction",),
+        required_capabilities=("message_turns",),
     ),
     CommandContractEntry(
         id="car.rollout",
@@ -517,7 +517,7 @@ COMMAND_CONTRACT: tuple[CommandContractEntry, ...] = (
         discord_paths=(("car", "session", "interrupt"),),
         discord_ack_policy="defer_ephemeral",
         discord_exposure="public",
-        required_capabilities=("turn_control",),
+        required_capabilities=("interrupt",),
     ),
 )
 

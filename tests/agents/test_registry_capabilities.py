@@ -21,7 +21,15 @@ def _make_descriptor(capabilities: frozenset[str]) -> AgentDescriptor:
 
 def test_normalize_agent_capabilities_canonicalizes_legacy_aliases() -> None:
     capabilities = normalize_agent_capabilities(
-        ["threads", "turns", "interrupt", "active_thread_discovery"]
+        [
+            "threads",
+            "turns",
+            "session_resume",
+            "conversation_compaction",
+            "code_review",
+            "turn_control",
+            "active_thread_discovery",
+        ]
     )
 
     assert capabilities == frozenset(
@@ -29,6 +37,7 @@ def test_normalize_agent_capabilities_canonicalizes_legacy_aliases() -> None:
             "durable_threads",
             "message_turns",
             "interrupt",
+            "review",
             "active_thread_discovery",
         ]
     )

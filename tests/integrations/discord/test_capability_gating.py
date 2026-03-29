@@ -107,6 +107,12 @@ class TestCapabilityHelpers:
         )
 
         assert service._agent_supports_capability("hermes", "message_turns") is True
+        assert (
+            service._agent_supports_capability("hermes", "conversation_compaction")
+            is True
+        )
+        assert service._agent_supports_capability("hermes", "session_resume") is True
+        assert service._agent_supports_capability("hermes", "turn_control") is True
         assert service._agent_supports_capability("hermes", "model_listing") is False
         assert service._agent_supports_capability("hermes", "review") is False
         assert service._agent_supports_capability("codex", "model_listing") is True

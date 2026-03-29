@@ -133,6 +133,18 @@ def test_command_contract_discord_metadata_is_present_for_registered_paths() -> 
     assert by_id["car.flow.restart"].discord_ack_timing == "post_private_preflight"
 
 
+def test_command_contract_uses_canonical_runtime_capabilities_for_agent_linked_commands() -> (
+    None
+):
+    by_id = {entry.id: entry for entry in COMMAND_CONTRACT}
+
+    assert by_id["car.resume"].required_capabilities == ("durable_threads",)
+    assert by_id["car.reset"].required_capabilities == ("durable_threads",)
+    assert by_id["car.review"].required_capabilities == ("review",)
+    assert by_id["car.compact"].required_capabilities == ("message_turns",)
+    assert by_id["car.interrupt"].required_capabilities == ("interrupt",)
+
+
 def test_command_contract_telegram_metadata_is_present_for_runtime_commands() -> None:
     for name in telegram_runtime_command_names_from_contract():
         metadata = telegram_command_metadata_for_name(name)
