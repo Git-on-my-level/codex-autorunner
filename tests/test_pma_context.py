@@ -2,6 +2,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Optional
+from unittest.mock import patch
 
 import yaml
 
@@ -257,6 +258,28 @@ def test_format_pma_prompt_without_hub_root(tmp_path: Path) -> None:
 
     assert "<pma_workspace_docs>" not in result
     assert "</pma_workspace_docs>" not in result
+    assert "<pma_fastpath>" in result
+
+
+def test_format_pma_prompt_load_failure_still_includes_fastpath(
+    tmp_path: Path,
+) -> None:
+    """Fastpath remains available even when PMA docs cannot be loaded."""
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {"test": "data"}
+    base_prompt = "Base prompt"
+    message = "User message"
+
+    with patch(
+        "codex_autorunner.core.pma_context.load_pma_workspace_docs",
+        side_effect=RuntimeError("boom"),
+    ):
+        result = format_pma_prompt(base_prompt, snapshot, message, hub_root=tmp_path)
+
+    assert "<pma_workspace_docs>" not in result
+    assert "</pma_workspace_docs>" not in result
+    assert "<pma_fastpath>" in result
 
 
 def test_truncation_applied_to_long_agents(tmp_path: Path) -> None:

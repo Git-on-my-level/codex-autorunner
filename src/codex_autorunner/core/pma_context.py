@@ -2117,6 +2117,7 @@ def format_pma_prompt(
         prompt += discoverability_text
     if not use_delta and pma_docs:
         prompt += _render_pma_workspace_docs(pma_docs)
+    if not use_delta:
         prompt += f"{PMA_FASTPATH}\n\n"
     if prompt_state_key:
         prompt += _render_prompt_delta_header(
