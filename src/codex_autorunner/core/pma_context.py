@@ -885,10 +885,9 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
         }
     if status == "idle":
         if (
-            not last_turn_id
-            and status_reason in {"thread_created", "thread_resumed"}
-            and not is_stale
-        ):
+            (status_reason == "thread_created" and not last_turn_id)
+            or status_reason == "thread_resumed"
+        ) and not is_stale:
             return {
                 "followup_state": "awaiting_followup",
                 "operator_need": "normal",

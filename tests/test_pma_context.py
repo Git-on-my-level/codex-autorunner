@@ -2283,6 +2283,45 @@ class TestIssue975CharacterizationMixedPmaState:
             reusable_item.get("why_selected") or ""
         )
 
+    def test_recently_resumed_thread_with_history_stays_awaiting_followup(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot(
+            include_dispatch=False,
+            include_failed_run=False,
+            include_completed_run=False,
+            include_pma_file=False,
+        )
+        pma_threads = snapshot.get("pma_threads") or []
+        resumed_thread = next(
+            item
+            for item in pma_threads
+            if item.get("managed_thread_id") == "thread-idle-1"
+        )
+        resumed_thread["status_reason"] = "thread_resumed"
+        resumed_thread["repo_id"] = "repo-resumed"
+        resumed_thread["resource_id"] = "repo-resumed"
+
+        from codex_autorunner.core.pma_context import build_pma_action_queue
+
+        queue = build_pma_action_queue(
+            inbox=[],
+            pma_threads=pma_threads,
+            pma_files_detail={"inbox": [], "outbox": []},
+            automation={},
+            generated_at="2026-03-16T12:00:00Z",
+            stale_threshold_seconds=3600,
+        )
+        resumed_item = next(
+            item for item in queue if item.get("managed_thread_id") == "thread-idle-1"
+        )
+
+        assert resumed_item["followup_state"] == "awaiting_followup"
+        assert resumed_item["operator_need"] == "normal"
+        assert resumed_item["recommended_action"] == "resume_managed_thread"
+        assert "needs its next turn" in (resumed_item.get("why_selected") or "")
+
     def test_stale_completed_thread_queue_item_becomes_cleanup_candidate(
         self, tmp_path: Path
     ) -> None:
