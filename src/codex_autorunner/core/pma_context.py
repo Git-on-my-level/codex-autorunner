@@ -1619,14 +1619,15 @@ def _render_hub_snapshot(
                 for entry in (pma_files_detail.get("inbox") or [])
                 if isinstance(entry, Mapping)
             ]
+            visible_inbox_detail = inbox_detail[: max(0, max_pma_files)]
             fresh_files = [
                 _truncate(str(entry.get("name") or ""), max_field_chars)
-                for entry in inbox_detail
+                for entry in visible_inbox_detail
                 if str(entry.get("next_action") or "") == PMA_FILE_NEXT_ACTION_PROCESS
             ]
             stale_files = [
                 _truncate(str(entry.get("name") or ""), max_field_chars)
-                for entry in inbox_detail
+                for entry in visible_inbox_detail
                 if str(entry.get("next_action") or "")
                 == PMA_FILE_NEXT_ACTION_REVIEW_STALE
             ]

@@ -1322,6 +1322,62 @@ def test_render_hub_snapshot_marks_stale_pma_files_as_review_only(
     assert "false positives from prior work" in result
 
 
+def test_render_hub_snapshot_caps_pma_file_action_summaries(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [],
+        "repos": [],
+        "pma_files": {
+            "inbox": ["fresh-1.md", "stale-1.zip", "fresh-2.md"],
+            "outbox": [],
+        },
+        "pma_files_detail": {
+            "inbox": [
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "fresh-1.md",
+                    "source": "filebox",
+                    "size": "200",
+                    "modified_at": "2026-03-29T09:00:00Z",
+                },
+                {
+                    "item_type": "pma_file",
+                    "next_action": "review_stale_uploaded_file",
+                    "box": "inbox",
+                    "name": "stale-1.zip",
+                    "source": "filebox",
+                    "size": "200",
+                    "modified_at": "2026-03-16T09:00:00Z",
+                },
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "fresh-2.md",
+                    "source": "filebox",
+                    "size": "200",
+                    "modified_at": "2026-03-29T10:00:00Z",
+                },
+            ],
+            "outbox": [],
+        },
+    }
+
+    result = _render_hub_snapshot(snapshot, max_pma_files=2)
+
+    assert "inbox: [fresh-1.md, stale-1.zip]" in result
+    assert "fresh_uploads=[fresh-1.md]" in result
+    assert "likely_leftovers=[stale-1.zip]" in result
+    assert "fresh-2.md" not in result
+
+
 def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
