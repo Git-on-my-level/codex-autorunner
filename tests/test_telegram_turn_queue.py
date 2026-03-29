@@ -180,12 +180,25 @@ class _HandlerStub(TelegramCommandHandlers):
     def _maybe_inject_car_context(self, prompt_text: str) -> tuple[str, bool]:
         return prompt_text, False
 
-    def _maybe_inject_prompt_context(self, prompt_text: str) -> tuple[str, bool]:
+    def _maybe_inject_prompt_context(
+        self,
+        prompt_text: str,
+        *,
+        trigger_text: Optional[str] = None,
+    ) -> tuple[str, bool]:
+        _ = trigger_text
         return prompt_text, False
 
     def _maybe_inject_outbox_context(
-        self, prompt_text: str, *, record: object, topic_key: str
+        self,
+        prompt_text: str,
+        *,
+        record: object,
+        topic_key: str,
+        has_file_context: bool = False,
+        user_input_text: Optional[str] = None,
     ) -> tuple[str, bool]:
+        _ = record, topic_key, has_file_context, user_input_text
         return prompt_text, False
 
     def _effective_policies(self, _record: TelegramTopicRecord) -> tuple[None, None]:
