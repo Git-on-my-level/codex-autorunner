@@ -95,9 +95,9 @@ PMA_PROMPT_SECTION_META: dict[str, dict[str, str]] = {
 
 PMA_ACTION_QUEUE_PRECEDENCE: dict[str, tuple[int, str]] = {
     "ticket_flow_inbox": (10, "ticket_flow_inbox"),
+    "automation_wakeup": (15, "automation_wakeup"),
     "managed_thread_followup": (20, "managed_thread_followup"),
     "pma_file_inbox": (30, "pma_file_inbox"),
-    "automation_wakeup": (40, "automation_wakeup"),
 }
 PMA_FILE_NEXT_ACTION_PROCESS = "process_uploaded_file"
 PMA_FILE_NEXT_ACTION_REVIEW_STALE = "review_stale_uploaded_file"
@@ -814,6 +814,282 @@ def _queue_supersession_payload(
     }
 
 
+def _thread_followup_state_rank(state: str) -> int:
+    normalized = state.strip().lower()
+    if normalized == "attention_required":
+        return 0
+    if normalized == "awaiting_followup":
+        return 10
+    if normalized == "reusable":
+        return 20
+    if normalized == "idle_archive_candidate":
+        return 30
+    return 99
+
+
+def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
+    status = str(entry.get("status") or "").strip().lower()
+    status_reason = str(entry.get("status_reason") or "").strip().lower()
+    last_turn_id = str(entry.get("last_turn_id") or "").strip()
+    freshness = _extract_entry_freshness(entry)
+    is_stale = bool(
+        isinstance(freshness, Mapping) and freshness.get("is_stale") is True
+    )
+
+    if status == "failed":
+        return {
+            "followup_state": "attention_required",
+            "operator_need": "urgent",
+            "recommended_action": "inspect_managed_thread_failure",
+            "why_selected": "Managed thread failed and needs inspection before reuse",
+            "recommended_detail_template": "car pma thread status --id {managed_thread_id}",
+        }
+    if status == "paused":
+        return {
+            "followup_state": "awaiting_followup",
+            "operator_need": "normal",
+            "recommended_action": "resume_managed_thread",
+            "why_selected": "Managed thread is paused and likely waiting for the next turn",
+            "recommended_detail_template": (
+                'car pma thread send --id {managed_thread_id} --message "..." --watch'
+            ),
+        }
+    if status in {"completed", "interrupted"}:
+        if is_stale:
+            return {
+                "followup_state": "idle_archive_candidate",
+                "operator_need": "cleanup",
+                "recommended_action": "review_or_archive_managed_thread",
+                "why_selected": (
+                    "Managed thread has been dormant since its last completed turn "
+                    "and is a cleanup candidate"
+                ),
+                "recommended_detail_template": (
+                    "Review before cleanup: car pma thread archive --id "
+                    "{managed_thread_id} if dormant, or reuse it with "
+                    'car pma thread send --id {managed_thread_id} --message "..." --watch'
+                ),
+            }
+        return {
+            "followup_state": "reusable",
+            "operator_need": "optional",
+            "recommended_action": "consider_resuming_managed_thread",
+            "why_selected": (
+                "Managed thread can be reused, but there is no stronger signal "
+                "that PMA needs to act on it now"
+            ),
+            "recommended_detail_template": (
+                "Optional reuse: car pma thread send --id {managed_thread_id} "
+                '--message "..." --watch'
+            ),
+        }
+    if status == "idle":
+        if (
+            not last_turn_id
+            and status_reason in {"thread_created", "thread_resumed"}
+            and not is_stale
+        ):
+            return {
+                "followup_state": "awaiting_followup",
+                "operator_need": "normal",
+                "recommended_action": "resume_managed_thread",
+                "why_selected": (
+                    "Managed thread was recently created or resumed and likely "
+                    "needs its next turn"
+                ),
+                "recommended_detail_template": (
+                    'car pma thread send --id {managed_thread_id} --message "..." --watch'
+                ),
+            }
+        if is_stale:
+            return {
+                "followup_state": "idle_archive_candidate",
+                "operator_need": "cleanup",
+                "recommended_action": "review_or_archive_managed_thread",
+                "why_selected": (
+                    "Managed thread has been idle for a while with no recent "
+                    "operator signal and is a cleanup candidate"
+                ),
+                "recommended_detail_template": (
+                    "Review before cleanup: car pma thread archive --id "
+                    "{managed_thread_id} if dormant, or reuse it with "
+                    'car pma thread send --id {managed_thread_id} --message "..." --watch'
+                ),
+            }
+        return {
+            "followup_state": "reusable",
+            "operator_need": "optional",
+            "recommended_action": "consider_resuming_managed_thread",
+            "why_selected": (
+                "Managed thread is available for reuse, but no immediate follow-up "
+                "signal is present"
+            ),
+            "recommended_detail_template": (
+                "Optional reuse: car pma thread send --id {managed_thread_id} "
+                '--message "..." --watch'
+            ),
+        }
+    return {
+        "followup_state": "reusable",
+        "operator_need": "optional",
+        "recommended_action": "consider_resuming_managed_thread",
+        "why_selected": "Managed thread can accept another turn if PMA needs it",
+        "recommended_detail_template": (
+            "Optional reuse: car pma thread send --id {managed_thread_id} "
+            '--message "..." --watch'
+        ),
+    }
+
+
+def _thread_group_owner_label(
+    *,
+    repo_id: Optional[str],
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+    workspace_root: Optional[str],
+) -> str:
+    if repo_id:
+        return f"repo {repo_id}"
+    if resource_kind and resource_id:
+        return f"{resource_kind}:{resource_id}"
+    if workspace_root:
+        return workspace_root
+    return "unowned threads"
+
+
+def _thread_grouping_key(entry: Mapping[str, Any]) -> Optional[tuple[str, str]]:
+    repo_id = str(entry.get("repo_id") or "").strip()
+    if repo_id:
+        return ("repo", repo_id)
+    resource_kind = str(entry.get("resource_kind") or "").strip()
+    resource_id = str(entry.get("resource_id") or "").strip()
+    if resource_kind and resource_id:
+        return (resource_kind, resource_id)
+    workspace_root = str(entry.get("workspace_root") or "").strip()
+    if workspace_root:
+        return ("workspace_root", workspace_root)
+    return None
+
+
+def _collapse_low_signal_thread_queue_items(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped_keys: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    passthrough: list[dict[str, Any]] = []
+
+    for item in items:
+        followup_state = str(item.get("followup_state") or "").strip().lower()
+        grouping_key = _thread_grouping_key(item)
+        if (
+            followup_state not in {"reusable", "idle_archive_candidate"}
+            or grouping_key is None
+        ):
+            passthrough.append(item)
+            continue
+        grouped_keys.setdefault(grouping_key, []).append(item)
+
+    collapsed: list[dict[str, Any]] = list(passthrough)
+    for (group_kind, group_value), group_items in grouped_keys.items():
+        if len(group_items) < 2:
+            collapsed.extend(group_items)
+            continue
+
+        repo_id = str(group_items[0].get("repo_id") or "").strip() or None
+        resource_kind = str(group_items[0].get("resource_kind") or "").strip() or None
+        resource_id = str(group_items[0].get("resource_id") or "").strip() or None
+        workspace_root = str(group_items[0].get("workspace_root") or "").strip() or None
+        state_counts: dict[str, int] = {}
+        newest = max(
+            group_items, key=lambda item: float(item.get("sort_timestamp") or 0)
+        )
+        for item in group_items:
+            state = str(item.get("followup_state") or "").strip().lower() or "unknown"
+            state_counts[state] = state_counts.get(state, 0) + 1
+
+        reusable_count = state_counts.get("reusable", 0)
+        archive_count = state_counts.get("idle_archive_candidate", 0)
+        if reusable_count and archive_count:
+            group_state = "reusable"
+            operator_need = "optional"
+            why_selected = (
+                f"Grouped {len(group_items)} low-signal managed threads for "
+                f"{_thread_group_owner_label(repo_id=repo_id, resource_kind=resource_kind, resource_id=resource_id, workspace_root=workspace_root)} "
+                f"to reduce queue noise ({reusable_count} reusable, {archive_count} cleanup candidates)"
+            )
+            recommended_action = "review_managed_thread_group"
+            recommended_detail = (
+                "Review the grouped managed threads and decide which to reuse now "
+                "versus archive as dormant cleanup."
+            )
+        elif reusable_count:
+            group_state = "reusable"
+            operator_need = "optional"
+            why_selected = (
+                f"Grouped {len(group_items)} reusable managed threads for "
+                f"{_thread_group_owner_label(repo_id=repo_id, resource_kind=resource_kind, resource_id=resource_id, workspace_root=workspace_root)} "
+                "to reduce queue noise"
+            )
+            recommended_action = "review_managed_thread_group"
+            recommended_detail = (
+                "Optional review: pick a grouped managed thread to reuse if new work "
+                "arrives for that repo or resource."
+            )
+        else:
+            group_state = "idle_archive_candidate"
+            operator_need = "cleanup"
+            why_selected = (
+                f"Grouped {len(group_items)} dormant managed threads for "
+                f"{_thread_group_owner_label(repo_id=repo_id, resource_kind=resource_kind, resource_id=resource_id, workspace_root=workspace_root)} "
+                "so cleanup candidates do not dominate the queue"
+            )
+            recommended_action = "review_or_archive_managed_thread_group"
+            recommended_detail = (
+                "Review the grouped dormant threads and archive the ones that no "
+                "longer need to stay reusable."
+            )
+
+        collapsed.append(
+            {
+                "item_type": "managed_thread_followup_group",
+                "queue_source": "managed_thread_followup",
+                "action_queue_id": (
+                    f"managed_thread_followup_group:{group_kind}:{group_value}"
+                ),
+                "precedence": dict(newest.get("precedence") or {}),
+                "repo_id": repo_id,
+                "resource_kind": resource_kind,
+                "resource_id": resource_id,
+                "workspace_root": workspace_root,
+                "name": f"{len(group_items)} managed threads",
+                "thread_count": len(group_items),
+                "managed_thread_ids": [
+                    item.get("managed_thread_id")
+                    for item in group_items
+                    if item.get("managed_thread_id")
+                ],
+                "followup_state": group_state,
+                "followup_state_counts": state_counts,
+                "operator_need": operator_need,
+                "operator_need_rank": _thread_followup_state_rank(group_state),
+                "why_selected": why_selected,
+                "recommended_action": recommended_action,
+                "recommended_detail": recommended_detail,
+                "freshness": (
+                    dict(newest.get("freshness") or {})
+                    if isinstance(newest.get("freshness"), Mapping)
+                    else None
+                ),
+                "scope": {
+                    "kind": "thread_group",
+                    "key": f"{group_kind}:{group_value}",
+                },
+                "sort_timestamp": newest.get("sort_timestamp"),
+            }
+        )
+
+    return collapsed
+
+
 def _build_ticket_flow_queue_items(
     inbox: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -865,29 +1141,6 @@ def _build_ticket_flow_queue_items(
     return items
 
 
-def _thread_followup_next_action(status: str) -> tuple[str, str]:
-    normalized = status.strip().lower()
-    if normalized == "failed":
-        return (
-            "inspect_managed_thread_failure",
-            "Managed thread failed and needs inspection before reuse",
-        )
-    if normalized == "paused":
-        return (
-            "resume_managed_thread",
-            "Managed thread is paused and can be resumed",
-        )
-    if normalized == "completed":
-        return (
-            "resume_managed_thread",
-            "Managed thread completed its last turn and is reusable",
-        )
-    return (
-        "resume_managed_thread",
-        "Managed thread is idle and ready for another turn",
-    )
-
-
 def _build_thread_queue_items(
     pma_threads: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -901,8 +1154,13 @@ def _build_thread_queue_items(
             continue
         repo_id = str(entry.get("repo_id") or "").strip()
         managed_thread_id = str(entry.get("managed_thread_id") or "").strip()
-        next_action, why_selected = _thread_followup_next_action(status)
         freshness = _extract_entry_freshness(entry)
+        semantics = _thread_followup_semantics(entry)
+        next_action = str(semantics.get("recommended_action") or "").strip() or None
+        why_selected = str(semantics.get("why_selected") or "").strip() or None
+        detail_template = (
+            str(semantics.get("recommended_detail_template") or "").strip() or None
+        )
         scope_key = (
             f"thread:{managed_thread_id}"
             if managed_thread_id
@@ -937,16 +1195,17 @@ def _build_thread_queue_items(
                 "action_queue_id": f"managed_thread_followup:{managed_thread_id or '-'}",
                 "queue_source": "managed_thread_followup",
                 "precedence": {"rank": rank, "label": label},
+                "followup_state": semantics.get("followup_state"),
+                "operator_need": semantics.get("operator_need"),
+                "operator_need_rank": _thread_followup_state_rank(
+                    str(semantics.get("followup_state") or "")
+                ),
                 "why_selected": why_selected,
                 "recommended_action": next_action,
                 "recommended_detail": (
-                    f'car pma thread send --id {managed_thread_id} --message "..." --watch'
-                    if managed_thread_id and next_action == "resume_managed_thread"
-                    else (
-                        f"car pma thread status --id {managed_thread_id}"
-                        if managed_thread_id
-                        else None
-                    )
+                    detail_template.format(managed_thread_id=managed_thread_id)
+                    if managed_thread_id and detail_template
+                    else None
                 ),
                 "freshness": (
                     dict(freshness) if isinstance(freshness, Mapping) else None
@@ -962,7 +1221,7 @@ def _build_thread_queue_items(
                 ),
             }
         )
-    return items
+    return _collapse_low_signal_thread_queue_items(items)
 
 
 def _build_file_queue_items(
@@ -1018,9 +1277,13 @@ def _build_automation_queue_items(
             candidates=[("automation_wakeup", basis_at)],
         )
         scope_key = (
-            f"wakeup:{wakeup_id}"
-            if wakeup_id
-            else (f"thread:{thread_id}" if thread_id else f"repo:{repo_id}")
+            f"thread:{thread_id}"
+            if thread_id
+            else (
+                f"run:{entry.get('run_id')}"
+                if entry.get("run_id")
+                else (f"repo:{repo_id}" if repo_id else f"wakeup:{wakeup_id}")
+            )
         )
         items.append(
             {
@@ -1048,6 +1311,7 @@ def _build_automation_queue_items(
                     if entry.get("lane_id")
                     else "Inspect the pending PMA automation wakeup"
                 ),
+                "operator_need_rank": 5,
                 "freshness": freshness,
                 "scope": {
                     "kind": "wakeup",
@@ -1087,6 +1351,7 @@ def build_pma_action_queue(
         items,
         key=lambda item: (
             int(((item.get("precedence") or {}).get("rank") or 999)),
+            int(item.get("operator_need_rank") or 0),
             -float(item.get("sort_timestamp") or 0.0),
             str(item.get("action_queue_id") or ""),
         ),
@@ -1362,6 +1627,15 @@ def _render_hub_snapshot(
             recommended_action = _truncate(
                 str(item.get("recommended_action") or ""), max_field_chars
             )
+            followup_state = _truncate(
+                str(item.get("followup_state") or ""), max_field_chars
+            )
+            operator_need = _truncate(
+                str(item.get("operator_need") or ""), max_field_chars
+            )
+            thread_count = _truncate(
+                str(item.get("thread_count") or ""), max_field_chars
+            )
             precedence = item.get("precedence") or {}
             precedence_rank = _truncate(
                 str(precedence.get("rank") or ""), max_field_chars
@@ -1387,6 +1661,9 @@ def _render_hub_snapshot(
                     else ""
                 )
                 + (f" file={file_name}" if file_name else "")
+                + (f" followup_state={followup_state}" if followup_state else "")
+                + (f" operator_need={operator_need}" if operator_need else "")
+                + (f" thread_count={thread_count}" if thread_count else "")
                 + (
                     f" recommended_action={recommended_action}"
                     if recommended_action
@@ -3071,7 +3348,10 @@ async def build_hub_snapshot(
             thread["freshness"] = build_freshness_payload(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
-                candidates=[("thread_updated_at", thread.get("updated_at"))],
+                candidates=[
+                    ("thread_status_changed_at", thread.get("status_changed_at")),
+                    ("thread_updated_at", thread.get("updated_at")),
+                ],
             )
         for box in BOXES:
             for index, entry in enumerate(pma_files_detail.get(box) or []):

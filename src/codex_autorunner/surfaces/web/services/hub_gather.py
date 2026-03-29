@@ -171,7 +171,10 @@ def gather_hub_messages(
             thread["freshness"] = build_freshness_payload(
                 generated_at=generated_at,
                 stale_threshold_seconds=stale_threshold_seconds,
-                candidates=[("thread_updated_at", thread.get("updated_at"))],
+                candidates=[
+                    ("thread_status_changed_at", thread.get("status_changed_at")),
+                    ("thread_updated_at", thread.get("updated_at")),
+                ],
             )
         for box in BOXES:
             for index, entry in enumerate(pma_files_detail.get(box) or []):

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -738,6 +739,56 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
     assert file_item["supersession"]["status"] == "non_primary"
 
 
+def test_build_hub_snapshot_prefers_status_change_time_for_thread_freshness(
+    hub_env,
+) -> None:
+    thread_store = PmaThreadStore(hub_env.hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="freshness-status-change-thread",
+    )
+    thread_id = thread["managed_thread_id"]
+
+    thread_store.create_turn(thread_id, prompt="First turn")
+    thread_store.mark_turn_finished(
+        thread_store.get_running_turn(thread_id)["managed_turn_id"],
+        status="ok",
+        assistant_text="done",
+    )
+
+    with thread_store._write_conn() as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET updated_at = ?,
+                   status_updated_at = ?
+             WHERE thread_target_id = ?
+            """,
+            ("2026-03-16T12:00:00Z", "2026-03-16T09:00:00Z", thread_id),
+        )
+        conn.commit()
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    thread_snapshot = next(
+        item
+        for item in (snapshot.get("pma_threads") or [])
+        if item.get("managed_thread_id") == thread_id
+    )
+    freshness = thread_snapshot.get("freshness") or {}
+    assert freshness.get("recency_basis") == "thread_status_changed_at"
+    assert freshness.get("basis_at") == "2026-03-16T09:00:00+00:00"
+
+
 def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
@@ -1108,7 +1159,7 @@ def test_build_hub_snapshot_includes_pma_threads_section(hub_env) -> None:
     assert "last_message_preview" in first
     thread_freshness = first.get("freshness") or {}
     assert thread_freshness.get("generated_at")
-    assert thread_freshness.get("recency_basis") == "thread_updated_at"
+    assert thread_freshness.get("recency_basis") == "thread_status_changed_at"
 
     rendered = _render_hub_snapshot(snapshot)
     assert "Snapshot Freshness:" in rendered
@@ -1962,12 +2013,13 @@ class TestIssue975CharacterizationMixedPmaState:
                     "lifecycle_status": "active",
                     "status_reason": "managed_turn_completed",
                     "status_terminal": False,
+                    "status_changed_at": "2026-03-16T11:00:00Z",
                     "last_turn_id": "turn-001",
                     "last_message_preview": "Refactoring complete, ready for review.",
-                    "updated_at": "2026-03-16T11:00:00Z",
+                    "updated_at": "2026-03-16T11:30:00Z",
                     "freshness": {
                         "generated_at": "2026-03-16T12:00:00Z",
-                        "recency_basis": "thread_updated_at",
+                        "recency_basis": "thread_status_changed_at",
                         "basis_at": "2026-03-16T11:00:00Z",
                         "is_stale": False,
                     },
@@ -1986,14 +2038,15 @@ class TestIssue975CharacterizationMixedPmaState:
                     "lifecycle_status": "active",
                     "status_reason": "managed_turn_completed",
                     "status_terminal": False,
+                    "status_changed_at": "2026-03-16T09:00:00Z",
                     "last_turn_id": "turn-002",
                     "last_message_preview": "Task finished successfully.",
-                    "updated_at": "2026-03-16T10:00:00Z",
+                    "updated_at": "2026-03-16T11:45:00Z",
                     "freshness": {
                         "generated_at": "2026-03-16T12:00:00Z",
-                        "recency_basis": "thread_updated_at",
-                        "basis_at": "2026-03-16T10:00:00Z",
-                        "is_stale": False,
+                        "recency_basis": "thread_status_changed_at",
+                        "basis_at": "2026-03-16T09:00:00Z",
+                        "is_stale": True,
                     },
                 }
             )
@@ -2151,13 +2204,21 @@ class TestIssue975CharacterizationMixedPmaState:
         assert failed_run["supersession"]["status"] == "superseded"
         assert failed_run["supersession"]["superseded_by"] == primary["action_queue_id"]
 
-        thread_item = next(
-            item for item in queue if item.get("managed_thread_id") == "thread-idle-1"
+        thread_group = next(
+            item
+            for item in queue
+            if item.get("item_type") == "managed_thread_followup_group"
         )
-        assert thread_item["queue_source"] == "managed_thread_followup"
-        assert thread_item["supersession"]["status"] == "superseded"
+        assert thread_group["queue_source"] == "managed_thread_followup"
+        assert thread_group["thread_count"] == 2
+        assert thread_group["followup_state"] == "reusable"
+        assert thread_group["followup_state_counts"] == {
+            "reusable": 1,
+            "idle_archive_candidate": 1,
+        }
+        assert thread_group["supersession"]["status"] == "superseded"
         assert (
-            thread_item["supersession"]["superseded_by"] == primary["action_queue_id"]
+            thread_group["supersession"]["superseded_by"] == primary["action_queue_id"]
         )
 
         file_item = next(item for item in queue if item.get("item_type") == "pma_file")
@@ -2178,6 +2239,89 @@ class TestIssue975CharacterizationMixedPmaState:
         assert "source=ticket_flow_inbox" in result
         assert "status=primary" in result
         assert "status=superseded" in result
+        assert "item_type=managed_thread_followup_group" in result
+        assert "thread_count=2" in result
+        assert "followup_state=reusable" in result
+
+    def test_completed_thread_queue_item_is_optional_reuse_not_immediate_followup(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot(
+            include_dispatch=False,
+            include_failed_run=False,
+            include_completed_run=False,
+            include_pma_file=False,
+        )
+        pma_threads = snapshot.get("pma_threads") or []
+        completed_thread = next(
+            item
+            for item in pma_threads
+            if item.get("managed_thread_id") == "thread-completed-1"
+        )
+        completed_thread["repo_id"] = "repo-other"
+        completed_thread["resource_id"] = "repo-other"
+
+        from codex_autorunner.core.pma_context import build_pma_action_queue
+
+        queue = build_pma_action_queue(
+            inbox=[],
+            pma_threads=pma_threads,
+            pma_files_detail={"inbox": [], "outbox": []},
+            automation={},
+            generated_at="2026-03-16T12:00:00Z",
+            stale_threshold_seconds=3600,
+        )
+        reusable_item = next(
+            item for item in queue if item.get("managed_thread_id") == "thread-idle-1"
+        )
+
+        assert reusable_item["followup_state"] == "reusable"
+        assert reusable_item["operator_need"] == "optional"
+        assert reusable_item["recommended_action"] == "consider_resuming_managed_thread"
+        assert "no immediate follow-up signal" in (
+            reusable_item.get("why_selected") or ""
+        )
+
+    def test_stale_completed_thread_queue_item_becomes_cleanup_candidate(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot(
+            include_dispatch=False,
+            include_failed_run=False,
+            include_completed_run=False,
+            include_pma_file=False,
+        )
+        pma_threads = snapshot.get("pma_threads") or []
+        stale_thread = next(
+            item
+            for item in pma_threads
+            if item.get("managed_thread_id") == "thread-completed-1"
+        )
+        stale_thread["repo_id"] = "repo-other"
+        stale_thread["resource_id"] = "repo-other"
+
+        from codex_autorunner.core.pma_context import build_pma_action_queue
+
+        queue = build_pma_action_queue(
+            inbox=[],
+            pma_threads=pma_threads,
+            pma_files_detail={"inbox": [], "outbox": []},
+            automation={},
+            generated_at="2026-03-16T12:00:00Z",
+            stale_threshold_seconds=3600,
+        )
+
+        archive_item = next(
+            item
+            for item in queue
+            if item.get("managed_thread_id") == "thread-completed-1"
+        )
+        assert archive_item["followup_state"] == "idle_archive_candidate"
+        assert archive_item["operator_need"] == "cleanup"
+        assert archive_item["recommended_action"] == "review_or_archive_managed_thread"
+        assert "cleanup candidate" in (archive_item.get("why_selected") or "")
 
     def test_stale_pma_file_queue_item_is_marked_as_review_not_process(
         self, tmp_path: Path
