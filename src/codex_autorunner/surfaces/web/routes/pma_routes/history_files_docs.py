@@ -22,9 +22,13 @@ from .....bootstrap import (
 )
 from .....core import filebox
 from .....core.filebox import BOXES
+from .....core.freshness import build_freshness_payload, resolve_stale_threshold_seconds
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_audit import PmaActionType
-from .....core.pma_context import get_active_context_auto_prune_meta
+from .....core.pma_context import (
+    enrich_pma_file_inbox_entry,
+    get_active_context_auto_prune_meta,
+)
 from .....core.pma_dispatches import (
     find_pma_dispatch_path,
     list_pma_dispatches,
@@ -165,15 +169,18 @@ def build_history_files_docs_router(
         return transcript
 
     def _serialize_pma_entry(
-        entry: filebox.FileBoxEntry, *, request: Request
+        entry: filebox.FileBoxEntry,
+        *,
+        request: Request,
+        generated_at: str,
+        stale_threshold_seconds: int,
     ) -> dict[str, Any]:
         base = request.scope.get("root_path", "") or ""
         box = entry.box
         filename = entry.name
         download = f"{base}/hub/pma/files/{box}/{filename}"
-        return {
+        payload: dict[str, Any] = {
             "item_type": "pma_file",
-            "next_action": "process_uploaded_file",
             "name": filename,
             "box": box,
             "size": entry.size,
@@ -181,17 +188,38 @@ def build_history_files_docs_router(
             "source": entry.source,
             "url": download,
         }
+        if box == "inbox":
+            payload["freshness"] = build_freshness_payload(
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                candidates=[("file_modified_at", entry.modified_at)],
+            )
+            return enrich_pma_file_inbox_entry(payload)
+        return payload
 
     @router.get("/files")
     async def list_pma_files(request: Request) -> dict[str, list[dict[str, Any]]]:
         hub_root = request.app.state.config.root
         result: dict[str, list[dict[str, Any]]] = {box: [] for box in BOXES}
+        generated_at = now_iso()
+        stale_threshold_seconds = resolve_stale_threshold_seconds(
+            getattr(
+                getattr(request.app.state.config, "pma", None),
+                "freshness_stale_threshold_seconds",
+                None,
+            )
+        )
         async with await _get_pma_lock():
             listing = await asyncio.to_thread(filebox.list_filebox, hub_root)
         for box in BOXES:
             entries = listing.get(box, [])
             result[box] = [
-                _serialize_pma_entry(entry, request=request)
+                _serialize_pma_entry(
+                    entry,
+                    request=request,
+                    generated_at=generated_at,
+                    stale_threshold_seconds=stale_threshold_seconds,
+                )
                 for entry in sorted(entries, key=lambda item: item.name)
             ]
         return result

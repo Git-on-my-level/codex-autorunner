@@ -1,7 +1,9 @@
 import asyncio
 import concurrent.futures
 import json
+import os
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -2033,6 +2035,8 @@ def test_pma_files_upload_list_download_delete(hub_env) -> None:
     assert payload["inbox"][0]["box"] == "inbox"
     assert payload["inbox"][0]["size"] == 11
     assert payload["inbox"][0]["source"] == "filebox"
+    assert payload["inbox"][0]["next_action"] == "process_uploaded_file"
+    assert payload["inbox"][0]["likely_false_positive"] is False
     assert "/hub/pma/files/inbox/file.txt" in payload["inbox"][0]["url"]
     assert payload["outbox"] == []
     assert (
@@ -2100,18 +2104,42 @@ def test_pma_files_list_ignores_legacy_sources(hub_env) -> None:
     resp = client.get("/hub/pma/files")
     assert resp.status_code == 200
     payload = resp.json()
-    assert payload["inbox"] == [
-        {
-            "box": "inbox",
-            "item_type": "pma_file",
-            "modified_at": payload["inbox"][0]["modified_at"],
-            "name": "primary.txt",
-            "next_action": "process_uploaded_file",
-            "size": 7,
-            "source": "filebox",
-            "url": payload["inbox"][0]["url"],
-        }
-    ]
+    assert len(payload["inbox"]) == 1
+    item = payload["inbox"][0]
+    assert item["box"] == "inbox"
+    assert item["item_type"] == "pma_file"
+    assert item["name"] == "primary.txt"
+    assert item["next_action"] == "process_uploaded_file"
+    assert item["likely_false_positive"] is False
+    assert item["size"] == 7
+    assert item["source"] == "filebox"
+    assert item["url"].endswith("/hub/pma/files/inbox/primary.txt")
+    assert item["modified_at"]
+    assert (item.get("freshness") or {}).get("is_stale") is False
+
+
+def test_pma_files_list_marks_old_inbox_files_as_likely_stale(hub_env) -> None:
+    seed_hub_files(hub_env.hub_root, force=True)
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    client = TestClient(app)
+
+    inbox_file = filebox.inbox_dir(hub_env.hub_root) / "forgotten.txt"
+    inbox_file.parent.mkdir(parents=True, exist_ok=True)
+    inbox_file.write_bytes(b"old")
+    old_ts = datetime(2026, 3, 16, 9, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(inbox_file, (old_ts, old_ts))
+
+    resp = client.get("/hub/pma/files")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload["inbox"]) == 1
+    item = payload["inbox"][0]
+    assert item["name"] == "forgotten.txt"
+    assert item["next_action"] == "review_stale_uploaded_file"
+    assert item["likely_false_positive"] is True
+    assert "already handled" in (item["attention_summary"] or "").lower()
+    assert (item.get("freshness") or {}).get("is_stale") is True
 
 
 def test_pma_files_download_rejects_legacy_path(hub_env) -> None:

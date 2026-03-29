@@ -27,6 +27,7 @@ from ....core.pma_context import (
     _snapshot_pma_files,
     _snapshot_pma_threads,
     build_pma_action_queue,
+    enrich_pma_file_inbox_entry,
 )
 from ....tickets.files import safe_relpath
 from ....tickets.models import Dispatch
@@ -173,12 +174,14 @@ def gather_hub_messages(
                 candidates=[("thread_updated_at", thread.get("updated_at"))],
             )
         for box in BOXES:
-            for entry in pma_files_detail.get(box) or []:
+            for index, entry in enumerate(pma_files_detail.get(box) or []):
                 entry["freshness"] = build_freshness_payload(
                     generated_at=generated_at,
                     stale_threshold_seconds=stale_threshold_seconds,
                     candidates=[("file_modified_at", entry.get("modified_at"))],
                 )
+                if box == "inbox":
+                    pma_files_detail[box][index] = enrich_pma_file_inbox_entry(entry)
 
     action_queue = build_pma_action_queue(
         inbox=inbox,
