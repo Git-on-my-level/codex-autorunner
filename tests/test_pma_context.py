@@ -1281,6 +1281,103 @@ def test_render_hub_snapshot_pma_files_only(tmp_path: Path) -> None:
     assert "next_action: process_uploaded_file" in result
 
 
+def test_render_hub_snapshot_marks_stale_pma_files_as_review_only(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [],
+        "repos": [],
+        "pma_files": {"inbox": ["forgotten.zip"], "outbox": []},
+        "pma_files_detail": {
+            "inbox": [
+                {
+                    "item_type": "pma_file",
+                    "next_action": "review_stale_uploaded_file",
+                    "box": "inbox",
+                    "name": "forgotten.zip",
+                    "source": "filebox",
+                    "size": "200",
+                    "modified_at": "2026-03-16T09:00:00Z",
+                    "freshness": {
+                        "generated_at": "2026-03-16T12:00:00Z",
+                        "recency_basis": "file_modified_at",
+                        "basis_at": "2026-03-16T09:00:00Z",
+                        "is_stale": True,
+                    },
+                }
+            ],
+            "outbox": [],
+        },
+    }
+
+    result = _render_hub_snapshot(snapshot)
+
+    assert "PMA File Inbox:" in result
+    assert "next_action: review_stale_uploaded_file" in result
+    assert "likely_leftovers=[forgotten.zip]" in result
+    assert "false positives from prior work" in result
+
+
+def test_render_hub_snapshot_caps_pma_file_action_summaries(
+    tmp_path: Path,
+) -> None:
+    from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+    seed_hub_files(tmp_path, force=True)
+
+    snapshot = {
+        "inbox": [],
+        "repos": [],
+        "pma_files": {
+            "inbox": ["fresh-1.md", "stale-1.zip", "fresh-2.md"],
+            "outbox": [],
+        },
+        "pma_files_detail": {
+            "inbox": [
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "fresh-1.md",
+                    "source": "filebox",
+                    "size": "200",
+                    "modified_at": "2026-03-29T09:00:00Z",
+                },
+                {
+                    "item_type": "pma_file",
+                    "next_action": "review_stale_uploaded_file",
+                    "box": "inbox",
+                    "name": "stale-1.zip",
+                    "source": "filebox",
+                    "size": "200",
+                    "modified_at": "2026-03-16T09:00:00Z",
+                },
+                {
+                    "item_type": "pma_file",
+                    "next_action": "process_uploaded_file",
+                    "box": "inbox",
+                    "name": "fresh-2.md",
+                    "source": "filebox",
+                    "size": "200",
+                    "modified_at": "2026-03-29T10:00:00Z",
+                },
+            ],
+            "outbox": [],
+        },
+    }
+
+    result = _render_hub_snapshot(snapshot, max_pma_files=2)
+
+    assert "inbox: [fresh-1.md, stale-1.zip]" in result
+    assert "fresh_uploads=[fresh-1.md]" in result
+    assert "likely_leftovers=[stale-1.zip]" in result
+    assert "fresh-2.md" not in result
+
+
 def test_render_hub_snapshot_empty_both(tmp_path: Path) -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
@@ -2081,6 +2178,37 @@ class TestIssue975CharacterizationMixedPmaState:
         assert "source=ticket_flow_inbox" in result
         assert "status=primary" in result
         assert "status=superseded" in result
+
+    def test_stale_pma_file_queue_item_is_marked_as_review_not_process(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot()
+        pma_files_detail = snapshot.get("pma_files_detail") or {}
+        stale_file = (pma_files_detail.get("inbox") or [])[0]
+        stale_file["freshness"] = {
+            "generated_at": "2026-03-16T12:00:00Z",
+            "recency_basis": "file_modified_at",
+            "basis_at": "2026-03-16T09:00:00Z",
+            "is_stale": True,
+        }
+
+        from codex_autorunner.core.pma_context import build_pma_action_queue
+
+        queue = build_pma_action_queue(
+            inbox=snapshot.get("inbox") or [],
+            pma_threads=snapshot.get("pma_threads") or [],
+            pma_files_detail=pma_files_detail,
+            automation={},
+            generated_at="2026-03-16T12:00:00Z",
+            stale_threshold_seconds=3600,
+        )
+
+        file_item = next(item for item in queue if item.get("item_type") == "pma_file")
+        assert file_item["recommended_action"] == "review_stale_uploaded_file"
+        assert file_item["next_action"] == "review_stale_uploaded_file"
+        assert file_item["likely_false_positive"] is True
+        assert "leftover" in (file_item["why_selected"] or "").lower()
 
 
 class TestIssue975CharacterizationManagedThreadPayload:

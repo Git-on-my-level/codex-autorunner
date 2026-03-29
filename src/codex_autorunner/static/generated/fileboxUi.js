@@ -80,10 +80,17 @@ export function createFileBoxWidget(opts) {
             const meta = entry.modified_at ? new Date(entry.modified_at).toLocaleString() : "";
             const size = formatBytes(entry.size);
             const source = entry.source && entry.source !== "filebox" ? ` • ${escapeHtml(entry.source || "")}` : "";
+            const isLikelyStale = entry.freshness?.is_stale === true ||
+                entry.next_action === "review_stale_uploaded_file" ||
+                entry.likely_false_positive === true;
+            const statusPill = isLikelyStale
+                ? `<span class="pill pill-small pill-warn" title="${escapeHtml(entry.attention_summary || "Likely stale leftover upload")}">likely stale</span>`
+                : "";
             return `
         <div class="filebox-item">
           <div class="filebox-row">
             <a class="filebox-link" href="${escapeHtml(href)}" download>${escapeHtml(entry.name)}</a>
+            ${statusPill}
             <button class="ghost sm icon-btn filebox-delete" data-box="${box}" data-file="${escapeHtml(entry.name)}" title="Delete">×</button>
           </div>
           <div class="filebox-meta muted small">${escapeHtml(size || "")}${source}${meta ? ` • ${escapeHtml(meta)}` : ""}</div>

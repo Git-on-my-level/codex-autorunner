@@ -99,6 +99,8 @@ PMA_ACTION_QUEUE_PRECEDENCE: dict[str, tuple[int, str]] = {
     "pma_file_inbox": (30, "pma_file_inbox"),
     "automation_wakeup": (40, "automation_wakeup"),
 }
+PMA_FILE_NEXT_ACTION_PROCESS = "process_uploaded_file"
+PMA_FILE_NEXT_ACTION_REVIEW_STALE = "review_stale_uploaded_file"
 
 # Keep this short and stable; see ticket TICKET-001 for rationale.
 PMA_FASTPATH = """<pma_fastpath>
@@ -129,7 +131,7 @@ First-turn routine:
      - `car pma thread compact --id <id> --summary "..."`
      - `car pma thread archive --id <id>`
    - If request is a multi-step deliverable or cross-repo change, prefer tickets/ticket_flow.
-4) BRANCH C - PMA File Inbox (uploaded files needing processing):
+4) BRANCH C - PMA File Inbox (fresh uploads vs stale leftovers):
    - If PMA File Inbox shows next_action="process_uploaded_file" and hub_snapshot.inbox is empty:
      - Inspect files in `.codex-autorunner/filebox/inbox/` (read their contents).
      - Classify each upload: ticket pack (TICKET-*.md), docs (*.md), code (*.py/*.ts/*.js), assets (images/pdfs).
@@ -141,6 +143,11 @@ First-turn routine:
        - Docs: integrate into contextspace (`active_context.md`, `spec.md`, `decisions.md`)
        - Code: identify target worktree, propose handoff or direct edit
      - Assets: suggest destination (repo docs, archive)
+   - If PMA File Inbox shows next_action="review_stale_uploaded_file":
+     - Treat the file as a likely leftover, not urgent new work.
+     - First verify whether it was already handled by checking the user request, recent PMA history, and nearby outbox/repo activity.
+     - If it was already consumed or is no longer relevant, delete it from `.codex-autorunner/filebox/inbox/`.
+     - Only route it like a fresh upload when evidence says it is still pending work.
    - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
 5) BRANCH D - Automation continuity (subscriptions + timers):
    - If work should continue without manual polling, use PMA automation primitives.
@@ -582,15 +589,28 @@ def _snapshot_pma_files(
             names = sorted([e.name for e in entries])
             pma_files[box] = names
             pma_files_detail[box] = [
-                {
-                    "item_type": "pma_file",
-                    "next_action": "process_uploaded_file",
-                    "box": box,
-                    "name": e.name,
-                    "source": e.source or "filebox",
-                    "size": str(e.size) if e.size is not None else "",
-                    "modified_at": e.modified_at or "",
-                }
+                (
+                    enrich_pma_file_inbox_entry(
+                        {
+                            "item_type": "pma_file",
+                            "next_action": PMA_FILE_NEXT_ACTION_PROCESS,
+                            "box": box,
+                            "name": e.name,
+                            "source": e.source or "filebox",
+                            "size": str(e.size) if e.size is not None else "",
+                            "modified_at": e.modified_at or "",
+                        }
+                    )
+                    if box == "inbox"
+                    else {
+                        "item_type": "pma_file",
+                        "box": box,
+                        "name": e.name,
+                        "source": e.source or "filebox",
+                        "size": str(e.size) if e.size is not None else "",
+                        "modified_at": e.modified_at or "",
+                    }
+                )
                 for e in entries
             ]
     except Exception as exc:
@@ -706,6 +726,49 @@ def _extract_entry_freshness(entry: Mapping[str, Any]) -> Optional[Mapping[str, 
         if isinstance(nested, Mapping):
             return nested
     return None
+
+
+def classify_pma_file_inbox_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
+    freshness = _extract_entry_freshness(entry)
+    is_stale = bool(
+        isinstance(freshness, Mapping) and freshness.get("is_stale") is True
+    )
+    if is_stale:
+        return {
+            "next_action": PMA_FILE_NEXT_ACTION_REVIEW_STALE,
+            "attention_summary": (
+                "Likely stale leftover upload. Verify whether it was already handled "
+                "before treating it as new work."
+            ),
+            "why_selected": (
+                "Stale file remains in the PMA inbox and is more likely leftover "
+                "state than urgent work"
+            ),
+            "recommended_action": PMA_FILE_NEXT_ACTION_REVIEW_STALE,
+            "recommended_detail": (
+                "Check recent PMA activity before routing. If the file was already "
+                "handled, delete it from `.codex-autorunner/filebox/inbox/`."
+            ),
+            "urgency": "low",
+            "likely_false_positive": True,
+        }
+    return {
+        "next_action": PMA_FILE_NEXT_ACTION_PROCESS,
+        "attention_summary": "Fresh upload is waiting in the PMA inbox.",
+        "why_selected": "Fresh upload is waiting in the PMA inbox",
+        "recommended_action": PMA_FILE_NEXT_ACTION_PROCESS,
+        "recommended_detail": (
+            "Inspect `.codex-autorunner/filebox/inbox/` and route the upload"
+        ),
+        "urgency": "normal",
+        "likely_false_positive": False,
+    }
+
+
+def enrich_pma_file_inbox_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
+    enriched = dict(entry)
+    enriched.update(classify_pma_file_inbox_entry(enriched))
+    return enriched
 
 
 def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
@@ -910,19 +973,14 @@ def _build_file_queue_items(
     for entry in pma_files_detail.get("inbox") or []:
         if not isinstance(entry, dict):
             continue
-        freshness = _extract_entry_freshness(entry)
-        name = str(entry.get("name") or "").strip()
-        copied = dict(entry)
+        copied = enrich_pma_file_inbox_entry(entry)
+        freshness = _extract_entry_freshness(copied)
+        name = str(copied.get("name") or "").strip()
         copied.update(
             {
                 "action_queue_id": f"pma_file_inbox:{name or '-'}",
                 "queue_source": "pma_file_inbox",
                 "precedence": {"rank": rank, "label": label},
-                "why_selected": "Uploaded file is waiting in the PMA inbox",
-                "recommended_action": "process_uploaded_file",
-                "recommended_detail": (
-                    "Inspect `.codex-autorunner/filebox/inbox/` and route the upload"
-                ),
                 "freshness": (
                     dict(freshness) if isinstance(freshness, Mapping) else None
                 ),
@@ -1556,8 +1614,39 @@ def _render_hub_snapshot(
                 for name in list(inbox_files)[: max(0, max_pma_files)]
             ]
             lines.append(f"- inbox: [{', '.join(files)}]")
-            if pma_files_detail.get("inbox"):
-                lines.append("- next_action: process_uploaded_file")
+            inbox_detail = [
+                entry
+                for entry in (pma_files_detail.get("inbox") or [])
+                if isinstance(entry, Mapping)
+            ]
+            visible_inbox_detail = inbox_detail[: max(0, max_pma_files)]
+            fresh_files = [
+                _truncate(str(entry.get("name") or ""), max_field_chars)
+                for entry in visible_inbox_detail
+                if str(entry.get("next_action") or "") == PMA_FILE_NEXT_ACTION_PROCESS
+            ]
+            stale_files = [
+                _truncate(str(entry.get("name") or ""), max_field_chars)
+                for entry in visible_inbox_detail
+                if str(entry.get("next_action") or "")
+                == PMA_FILE_NEXT_ACTION_REVIEW_STALE
+            ]
+            if fresh_files:
+                lines.append(
+                    "- next_action: "
+                    f"{PMA_FILE_NEXT_ACTION_PROCESS} "
+                    f"(fresh_uploads=[{', '.join(fresh_files)}])"
+                )
+            if stale_files:
+                lines.append(
+                    "- next_action: "
+                    f"{PMA_FILE_NEXT_ACTION_REVIEW_STALE} "
+                    f"(likely_leftovers=[{', '.join(stale_files)}])"
+                )
+                lines.append(
+                    "- note: stale inbox files are usually false positives from prior "
+                    "work that was never cleared"
+                )
         if outbox_files:
             lines.append("PMA File Outbox:")
             files = [
@@ -2985,12 +3074,14 @@ async def build_hub_snapshot(
                 candidates=[("thread_updated_at", thread.get("updated_at"))],
             )
         for box in BOXES:
-            for entry in pma_files_detail.get(box) or []:
+            for index, entry in enumerate(pma_files_detail.get(box) or []):
                 entry["freshness"] = build_freshness_payload(
                     generated_at=generated_at,
                     stale_threshold_seconds=stale_threshold_seconds,
                     candidates=[("file_modified_at", entry.get("modified_at"))],
                 )
+                if box == "inbox":
+                    pma_files_detail[box][index] = enrich_pma_file_inbox_entry(entry)
 
     action_queue = build_pma_action_queue(
         inbox=inbox,
