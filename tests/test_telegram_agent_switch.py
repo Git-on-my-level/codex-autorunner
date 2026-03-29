@@ -57,5 +57,5 @@ async def test_apply_agent_change_resets_runtime_state_and_applies_default_model
     assert record.thread_summaries == {}
     assert record.pending_compact_seed is None
     assert record.pending_compact_seed_thread_id is None
-    assert record.model == "zai-coding-plan/glm-5"
+    assert record.model == "zai-coding-plan/glm-5.1"
     assert record.effort is None
