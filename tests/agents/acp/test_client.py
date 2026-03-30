@@ -190,6 +190,20 @@ async def test_client_reports_subprocess_crash_during_prompt(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_client_ignores_known_cli_noise_on_stdout(tmp_path: Path) -> None:
+    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        session = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(session.session_id, "stdout noise")
+        result = await handle.wait()
+
+        assert result.status == "completed"
+        assert result.final_output == "fixture reply"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_logs_background_permission_notification_task_failures(
     tmp_path: Path,
 ) -> None:

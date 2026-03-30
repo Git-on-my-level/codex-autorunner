@@ -12,6 +12,9 @@ RuntimeThreadOutcomeStatus = Literal["ok", "error", "interrupted"]
 _INTERRUPT_POLL_INTERVAL_SECONDS = 0.05
 RUNTIME_THREAD_TIMEOUT_ERROR = "Runtime thread timed out"
 RUNTIME_THREAD_INTERRUPTED_ERROR = "Runtime thread interrupted"
+RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR = (
+    "Runtime thread execution is missing backend ids"
+)
 _SUCCESSFUL_COMPLETION_STATUSES = frozenset(
     {"ok", "completed", "complete", "done", "success"}
 )
@@ -153,6 +156,15 @@ async def await_runtime_thread_outcome(
 
     backend_thread_id = execution.thread.backend_thread_id or ""
     backend_turn_id = execution.execution.backend_id
+    if not backend_thread_id or not backend_turn_id:
+        return RuntimeThreadOutcome(
+            status="error",
+            assistant_text="",
+            error=RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR,
+            backend_thread_id=backend_thread_id,
+            backend_turn_id=backend_turn_id,
+            raw_events=(),
+        )
     collector_task = asyncio.create_task(
         execution.harness.wait_for_turn(
             execution.workspace_root,
@@ -296,6 +308,7 @@ async def _wait_for_interrupt(interrupt_event: asyncio.Event) -> None:
 
 __all__ = [
     "RUNTIME_THREAD_INTERRUPTED_ERROR",
+    "RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR",
     "RUNTIME_THREAD_TIMEOUT_ERROR",
     "RuntimeThreadExecution",
     "RuntimeThreadOutcome",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -16,6 +16,7 @@ from codex_autorunner.core.orchestration import (
     PmaThreadExecutionStore,
 )
 from codex_autorunner.core.orchestration.runtime_threads import (
+    RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR,
     await_runtime_thread_outcome,
     begin_runtime_thread_execution,
     stream_runtime_thread_events,
@@ -398,6 +399,39 @@ async def test_runtime_threads_allow_missing_interrupt_event(
 
     assert outcome.status == "ok"
     assert outcome.assistant_text == "assistant-output"
+
+
+async def test_runtime_threads_fail_cleanly_when_backend_ids_are_missing(
+    tmp_path: Path,
+) -> None:
+    harness = _HarnessWithWait()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    started = await begin_runtime_thread_execution(
+        service,
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="user-visible prompt",
+        ),
+    )
+    broken_started = replace(
+        started,
+        execution=replace(started.execution, backend_id=None),
+    )
+    outcome = await await_runtime_thread_outcome(
+        broken_started,
+        interrupt_event=None,
+        timeout_seconds=5,
+        execution_error_message="Managed thread execution failed",
+    )
+
+    assert outcome.status == "error"
+    assert outcome.error == RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR
+    assert harness.wait_calls == []
 
 
 async def test_runtime_threads_stream_events_support_hermes_harness(

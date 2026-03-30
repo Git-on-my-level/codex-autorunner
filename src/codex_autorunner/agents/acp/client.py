@@ -52,6 +52,7 @@ _PERMISSION_NOTIFICATION_METHODS = (
 )
 _ACP_PROTOCOL_VERSION = 1
 _OFFICIAL_ACP_INIT_KEYS = frozenset({"agentInfo", "agentCapabilities"})
+_ACP_STDOUT_NOISE_PREFIXES = ("┊", "╎", "│")
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,18 @@ def _build_transport_error_message(
     if stderr_tail:
         message = f"{message}: {' | '.join(stderr_tail)}"
     return message
+
+
+def _coerce_stdout_text(line: bytes) -> str:
+    return line.decode("utf-8", errors="replace").strip()
+
+
+def _is_ignorable_stdout_noise(line: bytes) -> bool:
+    text = _coerce_stdout_text(line)
+    if not text:
+        return True
+    stripped = text.lstrip()
+    return stripped.startswith(_ACP_STDOUT_NOISE_PREFIXES)
 
 
 class ACPPromptHandle:
@@ -554,9 +567,17 @@ class ACPClient:
             line = await process.stdout.readline()
             if not line:
                 return
+            text = _coerce_stdout_text(line)
             try:
-                message = json.loads(line.decode("utf-8"))
+                message = json.loads(text)
             except json.JSONDecodeError as exc:
+                if _is_ignorable_stdout_noise(line):
+                    if text:
+                        self._logger.warning(
+                            "Ignoring non-JSON ACP stdout noise: %s",
+                            text[:200],
+                        )
+                    continue
                 error = ACPProtocolError(
                     f"ACP subprocess emitted invalid JSON: {line[:200]!r}"
                 )
