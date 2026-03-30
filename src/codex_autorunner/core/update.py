@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
@@ -28,6 +29,8 @@ class UpdateInProgressError(RuntimeError):
 
 _UPDATE_LOCK_STARTUP_GRACE_SECONDS = 10.0
 _UPDATE_LOCK_CMD_HINTS = ("codex_autorunner.core.update_runner",)
+_UPDATE_BUILD_ARTIFACT_DIRS = ("build", "dist", ".eggs")
+_UPDATE_BUILD_ARTIFACT_GLOBS = ("*.egg-info", "src/*.egg-info")
 
 
 def _run_cmd(cmd: list[str], cwd: Path) -> None:
@@ -47,6 +50,104 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
             f"Command failed: {' '.join(cmd)}\nStdout: {e.stdout}\nStderr: {e.stderr}"
         )
         raise RuntimeError(detail) from e
+
+
+def _remove_update_artifact(path: Path) -> bool:
+    if not path.exists():
+        return False
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    return True
+
+
+def _cleanup_update_build_artifacts(
+    update_dir: Path, logger: logging.Logger
+) -> list[str]:
+    removed: list[str] = []
+    for rel_path in _UPDATE_BUILD_ARTIFACT_DIRS:
+        path = update_dir / rel_path
+        if _remove_update_artifact(path):
+            removed.append(rel_path)
+    for pattern in _UPDATE_BUILD_ARTIFACT_GLOBS:
+        for path in sorted(update_dir.glob(pattern)):
+            if _remove_update_artifact(path):
+                removed.append(str(path.relative_to(update_dir)))
+    if removed:
+        logger.info(
+            "Removed cached update build artifacts: %s",
+            ", ".join(removed),
+        )
+    return removed
+
+
+def _refresh_failure_is_retryable(output_lines: list[str]) -> bool:
+    if not output_lines:
+        return False
+    haystack = "\n".join(output_lines).lower()
+    if "codex-autorunner" not in haystack:
+        return False
+    if "no such file or directory" not in haystack:
+        return False
+    if "build/" not in haystack and "build\\" not in haystack:
+        return False
+    return (
+        "failed building wheel for codex-autorunner" in haystack
+        or "building wheel for codex-autorunner" in haystack
+    )
+
+
+def _reset_update_cache_for_retry(
+    update_dir: Path,
+    *,
+    logger: logging.Logger,
+) -> bool:
+    if not update_dir.exists() or not _is_valid_git_repo(update_dir):
+        logger.warning(
+            "Skipping update refresh retry; cache at %s is not a valid git repo.",
+            update_dir,
+        )
+        return False
+    try:
+        logger.warning(
+            "Refresh failed with a retryable stale-build-artifact error; resetting tracked files and cleaning build artifacts in %s before retrying once.",
+            update_dir,
+        )
+        _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
+        _cleanup_update_build_artifacts(update_dir, logger)
+    except Exception as exc:
+        logger.warning(
+            "Aggressive update cache cleanup failed; refresh retry skipped. %s",
+            exc,
+        )
+        return False
+    return True
+
+
+def _run_refresh_script(
+    *,
+    refresh_script: Path,
+    update_dir: Path,
+    env: dict[str, str],
+    logger: logging.Logger,
+) -> tuple[int, list[str]]:
+    output_tail: deque[str] = deque(maxlen=400)
+    proc = subprocess.Popen(
+        [str(refresh_script)],
+        cwd=update_dir,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    if proc.stdout:
+        for line in proc.stdout:
+            rendered = line.rstrip("\n")
+            logger.info("[Updater] %s", rendered)
+            output_tail.append(rendered)
+    proc.wait()
+    return proc.returncode, list(output_tail)
 
 
 def _normalize_update_target(raw: Optional[str]) -> str:
@@ -749,6 +850,8 @@ def _system_update_worker(
             _run_cmd(["git", "fetch", "origin", repo_ref], cwd=update_dir)
             _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
 
+        _cleanup_update_build_artifacts(update_dir, logger)
+
         skip_checks_env = os.environ.get("CODEX_AUTORUNNER_SKIP_UPDATE_CHECKS") == "1"
         if skip_checks_env or skip_checks:
             if skip_checks_env:
@@ -793,25 +896,30 @@ def _system_update_worker(
             if linux_discord_service_name:
                 env["UPDATE_DISCORD_SERVICE_NAME"] = linux_discord_service_name
 
-        proc = subprocess.Popen(
-            [str(refresh_script)],
-            cwd=update_dir,
+        returncode, output_tail = _run_refresh_script(
+            refresh_script=refresh_script,
+            update_dir=update_dir,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
+            logger=logger,
         )
-        if proc.stdout:
-            for line in proc.stdout:
-                logger.info("[Updater] %s", line.rstrip("\n"))
-        proc.wait()
-        if proc.returncode != 0:
+        if (
+            returncode != 0
+            and _refresh_failure_is_retryable(output_tail)
+            and _reset_update_cache_for_retry(update_dir, logger=logger)
+        ):
+            returncode, output_tail = _run_refresh_script(
+                refresh_script=refresh_script,
+                update_dir=update_dir,
+                env=env,
+                logger=logger,
+            )
+        if returncode != 0:
             existing = _read_update_status()
             if not existing or existing.get("status") not in ("rollback", "error"):
                 _write_update_status(
                     "rollback",
                     "Update failed; rollback attempted. Check hub logs for details.",
-                    exit_code=proc.returncode,
+                    exit_code=returncode,
                 )
             return
 
