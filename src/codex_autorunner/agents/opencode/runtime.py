@@ -53,6 +53,7 @@ _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS = (0.5, 1.0, 2.0, 5.0, 10.0)
 _OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS = 5
 _OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS = 120.0
 _OPENCODE_STREAM_STALL_TIMEOUT_REASON = "opencode_stream_stalled_timeout"
+_OPENCODE_POST_COMPLETION_GRACE_SECONDS = 5.0
 _OPENCODE_IDLE_STATUS_VALUES = {
     "idle",
     "done",
@@ -230,6 +231,54 @@ def _extract_error_text(payload: Any) -> Optional[str]:
         value = payload.get(key)
         if isinstance(value, str) and value:
             return value
+    return None
+
+
+def _normalize_message_phase(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"commentary", "final_answer"}:
+        return normalized
+    return None
+
+
+def _extract_message_phase(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    phase = _normalize_message_phase(payload.get("phase"))
+    if phase is not None:
+        return phase
+    info = payload.get("info")
+    if isinstance(info, dict):
+        phase = _normalize_message_phase(info.get("phase"))
+        if phase is not None:
+            return phase
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        phase = _normalize_message_phase(properties.get("phase"))
+        if phase is not None:
+            return phase
+        message = properties.get("message")
+        if isinstance(message, dict):
+            phase = _normalize_message_phase(message.get("phase"))
+            if phase is not None:
+                return phase
+        item = properties.get("item")
+        if isinstance(item, dict):
+            phase = _normalize_message_phase(item.get("phase"))
+            if phase is not None:
+                return phase
+    message = payload.get("message")
+    if isinstance(message, dict):
+        phase = _normalize_message_phase(message.get("phase"))
+        if phase is not None:
+            return phase
+    item = payload.get("item")
+    if isinstance(item, dict):
+        phase = _normalize_message_phase(item.get("phase"))
+        if phase is not None:
+            return phase
     return None
 
 
@@ -970,6 +1019,7 @@ async def collect_opencode_output_from_events(
     stream_iter = _new_stream().__aiter__()
     last_relevant_event_at = time.monotonic()
     last_primary_completion_at: Optional[float] = None
+    post_completion_deadline: Optional[float] = None
     reconnect_attempts = 0
     reconnect_started_at: Optional[float] = None
     can_reconnect = (
@@ -1068,9 +1118,24 @@ async def collect_opencode_output_from_events(
             if should_stop is not None and should_stop():
                 break
             try:
+                wait_timeout: Optional[float] = None
                 if can_reconnect and stall_timeout_seconds is not None:
+                    wait_timeout = stall_timeout_seconds
+                if post_completion_deadline is not None:
+                    remaining_completion_seconds = max(
+                        0.0,
+                        post_completion_deadline - time.monotonic(),
+                    )
+                    if wait_timeout is None:
+                        wait_timeout = remaining_completion_seconds
+                    else:
+                        wait_timeout = min(
+                            wait_timeout,
+                            remaining_completion_seconds,
+                        )
+                if wait_timeout is not None:
                     event = await asyncio.wait_for(
-                        stream_iter.__anext__(), timeout=stall_timeout_seconds
+                        stream_iter.__anext__(), timeout=wait_timeout
                     )
                 else:
                     event = await stream_iter.__anext__()
@@ -1078,6 +1143,21 @@ async def collect_opencode_output_from_events(
                 break
             except asyncio.TimeoutError:
                 now = time.monotonic()
+                if (
+                    post_completion_deadline is not None
+                    and now >= post_completion_deadline
+                ):
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "opencode.stream.completed.grace_elapsed",
+                        session_id=session_id,
+                        grace_seconds=_OPENCODE_POST_COMPLETION_GRACE_SECONDS,
+                        idle_seconds=now - last_relevant_event_at,
+                    )
+                    if not text_parts and (pending_text or pending_no_id):
+                        _flush_all_pending_text()
+                    break
                 status_type = None
                 if session_fetcher is not None:
                     try:
@@ -1504,6 +1584,15 @@ async def collect_opencode_output_from_events(
                     if message_result.error and not error:
                         error = message_result.error
                 await _emit_usage_update(payload, is_primary_session=is_primary_session)
+            if (
+                event.event == "message.completed"
+                and is_primary_session
+                and _extract_message_phase(payload) != "commentary"
+            ):
+                last_primary_completion_at = time.monotonic()
+                post_completion_deadline = last_primary_completion_at + max(
+                    _OPENCODE_POST_COMPLETION_GRACE_SECONDS, 0.0
+                )
             if event.event == "session.idle" or (
                 event.event == "session.status"
                 and _status_is_idle(_extract_status_type(payload))
@@ -1513,8 +1602,21 @@ async def collect_opencode_output_from_events(
                 if not text_parts and (pending_text or pending_no_id):
                     _flush_all_pending_text()
                 break
-            if event.event == "message.completed" and is_primary_session:
-                last_primary_completion_at = time.monotonic()
+            if (
+                post_completion_deadline is not None
+                and time.monotonic() >= post_completion_deadline
+            ):
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "opencode.stream.completed.grace_elapsed",
+                    session_id=session_id,
+                    grace_seconds=_OPENCODE_POST_COMPLETION_GRACE_SECONDS,
+                    idle_seconds=time.monotonic() - last_relevant_event_at,
+                )
+                if not text_parts and (pending_text or pending_no_id):
+                    _flush_all_pending_text()
+                break
     finally:
         await _close_stream(stream_iter)
 

@@ -252,9 +252,9 @@ def recover_post_completion_outcome(
     outcome: RuntimeThreadOutcome,
     state: RuntimeThreadRunEventState,
 ) -> RuntimeThreadOutcome:
-    """Prefer a streamed completion over a later transport error."""
+    """Prefer a streamed completion over a later transport error or interrupt."""
 
-    if outcome.status != "error" or not state.completed_seen:
+    if outcome.status not in {"error", "interrupted"} or not state.completed_seen:
         return outcome
     assistant_text = outcome.assistant_text or state.assistant_message_text
     if not isinstance(assistant_text, str) or not assistant_text.strip():

@@ -369,6 +369,27 @@ async def test_recover_post_completion_outcome_requires_canonical_final_message(
     assert recovered.assistant_text == "final canonical output"
 
 
+async def test_recover_post_completion_outcome_recovers_interrupted_with_final_message() -> (
+    None
+):
+    outcome = RuntimeThreadOutcome(
+        status="interrupted",
+        assistant_text="",
+        error="Runtime thread interrupted",
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+
+    state = RuntimeThreadRunEventState(
+        assistant_message_text="final canonical output",
+        completed_seen=True,
+    )
+
+    recovered = recover_post_completion_outcome(outcome, state)
+    assert recovered.status == "ok"
+    assert recovered.assistant_text == "final canonical output"
+
+
 async def test_terminal_run_event_from_outcome_uses_streamed_fallback_text() -> None:
     state = RuntimeThreadRunEventState(assistant_stream_text="streamed fallback")
 

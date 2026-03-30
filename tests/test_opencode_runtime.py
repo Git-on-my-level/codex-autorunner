@@ -549,6 +549,43 @@ async def test_collect_output_uses_completed_text_when_no_parts() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_exits_after_completion_without_idle_when_stream_stays_busy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _busy_after_completion():
+        yield SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"m1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"Hello"}]}',
+        )
+        while True:
+            await asyncio.sleep(0.002)
+            yield SSEEvent(
+                event="session.status",
+                data='{"sessionID":"s1","status":{"type":"busy"}}',
+            )
+
+    monkeypatch.setattr(
+        opencode_runtime,
+        "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
+        0.01,
+    )
+
+    start = time.monotonic()
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _busy_after_completion(),
+        stall_timeout_seconds=30.0,
+    )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_ignores_completed_text_when_role_missing() -> None:
     events = [
         SSEEvent(
