@@ -2402,6 +2402,64 @@ class TestIssue975CharacterizationMixedPmaState:
         assert "counts-first summary" in (reusable_item.get("why_selected") or "")
         assert "thread-idle-1" in (reusable_item.get("managed_thread_ids") or [])
 
+    def test_low_signal_reusable_summary_does_not_inherit_repo_id_from_mixed_owners(
+        self, tmp_path: Path
+    ) -> None:
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot(
+            include_failed_run=False,
+            include_completed_run=False,
+            include_pma_file=False,
+        )
+        pma_threads = snapshot.get("pma_threads") or []
+        pma_threads.append(
+            {
+                "managed_thread_id": "thread-unowned-1",
+                "agent": "codex",
+                "repo_id": "",
+                "resource_kind": "",
+                "resource_id": "",
+                "workspace_root": "",
+                "name": "unowned-thread",
+                "status": "idle",
+                "lifecycle_status": "active",
+                "status_reason": "managed_turn_completed",
+                "status_terminal": False,
+                "status_changed_at": "2026-03-16T11:10:00Z",
+                "last_turn_id": "turn-003",
+                "last_message_preview": "Unowned reusable thread.",
+                "updated_at": "2026-03-16T11:40:00Z",
+                "freshness": {
+                    "generated_at": "2026-03-16T12:00:00Z",
+                    "recency_basis": "thread_status_changed_at",
+                    "basis_at": "2026-03-16T11:10:00Z",
+                    "is_stale": False,
+                },
+            }
+        )
+
+        from codex_autorunner.core.pma_context import build_pma_action_queue
+
+        queue = build_pma_action_queue(
+            inbox=snapshot.get("inbox") or [],
+            pma_threads=pma_threads,
+            pma_files_detail={"inbox": [], "outbox": []},
+            automation={},
+            generated_at="2026-03-16T12:00:00Z",
+            stale_threshold_seconds=3600,
+        )
+        reusable_item = next(
+            item
+            for item in queue
+            if item.get("item_type") == "managed_thread_followup_summary"
+            and item.get("followup_state") == "reusable"
+        )
+
+        assert reusable_item["repo_id"] is None
+        assert reusable_item["supersession"]["status"] == "non_primary"
+        assert "thread-idle-1" in (reusable_item.get("managed_thread_ids") or [])
+        assert "thread-unowned-1" in (reusable_item.get("managed_thread_ids") or [])
+
     def test_recently_resumed_thread_with_history_stays_awaiting_followup(
         self, tmp_path: Path
     ) -> None:

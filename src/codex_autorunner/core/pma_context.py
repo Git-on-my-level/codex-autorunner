@@ -996,6 +996,14 @@ def _build_low_signal_thread_summary_item(
             if str(item.get("repo_id") or "").strip()
         }
     )
+    summary_repo_id = None
+    if len(repo_ids) == 1:
+        candidate_repo_id = repo_ids[0]
+        if all(
+            str(item.get("repo_id") or "").strip() == candidate_repo_id
+            for item in items
+        ):
+            summary_repo_id = candidate_repo_id
     if followup_state == "idle_archive_candidate":
         name = f"Dormant cleanup candidates ({len(items)})"
         operator_need = "cleanup"
@@ -1034,7 +1042,7 @@ def _build_low_signal_thread_summary_item(
         "queue_source": "managed_thread_followup",
         "action_queue_id": f"managed_thread_followup_summary:{followup_state}",
         "precedence": dict(newest.get("precedence") or {}),
-        "repo_id": repo_ids[0] if len(repo_ids) == 1 else None,
+        "repo_id": summary_repo_id,
         "name": name,
         "thread_count": len(items),
         "managed_thread_ids": [
