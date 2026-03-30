@@ -12,7 +12,10 @@ from codex_autorunner.agents.acp import (
     ACPMethodNotFoundError,
     ACPPermissionRequestEvent,
 )
-from codex_autorunner.agents.acp.errors import ACPProcessCrashedError
+from codex_autorunner.agents.acp.errors import (
+    ACPProcessCrashedError,
+    ACPProtocolError,
+)
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
 
@@ -199,6 +202,21 @@ async def test_client_ignores_known_cli_noise_on_stdout(tmp_path: Path) -> None:
 
         assert result.status == "completed"
         assert result.final_output == "fixture reply"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_unclassified_non_json_stdout(tmp_path: Path) -> None:
+    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        session = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(session.session_id, "stdout invalid")
+
+        with pytest.raises(
+            ACPProtocolError, match="ACP subprocess emitted invalid JSON"
+        ):
+            await handle.wait()
     finally:
         await client.close()
 
