@@ -64,10 +64,24 @@ class FakeACPServer:
             }
         )
         if prompt == "stdout noise":
+            _write_raw_stdout(self._lock, "\n")
             _write_raw_stdout(
                 self._lock,
                 "  ┊ 💻 $ curl -fsS http://127.0.0.1:4517/car/hub... 0.3s\n",
             )
+            _write_raw_stdout(
+                self._lock,
+                "\x1b[33m  [tool] (｡•́︿•̀｡) deliberating...\x1b[0m\n",
+            )
+        if prompt == "stdout invalid":
+            _write_raw_stdout(self._lock, "ACP dependencies not installed.\n")
+            return
+        if prompt == "stdout invalid bracketed":
+            _write_raw_stdout(
+                self._lock,
+                '[tool] {"id":"1","method":"prompt/completed"}\n',
+            )
+            return
         cancel_event = self._cancel_events[turn_id]
         if prompt == "needs permission":
             permission_id = f"perm-{self._next_permission}"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,7 +53,26 @@ _PERMISSION_NOTIFICATION_METHODS = (
 )
 _ACP_PROTOCOL_VERSION = 1
 _OFFICIAL_ACP_INIT_KEYS = frozenset({"agentInfo", "agentCapabilities"})
-_ACP_STDOUT_NOISE_PREFIXES = ("┊", "╎", "│")
+_ACP_STDOUT_NOISE_PREFIXES = (
+    "┊",
+    "╎",
+    "│",
+    "┌",
+    "┐",
+    "└",
+    "┘",
+    "├",
+    "┤",
+    "┬",
+    "┴",
+    "┼",
+    "╭",
+    "╮",
+    "╰",
+    "╯",
+)
+_ACP_STDOUT_BRACKETED_STATUS_RE = re.compile(r"^\[[^\]\s]{1,32}\]\s+(?![\[{])\S")
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 @dataclass(frozen=True)
@@ -183,12 +203,18 @@ def _coerce_stdout_text(line: bytes) -> str:
     return line.decode("utf-8", errors="replace").strip()
 
 
+def _strip_terminal_control_sequences(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
 def _is_ignorable_stdout_noise(line: bytes) -> bool:
     text = _coerce_stdout_text(line)
     if not text:
         return True
-    stripped = text.lstrip()
-    return stripped.startswith(_ACP_STDOUT_NOISE_PREFIXES)
+    stripped = _strip_terminal_control_sequences(text).lstrip()
+    return stripped.startswith(_ACP_STDOUT_NOISE_PREFIXES) or (
+        _ACP_STDOUT_BRACKETED_STATUS_RE.match(stripped) is not None
+    )
 
 
 class ACPPromptHandle:
@@ -532,12 +558,15 @@ class ACPClient:
                 self._stderr_task,
                 self._wait_task,
             ):
-                if transport_task is not None and not transport_task.done():
+                if transport_task is None:
+                    continue
+                if not transport_task.done():
                     transport_task.cancel()
                     try:
                         await transport_task
                     except asyncio.CancelledError:
                         pass
+                self._consume_transport_task_result(transport_task)
             await self._finalize_disconnect(self._disconnect_error)
 
     async def _ensure_transport_ready(self) -> None:
@@ -767,6 +796,19 @@ class ACPClient:
             return
         except Exception:
             self._logger.exception("Unhandled ACP background task failure")
+
+    def _consume_transport_task_result(self, task: asyncio.Task[Any]) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except ACPError:
+            return
+        except Exception:
+            self._logger.debug(
+                "Unhandled ACP transport task failure during shutdown",
+                exc_info=True,
+            )
 
     def prompt_events_snapshot(self, turn_id: str) -> tuple[ACPEvent, ...]:
         state = self._prompts.get(turn_id)
