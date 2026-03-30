@@ -581,8 +581,39 @@ def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
     assert fetched["repo_id"] == hub_env.repo_id
     assert fetched["resource_kind"] == "repo"
     assert fetched["resource_id"] == hub_env.repo_id
-    assert fetched["operator_status"] == "idle"
-    assert fetched["is_reusable"] is True
+
+
+def test_create_managed_thread_succeeds_when_binding_metadata_lookup_fails(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = create_hub_app(hub_env.hub_root)
+    monkeypatch.setattr(
+        managed_threads,
+        "active_chat_binding_metadata_by_thread",
+        lambda *, hub_root: (_ for _ in ()).throw(
+            RuntimeError("binding db unavailable")
+        ),
+    )
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "Degraded metadata thread",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["managed_thread_id"]
+    assert thread["chat_bound"] is False
+    assert thread["binding_kind"] is None
+    assert thread["binding_count"] == 0
+    assert thread["cleanup_protected"] is False
+    assert thread["operator_status"] == "idle"
+    assert thread["is_reusable"] is True
 
 
 def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) -> None:

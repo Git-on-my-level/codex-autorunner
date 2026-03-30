@@ -2397,6 +2397,36 @@ class TestIssue975CharacterizationMixedPmaState:
         assert thread_snapshot["binding_ids"] == ["discord:channel-123"]
         assert thread_snapshot["cleanup_protected"] is True
 
+    def test_snapshot_pma_threads_keeps_inventory_when_binding_lookup_fails(
+        self, hub_env
+    ) -> None:
+        from codex_autorunner.core.pma_context import _snapshot_pma_threads
+
+        store = PmaThreadStore(hub_env.hub_root)
+        thread = store.create_thread(
+            "codex",
+            hub_env.repo_root,
+            repo_id=hub_env.repo_id,
+            name="binding-failure-thread",
+        )
+        thread_id = str(thread["managed_thread_id"])
+
+        with patch(
+            "codex_autorunner.core.pma_context.active_chat_binding_metadata_by_thread",
+            side_effect=RuntimeError("binding db unavailable"),
+        ):
+            snapshot_threads = _snapshot_pma_threads(hub_env.hub_root)
+
+        thread_snapshot = next(
+            item
+            for item in snapshot_threads
+            if item.get("managed_thread_id") == thread_id
+        )
+        assert thread_snapshot["chat_bound"] is False
+        assert thread_snapshot["binding_kind"] is None
+        assert thread_snapshot["binding_count"] == 0
+        assert thread_snapshot["cleanup_protected"] is False
+
     def test_completed_thread_queue_item_is_optional_reuse_not_immediate_followup(
         self, tmp_path: Path
     ) -> None:

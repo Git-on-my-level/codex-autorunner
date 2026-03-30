@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     pass
 
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+_logger = logging.getLogger(__name__)
 
 
 def _is_within_root(path: Path, root: Path) -> bool:
@@ -226,6 +228,16 @@ def _chat_binding_defaults() -> dict[str, Any]:
         "binding_ids": [],
         "cleanup_protected": False,
     }
+
+
+def _load_chat_binding_metadata_by_thread(hub_root: Path) -> dict[str, dict[str, Any]]:
+    try:
+        return active_chat_binding_metadata_by_thread(hub_root=hub_root)
+    except Exception as exc:
+        _logger.warning(
+            "Could not load PMA chat-binding metadata for thread response: %s", exc
+        )
+        return {}
 
 
 def _apply_chat_binding_fields(
@@ -674,7 +686,7 @@ def build_managed_thread_crud_routes(
                 raise HTTPException(
                     status_code=503, detail="Automation action unavailable"
                 ) from exc
-        binding_metadata = active_chat_binding_metadata_by_thread(hub_root=hub_root)
+        binding_metadata = _load_chat_binding_metadata_by_thread(hub_root)
         response: dict[str, Any] = {
             "thread": _serialize_thread_target(
                 thread,
@@ -723,8 +735,8 @@ def build_managed_thread_crud_routes(
             resource_id=normalized_resource_id,
             limit=limit,
         )
-        binding_metadata = active_chat_binding_metadata_by_thread(
-            hub_root=request.app.state.config.root
+        binding_metadata = _load_chat_binding_metadata_by_thread(
+            request.app.state.config.root
         )
         return {
             "threads": [
@@ -742,8 +754,8 @@ def build_managed_thread_crud_routes(
         thread = service.get_thread_target(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        binding_metadata = active_chat_binding_metadata_by_thread(
-            hub_root=request.app.state.config.root
+        binding_metadata = _load_chat_binding_metadata_by_thread(
+            request.app.state.config.root
         )
         return {
             "thread": _serialize_thread_target(
@@ -798,8 +810,8 @@ def build_managed_thread_crud_routes(
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
         thread_payload = _serialize_managed_thread(updated)
-        binding_metadata = active_chat_binding_metadata_by_thread(
-            hub_root=request.app.state.config.root
+        binding_metadata = _load_chat_binding_metadata_by_thread(
+            request.app.state.config.root
         )
         return {
             "thread": _apply_chat_binding_fields(
@@ -840,8 +852,8 @@ def build_managed_thread_crud_routes(
                 ensure_ascii=True,
             ),
         )
-        binding_metadata = active_chat_binding_metadata_by_thread(
-            hub_root=request.app.state.config.root
+        binding_metadata = _load_chat_binding_metadata_by_thread(
+            request.app.state.config.root
         )
         return {
             "thread": _serialize_thread_target(
@@ -867,8 +879,8 @@ def build_managed_thread_crud_routes(
             managed_thread_id=managed_thread_id,
             payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
         )
-        binding_metadata = active_chat_binding_metadata_by_thread(
-            hub_root=request.app.state.config.root
+        binding_metadata = _load_chat_binding_metadata_by_thread(
+            request.app.state.config.root
         )
         return {
             "thread": _serialize_thread_target(

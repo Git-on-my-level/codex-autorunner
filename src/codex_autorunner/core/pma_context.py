@@ -645,12 +645,18 @@ def _snapshot_pma_threads(
     try:
         store = PmaThreadStore(hub_root)
         threads = store.list_threads(limit=limit)
+    except Exception as exc:
+        _logger.warning("Could not load PMA managed threads: %s", exc)
+        return []
+    try:
         chat_binding_metadata = active_chat_binding_metadata_by_thread(
             hub_root=hub_root
         )
     except Exception as exc:
-        _logger.warning("Could not load PMA managed threads: %s", exc)
-        return []
+        _logger.warning(
+            "Could not load PMA chat-binding metadata for thread snapshot: %s", exc
+        )
+        chat_binding_metadata = {}
 
     snapshot_threads: list[dict[str, Any]] = []
     for thread in threads[:limit]:
