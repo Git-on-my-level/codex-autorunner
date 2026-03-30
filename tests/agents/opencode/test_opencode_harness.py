@@ -95,12 +95,15 @@ class _StubSupervisor:
         self._client = client
         self.session_stall_timeout_seconds = session_stall_timeout_seconds
         self.runtime_instance_id = runtime_instance_id
+        self.get_client_error: Exception | None = None
         self.timeout_workspace_roots: list[Path] = []
         self.runtime_workspace_roots: list[Path] = []
         self.started_workspace_roots: list[Path] = []
         self.finished_workspace_roots: list[Path] = []
 
     async def get_client(self, _workspace_root: Path) -> _StubClient:
+        if self.get_client_error is not None:
+            raise self.get_client_error
         return self._client
 
     async def get_client_for_turn(self, workspace_root: Path) -> _StubClient:
@@ -304,6 +307,32 @@ async def test_opencode_harness_keeps_turn_guard_through_resume_start_and_wait()
 
     assert result.status == "ok"
     assert result.assistant_text == "hello world"
+    assert supervisor.finished_workspace_roots == [workspace]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_releases_reserved_turn_when_start_turn_setup_fails() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    supervisor = _StubSupervisor(_StubClient([]))
+    harness = OpenCodeHarness(supervisor)
+
+    resumed = await harness.resume_conversation(workspace, "session-1")
+    supervisor.get_client_error = RuntimeError("startup failed")
+
+    with pytest.raises(RuntimeError, match="startup failed"):
+        await harness.start_turn(
+            workspace,
+            resumed.id,
+            prompt="hello",
+            model=None,
+            reasoning=None,
+            approval_mode=None,
+            sandbox_policy=None,
+        )
+
+    assert supervisor.started_workspace_roots == [workspace]
     assert supervisor.finished_workspace_roots == [workspace]
 
 

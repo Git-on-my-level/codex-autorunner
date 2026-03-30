@@ -798,12 +798,16 @@ class OpenCodeHarness(AgentHarness):
         _ = input_items
         canonical_workspace = workspace_root.resolve()
         reserved_workspace = self._reserved_conversations.pop(conversation_id, None)
-        if reserved_workspace is None:
-            client, reserved_workspace = await self._acquire_turn_client(
-                canonical_workspace
-            )
-        else:
-            client = await self._supervisor.get_client(canonical_workspace)
+        try:
+            if reserved_workspace is None:
+                client, reserved_workspace = await self._acquire_turn_client(
+                    canonical_workspace
+                )
+            else:
+                client = await self._supervisor.get_client(canonical_workspace)
+        except Exception:
+            await self._release_turn_client(reserved_workspace)
+            raise
         if model is None:
             model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         model_payload = split_model_id(model)
@@ -851,12 +855,16 @@ class OpenCodeHarness(AgentHarness):
     ) -> TurnRef:
         canonical_workspace = workspace_root.resolve()
         reserved_workspace = self._reserved_conversations.pop(conversation_id, None)
-        if reserved_workspace is None:
-            client, reserved_workspace = await self._acquire_turn_client(
-                canonical_workspace
-            )
-        else:
-            client = await self._supervisor.get_client(canonical_workspace)
+        try:
+            if reserved_workspace is None:
+                client, reserved_workspace = await self._acquire_turn_client(
+                    canonical_workspace
+                )
+            else:
+                client = await self._supervisor.get_client(canonical_workspace)
+        except Exception:
+            await self._release_turn_client(reserved_workspace)
+            raise
         if model is None:
             model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         arguments = prompt if prompt else ""
