@@ -222,6 +222,23 @@ async def test_client_rejects_unclassified_non_json_stdout(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
+async def test_client_rejects_bracketed_json_like_stdout(tmp_path: Path) -> None:
+    client = ACPClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        session = await client.create_session(cwd=str(tmp_path))
+        handle = await client.start_prompt(
+            session.session_id, "stdout invalid bracketed"
+        )
+
+        with pytest.raises(
+            ACPProtocolError, match="ACP subprocess emitted invalid JSON"
+        ):
+            await handle.wait()
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_client_logs_background_permission_notification_task_failures(
     tmp_path: Path,
 ) -> None:

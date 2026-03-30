@@ -71,7 +71,7 @@ _ACP_STDOUT_NOISE_PREFIXES = (
     "╰",
     "╯",
 )
-_ACP_STDOUT_BRACKETED_STATUS_RE = re.compile(r"^\[[^\]\s]{1,32}\]\s+\S")
+_ACP_STDOUT_BRACKETED_STATUS_RE = re.compile(r"^\[[^\]\s]{1,32}\]\s+(?![\[{])\S")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
