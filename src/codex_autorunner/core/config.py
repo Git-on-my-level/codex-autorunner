@@ -359,6 +359,11 @@ def _default_github_automation_section() -> Dict[str, Any]:
             "duplicate_escalation_threshold": 3,
             "delivery_failure_escalation_threshold": 3,
         },
+        "polling": {
+            "enabled": False,
+            "watch_window_minutes": 30,
+            "interval_seconds": 90,
+        },
         "webhook_ingress": {
             "enabled": False,
             "max_payload_bytes": 262_144,

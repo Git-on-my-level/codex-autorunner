@@ -314,6 +314,71 @@ def test_load_repo_config_rejects_boolean_github_webhook_size_limits(
         load_repo_config(repo_root, hub_path=hub_root)
 
 
+@pytest.mark.parametrize("field", ["watch_window_minutes", "interval_seconds"])
+def test_load_repo_config_rejects_boolean_github_polling_size_limits(
+    tmp_path: Path, field: str
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {
+                "github": {
+                    "automation": {
+                        "polling": {
+                            field: True,
+                        }
+                    }
+                }
+            },
+        },
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(
+        ConfigError,
+        match=(f"github\\.automation\\.polling\\.{field} must be an integer"),
+    ):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
+def test_load_repo_config_rejects_invalid_github_reaction_profile(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {
+                "github": {
+                    "automation": {
+                        "reactions": {
+                            "profile": "chatty",
+                        }
+                    }
+                }
+            },
+        },
+    )
+
+    repo_root = hub_root / "repo"
+    repo_root.mkdir()
+
+    with pytest.raises(
+        ConfigError,
+        match=(
+            "github\\.automation\\.reactions\\.profile must be 'all' or 'minimal_noise'"
+        ),
+    ):
+        load_repo_config(repo_root, hub_path=hub_root)
+
+
 def test_load_repo_config_rejects_invalid_github_mutation_policy_value(
     tmp_path: Path,
 ) -> None:

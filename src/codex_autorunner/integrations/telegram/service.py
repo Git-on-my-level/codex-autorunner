@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .state import TelegramTopicRecord
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
-from ...core.config import load_repo_config
+from ...core.config import load_hub_config, load_repo_config
 from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -224,7 +224,15 @@ class TelegramBotService(
                 self._hub_config_path = root_hub_config
         if self._hub_root:
             try:
-                self._hub_supervisor = HubSupervisor.from_path(self._hub_root)
+                from ..github.polling import build_hub_scm_poll_processor
+
+                self._hub_supervisor = HubSupervisor.from_path(
+                    self._hub_root,
+                    scm_poll_processor=build_hub_scm_poll_processor(
+                        hub_root=self._hub_root,
+                        raw_config=load_hub_config(self._hub_root).raw,
+                    ),
+                )
             except Exception as exc:
                 log_event(
                     self._logger,

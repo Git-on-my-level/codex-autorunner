@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 14
+ORCHESTRATION_SCHEMA_VERSION = 15
 
 
 @dataclass(frozen=True)
@@ -961,6 +961,55 @@ def _apply_v14(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v15(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_scm_polling_watches (
+            watch_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            binding_id TEXT NOT NULL,
+            repo_slug TEXT NOT NULL,
+            repo_id TEXT,
+            pr_number INTEGER NOT NULL,
+            workspace_root TEXT NOT NULL,
+            thread_target_id TEXT,
+            poll_interval_seconds INTEGER NOT NULL,
+            state TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            next_poll_at TEXT NOT NULL,
+            last_polled_at TEXT,
+            last_error_text TEXT,
+            reaction_config_json TEXT NOT NULL DEFAULT '{}',
+            snapshot_json TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY (binding_id) REFERENCES orch_pr_bindings(binding_id)
+                ON DELETE CASCADE,
+            FOREIGN KEY (thread_target_id) REFERENCES orch_thread_targets(thread_target_id)
+                ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_orch_scm_polling_watches_provider_binding
+            ON orch_scm_polling_watches(provider, binding_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_polling_watches_due
+            ON orch_scm_polling_watches(state, next_poll_at, expires_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_scm_polling_watches_repo_pr
+            ON orch_scm_polling_watches(provider, repo_slug, pr_number, updated_at)
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -980,6 +1029,7 @@ _MIGRATIONS = (
     _MigrationStep(12, "add_scm_reaction_escalation_tracking", _apply_v12),
     _MigrationStep(13, "add_scm_event_correlation_ids", _apply_v13),
     _MigrationStep(14, "add_feedback_report_store", _apply_v14),
+    _MigrationStep(15, "add_scm_polling_watch_store", _apply_v15),
 )
 
 
@@ -1058,6 +1108,11 @@ _TABLE_DEFINITIONS = (
         name="orch_feedback_reports",
         role="authoritative",
         description="Durable structured feedback reports keyed by stable content-derived dedupe fingerprints.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_scm_polling_watches",
+        role="authoritative",
+        description="Bounded SCM polling watches for outbound-only PR follow-up automation.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",

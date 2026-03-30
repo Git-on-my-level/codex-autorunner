@@ -108,6 +108,54 @@ def test_discover_pr_binding_summary_returns_none_when_branch_has_no_pr(
     assert service.discover_pr_binding_summary() is None
 
 
+def test_pr_reviews_preserves_numeric_review_ids(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = GitHubService(tmp_path, raw_config={})
+
+    def _fake_gh(
+        args: list[str], *, cwd=None, check=True, timeout_seconds=None
+    ):  # type: ignore[no-untyped-def]
+        assert args[:3] == ["api", "repos/acme/widgets/pulls/17/reviews", "-F"]
+        _ = cwd, check, timeout_seconds
+        return type(
+            "Proc",
+            (),
+            {
+                "returncode": 0,
+                "stdout": json.dumps(
+                    [
+                        {
+                            "id": 12345,
+                            "state": "CHANGES_REQUESTED",
+                            "body": "Please add dedupe coverage.",
+                            "html_url": "https://example.invalid/reviews/12345",
+                            "user": {"login": "reviewer"},
+                            "commit_id": "abc123",
+                            "submitted_at": "2026-03-30T00:10:00Z",
+                        }
+                    ]
+                ),
+            },
+        )()
+
+    monkeypatch.setattr(service, "_gh", _fake_gh)
+
+    reviews = service.pr_reviews(owner="acme", repo="widgets", number=17)
+
+    assert reviews == [
+        {
+            "review_id": "12345",
+            "review_state": "CHANGES_REQUESTED",
+            "body": "Please add dedupe coverage.",
+            "html_url": "https://example.invalid/reviews/12345",
+            "author_login": "reviewer",
+            "commit_id": "abc123",
+            "submitted_at": "2026-03-30T00:10:00Z",
+        }
+    ]
+
+
 def test_sync_pr_does_not_append_duplicate_close_keyword(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

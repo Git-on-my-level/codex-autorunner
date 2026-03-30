@@ -666,6 +666,23 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                 automation.get("enabled"), bool
             ):
                 raise ConfigError("github.automation.enabled must be boolean")
+            reactions = automation.get("reactions")
+            if reactions is not None and not isinstance(reactions, dict):
+                raise ConfigError(
+                    "github.automation.reactions must be a mapping if provided"
+                )
+            if isinstance(reactions, dict):
+                profile = reactions.get("profile")
+                if profile is not None:
+                    if not isinstance(profile, str):
+                        raise ConfigError(
+                            "github.automation.reactions.profile must be a string"
+                        )
+                    normalized_profile = profile.strip().lower()
+                    if normalized_profile not in {"all", "minimal_noise"}:
+                        raise ConfigError(
+                            "github.automation.reactions.profile must be 'all' or 'minimal_noise'"
+                        )
             policy = automation.get("policy")
             if policy is not None and not isinstance(policy, dict):
                 raise ConfigError(
@@ -747,6 +764,28 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                     raise ConfigError(
                         "github.automation.webhook_ingress.max_raw_payload_bytes must be <= max_payload_bytes"
                     )
+            polling = automation.get("polling")
+            if polling is not None and not isinstance(polling, dict):
+                raise ConfigError(
+                    "github.automation.polling must be a mapping if provided"
+                )
+            if isinstance(polling, dict):
+                if "enabled" in polling and not isinstance(
+                    polling.get("enabled"), bool
+                ):
+                    raise ConfigError(
+                        "github.automation.polling.enabled must be boolean"
+                    )
+                for field in ("watch_window_minutes", "interval_seconds"):
+                    value = polling.get(field)
+                    if value is not None and not _is_strict_int(value):
+                        raise ConfigError(
+                            f"github.automation.polling.{field} must be an integer"
+                        )
+                    if isinstance(value, int) and value <= 0:
+                        raise ConfigError(
+                            f"github.automation.polling.{field} must be > 0"
+                        )
 
     server = cfg.get("server")
     if not isinstance(server, dict):

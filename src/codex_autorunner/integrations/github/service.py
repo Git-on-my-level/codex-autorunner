@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import subprocess
 import time
@@ -26,6 +27,9 @@ from ...core.utils import (
     resolve_executable,
     subprocess_env,
 )
+from .polling import GitHubScmPollingService
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubError(Exception):
@@ -320,6 +324,14 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
         return None
     text = value.strip()
     return text or None
+
+
+def _normalize_optional_identifier_text(value: Any) -> Optional[str]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    return _normalize_optional_text(value)
 
 
 def _normalize_positive_int(value: Any) -> Optional[int]:
@@ -688,7 +700,7 @@ class GitHubService:
             "view",
             str(number),
             "--json",
-            "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles,headRefName,baseRefName",
+            "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles,headRefName,baseRefName,headRefOid,isDraft",
         ]
         if repo_slug:
             args += ["-R", repo_slug]
@@ -705,6 +717,57 @@ class GitHubService:
                 "Unable to parse gh pr view output", status_code=500
             ) from exc
         return payload if isinstance(payload, dict) else {}
+
+    def pr_reviews(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        number: int,
+        cwd: Optional[Path] = None,
+    ) -> list[dict[str, Any]]:
+        proc = self._gh(
+            [
+                "api",
+                f"repos/{owner}/{repo}/pulls/{int(number)}/reviews",
+                "-F",
+                "per_page=100",
+            ],
+            cwd=cwd or self.repo_root,
+            check=False,
+            timeout_seconds=30,
+        )
+        if proc.returncode != 0:
+            return []
+        try:
+            payload = json.loads(proc.stdout or "[]")
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        reviews: list[dict[str, Any]] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            user = item.get("user")
+            author_login = (
+                _normalize_optional_text(user.get("login"))
+                if isinstance(user, dict)
+                else None
+            )
+            review = {
+                "review_id": _normalize_optional_identifier_text(item.get("id")),
+                "review_state": _normalize_optional_text(item.get("state")),
+                "body": _normalize_optional_text(item.get("body")),
+                "html_url": _normalize_optional_text(item.get("html_url")),
+                "author_login": author_login,
+                "commit_id": _normalize_optional_text(item.get("commit_id")),
+                "submitted_at": _normalize_optional_text(item.get("submitted_at")),
+            }
+            reviews.append(
+                {key: value for key, value in review.items() if value is not None}
+            )
+        return reviews
 
     def ensure_pr_head(
         self,
@@ -1175,11 +1238,33 @@ class GitHubService:
                 pr=pr, repo_slug=repo.name_with_owner
             )
         if binding_summary is not None:
-            self._persist_pr_binding(
+            persisted_binding = self._persist_pr_binding(
                 repo_slug=repo.name_with_owner,
                 summary=binding_summary,
                 existing_binding=binding_hint,
             )
+            hub_root, _repo_id = self._binding_context()
+            if persisted_binding is not None and hub_root is not None:
+                try:
+                    GitHubScmPollingService(
+                        hub_root,
+                        raw_config=(
+                            self.raw_config
+                            if isinstance(self.raw_config, dict)
+                            else None
+                        ),
+                    ).arm_watch(
+                        binding=persisted_binding,
+                        workspace_root=self.repo_root,
+                        reaction_config=self.raw_config,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed arming SCM polling watch for %s#%s",
+                        persisted_binding.repo_slug,
+                        persisted_binding.pr_number,
+                        exc_info=True,
+                    )
 
         state["repo"] = {"nameWithOwner": repo.name_with_owner, "url": repo.url}
         if pr_url:

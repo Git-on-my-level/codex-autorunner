@@ -300,6 +300,7 @@ def build_hub_supervisor(config: HubConfig) -> HubSupervisor:
         build_agent_backend_factory,
         build_app_server_supervisor_factory,
     )
+    from ....integrations.github.polling import build_hub_scm_poll_processor
 
     return HubSupervisor(
         config,
@@ -307,6 +308,10 @@ def build_hub_supervisor(config: HubConfig) -> HubSupervisor:
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
         backend_orchestrator_builder=build_backend_orchestrator,
         agent_id_validator=validate_agent_id,
+        scm_poll_processor=build_hub_scm_poll_processor(
+            hub_root=config.root,
+            raw_config=config.raw,
+        ),
     )
 
 

@@ -137,6 +137,11 @@
         "enabled": true,
         "merged": true
       },
+      "polling": {
+        "enabled": false,
+        "interval_seconds": 90,
+        "watch_window_minutes": 30
+      },
       "webhook_ingress": {
         "enabled": false,
         "max_payload_bytes": 262144,
