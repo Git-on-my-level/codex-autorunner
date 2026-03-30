@@ -31,12 +31,6 @@ _UPDATE_LOCK_STARTUP_GRACE_SECONDS = 10.0
 _UPDATE_LOCK_CMD_HINTS = ("codex_autorunner.core.update_runner",)
 _UPDATE_BUILD_ARTIFACT_DIRS = ("build", "dist", ".eggs")
 _UPDATE_BUILD_ARTIFACT_GLOBS = ("*.egg-info", "src/*.egg-info")
-_RETRYABLE_REFRESH_FAILURE_MARKERS = (
-    "failed building wheel",
-    "failed-wheel-build-for-install",
-    "building wheel for codex-autorunner",
-    "no such file or directory: 'build/",
-)
 
 
 def _run_cmd(cmd: list[str], cwd: Path) -> None:
@@ -92,7 +86,16 @@ def _refresh_failure_is_retryable(output_lines: list[str]) -> bool:
     if not output_lines:
         return False
     haystack = "\n".join(output_lines).lower()
-    return any(marker in haystack for marker in _RETRYABLE_REFRESH_FAILURE_MARKERS)
+    if "codex-autorunner" not in haystack:
+        return False
+    if "no such file or directory" not in haystack:
+        return False
+    if "build/" not in haystack and "build\\" not in haystack:
+        return False
+    return (
+        "failed building wheel for codex-autorunner" in haystack
+        or "building wheel for codex-autorunner" in haystack
+    )
 
 
 def _reset_update_cache_for_retry(
@@ -108,11 +111,11 @@ def _reset_update_cache_for_retry(
         return False
     try:
         logger.warning(
-            "Refresh failed with a retryable packaging error; cleaning ignored cache artifacts in %s and retrying once.",
+            "Refresh failed with a retryable stale-build-artifact error; resetting tracked files and cleaning build artifacts in %s before retrying once.",
             update_dir,
         )
         _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
-        _run_cmd(["git", "clean", "-fdX"], cwd=update_dir)
+        _cleanup_update_build_artifacts(update_dir, logger)
     except Exception as exc:
         logger.warning(
             "Aggressive update cache cleanup failed; refresh retry skipped. %s",
@@ -904,7 +907,6 @@ def _system_update_worker(
             and _refresh_failure_is_retryable(output_tail)
             and _reset_update_cache_for_retry(update_dir, logger=logger)
         ):
-            _cleanup_update_build_artifacts(update_dir, logger)
             returncode, output_tail = _run_refresh_script(
                 refresh_script=refresh_script,
                 update_dir=update_dir,

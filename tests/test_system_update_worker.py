@@ -535,10 +535,12 @@ def test_system_update_worker_retries_refresh_after_packaging_failure(
             return self.returncode
 
     popen_calls = 0
+    build_exists_at_refresh: list[bool] = []
 
     def fake_popen(cmd, cwd, env, stdout, stderr, text):  # type: ignore[no-untyped-def]
         nonlocal popen_calls
         popen_calls += 1
+        build_exists_at_refresh.append((update_dir / "build").exists())
         if popen_calls == 1:
             return _Proc(
                 [
@@ -566,5 +568,124 @@ def test_system_update_worker_retries_refresh_after_packaging_failure(
     payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
     assert payload["status"] == "ok"
     assert popen_calls == 2
-    assert ["git", "clean", "-fdX"] in run_cmd_calls
+    assert build_exists_at_refresh == [False, False]
+    assert ["git", "reset", "--hard", "FETCH_HEAD"] in run_cmd_calls
+    assert not (update_dir / "build").exists()
+
+
+def test_system_update_worker_does_not_retry_non_packaging_refresh_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    update_dir = tmp_path / "update"
+    (update_dir / ".git").mkdir(parents=True)
+    refresh_script = update_dir / "scripts" / "safe-refresh-local-linux-hub.sh"
+    refresh_script.parent.mkdir(parents=True, exist_ok=True)
+    refresh_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+    monkeypatch.setattr(system.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+    monkeypatch.setattr(system.update_core, "_is_valid_git_repo", lambda _path: True)
+
+    run_cmd_calls: list[list[str]] = []
+
+    def fake_run_cmd(cmd: list[str], cwd: Path) -> None:
+        run_cmd_calls.append(cmd)
+
+    monkeypatch.setattr(system.update_core, "_run_cmd", fake_run_cmd)
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.stdout = ["Hub health check failed.\n"]
+            self.returncode = 1
+
+        def wait(self) -> int:
+            return self.returncode
+
+    popen_calls = 0
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text):  # type: ignore[no-untyped-def]
+        nonlocal popen_calls
+        popen_calls += 1
+        return _Proc()
+
+    monkeypatch.setattr(system.subprocess, "Popen", fake_popen)
+    logger = logging.getLogger("test")
+
+    system._system_update_worker(
+        repo_url="https://example.com/repo.git",
+        repo_ref="main",
+        update_dir=update_dir,
+        logger=logger,
+        update_target="web",
+        update_backend="systemd-user",
+        skip_checks=True,
+    )
+
+    payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
+    assert payload["status"] == "rollback"
+    assert payload["exit_code"] == 1
+    assert popen_calls == 1
+    assert run_cmd_calls.count(["git", "reset", "--hard", "FETCH_HEAD"]) == 1
+
+
+def test_system_update_worker_rolls_back_when_retryable_refresh_failure_persists(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    update_dir = tmp_path / "update"
+    (update_dir / ".git").mkdir(parents=True)
+    (update_dir / "build").mkdir()
+    refresh_script = update_dir / "scripts" / "safe-refresh-local-linux-hub.sh"
+    refresh_script.parent.mkdir(parents=True, exist_ok=True)
+    refresh_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+    monkeypatch.setattr(system.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+    monkeypatch.setattr(system.update_core, "_is_valid_git_repo", lambda _path: True)
+
+    run_cmd_calls: list[list[str]] = []
+
+    def fake_run_cmd(cmd: list[str], cwd: Path) -> None:
+        run_cmd_calls.append(cmd)
+
+    monkeypatch.setattr(system.update_core, "_run_cmd", fake_run_cmd)
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.stdout = [
+                "error: subprocess-exited-with-error\n",
+                "Failed building wheel for codex-autorunner\n",
+                "error: [Errno 2] No such file or directory: 'build/bdist...'\n",
+            ]
+            self.returncode = 1
+
+        def wait(self) -> int:
+            return self.returncode
+
+    popen_calls = 0
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text):  # type: ignore[no-untyped-def]
+        nonlocal popen_calls
+        popen_calls += 1
+        return _Proc()
+
+    monkeypatch.setattr(system.subprocess, "Popen", fake_popen)
+    logger = logging.getLogger("test")
+
+    system._system_update_worker(
+        repo_url="https://example.com/repo.git",
+        repo_ref="main",
+        update_dir=update_dir,
+        logger=logger,
+        update_target="web",
+        update_backend="systemd-user",
+        skip_checks=True,
+    )
+
+    payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
+    assert payload["status"] == "rollback"
+    assert payload["exit_code"] == 1
+    assert popen_calls == 2
+    assert ["git", "reset", "--hard", "FETCH_HEAD"] in run_cmd_calls
     assert not (update_dir / "build").exists()
