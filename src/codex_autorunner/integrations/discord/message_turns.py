@@ -1320,6 +1320,10 @@ async def _finalize_discord_thread_execution(
         or started.thread.backend_thread_id
         or ""
     ).strip()
+    started_execution_status = str(
+        getattr(started.execution, "status", "") or ""
+    ).strip()
+    started_execution_error = str(getattr(started.execution, "error", "") or "").strip()
     event_state = runtime_event_state or RuntimeThreadRunEventState()
     stream_task: Optional[asyncio.Task[None]] = None
 
@@ -1377,17 +1381,34 @@ async def _finalize_discord_thread_execution(
         stream_task = asyncio.create_task(_pump_runtime_events())
 
     try:
-        outcome = await await_runtime_thread_outcome(
-            started,
-            interrupt_event=None,
-            timeout_seconds=DISCORD_PMA_TIMEOUT_SECONDS,
-            execution_error_message=public_execution_error,
-        )
+        if started_execution_status == "error":
+            outcome = RuntimeThreadOutcome(
+                status="error",
+                assistant_text="",
+                error=started_execution_error or public_execution_error,
+                backend_thread_id=current_backend_thread_id,
+                backend_turn_id=started.execution.backend_id,
+            )
+        elif started_execution_status == "interrupted":
+            outcome = RuntimeThreadOutcome(
+                status="interrupted",
+                assistant_text="",
+                error=interrupted_error,
+                backend_thread_id=current_backend_thread_id,
+                backend_turn_id=started.execution.backend_id,
+            )
+        else:
+            outcome = await await_runtime_thread_outcome(
+                started,
+                interrupt_event=None,
+                timeout_seconds=DISCORD_PMA_TIMEOUT_SECONDS,
+                execution_error_message=public_execution_error,
+            )
     except Exception:
         outcome = RuntimeThreadOutcome(
             status="error",
             assistant_text="",
-            error=public_execution_error,
+            error=started_execution_error or public_execution_error,
             backend_thread_id=current_backend_thread_id,
             backend_turn_id=started.execution.backend_id,
         )

@@ -7478,6 +7478,80 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
 
 
 @pytest.mark.anyio
+async def test_finalize_discord_thread_execution_prefers_started_execution_error(
+    tmp_path: Path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    service = SimpleNamespace(
+        _config=SimpleNamespace(root=tmp_path),
+        _logger=logging.getLogger("test.discord.finalize"),
+    )
+
+    captured_result: dict[str, Any] = {}
+
+    class _OrchestrationServiceStub:
+        def get_thread_target(self, managed_thread_id: str) -> Any:
+            _ = managed_thread_id
+            return SimpleNamespace(backend_thread_id=None)
+
+        def record_execution_result(
+            self,
+            managed_thread_id: str,
+            managed_turn_id: str,
+            *,
+            status: str,
+            assistant_text: str,
+            error: Optional[str],
+            backend_turn_id: Optional[str],
+            transcript_turn_id: Optional[str],
+        ) -> Any:
+            _ = (
+                managed_thread_id,
+                managed_turn_id,
+                assistant_text,
+                backend_turn_id,
+                transcript_turn_id,
+            )
+            captured_result["status"] = status
+            captured_result["error"] = error
+            return SimpleNamespace(status=status, error=error)
+
+    started = SimpleNamespace(
+        thread=SimpleNamespace(
+            thread_target_id="managed-thread-1",
+            backend_thread_id=None,
+        ),
+        execution=SimpleNamespace(
+            execution_id="turn-1",
+            status="error",
+            backend_id=None,
+            error=(
+                "ACP subprocess emitted invalid JSON: " "b'  [tool] deliberating...\\n'"
+            ),
+        ),
+        request=SimpleNamespace(message_text="What did we do in this session so far?"),
+        workspace_root=tmp_path,
+        harness=object(),
+    )
+
+    result = await discord_message_turns_module._finalize_discord_thread_execution(
+        service,
+        orchestration_service=_OrchestrationServiceStub(),
+        started=started,
+        channel_id="channel-1",
+        public_execution_error="Discord PMA turn failed",
+        timeout_error="Discord PMA turn timed out",
+        interrupted_error="Discord PMA turn interrupted",
+    )
+
+    assert result["status"] == "error"
+    assert "ACP subprocess emitted invalid JSON" in str(result["error"])
+    assert captured_result["status"] == "error"
+    assert "ACP subprocess emitted invalid JSON" in str(captured_result["error"])
+
+
+@pytest.mark.anyio
 async def test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flush_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
