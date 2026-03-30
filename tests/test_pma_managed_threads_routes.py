@@ -9,7 +9,11 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
-from codex_autorunner.core.orchestration import ActiveWorkSummary, ThreadTarget
+from codex_autorunner.core.orchestration import (
+    ActiveWorkSummary,
+    OrchestrationBindingStore,
+    ThreadTarget,
+)
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import managed_threads
@@ -521,6 +525,59 @@ def test_get_managed_thread_returns_created_thread(hub_env) -> None:
     assert get_resp.status_code == 200
     fetched = get_resp.json()["thread"]
     assert fetched["managed_thread_id"] == created["managed_thread_id"]
+
+
+def test_managed_thread_routes_expose_chat_binding_metadata(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "codex",
+                **_repo_owner(hub_env),
+                "name": "Chat-bound thread",
+            },
+        )
+        assert create_resp.status_code == 200
+        created = create_resp.json()["thread"]
+        thread_id = created["managed_thread_id"]
+        assert created["chat_bound"] is False
+        assert created["cleanup_protected"] is False
+
+        OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
+            surface_kind="telegram",
+            surface_key="telegram:-1001:root",
+            thread_target_id=thread_id,
+            agent_id="codex",
+            repo_id=hub_env.repo_id,
+            mode="reuse",
+        )
+
+        get_resp = client.get(f"/hub/pma/threads/{thread_id}")
+        list_resp = client.get(
+            "/hub/pma/threads",
+            params={"agent": "codex", **_repo_owner(hub_env), "limit": 200},
+        )
+
+    assert get_resp.status_code == 200
+    fetched = get_resp.json()["thread"]
+    assert fetched["chat_bound"] is True
+    assert fetched["binding_kind"] == "telegram"
+    assert fetched["binding_id"] == "telegram:-1001:root"
+    assert fetched["binding_count"] == 1
+    assert fetched["binding_kinds"] == ["telegram"]
+    assert fetched["binding_ids"] == ["telegram:-1001:root"]
+    assert fetched["cleanup_protected"] is True
+
+    listed = next(
+        item
+        for item in list_resp.json()["threads"]
+        if item["managed_thread_id"] == thread_id
+    )
+    assert listed["chat_bound"] is True
+    assert listed["binding_kind"] == "telegram"
+    assert listed["cleanup_protected"] is True
     assert fetched["repo_id"] == hub_env.repo_id
     assert fetched["resource_kind"] == "repo"
     assert fetched["resource_id"] == hub_env.repo_id

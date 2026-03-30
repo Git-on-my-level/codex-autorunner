@@ -12,6 +12,7 @@ from .....core.car_context import (
     default_managed_thread_context_profile,
     normalize_car_context_profile,
 )
+from .....core.chat_bindings import active_chat_binding_metadata_by_thread
 from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
@@ -215,7 +216,51 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
+def _chat_binding_defaults() -> dict[str, Any]:
+    return {
+        "chat_bound": False,
+        "binding_kind": None,
+        "binding_id": None,
+        "binding_count": 0,
+        "binding_kinds": [],
+        "binding_ids": [],
+        "cleanup_protected": False,
+    }
+
+
+def _apply_chat_binding_fields(
+    payload: dict[str, Any],
+    *,
+    managed_thread_id: Optional[str],
+    binding_metadata_by_thread: Optional[dict[str, dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    payload.update(_chat_binding_defaults())
+    if not managed_thread_id:
+        return payload
+    binding_metadata = (binding_metadata_by_thread or {}).get(managed_thread_id, {})
+    if not isinstance(binding_metadata, dict):
+        return payload
+    payload.update(
+        {
+            "chat_bound": bool(binding_metadata.get("chat_bound")),
+            "binding_kind": normalize_optional_text(
+                binding_metadata.get("binding_kind")
+            ),
+            "binding_id": normalize_optional_text(binding_metadata.get("binding_id")),
+            "binding_count": int(binding_metadata.get("binding_count") or 0),
+            "binding_kinds": list(binding_metadata.get("binding_kinds") or []),
+            "binding_ids": list(binding_metadata.get("binding_ids") or []),
+            "cleanup_protected": bool(binding_metadata.get("cleanup_protected")),
+        }
+    )
+    return payload
+
+
+def _serialize_thread_target(
+    thread: ThreadTarget,
+    *,
+    binding_metadata_by_thread: Optional[dict[str, dict[str, Any]]] = None,
+) -> dict[str, Any]:
     payload = {
         "managed_thread_id": thread.thread_target_id,
         "agent": thread.agent_id,
@@ -250,7 +295,11 @@ def _serialize_thread_target(thread: ThreadTarget) -> dict[str, Any]:
             lifecycle_status=thread.lifecycle_status,
         )
     )
-    return payload
+    return _apply_chat_binding_fields(
+        payload,
+        managed_thread_id=thread.thread_target_id,
+        binding_metadata_by_thread=binding_metadata_by_thread,
+    )
 
 
 def _raise_agent_workspace_runtime_not_ready(
@@ -625,7 +674,13 @@ def build_managed_thread_crud_routes(
                 raise HTTPException(
                     status_code=503, detail="Automation action unavailable"
                 ) from exc
-        response: dict[str, Any] = {"thread": _serialize_thread_target(thread)}
+        binding_metadata = active_chat_binding_metadata_by_thread(hub_root=hub_root)
+        response: dict[str, Any] = {
+            "thread": _serialize_thread_target(
+                thread,
+                binding_metadata_by_thread=binding_metadata,
+            )
+        }
         if notification is not None:
             response["notification"] = notification
         return response
@@ -668,7 +723,18 @@ def build_managed_thread_crud_routes(
             resource_id=normalized_resource_id,
             limit=limit,
         )
-        return {"threads": [_serialize_thread_target(thread) for thread in threads]}
+        binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=request.app.state.config.root
+        )
+        return {
+            "threads": [
+                _serialize_thread_target(
+                    thread,
+                    binding_metadata_by_thread=binding_metadata,
+                )
+                for thread in threads
+            ]
+        }
 
     @router.get("/threads/{managed_thread_id}")
     def get_managed_thread(managed_thread_id: str, request: Request) -> dict[str, Any]:
@@ -676,7 +742,15 @@ def build_managed_thread_crud_routes(
         thread = service.get_thread_target(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": _serialize_thread_target(thread)}
+        binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=request.app.state.config.root
+        )
+        return {
+            "thread": _serialize_thread_target(
+                thread,
+                binding_metadata_by_thread=binding_metadata,
+            )
+        }
 
     @router.post("/threads/{managed_thread_id}/compact")
     def compact_managed_thread(
@@ -723,7 +797,17 @@ def build_managed_thread_crud_routes(
         updated = store.get_thread(managed_thread_id)
         if updated is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        return {"thread": _serialize_managed_thread(updated)}
+        thread_payload = _serialize_managed_thread(updated)
+        binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=request.app.state.config.root
+        )
+        return {
+            "thread": _apply_chat_binding_fields(
+                thread_payload,
+                managed_thread_id=managed_thread_id,
+                binding_metadata_by_thread=binding_metadata,
+            )
+        }
 
     @router.post("/threads/{managed_thread_id}/resume")
     async def resume_managed_thread(
@@ -756,7 +840,15 @@ def build_managed_thread_crud_routes(
                 ensure_ascii=True,
             ),
         )
-        return {"thread": _serialize_thread_target(updated)}
+        binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=request.app.state.config.root
+        )
+        return {
+            "thread": _serialize_thread_target(
+                updated,
+                binding_metadata_by_thread=binding_metadata,
+            )
+        }
 
     @router.post("/threads/{managed_thread_id}/archive")
     def archive_managed_thread(
@@ -775,7 +867,15 @@ def build_managed_thread_crud_routes(
             managed_thread_id=managed_thread_id,
             payload_json=json.dumps({"old_status": old_status}, ensure_ascii=True),
         )
-        return {"thread": _serialize_thread_target(updated)}
+        binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=request.app.state.config.root
+        )
+        return {
+            "thread": _serialize_thread_target(
+                updated,
+                binding_metadata_by_thread=binding_metadata,
+            )
+        }
 
     @router.get("/threads/{managed_thread_id}/turns")
     def list_managed_thread_turns(

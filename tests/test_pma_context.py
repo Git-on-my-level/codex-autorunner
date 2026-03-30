@@ -13,6 +13,7 @@ from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
 from codex_autorunner.core.hub_inbox_resolution import record_message_resolution
+from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.pma_context import (
     PMA_ACTIVE_CONTEXT_MAX_LINES,
     build_hub_snapshot,
@@ -2361,6 +2362,41 @@ class TestIssue975CharacterizationMixedPmaState:
         assert "followup_state=reusable" in result
         assert "show reusable threads" in result
 
+    def test_snapshot_pma_threads_expose_chat_binding_metadata(self, hub_env) -> None:
+        from codex_autorunner.core.pma_context import _snapshot_pma_threads
+
+        store = PmaThreadStore(hub_env.hub_root)
+        thread = store.create_thread(
+            "codex",
+            hub_env.repo_root,
+            repo_id=hub_env.repo_id,
+            name="chat-bound-thread",
+        )
+        thread_id = str(thread["managed_thread_id"])
+        OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
+            surface_kind="discord",
+            surface_key="discord:channel-123",
+            thread_target_id=thread_id,
+            agent_id="codex",
+            repo_id=hub_env.repo_id,
+            mode="reuse",
+        )
+
+        snapshot_threads = _snapshot_pma_threads(hub_env.hub_root)
+        thread_snapshot = next(
+            item
+            for item in snapshot_threads
+            if item.get("managed_thread_id") == thread_id
+        )
+
+        assert thread_snapshot["chat_bound"] is True
+        assert thread_snapshot["binding_kind"] == "discord"
+        assert thread_snapshot["binding_id"] == "discord:channel-123"
+        assert thread_snapshot["binding_count"] == 1
+        assert thread_snapshot["binding_kinds"] == ["discord"]
+        assert thread_snapshot["binding_ids"] == ["discord:channel-123"]
+        assert thread_snapshot["cleanup_protected"] is True
+
     def test_completed_thread_queue_item_is_optional_reuse_not_immediate_followup(
         self, tmp_path: Path
     ) -> None:
@@ -2570,6 +2606,67 @@ class TestIssue975CharacterizationMixedPmaState:
         assert archive_item["recommended_action"] == "show_cleanup_candidates"
         assert "counts-first summary" in (archive_item.get("why_selected") or "")
         assert "thread-completed-1" in (archive_item.get("managed_thread_ids") or [])
+
+    def test_stale_chat_bound_thread_becomes_protected_inventory(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.core.pma_context import (
+            _render_hub_snapshot,
+            build_pma_action_queue,
+        )
+
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot(
+            include_dispatch=False,
+            include_failed_run=False,
+            include_completed_run=False,
+            include_pma_file=False,
+        )
+        pma_threads = snapshot.get("pma_threads") or []
+        stale_thread = next(
+            item
+            for item in pma_threads
+            if item.get("managed_thread_id") == "thread-completed-1"
+        )
+        stale_thread["chat_bound"] = True
+        stale_thread["binding_kind"] = "discord"
+        stale_thread["binding_id"] = "discord:channel-123"
+        stale_thread["binding_count"] = 1
+        stale_thread["binding_kinds"] = ["discord"]
+        stale_thread["binding_ids"] = ["discord:channel-123"]
+        stale_thread["cleanup_protected"] = True
+
+        queue = build_pma_action_queue(
+            inbox=[],
+            pma_threads=pma_threads,
+            pma_files_detail={"inbox": [], "outbox": []},
+            automation={},
+            generated_at="2026-03-16T12:00:00Z",
+            stale_threshold_seconds=3600,
+        )
+
+        protected_item = next(
+            item
+            for item in queue
+            if item.get("item_type") == "managed_thread_followup_summary"
+            and item.get("followup_state") == "protected_chat_bound"
+        )
+        assert protected_item["operator_need"] == "protected"
+        assert protected_item["thread_count"] == 1
+        assert protected_item["recommended_action"] == "show_protected_threads"
+        assert protected_item["cleanup_protected"] is True
+        assert protected_item["chat_bound_thread_count"] == 1
+        assert "thread-completed-1" in (protected_item.get("managed_thread_ids") or [])
+        assert not any(
+            "thread-completed-1" in (item.get("managed_thread_ids") or [])
+            for item in queue
+            if item.get("followup_state") == "idle_archive_candidate"
+        )
+
+        snapshot["action_queue"] = queue
+        rendered = _render_hub_snapshot(snapshot)
+        assert "Protected chat-bound threads (1)" in rendered
+        assert "clean up workspace" in rendered
 
     def test_stale_pma_file_queue_item_is_marked_as_review_not_process(
         self, tmp_path: Path

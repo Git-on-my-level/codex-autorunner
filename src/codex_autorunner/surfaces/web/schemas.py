@@ -317,18 +317,10 @@ class PmaManagedThreadCreateRequest(Payload):
             return value
         payload = dict(value)
         repo_id = payload.get("repo_id", payload.get("repoId"))
-        if (
-            repo_id is not None
-            and payload.get("resource_id") is None
-            and payload.get("resourceId") is None
-        ):
-            payload["resource_id"] = repo_id
-        if (
-            repo_id is not None
-            and payload.get("resource_kind") is None
-            and payload.get("resourceKind") is None
-        ):
-            payload["resource_kind"] = "repo"
+        if repo_id is not None:
+            raise ValueError(
+                "repo_id is not supported; use resource_kind='repo' with resource_id"
+            )
         payload["notify_on_explicit"] = any(
             key in value for key in ("notify_on", "notifyOn")
         )

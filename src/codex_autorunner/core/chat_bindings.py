@@ -473,6 +473,86 @@ def _orchestration_binding_counts_by_source(
     return source_counts
 
 
+def active_chat_binding_metadata_by_thread(
+    *, hub_root: Path
+) -> dict[str, dict[str, Any]]:
+    """Return active chat-binding metadata keyed by orchestration thread id."""
+
+    try:
+        with open_orchestration_sqlite(hub_root) as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    target_id,
+                    surface_kind,
+                    surface_key,
+                    updated_at
+                  FROM orch_bindings
+                 WHERE disabled_at IS NULL
+                   AND target_kind = 'thread'
+                   AND surface_kind IN ('discord', 'telegram')
+                   AND TRIM(COALESCE(target_id, '')) != ''
+                """
+            ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc).lower():
+            return {}
+        raise RuntimeError(
+            f"Failed reading orchestration chat bindings from {hub_root}: {exc}"
+        ) from exc
+
+    bindings_by_thread: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        thread_target_id = _normalize_scope(row["target_id"])
+        surface_kind = _normalize_scope(row["surface_kind"])
+        surface_key = _normalize_scope(row["surface_key"])
+        if thread_target_id is None or surface_kind is None or surface_key is None:
+            continue
+        bindings_by_thread.setdefault(thread_target_id, []).append(
+            {
+                "surface_kind": surface_kind,
+                "surface_key": surface_key,
+                "updated_at": row["updated_at"],
+            }
+        )
+
+    metadata_by_thread: dict[str, dict[str, Any]] = {}
+    for thread_target_id, bindings in bindings_by_thread.items():
+        if not bindings:
+            continue
+        ordered = sorted(
+            bindings,
+            key=lambda item: (
+                _parse_iso_timestamp(item.get("updated_at")),
+                1 if item.get("surface_kind") == "telegram" else 0,
+                str(item.get("surface_key") or ""),
+            ),
+        )
+        preferred = ordered[-1]
+        binding_kinds = sorted(
+            {
+                str(item.get("surface_kind") or "").strip()
+                for item in bindings
+                if str(item.get("surface_kind") or "").strip()
+            }
+        )
+        binding_ids = [
+            str(item.get("surface_key") or "").strip()
+            for item in ordered
+            if str(item.get("surface_key") or "").strip()
+        ]
+        metadata_by_thread[thread_target_id] = {
+            "chat_bound": True,
+            "binding_kind": preferred.get("surface_kind"),
+            "binding_id": preferred.get("surface_key"),
+            "binding_count": len(bindings),
+            "binding_kinds": binding_kinds,
+            "binding_ids": binding_ids,
+            "cleanup_protected": True,
+        }
+    return metadata_by_thread
+
+
 def _orchestration_binding_timestamps_by_workspace(
     *,
     hub_root: Path,
@@ -727,6 +807,7 @@ def preferred_non_pma_chat_notification_sources_by_workspace(
 __all__ = [
     "active_chat_binding_counts",
     "active_chat_binding_counts_by_source",
+    "active_chat_binding_metadata_by_thread",
     "preferred_non_pma_chat_notification_source_for_workspace",
     "preferred_non_pma_chat_notification_sources_by_workspace",
     "repo_has_active_chat_binding",

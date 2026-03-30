@@ -14,6 +14,7 @@ from ..tickets.files import list_ticket_paths, safe_relpath
 from ..tickets.models import Dispatch
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..tickets.replies import resolve_reply_paths
+from .chat_bindings import active_chat_binding_metadata_by_thread
 from .config import load_hub_config, load_repo_config
 from .filebox import BOXES, empty_listing, list_filebox
 from .flows.failure_diagnostics import (
@@ -130,6 +131,7 @@ First-turn routine:
 3) BRANCH B - Managed threads vs ticket flows:
    - If request is exploratory/review/debug/quick-fix work in one managed resource, prefer managed threads.
    - If `hub_snapshot.pma_threads` has a relevant active thread, resume it instead of spawning a new one.
+   - Treat `chat_bound=true` managed threads as continuity artifacts protected from cleanup by default. Broad requests like "clean up workspace" do not authorize archiving or removing them; only explicit user direction does.
    - If no suitable thread exists, spawn one, run work, and keep it compact:
      - `car pma thread spawn --agent codex --repo <repo_id> --name <label>`
      - `car pma thread spawn --resource-kind agent_workspace --resource-id <workspace_id> --name <label>`
@@ -643,12 +645,16 @@ def _snapshot_pma_threads(
     try:
         store = PmaThreadStore(hub_root)
         threads = store.list_threads(limit=limit)
+        chat_binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=hub_root
+        )
     except Exception as exc:
         _logger.warning("Could not load PMA managed threads: %s", exc)
         return []
 
     snapshot_threads: list[dict[str, Any]] = []
     for thread in threads[:limit]:
+        managed_thread_id = str(thread.get("managed_thread_id") or "").strip()
         workspace_raw = str(thread.get("workspace_root") or "").strip()
         workspace_root = workspace_raw
         if workspace_raw:
@@ -656,9 +662,11 @@ def _snapshot_pma_threads(
                 workspace_root = safe_relpath(Path(workspace_raw).resolve(), hub_root)
             except Exception:
                 workspace_root = workspace_raw
+        chat_binding = chat_binding_metadata.get(managed_thread_id, {})
         snapshot_threads.append(
             {
-                "managed_thread_id": thread.get("managed_thread_id"),
+                "managed_thread_id": managed_thread_id
+                or thread.get("managed_thread_id"),
                 "agent": thread.get("agent"),
                 "repo_id": thread.get("repo_id"),
                 "resource_kind": thread.get("resource_kind"),
@@ -679,6 +687,13 @@ def _snapshot_pma_threads(
                     max_preview_chars,
                 ),
                 "updated_at": thread.get("updated_at"),
+                "chat_bound": bool(chat_binding.get("chat_bound")),
+                "binding_kind": chat_binding.get("binding_kind"),
+                "binding_id": chat_binding.get("binding_id"),
+                "binding_count": int(chat_binding.get("binding_count") or 0),
+                "binding_kinds": list(chat_binding.get("binding_kinds") or []),
+                "binding_ids": list(chat_binding.get("binding_ids") or []),
+                "cleanup_protected": bool(chat_binding.get("cleanup_protected")),
             }
         )
     return snapshot_threads
@@ -831,6 +846,8 @@ def _thread_followup_state_rank(state: str) -> int:
         return 10
     if normalized == "reusable":
         return 20
+    if normalized == "protected_chat_bound":
+        return 25
     if normalized == "idle_archive_candidate":
         return 30
     return 99
@@ -840,6 +857,9 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
     status = str(entry.get("status") or "").strip().lower()
     status_reason = str(entry.get("status_reason") or "").strip().lower()
     last_turn_id = str(entry.get("last_turn_id") or "").strip()
+    is_chat_bound = bool(
+        entry.get("chat_bound") is True or entry.get("cleanup_protected") is True
+    )
     freshness = _extract_entry_freshness(entry)
     is_stale = bool(
         isinstance(freshness, Mapping) and freshness.get("is_stale") is True
@@ -865,6 +885,22 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
         }
     if status in {"completed", "interrupted"}:
         if is_stale:
+            if is_chat_bound:
+                return {
+                    "followup_state": "protected_chat_bound",
+                    "operator_need": "protected",
+                    "recommended_action": "show_protected_threads",
+                    "why_selected": (
+                        "Chat-bound managed thread is dormant, but continuity-bearing "
+                        "chat threads are protected from cleanup by default"
+                    ),
+                    "recommended_detail_template": (
+                        "Protected by default: review this chat-bound thread before "
+                        "taking any action. Do not archive or remove it unless the "
+                        'user is explicit; broad requests like "clean up workspace" '
+                        "are not enough."
+                    ),
+                }
             return {
                 "followup_state": "idle_archive_candidate",
                 "operator_need": "cleanup",
@@ -912,6 +948,22 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
                 ),
             }
         if is_stale:
+            if is_chat_bound:
+                return {
+                    "followup_state": "protected_chat_bound",
+                    "operator_need": "protected",
+                    "recommended_action": "show_protected_threads",
+                    "why_selected": (
+                        "Chat-bound managed thread is dormant, but continuity-bearing "
+                        "chat threads are protected from cleanup by default"
+                    ),
+                    "recommended_detail_template": (
+                        "Protected by default: review this chat-bound thread before "
+                        "taking any action. Do not archive or remove it unless the "
+                        'user is explicit; broad requests like "clean up workspace" '
+                        "are not enough."
+                    ),
+                }
             return {
                 "followup_state": "idle_archive_candidate",
                 "operator_need": "cleanup",
@@ -1019,6 +1071,22 @@ def _build_low_signal_thread_summary_item(
             "archiving any of them."
         )
         drilldown_commands = ["show cleanup candidates"]
+    elif followup_state == "protected_chat_bound":
+        name = f"Protected chat-bound threads ({len(items)})"
+        operator_need = "protected"
+        why_selected = (
+            f"Collapsed {len(items)} protected chat-bound threads into a counts-first "
+            "summary so continuity-bearing chat state stays separate from generic "
+            "cleanup inventory"
+        )
+        recommended_action = "show_protected_threads"
+        recommended_detail = (
+            "Show protected threads to review chat-bound continuity artifacts. "
+            "These are protected by default and should not be archived or removed "
+            'unless the user is very explicit; broad requests like "clean up '
+            'workspace" are not enough.'
+        )
+        drilldown_commands = ["show protected threads"]
     else:
         name = f"Reusable managed threads ({len(items)})"
         operator_need = "optional"
@@ -1052,6 +1120,7 @@ def _build_low_signal_thread_summary_item(
             for item in items
             if item.get("managed_thread_id")
         ],
+        "chat_bound_thread_count": sum(1 for item in items if item.get("chat_bound")),
         "followup_state": followup_state,
         "followup_state_counts": {followup_state: len(items)},
         "operator_need": operator_need,
@@ -1060,6 +1129,7 @@ def _build_low_signal_thread_summary_item(
         "recommended_action": recommended_action,
         "recommended_detail": recommended_detail,
         "drilldown_commands": drilldown_commands,
+        "cleanup_protected": followup_state == "protected_chat_bound",
         "owner_count": len(owner_labels),
         "owner_labels": owner_labels,
         "freshness": (
@@ -1080,12 +1150,16 @@ def _collapse_low_signal_thread_queue_items(
 ) -> list[dict[str, Any]]:
     passthrough: list[dict[str, Any]] = []
     reusable_items: list[dict[str, Any]] = []
+    protected_items: list[dict[str, Any]] = []
     cleanup_items: list[dict[str, Any]] = []
 
     for item in items:
         followup_state = str(item.get("followup_state") or "").strip().lower()
         if followup_state == "reusable":
             reusable_items.append(item)
+            continue
+        if followup_state == "protected_chat_bound":
+            protected_items.append(item)
             continue
         if followup_state == "idle_archive_candidate":
             cleanup_items.append(item)
@@ -1098,6 +1172,13 @@ def _collapse_low_signal_thread_queue_items(
             _build_low_signal_thread_summary_item(
                 followup_state="reusable",
                 items=reusable_items,
+            )
+        )
+    if protected_items:
+        collapsed.append(
+            _build_low_signal_thread_summary_item(
+                followup_state="protected_chat_bound",
+                items=protected_items,
             )
         )
     if cleanup_items:
@@ -1208,6 +1289,13 @@ def _build_thread_queue_items(
                 "last_turn_id": entry.get("last_turn_id"),
                 "last_message_preview": entry.get("last_message_preview"),
                 "updated_at": entry.get("updated_at"),
+                "chat_bound": bool(entry.get("chat_bound")),
+                "binding_kind": entry.get("binding_kind"),
+                "binding_id": entry.get("binding_id"),
+                "binding_count": int(entry.get("binding_count") or 0),
+                "binding_kinds": list(entry.get("binding_kinds") or []),
+                "binding_ids": list(entry.get("binding_ids") or []),
+                "cleanup_protected": bool(entry.get("cleanup_protected")),
                 "open_url": (
                     f"/hub/pma/threads/{managed_thread_id}"
                     if managed_thread_id
@@ -2102,6 +2190,22 @@ def _render_hub_snapshot(
                 f"- {managed_thread_id} {owner_summary} agent={agent} "
                 f"status={status_display} last_turn={last_turn_outcome} "
                 f"reason={status_reason} name={name} last={preview}"
+                + (" chat_bound=true" if bool(thread.get("chat_bound")) else "")
+                + (
+                    f" binding_kind={_truncate(str(thread.get('binding_kind') or ''), max_field_chars)}"
+                    if thread.get("binding_kind")
+                    else ""
+                )
+                + (
+                    f" binding_id={_truncate(str(thread.get('binding_id') or ''), max_field_chars)}"
+                    if thread.get("binding_id")
+                    else ""
+                )
+                + (
+                    " cleanup_protected=true"
+                    if bool(thread.get("cleanup_protected"))
+                    else ""
+                )
             )
             freshness_summary = _render_freshness_summary(
                 thread.get("freshness"), max_field_chars=max_field_chars
