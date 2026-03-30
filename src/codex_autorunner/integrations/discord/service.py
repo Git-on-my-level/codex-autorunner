@@ -528,22 +528,36 @@ class _DiscordOpenCodeSupervisorAdapter:
     def __init__(self, service: "DiscordBotService") -> None:
         self._service = service
 
+    async def _resolve_supervisor(
+        self, workspace_root: Path
+    ) -> Optional[OpenCodeSupervisor]:
+        canonical_root = canonicalize_path(Path(workspace_root))
+        return await self._service._opencode_supervisor_for_workspace(canonical_root)
+
     async def get_client(self, workspace_root: Path) -> Any:
         canonical_root = canonicalize_path(Path(workspace_root))
-        supervisor = await self._service._opencode_supervisor_for_workspace(
-            canonical_root
-        )
+        supervisor = await self._resolve_supervisor(canonical_root)
         if supervisor is None:
             raise RuntimeError("OpenCode supervisor unavailable")
         return await supervisor.get_client(canonical_root)
+
+    async def get_client_for_turn(self, workspace_root: Path) -> Any:
+        canonical_root = canonicalize_path(Path(workspace_root))
+        supervisor = await self._resolve_supervisor(canonical_root)
+        if supervisor is None:
+            raise RuntimeError("OpenCode supervisor unavailable")
+        getter = getattr(supervisor, "get_client_for_turn", None)
+        if callable(getter):
+            return await getter(canonical_root)
+        client = await supervisor.get_client(canonical_root)
+        await supervisor.mark_turn_started(canonical_root)
+        return client
 
     async def backend_runtime_instance_id_for_workspace(
         self, workspace_root: Path
     ) -> Optional[str]:
         canonical_root = canonicalize_path(Path(workspace_root))
-        supervisor = await self._service._opencode_supervisor_for_workspace(
-            canonical_root
-        )
+        supervisor = await self._resolve_supervisor(canonical_root)
         if supervisor is None:
             return None
         resolver = getattr(
@@ -561,12 +575,24 @@ class _DiscordOpenCodeSupervisorAdapter:
         self, workspace_root: Path
     ) -> Optional[float]:
         canonical_root = canonicalize_path(Path(workspace_root))
-        supervisor = await self._service._opencode_supervisor_for_workspace(
-            canonical_root
-        )
+        supervisor = await self._resolve_supervisor(canonical_root)
         if supervisor is None:
             return None
         return supervisor.session_stall_timeout_seconds
+
+    async def mark_turn_started(self, workspace_root: Path) -> None:
+        canonical_root = canonicalize_path(Path(workspace_root))
+        supervisor = await self._resolve_supervisor(canonical_root)
+        if supervisor is None:
+            return
+        await supervisor.mark_turn_started(canonical_root)
+
+    async def mark_turn_finished(self, workspace_root: Path) -> None:
+        canonical_root = canonicalize_path(Path(workspace_root))
+        supervisor = await self._resolve_supervisor(canonical_root)
+        if supervisor is None:
+            return
+        await supervisor.mark_turn_finished(canonical_root)
 
     async def close_all(self) -> None:
         await self._service._close_all_opencode_supervisors()

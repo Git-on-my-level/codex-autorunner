@@ -44,6 +44,7 @@ class _PendingTurnConfig:
     approval_mode: Optional[str]
     sandbox_policy: Optional[Any]
     question_policy: str
+    reserved_workspace_root: Optional[Path] = None
     command_task: Optional[asyncio.Task[Any]] = None
     progress_event_subscribers: list[asyncio.Queue[Optional[dict[str, Any]]]] = field(
         default_factory=list
@@ -623,6 +624,33 @@ class OpenCodeHarness(AgentHarness):
     def __init__(self, supervisor: OpenCodeHarnessSupervisorProtocol) -> None:
         self._supervisor = supervisor
         self._pending_turns: dict[tuple[str, str], _PendingTurnConfig] = {}
+        self._reserved_conversations: dict[str, Path] = {}
+
+    async def _acquire_turn_client(
+        self, workspace_root: Path
+    ) -> tuple[Any, Optional[Path]]:
+        canonical_workspace = workspace_root.resolve()
+        guarded_getter = getattr(self._supervisor, "get_client_for_turn", None)
+        if callable(guarded_getter):
+            client = await guarded_getter(canonical_workspace)
+            return client, canonical_workspace
+        client = await self._supervisor.get_client(canonical_workspace)
+        marker = getattr(self._supervisor, "mark_turn_started", None)
+        if not callable(marker):
+            return client, None
+        await marker(canonical_workspace)
+        return client, canonical_workspace
+
+    async def _release_turn_client(self, workspace_root: Optional[Path]) -> None:
+        if workspace_root is None:
+            return
+        marker = getattr(self._supervisor, "mark_turn_finished", None)
+        if not callable(marker):
+            return
+        try:
+            await marker(workspace_root)
+        except Exception:
+            pass
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         await self._supervisor.get_client(workspace_root)
@@ -696,15 +724,24 @@ class OpenCodeHarness(AgentHarness):
     async def new_conversation(
         self, workspace_root: Path, title: Optional[str] = None
     ) -> ConversationRef:
-        client = await self._supervisor.get_client(workspace_root)
-        result = await client.create_session(
-            title=title,
-            directory=str(workspace_root),
+        canonical_workspace = workspace_root.resolve()
+        client, reserved_workspace = await self._acquire_turn_client(
+            canonical_workspace
         )
-        session_id = extract_session_id(result) or result.get("id")
-        if not isinstance(session_id, str) or not session_id:
-            raise ValueError("OpenCode did not return a session id")
-        return ConversationRef(agent=AgentId("opencode"), id=session_id)
+        try:
+            result = await client.create_session(
+                title=title,
+                directory=str(canonical_workspace),
+            )
+            session_id = extract_session_id(result) or result.get("id")
+            if not isinstance(session_id, str) or not session_id:
+                raise ValueError("OpenCode did not return a session id")
+            if reserved_workspace is not None:
+                self._reserved_conversations[session_id] = reserved_workspace
+            return ConversationRef(agent=AgentId("opencode"), id=session_id)
+        except Exception:
+            await self._release_turn_client(reserved_workspace)
+            raise
 
     async def list_conversations(self, workspace_root: Path) -> list[ConversationRef]:
         client = await self._supervisor.get_client(workspace_root)
@@ -728,16 +765,22 @@ class OpenCodeHarness(AgentHarness):
     async def resume_conversation(
         self, workspace_root: Path, conversation_id: str
     ) -> ConversationRef:
-        client = await self._supervisor.get_client(workspace_root)
+        canonical_workspace = workspace_root.resolve()
+        client, reserved_workspace = await self._acquire_turn_client(
+            canonical_workspace
+        )
         try:
             result = await client.get_session(conversation_id)
         except Exception as exc:
+            await self._release_turn_client(reserved_workspace)
             _raise_fresh_conversation_error(
                 exc,
                 conversation_id=conversation_id,
                 operation="resume_conversation",
             )
         session_id = extract_session_id(result) or conversation_id
+        if reserved_workspace is not None:
+            self._reserved_conversations[session_id] = reserved_workspace
         return ConversationRef(agent=AgentId("opencode"), id=session_id)
 
     async def start_turn(
@@ -753,7 +796,14 @@ class OpenCodeHarness(AgentHarness):
         input_items: Optional[list[dict[str, Any]]] = None,
     ) -> TurnRef:
         _ = input_items
-        client = await self._supervisor.get_client(workspace_root)
+        canonical_workspace = workspace_root.resolve()
+        reserved_workspace = self._reserved_conversations.pop(conversation_id, None)
+        if reserved_workspace is None:
+            client, reserved_workspace = await self._acquire_turn_client(
+                canonical_workspace
+            )
+        else:
+            client = await self._supervisor.get_client(canonical_workspace)
         if model is None:
             model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         model_payload = split_model_id(model)
@@ -766,6 +816,7 @@ class OpenCodeHarness(AgentHarness):
                 variant=reasoning,
             )
         except Exception as exc:
+            await self._release_turn_client(reserved_workspace)
             _raise_fresh_conversation_error(
                 exc,
                 conversation_id=conversation_id,
@@ -775,6 +826,7 @@ class OpenCodeHarness(AgentHarness):
             model_payload=model_payload,
             approval_mode=approval_mode,
             sandbox_policy=sandbox_policy,
+            reserved_workspace_root=reserved_workspace,
             question_policy=(
                 "reject"
                 if approval_mode is not None or sandbox_policy is not None
@@ -797,7 +849,14 @@ class OpenCodeHarness(AgentHarness):
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
     ) -> TurnRef:
-        client = await self._supervisor.get_client(workspace_root)
+        canonical_workspace = workspace_root.resolve()
+        reserved_workspace = self._reserved_conversations.pop(conversation_id, None)
+        if reserved_workspace is None:
+            client, reserved_workspace = await self._acquire_turn_client(
+                canonical_workspace
+            )
+        else:
+            client = await self._supervisor.get_client(canonical_workspace)
         if model is None:
             model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         arguments = prompt if prompt else ""
@@ -810,6 +869,7 @@ class OpenCodeHarness(AgentHarness):
                 model=model,
             )
         except Exception as exc:
+            await self._release_turn_client(reserved_workspace)
             _raise_fresh_conversation_error(
                 exc,
                 conversation_id=conversation_id,
@@ -823,6 +883,7 @@ class OpenCodeHarness(AgentHarness):
             model_payload=split_model_id(model),
             approval_mode=approval_mode,
             sandbox_policy=sandbox_policy,
+            reserved_workspace_root=reserved_workspace,
             question_policy=(
                 "reject"
                 if approval_mode is not None or sandbox_policy is not None
@@ -1111,8 +1172,12 @@ class OpenCodeHarness(AgentHarness):
                 return await _collect()
             return await asyncio.wait_for(_collect(), timeout=timeout)
         finally:
+            reserved_workspace = (
+                pending.reserved_workspace_root if pending is not None else None
+            )
             if turn_id is not None:
                 self._pending_turns.pop((conversation_id, turn_id), None)
+            await self._release_turn_client(reserved_workspace)
 
 
 __all__ = ["OpenCodeHarness"]

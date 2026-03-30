@@ -209,6 +209,27 @@ class OpenCodeSupervisor:
             raise OpenCodeSupervisorError("OpenCode client not initialized")
         return handle.client
 
+    async def get_client_for_turn(self, workspace_root: Path) -> OpenCodeClient:
+        canonical_root = canonical_workspace_root(workspace_root)
+        workspace_id = workspace_id_for_path(canonical_root)
+        handle_id = (
+            _GLOBAL_HANDLE_ID if self._server_scope == _SCOPE_GLOBAL else workspace_id
+        )
+        handle = await self._ensure_handle(
+            handle_id,
+            canonical_root,
+            reserve_turn=True,
+        )
+        try:
+            await self._ensure_started(handle)
+            handle.last_used_at = time.monotonic()
+            if handle.client is None:
+                raise OpenCodeSupervisorError("OpenCode client not initialized")
+            return handle.client
+        except Exception:
+            await self.mark_turn_finished(canonical_root)
+            raise
+
     async def backend_runtime_instance_id_for_workspace(
         self, workspace_root: Path
     ) -> Optional[str]:
@@ -448,13 +469,19 @@ class OpenCodeSupervisor:
             handle.managed_process_record = None
 
     async def _ensure_handle(
-        self, handle_id: str, workspace_root: Path
+        self,
+        handle_id: str,
+        workspace_root: Path,
+        *,
+        reserve_turn: bool = False,
     ) -> OpenCodeHandle:
         handles_to_close: list[OpenCodeHandle] = []
         evicted_id: Optional[str] = None
         async with self._get_lock():
             existing = self._handles.get(handle_id)
             if existing is not None:
+                if reserve_turn:
+                    existing.active_turns += 1
                 existing.last_used_at = time.monotonic()
                 return existing
             handles_to_close.extend(self._pop_idle_handles_locked())
@@ -476,6 +503,8 @@ class OpenCodeSupervisor:
                 stdout_task=None,
                 last_used_at=time.monotonic(),
             )
+            if reserve_turn:
+                handle.active_turns = 1
             self._handles[handle_id] = handle
         log_event(
             self._logger,

@@ -97,9 +97,21 @@ class _StubSupervisor:
         self.runtime_instance_id = runtime_instance_id
         self.timeout_workspace_roots: list[Path] = []
         self.runtime_workspace_roots: list[Path] = []
+        self.started_workspace_roots: list[Path] = []
+        self.finished_workspace_roots: list[Path] = []
 
     async def get_client(self, _workspace_root: Path) -> _StubClient:
         return self._client
+
+    async def get_client_for_turn(self, workspace_root: Path) -> _StubClient:
+        self.started_workspace_roots.append(workspace_root)
+        return self._client
+
+    async def mark_turn_started(self, workspace_root: Path) -> None:
+        self.started_workspace_roots.append(workspace_root)
+
+    async def mark_turn_finished(self, workspace_root: Path) -> None:
+        self.finished_workspace_roots.append(workspace_root)
 
     async def session_stall_timeout_seconds_for_workspace(
         self, workspace_root: Path
@@ -247,6 +259,52 @@ async def test_opencode_harness_start_review_requires_fresh_binding_for_invalid_
     assert exc_info.value.conversation_id == "session-1"
     assert exc_info.value.operation == "start_review"
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_keeps_turn_guard_through_resume_start_and_wait() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="message.completed",
+                data='{"sessionID":"session-1","info":{"id":"assistant-1","role":"assistant"},"parts":[{"type":"text","text":"hello world"}]}',
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    supervisor = _StubSupervisor(client)
+    harness = OpenCodeHarness(supervisor)
+
+    resumed = await harness.resume_conversation(workspace, "session-1")
+
+    assert resumed.id == "session-1"
+    assert supervisor.started_workspace_roots == [workspace]
+    assert supervisor.finished_workspace_roots == []
+
+    turn = await harness.start_turn(
+        workspace,
+        resumed.id,
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    assert supervisor.started_workspace_roots == [workspace]
+    assert supervisor.finished_workspace_roots == []
+
+    result = await harness.wait_for_turn(workspace, resumed.id, turn.turn_id)
+
+    assert result.status == "ok"
+    assert result.assistant_text == "hello world"
+    assert supervisor.finished_workspace_roots == [workspace]
 
 
 @pytest.mark.asyncio

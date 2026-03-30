@@ -58,6 +58,24 @@ class _StubOpenCodeSupervisor:
         self.close_all_calls = 0
         self.prune_idle_calls = 0
         self.lifecycle_snapshot_calls = 0
+        self.get_client_calls: list[Path] = []
+        self.get_client_for_turn_calls: list[Path] = []
+        self.mark_turn_started_calls: list[Path] = []
+        self.mark_turn_finished_calls: list[Path] = []
+
+    async def get_client(self, workspace_root: Path) -> Any:
+        self.get_client_calls.append(workspace_root)
+        return object()
+
+    async def get_client_for_turn(self, workspace_root: Path) -> Any:
+        self.get_client_for_turn_calls.append(workspace_root)
+        return object()
+
+    async def mark_turn_started(self, workspace_root: Path) -> None:
+        self.mark_turn_started_calls.append(workspace_root)
+
+    async def mark_turn_finished(self, workspace_root: Path) -> None:
+        self.mark_turn_finished_calls.append(workspace_root)
 
     async def prune_idle(self) -> int:
         self.prune_idle_calls += 1
@@ -448,6 +466,54 @@ async def test_discord_opencode_adapter_resolves_stall_timeout_per_workspace(
             )
             == 23.0
         )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_discord_opencode_adapter_forwards_turn_lifecycle_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "load_repo_config",
+        lambda workspace_root, hub_path=None: SimpleNamespace(
+            opencode=SimpleNamespace(idle_ttl_seconds=120),
+        ),
+    )
+
+    shared_supervisor = _StubOpenCodeSupervisor(
+        pruned_handles=0,
+        handles_after_prune=1,
+    )
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "build_opencode_supervisor_from_repo_config",
+        lambda repo_config, *, workspace_root, logger, base_env=None: shared_supervisor,
+    )
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test.discord.opencode"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        client = await service.opencode_supervisor.get_client_for_turn(workspace)
+        await service.opencode_supervisor.mark_turn_finished(workspace)
+
+        assert client is not None
+        assert shared_supervisor.get_client_for_turn_calls == [workspace.resolve()]
+        assert shared_supervisor.mark_turn_finished_calls == [workspace.resolve()]
     finally:
         await store.close()
 
