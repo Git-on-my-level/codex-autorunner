@@ -746,11 +746,13 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
     thread_item = next(
         item
         for item in queue
-        if item.get("managed_thread_id") == thread["managed_thread_id"]
+        if item.get("item_type") == "managed_thread_followup_summary"
+        and item.get("followup_state") == "reusable"
     )
     assert thread_item["queue_source"] == "managed_thread_followup"
-    assert thread_item["followup_state"] == "awaiting_followup"
-    assert thread_item["recommended_action"] == "resume_managed_thread"
+    assert thread_item["followup_state"] == "reusable"
+    assert thread["managed_thread_id"] in (thread_item.get("managed_thread_ids") or [])
+    assert thread_item["recommended_action"] == "show_reusable_threads"
     assert thread_item["supersession"]["status"] == "superseded"
     assert thread_item["supersession"]["superseded_by"] == queue[0]["action_queue_id"]
 
@@ -2460,7 +2462,7 @@ class TestIssue975CharacterizationMixedPmaState:
         assert "thread-idle-1" in (reusable_item.get("managed_thread_ids") or [])
         assert "thread-unowned-1" in (reusable_item.get("managed_thread_ids") or [])
 
-    def test_recently_resumed_thread_with_history_stays_awaiting_followup(
+    def test_recently_resumed_thread_with_history_stays_reusable_inventory(
         self, tmp_path: Path
     ) -> None:
         seed_hub_files(tmp_path, force=True)
@@ -2491,13 +2493,40 @@ class TestIssue975CharacterizationMixedPmaState:
             stale_threshold_seconds=3600,
         )
         resumed_item = next(
-            item for item in queue if item.get("managed_thread_id") == "thread-idle-1"
+            item
+            for item in queue
+            if item.get("item_type") == "managed_thread_followup_summary"
+            and item.get("followup_state") == "reusable"
+            and "thread-idle-1" in (item.get("managed_thread_ids") or [])
         )
 
-        assert resumed_item["followup_state"] == "awaiting_followup"
-        assert resumed_item["operator_need"] == "normal"
-        assert resumed_item["recommended_action"] == "resume_managed_thread"
-        assert "needs its next turn" in (resumed_item.get("why_selected") or "")
+        assert resumed_item["followup_state"] == "reusable"
+        assert resumed_item["operator_need"] == "optional"
+        assert resumed_item["recommended_action"] == "show_reusable_threads"
+        assert "thread-idle-1" in (resumed_item.get("managed_thread_ids") or [])
+
+    def test_low_signal_inventory_queue_has_no_primary_next_action(
+        self, tmp_path: Path
+    ) -> None:
+        from codex_autorunner.core.pma_context import _render_hub_snapshot
+
+        seed_hub_files(tmp_path, force=True)
+        snapshot = self.build_mixed_pma_snapshot(
+            include_dispatch=False,
+            include_failed_run=False,
+            include_completed_run=False,
+            include_pma_file=False,
+        )
+
+        queue = snapshot.get("action_queue") or []
+        assert queue
+        assert all(
+            (item.get("supersession") or {}).get("status") != "primary"
+            for item in queue
+        )
+
+        rendered = _render_hub_snapshot(snapshot)
+        assert "No strong next-action item right now" in rendered
 
     def test_stale_completed_thread_queue_item_becomes_cleanup_candidate(
         self, tmp_path: Path

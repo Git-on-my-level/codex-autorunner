@@ -898,15 +898,17 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
             or status_reason == "thread_resumed"
         ) and not is_stale:
             return {
-                "followup_state": "awaiting_followup",
-                "operator_need": "normal",
-                "recommended_action": "resume_managed_thread",
+                "followup_state": "reusable",
+                "operator_need": "optional",
+                "recommended_action": "consider_resuming_managed_thread",
                 "why_selected": (
-                    "Managed thread was recently created or resumed and likely "
-                    "needs its next turn"
+                    "Managed thread was recently created or resumed, but there is "
+                    "no explicit wake-up or continuity signal that PMA needs to "
+                    "act on it now"
                 ),
                 "recommended_detail_template": (
-                    'car pma thread send --id {managed_thread_id} --message "..." --watch'
+                    "Optional reuse: car pma thread send --id {managed_thread_id} "
+                    '--message "..." --watch'
                 ),
             }
         if is_stale:
@@ -1390,6 +1392,30 @@ def _build_automation_queue_items(
     return items
 
 
+def _is_strong_action_queue_item(item: Mapping[str, Any]) -> bool:
+    if bool(item.get("likely_false_positive")):
+        return False
+
+    item_type = str(item.get("item_type") or "").strip().lower()
+    followup_state = str(item.get("followup_state") or "").strip().lower()
+    operator_need = str(item.get("operator_need") or "").strip().lower()
+
+    if item_type in {
+        "managed_thread_followup_summary",
+        "pma_file_summary",
+    }:
+        return False
+    if item_type == "managed_thread_followup":
+        return followup_state in {"attention_required", "awaiting_followup"}
+    if item_type == "pma_file":
+        return True
+    if item_type == "automation_wakeup":
+        return True
+    if item.get("queue_source") == "ticket_flow_inbox":
+        return True
+    return operator_need in {"urgent", "normal"}
+
+
 def build_pma_action_queue(
     *,
     inbox: list[dict[str, Any]],
@@ -1426,7 +1452,14 @@ def build_pma_action_queue(
 
     winning_scope: dict[str, dict[str, Any]] = {}
     winning_repo_blocker: dict[str, dict[str, Any]] = {}
-    primary_queue_id = str(items[0].get("action_queue_id") or "") if items else None
+    primary_queue_id = next(
+        (
+            str(item.get("action_queue_id") or "")
+            for item in items
+            if _is_strong_action_queue_item(item)
+        ),
+        None,
+    )
     for index, item in enumerate(items, start=1):
         scope = item.get("scope") or {}
         scope_key = str(scope.get("key") or "")
@@ -1457,7 +1490,11 @@ def build_pma_action_queue(
                 reason=(
                     "Highest-priority actionable item in the queue"
                     if is_primary
-                    else "Actionable, but lower priority than the current primary item"
+                    else (
+                        "Actionable, but lower priority than the current primary item"
+                        if primary_queue_id
+                        else "Inventory or hygiene item; no strong next action currently"
+                    )
                 ),
             )
         if (
@@ -1677,6 +1714,13 @@ def _render_hub_snapshot(
     action_queue = snapshot.get("action_queue") or []
     if action_queue:
         lines.append("PMA Action Queue:")
+        has_primary = any(
+            (item.get("supersession") or {}).get("status") == "primary"
+            for item in action_queue
+            if isinstance(item, Mapping)
+        )
+        if not has_primary:
+            lines.append("- No strong next-action item right now")
         for item in list(action_queue)[: max(0, max_messages)]:
             queue_id = _truncate(
                 str(item.get("action_queue_id") or ""), max_field_chars
