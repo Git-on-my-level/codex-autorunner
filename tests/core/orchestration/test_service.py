@@ -407,6 +407,35 @@ async def test_send_message_creates_conversation_and_execution(tmp_path: Path) -
     assert running.execution_id == execution.execution_id
 
 
+async def test_send_message_rejects_empty_backend_turn_id(tmp_path: Path) -> None:
+    harness = _FakeHarness(next_turn_id="")
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        display_name="Backlog",
+    )
+
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Ship it",
+        ),
+    )
+
+    refreshed_thread = service.get_thread_target(thread.thread_target_id)
+
+    assert execution.status == "error"
+    assert execution.backend_id is None
+    assert execution.error == "Agent 'codex' returned an empty turn id"
+    assert refreshed_thread is not None
+    assert refreshed_thread.backend_thread_id == "backend-conversation-1"
+
+
 async def test_send_review_resumes_existing_backend_thread(tmp_path: Path) -> None:
     harness = _FakeHarness(next_conversation_id="unused", next_turn_id="review-turn-1")
     service = _build_service(tmp_path, harness)

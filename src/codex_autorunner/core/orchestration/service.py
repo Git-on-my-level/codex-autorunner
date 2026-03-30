@@ -926,6 +926,11 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                             sandbox_policy=sandbox_policy,
                             input_items=request.input_items,
                         )
+                    resolved_turn_id = str(getattr(turn, "turn_id", "") or "").strip()
+                    if not resolved_turn_id:
+                        raise RuntimeError(
+                            f"Agent '{thread.agent_id}' returned an empty turn id"
+                        )
                     break
                 except FreshConversationRequiredError as exc:
                     if (
@@ -1004,7 +1009,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 resolved_conversation_id,
                 backend_runtime_instance_id=runtime_instance_id,
             )
-        self.thread_store.set_execution_backend_id(execution.execution_id, turn.turn_id)
+        self.thread_store.set_execution_backend_id(
+            execution.execution_id, resolved_turn_id
+        )
         refreshed = self.get_execution(thread.thread_target_id, execution.execution_id)
         if refreshed is None:
             raise KeyError(

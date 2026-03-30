@@ -16,6 +16,12 @@ def _write_line(lock: threading.Lock, payload: dict[str, Any]) -> None:
         sys.stdout.flush()
 
 
+def _write_raw_stdout(lock: threading.Lock, line: str) -> None:
+    with lock:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+
+
 class FakeACPServer:
     def __init__(self, scenario: str) -> None:
         self._scenario = scenario
@@ -57,6 +63,11 @@ class FakeACPServer:
                 },
             }
         )
+        if prompt == "stdout noise":
+            _write_raw_stdout(
+                self._lock,
+                "  ┊ 💻 $ curl -fsS http://127.0.0.1:4517/car/hub... 0.3s\n",
+            )
         cancel_event = self._cancel_events[turn_id]
         if prompt == "needs permission":
             permission_id = f"perm-{self._next_permission}"
