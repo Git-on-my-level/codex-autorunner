@@ -703,8 +703,15 @@ class DiscordBotService:
         self._hub_supervisor = None
         try:
             from ...core.hub import HubSupervisor
+            from ...integrations.github.polling import build_hub_scm_poll_processor
 
-            self._hub_supervisor = HubSupervisor.from_path(self._config.root)
+            self._hub_supervisor = HubSupervisor.from_path(
+                self._config.root,
+                scm_poll_processor=build_hub_scm_poll_processor(
+                    hub_root=self._config.root,
+                    raw_config=load_hub_config(self._config.root).raw,
+                ),
+            )
         except Exception as exc:
             log_event(
                 self._logger,

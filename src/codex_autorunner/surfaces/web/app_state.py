@@ -646,6 +646,7 @@ def build_hub_context(
     import sys
 
     from ...core.hub import HubSupervisor
+    from ...integrations.github.polling import build_hub_scm_poll_processor
 
     config = load_hub_config(hub_root or Path.cwd())
     dev_include_root_repo = _env_truthy(os.getenv(_DEV_INCLUDE_ROOT_REPO_ENV))
@@ -668,6 +669,10 @@ def build_hub_context(
         app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
         backend_orchestrator_builder=build_backend_orchestrator,
         agent_id_validator=validate_agent_id,
+        scm_poll_processor=build_hub_scm_poll_processor(
+            hub_root=config.root,
+            raw_config=config.raw,
+        ),
     )
     logger = setup_rotating_logger(f"hub[{config.root}]", config.server_log)
     env_overrides = collect_env_overrides()

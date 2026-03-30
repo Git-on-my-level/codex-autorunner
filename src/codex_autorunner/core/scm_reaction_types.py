@@ -12,6 +12,7 @@ ReactionKind = Literal[
     "merged",
 ]
 ReactionOperationKind = Literal["enqueue_managed_turn", "notify_chat"]
+ReactionProfile = Literal["all", "minimal_noise"]
 
 
 def _normalize_optional_bool(value: Any) -> Optional[bool]:
@@ -69,25 +70,45 @@ class ScmReactionConfig:
         reactions = mapping.get("reactions")
         if isinstance(reactions, Mapping):
             mapping = reactions
+        profile = cls._profile_from_mapping(mapping)
+        defaults = cls._defaults_for_profile(profile)
         default_enabled = _normalize_optional_bool(mapping.get("enabled"))
-        default_value = True if default_enabled is None else default_enabled
+        default_value = (
+            defaults["enabled"] if default_enabled is None else default_enabled
+        )
         return cls(
             ci_failed=_bool_from_mapping(
                 mapping,
                 "ci_failed",
-                default=default_value,
+                default=(
+                    defaults["ci_failed"] if default_enabled is None else default_value
+                ),
             ),
             changes_requested=_bool_from_mapping(
                 mapping,
                 "changes_requested",
-                default=default_value,
+                default=(
+                    defaults["changes_requested"]
+                    if default_enabled is None
+                    else default_value
+                ),
             ),
             approved_and_green=_bool_from_mapping(
                 mapping,
                 "approved_and_green",
-                default=default_value,
+                default=(
+                    defaults["approved_and_green"]
+                    if default_enabled is None
+                    else default_value
+                ),
             ),
-            merged=_bool_from_mapping(mapping, "merged", default=default_value),
+            merged=_bool_from_mapping(
+                mapping,
+                "merged",
+                default=(
+                    defaults["merged"] if default_enabled is None else default_value
+                ),
+            ),
             duplicate_escalation_threshold=_int_from_mapping(
                 mapping,
                 "duplicate_escalation_threshold",
@@ -99,6 +120,32 @@ class ScmReactionConfig:
                 default=3,
             ),
         )
+
+    @staticmethod
+    def _profile_from_mapping(mapping: Mapping[str, Any]) -> ReactionProfile:
+        value = mapping.get("profile")
+        if not isinstance(value, str):
+            return "all"
+        normalized = value.strip().lower()
+        return "minimal_noise" if normalized == "minimal_noise" else "all"
+
+    @staticmethod
+    def _defaults_for_profile(profile: ReactionProfile) -> dict[str, bool]:
+        if profile == "minimal_noise":
+            return {
+                "enabled": True,
+                "ci_failed": True,
+                "changes_requested": True,
+                "approved_and_green": False,
+                "merged": False,
+            }
+        return {
+            "enabled": True,
+            "ci_failed": True,
+            "changes_requested": True,
+            "approved_and_green": True,
+            "merged": True,
+        }
 
     def is_enabled(self, reaction_kind: ReactionKind) -> bool:
         return bool(getattr(self, reaction_kind))

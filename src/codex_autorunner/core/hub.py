@@ -543,6 +543,7 @@ class HubSupervisor:
         ] = None,
         backend_orchestrator_builder: Optional[BackendOrchestratorBuilder] = None,
         agent_id_validator: Optional[Callable[[str], str]] = None,
+        scm_poll_processor: Optional[Callable[[int], dict[str, int]]] = None,
     ):
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
@@ -576,6 +577,7 @@ class HubSupervisor:
         self._pma_safety_checker: Optional[PmaSafetyChecker] = None
         self._pma_automation_store: Optional[PmaAutomationStore] = None
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
+        self._scm_poll_processor = scm_poll_processor
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
         self._start_lifecycle_event_processor()
@@ -590,6 +592,7 @@ class HubSupervisor:
             AppServerSupervisorFactoryBuilder
         ] = None,
         backend_orchestrator_builder: Optional[BackendOrchestratorBuilder] = None,
+        scm_poll_processor: Optional[Callable[[int], dict[str, int]]] = None,
     ) -> "HubSupervisor":
         config = load_hub_config(path)
         return cls(
@@ -597,6 +600,7 @@ class HubSupervisor:
             backend_factory_builder=backend_factory_builder,
             app_server_supervisor_factory_builder=app_server_supervisor_factory_builder,
             backend_orchestrator_builder=backend_orchestrator_builder,
+            scm_poll_processor=scm_poll_processor,
         )
 
     def scan(self) -> List[RepoSnapshot]:
@@ -2401,6 +2405,7 @@ class HubSupervisor:
 
     def _process_lifecycle_event_cycle(self) -> None:
         self.process_lifecycle_events()
+        self.process_scm_automation_polls()
         self.process_pma_automation_timers()
         self.drain_pma_automation_wakeups()
 
@@ -2410,6 +2415,30 @@ class HubSupervisor:
             self.drain_pma_automation_wakeups()
         except Exception:
             logger.exception("Failed draining PMA automation wake-ups")
+
+    def process_scm_automation_polls(self, *, limit: int = 20) -> dict[str, int]:
+        processor = self._scm_poll_processor
+        if processor is None:
+            return {
+                "due": 0,
+                "polled": 0,
+                "events_emitted": 0,
+                "expired": 0,
+                "closed": 0,
+                "errors": 0,
+            }
+        try:
+            return processor(limit)
+        except Exception:
+            logger.exception("Failed processing SCM automation polling watches")
+            return {
+                "due": 0,
+                "polled": 0,
+                "events_emitted": 0,
+                "expired": 0,
+                "closed": 0,
+                "errors": 1,
+            }
 
     def _start_lifecycle_event_processor(self) -> None:
         self._lifecycle_worker.start()
