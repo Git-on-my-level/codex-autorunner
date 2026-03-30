@@ -46,6 +46,7 @@ async def _collect_events(
     ]
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_session_roundtrip_and_turn_streaming(
     tmp_path: Path,
@@ -128,6 +129,7 @@ def test_hermes_runtime_preflight_accepts_plain_acp_help(
     assert "Hermes-native durable sessions" in result.message
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_bridges_permission_requests_and_allows(
     tmp_path: Path,
@@ -183,6 +185,7 @@ async def test_hermes_supervisor_bridges_permission_requests_and_allows(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_auto_accepts_when_approval_mode_never(
     tmp_path: Path,
@@ -213,6 +216,7 @@ async def test_hermes_supervisor_auto_accepts_when_approval_mode_never(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_can_deny_permission_requests(
     tmp_path: Path,
@@ -244,6 +248,7 @@ async def test_hermes_supervisor_can_deny_permission_requests(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_times_out_pending_permission_requests(
     tmp_path: Path,
@@ -281,6 +286,7 @@ async def test_hermes_supervisor_times_out_pending_permission_requests(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_can_interrupt_active_turn_without_explicit_turn_id(
     tmp_path: Path,
@@ -298,6 +304,7 @@ async def test_hermes_supervisor_can_interrupt_active_turn_without_explicit_turn
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_interrupt_cancels_pending_permission_wait(
     tmp_path: Path,
@@ -337,6 +344,7 @@ async def test_hermes_supervisor_interrupt_cancels_pending_permission_wait(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_replacing_turn_cancels_previous_pending_approval(
     tmp_path: Path,
@@ -393,6 +401,7 @@ async def test_hermes_supervisor_replacing_turn_cancels_previous_pending_approva
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_close_workspace_retires_pending_turn_state(
     tmp_path: Path,
@@ -436,6 +445,7 @@ async def test_hermes_supervisor_close_workspace_retires_pending_turn_state(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_propagates_approval_handler_exception(
     tmp_path: Path,
@@ -469,6 +479,7 @@ async def test_hermes_supervisor_propagates_approval_handler_exception(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_propagates_initialize_error(
     tmp_path: Path,
@@ -481,6 +492,7 @@ async def test_hermes_supervisor_propagates_initialize_error(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_propagates_subprocess_crash_during_wait(
     tmp_path: Path,
@@ -496,6 +508,7 @@ async def test_hermes_supervisor_propagates_subprocess_crash_during_wait(
         await supervisor.close_all()
 
 
+@pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hermes_supervisor_rejects_unknown_turn_lookup(tmp_path: Path) -> None:
     supervisor = HermesSupervisor(fixture_command("basic"))

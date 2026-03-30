@@ -18,6 +18,7 @@ from codex_autorunner.agents.acp.errors import (
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "fake_acp_server.py"
+pytestmark = pytest.mark.slow
 
 
 def fixture_command(scenario: str) -> list[str]:

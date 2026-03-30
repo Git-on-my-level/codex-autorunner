@@ -1044,6 +1044,7 @@ async def test_service_enforces_allowlist_and_denies_command(tmp_path: Path) -> 
         await store.close()
 
 
+@pytest.mark.slow
 @pytest.mark.anyio
 async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
@@ -1090,6 +1091,7 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         await store.close()
 
 
+@pytest.mark.slow
 @pytest.mark.anyio
 async def test_service_status_reports_effective_collaboration_policy(
     tmp_path: Path,
