@@ -1548,6 +1548,7 @@ async def collect_opencode_output_from_events(
                     await _emit_usage_update(
                         payload, is_primary_session=is_primary_session
                     )
+            message_role: Optional[str] = None
             if event.event in ("message.completed", "message.updated"):
                 message_result = parse_message_response(payload)
                 msg_id = None
@@ -1557,6 +1558,7 @@ async def collect_opencode_output_from_events(
                     resolved_role = role
                     if resolved_role is None and msg_id:
                         resolved_role = message_roles.get(msg_id)
+                    message_role = resolved_role
                     if message_result.text:
                         if resolved_role == "assistant" or resolved_role is None:
                             fallback_message = (
@@ -1587,6 +1589,7 @@ async def collect_opencode_output_from_events(
             if (
                 event.event == "message.completed"
                 and is_primary_session
+                and message_role == "assistant"
                 and _extract_message_phase(payload) != "commentary"
             ):
                 last_primary_completion_at = time.monotonic()

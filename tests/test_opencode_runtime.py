@@ -586,6 +586,45 @@ async def test_collect_output_exits_after_completion_without_idle_when_stream_st
 
 
 @pytest.mark.anyio
+async def test_collect_output_does_not_start_grace_on_user_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _user_then_assistant_completion():
+        yield SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"u1","role":"user"}}',
+        )
+        for _ in range(10):
+            await asyncio.sleep(0.002)
+            yield SSEEvent(
+                event="session.status",
+                data='{"sessionID":"s1","status":{"type":"busy"}}',
+            )
+        yield SSEEvent(
+            event="message.completed",
+            data='{"sessionID":"s1","info":{"id":"a1","role":"assistant"},'
+            '"parts":[{"type":"text","text":"Hello"}]}',
+        )
+        yield SSEEvent(event="session.idle", data='{"sessionID":"s1"}')
+
+    monkeypatch.setattr(
+        opencode_runtime,
+        "_OPENCODE_POST_COMPLETION_GRACE_SECONDS",
+        0.01,
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _user_then_assistant_completion(),
+        stall_timeout_seconds=30.0,
+    )
+
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_ignores_completed_text_when_role_missing() -> None:
     events = [
         SSEEvent(
