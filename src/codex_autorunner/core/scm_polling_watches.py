@@ -4,7 +4,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -61,6 +61,14 @@ def _normalize_timestamp(value: Any, *, field_name: str) -> str:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _timestamp_after_seconds(value: str, *, seconds: int) -> str:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    shifted = parsed.astimezone(timezone.utc) + timedelta(seconds=max(1, int(seconds)))
+    return shifted.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
@@ -323,6 +331,80 @@ class ScmPollingWatchStore:
                 tuple(params),
             ).fetchall()
         return [_watch_from_row(row) for row in rows]
+
+    def claim_due_watches(
+        self,
+        *,
+        provider: Optional[str] = None,
+        now_timestamp: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[ScmPollingWatch]:
+        resolved_limit = _normalize_limit(limit, default=50)
+        if resolved_limit <= 0:
+            return []
+
+        claimed_at = _normalize_timestamp(
+            now_timestamp or now_iso(),
+            field_name="now_timestamp",
+        )
+        where_clauses = ["state = 'active'", "next_poll_at <= ?"]
+        params: list[Any] = [claimed_at]
+
+        normalized_provider = _normalize_text(provider)
+        if normalized_provider is not None:
+            where_clauses.append("provider = ?")
+            params.append(normalized_provider)
+
+        params.append(resolved_limit)
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"""
+                SELECT *
+                  FROM orch_scm_polling_watches
+                 WHERE {' AND '.join(where_clauses)}
+                 ORDER BY next_poll_at ASC, started_at ASC, watch_id ASC
+                 LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+            claimed: list[ScmPollingWatch] = []
+            for row in rows:
+                watch = _watch_from_row(row)
+                claimed_until = _timestamp_after_seconds(
+                    claimed_at,
+                    seconds=watch.poll_interval_seconds,
+                )
+                cursor = conn.execute(
+                    """
+                    UPDATE orch_scm_polling_watches
+                       SET updated_at = ?,
+                           next_poll_at = ?
+                     WHERE watch_id = ?
+                       AND state = 'active'
+                       AND next_poll_at <= ?
+                    """,
+                    (
+                        claimed_at,
+                        claimed_until,
+                        watch.watch_id,
+                        claimed_at,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    continue
+                refreshed = conn.execute(
+                    """
+                    SELECT *
+                      FROM orch_scm_polling_watches
+                     WHERE watch_id = ?
+                    """,
+                    (watch.watch_id,),
+                ).fetchone()
+                if refreshed is not None:
+                    claimed.append(_watch_from_row(refreshed))
+            conn.commit()
+        return claimed
 
     def refresh_watch(
         self,

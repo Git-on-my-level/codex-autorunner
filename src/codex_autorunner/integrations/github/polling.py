@@ -262,7 +262,7 @@ class GitHubScmPollingService:
             "closed": 0,
             "errors": 0,
         }
-        due_watches = self._watch_store.list_due_watches(
+        due_watches = self._watch_store.claim_due_watches(
             provider="github",
             limit=limit,
         )

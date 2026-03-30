@@ -326,3 +326,46 @@ def test_process_due_watches_uses_first_successful_poll_as_baseline(
     assert _AutomationServiceFake.ingested_events == []
     refreshed = watch_store.list_due_watches(limit=10)
     assert refreshed == []
+
+
+def test_claim_due_watches_prevents_duplicate_claims(
+    tmp_path: Path,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    watch_store = ScmPollingWatchStore(tmp_path)
+    watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"baseline_pending": True},
+    )
+
+    claimed = watch_store.claim_due_watches(
+        provider="github",
+        limit=10,
+        now_timestamp="2026-03-30T00:00:00Z",
+    )
+
+    assert len(claimed) == 1
+    assert claimed[0].next_poll_at == "2026-03-30T00:01:30Z"
+    assert (
+        watch_store.claim_due_watches(
+            provider="github",
+            limit=10,
+            now_timestamp="2026-03-30T00:00:00Z",
+        )
+        == []
+    )

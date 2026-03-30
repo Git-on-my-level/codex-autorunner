@@ -326,6 +326,14 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _normalize_optional_identifier_text(value: Any) -> Optional[str]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    return _normalize_optional_text(value)
+
+
 def _normalize_positive_int(value: Any) -> Optional[int]:
     if isinstance(value, bool):
         return None
@@ -748,7 +756,7 @@ class GitHubService:
                 else None
             )
             review = {
-                "review_id": _normalize_optional_text(item.get("id")),
+                "review_id": _normalize_optional_identifier_text(item.get("id")),
                 "review_state": _normalize_optional_text(item.get("state")),
                 "body": _normalize_optional_text(item.get("body")),
                 "html_url": _normalize_optional_text(item.get("html_url")),
