@@ -193,6 +193,7 @@ function els(): {
   agentSelect: HTMLSelectElement | null;
   profileSelect: HTMLSelectElement | null;
   modelSelect: HTMLSelectElement | null;
+  modelInput: HTMLInputElement | null;
   reasoningSelect: HTMLSelectElement | null;
 } {
   return {
@@ -225,6 +226,7 @@ function els(): {
     agentSelect: document.getElementById("ticket-chat-agent-select") as HTMLSelectElement | null,
     profileSelect: document.getElementById("ticket-chat-profile-select") as HTMLSelectElement | null,
     modelSelect: document.getElementById("ticket-chat-model-select") as HTMLSelectElement | null,
+    modelInput: document.getElementById("ticket-chat-model-input") as HTMLInputElement | null,
     reasoningSelect: document.getElementById("ticket-chat-reasoning-select") as HTMLSelectElement | null,
   };
 }
@@ -977,6 +979,7 @@ export function initTicketEditor(): void {
     agentSelect,
     profileSelect,
     modelSelect,
+    modelInput,
     reasoningSelect,
   } = els();
   if (!modal) return;
@@ -990,6 +993,7 @@ export function initTicketEditor(): void {
     agentSelect,
     profileSelect,
     modelSelect,
+    modelInput,
     reasoningSelect,
   });
 

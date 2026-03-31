@@ -515,6 +515,7 @@ function getElements() {
     agentSelect: document.getElementById("pma-chat-agent-select") as HTMLSelectElement | null,
     profileSelect: document.getElementById("pma-chat-profile-select") as HTMLSelectElement | null,
     modelSelect: document.getElementById("pma-chat-model-select") as HTMLSelectElement | null,
+    modelInput: document.getElementById("pma-chat-model-input") as HTMLInputElement | null,
     reasoningSelect: document.getElementById("pma-chat-reasoning-select") as HTMLSelectElement | null,
     chatUploadInput: document.getElementById("pma-chat-upload-input") as HTMLInputElement | null,
     chatUploadBtn: document.getElementById("pma-chat-upload-btn") as HTMLButtonElement | null,
@@ -687,6 +688,7 @@ async function initPMA(): Promise<void> {
     agentSelect: elements.agentSelect,
     profileSelect: elements.profileSelect,
     modelSelect: elements.modelSelect,
+    modelInput: elements.modelInput,
     reasoningSelect: elements.reasoningSelect,
   });
 

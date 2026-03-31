@@ -24,6 +24,7 @@ class _StubClient:
     ) -> None:
         self._events = events
         self._stream_error = stream_error
+        self.stream_calls: list[dict[str, object]] = []
         self.permission_replies: list[tuple[str, str]] = []
         self.question_replies: list[tuple[str, list[list[str]]]] = []
         self.question_rejections: list[str] = []
@@ -34,8 +35,21 @@ class _StubClient:
         self.send_command_error: Exception | None = None
 
     async def stream_events(
-        self, *, directory: str | None = None, ready_event: object = None
+        self,
+        *,
+        directory: str | None = None,
+        ready_event: object = None,
+        session_id: str | None = None,
+        paths: object = None,
     ):
+        self.stream_calls.append(
+            {
+                "directory": directory,
+                "ready_event": ready_event,
+                "session_id": session_id,
+                "paths": paths,
+            }
+        )
         _ = directory
         if ready_event is not None:
             ready_event.set()
@@ -680,6 +694,94 @@ async def test_opencode_harness_progress_event_stream_is_empty_after_pending_tur
     ]
 
     assert streamed == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_uses_session_scoped_event_stream() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+
+    class _SessionScopedClient(_StubClient):
+        async def stream_events(
+            self,
+            *,
+            directory: str | None = None,
+            ready_event: object = None,
+            session_id: str | None = None,
+            paths: object = None,
+        ):
+            self.stream_calls.append(
+                {
+                    "directory": directory,
+                    "ready_event": ready_event,
+                    "session_id": session_id,
+                    "paths": paths,
+                }
+            )
+            if ready_event is not None:
+                ready_event.set()
+            if session_id != "session-1":
+                return
+            for event in self._events:
+                yield event
+
+    client = _SessionScopedClient(
+        [
+            SSEEvent(
+                event="message.part.updated",
+                data='{"sessionID":"session-1","properties":{"part":{"type":"text","text":"OK"}}}',
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+
+    assert result.status == "ok"
+    assert result.assistant_text == "OK"
+    assert any(call["session_id"] == "session-1" for call in client.stream_calls)
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_stream_events_uses_session_scoped_event_stream() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="message.part.updated",
+                data='{"sessionID":"session-1","properties":{"part":{"type":"text","text":"OK"}}}',
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    events = [
+        event async for event in harness.stream_events(workspace, "session-1", "turn-1")
+    ]
+
+    assert events
+    assert client.stream_calls[0]["session_id"] == "session-1"
 
 
 @pytest.mark.asyncio

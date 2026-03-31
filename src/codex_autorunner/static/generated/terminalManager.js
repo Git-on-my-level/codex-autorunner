@@ -183,6 +183,7 @@ export class TerminalManager {
         this.agentSelect = null;
         this.profileSelect = null;
         this.modelSelect = null;
+        this.modelInput = null;
         this.reasoningSelect = null;
         // Voice state
         this.textVoiceBtn = null;
@@ -403,6 +404,7 @@ export class TerminalManager {
         this.agentSelect = document.getElementById("terminal-agent-select");
         this.profileSelect = document.getElementById("terminal-profile-select");
         this.modelSelect = document.getElementById("terminal-model-select");
+        this.modelInput = document.getElementById("terminal-model-input");
         this.reasoningSelect = document.getElementById("terminal-reasoning-select");
         if (!this.statusEl || !this.connectBtn || !this.disconnectBtn || !this.resumeBtn) {
             return;
@@ -441,6 +443,7 @@ export class TerminalManager {
             agentSelect: this.agentSelect,
             profileSelect: this.profileSelect,
             modelSelect: this.modelSelect,
+            modelInput: this.modelInput,
             reasoningSelect: this.reasoningSelect,
         });
         // Update resume button visibility when agent changes

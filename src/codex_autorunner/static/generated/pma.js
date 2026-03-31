@@ -428,6 +428,7 @@ function getElements() {
         agentSelect: document.getElementById("pma-chat-agent-select"),
         profileSelect: document.getElementById("pma-chat-profile-select"),
         modelSelect: document.getElementById("pma-chat-model-select"),
+        modelInput: document.getElementById("pma-chat-model-input"),
         reasoningSelect: document.getElementById("pma-chat-reasoning-select"),
         chatUploadInput: document.getElementById("pma-chat-upload-input"),
         chatUploadBtn: document.getElementById("pma-chat-upload-btn"),
@@ -589,6 +590,7 @@ async function initPMA() {
         agentSelect: elements.agentSelect,
         profileSelect: elements.profileSelect,
         modelSelect: elements.modelSelect,
+        modelInput: elements.modelInput,
         reasoningSelect: elements.reasoningSelect,
     });
     await refreshAgentControls({ force: true, reason: "initial" });

@@ -915,7 +915,10 @@ class OpenCodeHarness(AgentHarness):
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ) -> AsyncIterator[str]:
         client = await self._supervisor.get_client(workspace_root)
-        async for event in client.stream_events(directory=str(workspace_root)):
+        async for event in client.stream_events(
+            directory=str(workspace_root),
+            session_id=conversation_id,
+        ):
             payload = event.data
             try:
                 parsed = json.loads(payload) if payload else {}
@@ -1019,7 +1022,8 @@ class OpenCodeHarness(AgentHarness):
             async def _event_stream() -> AsyncIterator[Any]:
                 try:
                     async for event in client.stream_events(
-                        directory=str(workspace_root)
+                        directory=str(workspace_root),
+                        session_id=conversation_id,
                     ):
                         payload = event.data
                         try:

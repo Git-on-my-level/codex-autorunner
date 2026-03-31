@@ -35,6 +35,7 @@ interface AgentControlConfig {
   agentSelect?: HTMLSelectElement | null;
   profileSelect?: HTMLSelectElement | null;
   modelSelect?: HTMLSelectElement | null;
+  modelInput?: HTMLInputElement | null;
   reasoningSelect?: HTMLSelectElement | null;
 }
 
@@ -42,6 +43,7 @@ interface AgentControl extends AgentControlConfig {
   agentSelect?: HTMLSelectElement | null;
   profileSelect?: HTMLSelectElement | null;
   modelSelect?: HTMLSelectElement | null;
+  modelInput?: HTMLInputElement | null;
   reasoningSelect?: HTMLSelectElement | null;
 }
 
@@ -50,8 +52,11 @@ interface AgentControlsPayload {
   defaultAgent: string;
   selectedAgent: string;
   selectedProfile: string;
+  mode: ModelControlMode;
   catalog: ModelCatalog | null;
 }
+
+type ModelControlMode = "catalog" | "manual" | "none";
 
 const STORAGE_PREFIX = REPO_ID ? "car.agent" : "car.pma.agent";
 const STORAGE_KEYS = {
@@ -90,10 +95,13 @@ const agentControlsRefresh = createSmartRefresh<AgentControlsPayload>({
       .join("|");
     const catalogSig = payload.catalog
       ? `${payload.catalog.default_model || ""}:${payload.catalog.models
-        .map((model) => `${model.id}:${model.display_name || ""}:${model.supports_reasoning ? "1" : "0"}:${model.reasoning_options.join(",")}`)
+        .map(
+          (model) =>
+            `${model.id}:${model.display_name || ""}:${model.supports_reasoning ? "1" : "0"}:${model.reasoning_options.join(",")}`
+        )
         .join("|")}`
       : "none";
-    return `${agentsSig}::${payload.defaultAgent}::${payload.selectedProfile}::${catalogSig}`;
+    return `${agentsSig}::${payload.defaultAgent}::${payload.selectedProfile}::${payload.mode}::${catalogSig}`;
   },
   render: (payload) => {
     renderAgentControls(payload);
@@ -174,14 +182,6 @@ function agentProfiles(agentId: string): AgentProfile[] {
   return Array.isArray(entry?.profiles) ? entry.profiles : [];
 }
 
-function agentSupportsModelCatalog(agentId: string): boolean {
-  const entry = getAgentEntry(agentId);
-  if (Array.isArray(entry?.capabilities)) {
-    return entry.capabilities.includes("model_listing");
-  }
-  return true;
-}
-
 async function loadAgents(): Promise<void> {
   if (agentsLoaded) return;
   if (agentsLoadPromise) {
@@ -191,9 +191,13 @@ async function loadAgents(): Promise<void> {
   agentsLoadPromise = (async () => {
     try {
       const data = await api(`${API_PREFIX}/agents`, { method: "GET" });
-      const agents = Array.isArray((data as { agents?: unknown[] })?.agents) ? (data as { agents: unknown[] }).agents : [];
-      // Only use API response if it contains valid agents
-      if (agents.length > 0 && agents.every((a) => a && typeof (a as Agent).id === "string")) {
+      const agents = Array.isArray((data as { agents?: unknown[] })?.agents)
+        ? (data as { agents: unknown[] }).agents
+        : [];
+      if (
+        agents.length > 0 &&
+        agents.every((a) => a && typeof (a as Agent).id === "string")
+      ) {
         agentList = agents as Agent[];
         defaultAgent = (data as { default?: string })?.default || defaultAgent;
       }
@@ -226,7 +230,9 @@ function normalizeCatalog(raw: unknown): ModelCatalog {
           : id;
       const supportsReasoning = Boolean(entryObj.supports_reasoning);
       const reasoningOptions = Array.isArray(entryObj.reasoning_options)
-        ? (entryObj.reasoning_options as unknown[]).filter((value) => typeof value === "string")
+        ? (entryObj.reasoning_options as unknown[]).filter(
+          (value) => typeof value === "string"
+        )
         : [];
       return {
         id,
@@ -245,10 +251,6 @@ function normalizeCatalog(raw: unknown): ModelCatalog {
 }
 
 async function loadModelCatalog(agent: string): Promise<ModelCatalog | null> {
-  if (!agentSupportsModelCatalog(agent)) {
-    modelCatalogs.set(agent, null);
-    return null;
-  }
   if (modelCatalogs.has(agent)) return modelCatalogs.get(agent) || null;
   if (modelCatalogPromises.has(agent)) {
     return await modelCatalogPromises.get(agent) || null;
@@ -277,6 +279,21 @@ function getLabelText(agentId: string): string {
   return entry?.name || agentId;
 }
 
+function agentHasCapability(agentId: string, capability: string): boolean {
+  const entry = agentList.find((agent) => agent.id === agentId);
+  return Array.isArray(entry?.capabilities) && entry.capabilities.includes(capability);
+}
+
+function modelControlModeForAgent(agentId: string): ModelControlMode {
+  if (agentHasCapability(agentId, "model_listing")) {
+    return "catalog";
+  }
+  if (agentHasCapability(agentId, "message_turns")) {
+    return "manual";
+  }
+  return "none";
+}
+
 function ensureAgentOptions(select: HTMLSelectElement | null | undefined): void {
   if (!select) return;
   const selected = getSelectedAgent();
@@ -296,7 +313,10 @@ function ensureAgentOptions(select: HTMLSelectElement | null | undefined): void 
   select.value = selected;
 }
 
-function ensureProfileOptions(select: HTMLSelectElement | null | undefined, agentId: string): void {
+function ensureProfileOptions(
+  select: HTMLSelectElement | null | undefined,
+  agentId: string
+): void {
   if (!select) return;
   const profiles = agentProfiles(agentId);
   select.innerHTML = "";
@@ -323,22 +343,19 @@ function ensureProfileOptions(select: HTMLSelectElement | null | undefined, agen
 function ensureModelOptions(
   select: HTMLSelectElement | null | undefined,
   catalog: ModelCatalog | null,
-  supportsCatalog: boolean
+  mode: ModelControlMode
 ): void {
   if (!select) return;
   select.innerHTML = "";
-  if (!supportsCatalog) {
+  if (
+    mode !== "catalog" ||
+    !catalog ||
+    !Array.isArray(catalog.models) ||
+    !catalog.models.length
+  ) {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "No model picker";
-    select.appendChild(option);
-    select.disabled = true;
-    return;
-  }
-  if (!catalog || !Array.isArray(catalog.models) || !catalog.models.length) {
-    const option = document.createElement("option");
-    option.value = "";
-    option.textContent = "No models";
+    option.textContent = mode === "manual" ? "Manual override" : "No models";
     select.appendChild(option);
     select.disabled = true;
     return;
@@ -355,7 +372,10 @@ function ensureModelOptions(
   });
 }
 
-function ensureReasoningOptions(select: HTMLSelectElement | null | undefined, model: ModelCatalogModel | null): void {
+function ensureReasoningOptions(
+  select: HTMLSelectElement | null | undefined,
+  model: ModelCatalogModel | null
+): void {
   if (!select) return;
   select.innerHTML = "";
   if (!model || !model.supports_reasoning || !model.reasoning_options?.length) {
@@ -373,6 +393,26 @@ function ensureReasoningOptions(select: HTMLSelectElement | null | undefined, mo
     option.textContent = optionValue;
     select.appendChild(option);
   });
+}
+
+function ensureManualModelInput(
+  input: HTMLInputElement | null | undefined,
+  {
+    agent,
+    mode,
+  }: {
+    agent: string;
+    mode: ModelControlMode;
+  }
+): void {
+  if (!input) return;
+  const isManual = mode === "manual";
+  input.classList.toggle("hidden", !isManual);
+  input.disabled = !isManual;
+  input.value = isManual ? getSelectedModel(agent) : "";
+  input.placeholder = isManual
+    ? `Manual ${getLabelText(agent)} model override`
+    : "Manual model override";
 }
 
 function resolveSelectedModel(agent: string, catalog: ModelCatalog | null): string {
@@ -406,7 +446,10 @@ function resolveSelectedProfile(agent: string): string {
   return profiles[0]?.id || "";
 }
 
-function resolveSelectedReasoning(agent: string, model: ModelCatalogModel | null): string {
+function resolveSelectedReasoning(
+  agent: string,
+  model: ModelCatalogModel | null
+): string {
   if (!model || !model.reasoning_options?.length) return "";
   const stored = getSelectedReasoning(agent);
   if (stored && model.reasoning_options.includes(stored)) {
@@ -424,16 +467,19 @@ async function loadAgentControlsPayload(): Promise<AgentControlsPayload> {
   }
 
   const selectedAgent = getSelectedAgent();
+  const mode = modelControlModeForAgent(selectedAgent);
 
-  let catalog: ModelCatalog | null | undefined = modelCatalogs.has(selectedAgent)
-    ? (modelCatalogs.get(selectedAgent) ?? null)
-    : undefined;
-  if (catalog === undefined) {
-    try {
-      catalog = await loadModelCatalog(selectedAgent);
-    } catch (err) {
-      console.warn(`Failed to load model catalog for ${selectedAgent}`, err);
-      catalog = null;
+  let catalog: ModelCatalog | null = null;
+  if (mode === "catalog") {
+    if (modelCatalogs.has(selectedAgent)) {
+      catalog = modelCatalogs.get(selectedAgent) || null;
+    } else {
+      try {
+        catalog = await loadModelCatalog(selectedAgent);
+      } catch (err) {
+        console.warn(`Failed to load model catalog for ${selectedAgent}`, err);
+        catalog = null;
+      }
     }
   }
 
@@ -442,16 +488,15 @@ async function loadAgentControlsPayload(): Promise<AgentControlsPayload> {
     defaultAgent,
     selectedAgent,
     selectedProfile: resolveSelectedProfile(selectedAgent),
-    catalog: catalog || null,
+    mode,
+    catalog,
   };
 }
 
 function renderAgentControls(payload: AgentControlsPayload): void {
   const selectedAgent = payload.selectedAgent;
   const selectedProfile = payload.selectedProfile;
-  const supportsCatalog = agentSupportsModelCatalog(selectedAgent);
 
-  // Always update agent options first (uses in-memory agentList)
   controls.forEach((control) => {
     ensureAgentOptions(control.agentSelect);
     ensureProfileOptions(control.profileSelect, selectedAgent);
@@ -460,17 +505,17 @@ function renderAgentControls(payload: AgentControlsPayload): void {
     }
   });
 
-  const catalog = payload.catalog;
+  const { catalog, mode } = payload;
 
-  // Update model and reasoning options
   controls.forEach((control) => {
-    ensureModelOptions(control.modelSelect, catalog, supportsCatalog);
+    ensureModelOptions(control.modelSelect, catalog, mode);
+    ensureManualModelInput(control.modelInput, { agent: selectedAgent, mode });
     if (selectedProfile) {
       setSelectedProfile(selectedAgent, selectedProfile);
     } else {
       setSelectedProfile(selectedAgent, "");
     }
-    if (catalog && supportsCatalog) {
+    if (mode === "catalog" && catalog) {
       const selectedModelId = resolveSelectedModel(selectedAgent, catalog);
       setSelectedModel(selectedAgent, selectedModelId);
       if (control.modelSelect) {
@@ -478,14 +523,20 @@ function renderAgentControls(payload: AgentControlsPayload): void {
       }
       const modelEntry = catalog.models.find((entry) => entry.id === selectedModelId);
       ensureReasoningOptions(control.reasoningSelect, modelEntry || null);
-      const selectedReasoning = resolveSelectedReasoning(selectedAgent, modelEntry || null);
+      const selectedReasoning = resolveSelectedReasoning(
+        selectedAgent,
+        modelEntry || null
+      );
       setSelectedReasoning(selectedAgent, selectedReasoning);
       if (control.reasoningSelect) {
         control.reasoningSelect.value = selectedReasoning;
       }
-    } else {
-      ensureReasoningOptions(control.reasoningSelect, null);
+      return;
     }
+    if (mode !== "catalog") {
+      setSelectedReasoning(selectedAgent, "");
+    }
+    ensureReasoningOptions(control.reasoningSelect, null);
   });
 }
 
@@ -498,16 +549,16 @@ export async function refreshAgentControls(
 async function handleAgentChange(nextAgent: string): Promise<void> {
   const previous = getSelectedAgent();
   setSelectedAgent(nextAgent);
-  try {
-    if (agentSupportsModelCatalog(nextAgent)) {
+  if (modelControlModeForAgent(nextAgent) === "catalog") {
+    try {
       await loadModelCatalog(nextAgent);
+    } catch (err) {
+      setSelectedAgent(previous);
+      flash(
+        `Failed to load ${getLabelText(nextAgent)} models; staying on ${getLabelText(previous)}.`,
+        "error"
+      );
     }
-  } catch (err) {
-    setSelectedAgent(previous);
-    flash(
-      `Failed to load ${getLabelText(nextAgent)} models; staying on ${getLabelText(previous)}.`,
-      "error"
-    );
   }
   await refreshAgentControls({ force: true, reason: "manual" });
 }
@@ -524,6 +575,11 @@ async function handleProfileChange(nextProfile: string): Promise<void> {
   await refreshAgentControls({ force: true, reason: "manual" });
 }
 
+function handleManualModelInput(nextModel: string): void {
+  const agent = getSelectedAgent();
+  setSelectedModel(agent, nextModel.trim());
+}
+
 async function handleReasoningChange(nextReasoning: string): Promise<void> {
   const agent = getSelectedAgent();
   setSelectedReasoning(agent, nextReasoning);
@@ -534,50 +590,63 @@ async function handleReasoningChange(nextReasoning: string): Promise<void> {
  * @param {AgentControlConfig} [config]
  */
 export function initAgentControls(config: AgentControlConfig = {}): void {
-  const { agentSelect, profileSelect, modelSelect, reasoningSelect } = config;
-  if (!agentSelect && !profileSelect && !modelSelect && !reasoningSelect) {
+  const { agentSelect, profileSelect, modelSelect, modelInput, reasoningSelect } =
+    config;
+  if (
+    !agentSelect &&
+    !profileSelect &&
+    !modelSelect &&
+    !modelInput &&
+    !reasoningSelect
+  ) {
     return;
   }
   const control: AgentControl = {
     agentSelect,
     profileSelect,
     modelSelect,
+    modelInput,
     reasoningSelect,
   };
   controls.push(control);
 
-  // Immediately populate agent options from in-memory list (synchronous)
   ensureAgentOptions(agentSelect);
   ensureProfileOptions(profileSelect, getSelectedAgent());
-  ensureModelOptions(modelSelect, null, true);
+  ensureModelOptions(modelSelect, null, "none");
+  ensureManualModelInput(modelInput, { agent: getSelectedAgent(), mode: "none" });
   ensureReasoningOptions(reasoningSelect, null);
 
   if (agentSelect) {
     agentSelect.addEventListener("change", (event) => {
       const target = event.target as HTMLSelectElement;
-      handleAgentChange(target.value);
+      void handleAgentChange(target.value);
     });
   }
   if (modelSelect) {
     modelSelect.addEventListener("change", (event) => {
       const target = event.target as HTMLSelectElement;
-      handleModelChange(target.value);
+      void handleModelChange(target.value);
+    });
+  }
+  if (modelInput) {
+    modelInput.addEventListener("input", (event) => {
+      const target = event.target as HTMLInputElement;
+      handleManualModelInput(target.value);
     });
   }
   if (profileSelect) {
     profileSelect.addEventListener("change", (event) => {
       const target = event.target as HTMLSelectElement;
-      handleProfileChange(target.value);
+      void handleProfileChange(target.value);
     });
   }
   if (reasoningSelect) {
     reasoningSelect.addEventListener("change", (event) => {
       const target = event.target as HTMLSelectElement;
-      handleReasoningChange(target.value);
+      void handleReasoningChange(target.value);
     });
   }
 
-  // Async refresh to load from API (will update if API returns different data)
   refreshAgentControls({ force: true, reason: "initial" }).catch((err) => {
     console.warn("Failed to refresh agent controls", err);
   });
@@ -586,3 +655,17 @@ export function initAgentControls(config: AgentControlConfig = {}): void {
 export async function ensureAgentCatalog(): Promise<void> {
   await refreshAgentControls({ force: true, reason: "manual" });
 }
+
+export const __agentControlsTest = {
+  modelControlModeForAgent,
+  reset(): void {
+    agentControlsRefresh.reset();
+    controls.length = 0;
+    agentsLoaded = false;
+    agentsLoadPromise = null;
+    agentList = [...FALLBACK_AGENTS];
+    defaultAgent = "codex";
+    modelCatalogs.clear();
+    modelCatalogPromises.clear();
+  },
+};

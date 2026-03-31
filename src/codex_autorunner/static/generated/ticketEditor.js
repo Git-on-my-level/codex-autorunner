@@ -139,6 +139,7 @@ function els() {
         agentSelect: document.getElementById("ticket-chat-agent-select"),
         profileSelect: document.getElementById("ticket-chat-profile-select"),
         modelSelect: document.getElementById("ticket-chat-model-select"),
+        modelInput: document.getElementById("ticket-chat-model-input"),
         reasoningSelect: document.getElementById("ticket-chat-reasoning-select"),
     };
 }
@@ -793,7 +794,7 @@ export async function deleteTicket() {
  * Initialize the ticket editor - wire up event listeners
  */
 export function initTicketEditor() {
-    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, prevBtn, nextBtn, fmAgent, fmModel, fmReasoning, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, profileSelect, modelSelect, reasoningSelect, } = els();
+    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, prevBtn, nextBtn, fmAgent, fmModel, fmReasoning, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, profileSelect, modelSelect, modelInput, reasoningSelect, } = els();
     if (!modal)
         return;
     // Prevent double initialization
@@ -805,6 +806,7 @@ export function initTicketEditor() {
         agentSelect,
         profileSelect,
         modelSelect,
+        modelInput,
         reasoningSelect,
     });
     // Initialize voice input for ticket chat

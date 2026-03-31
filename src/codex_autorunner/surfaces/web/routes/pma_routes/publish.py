@@ -120,6 +120,31 @@ def resolve_binding_repo_id(
     return None
 
 
+def resolve_binding_repo_candidates(
+    *,
+    repo_id: Any,
+    workspace_path: Any,
+    prev_repo_id: Any,
+    prev_workspace_path: Any,
+    repo_id_by_workspace: dict[str, str],
+    hub_root: Path,
+) -> set[str]:
+    candidates: set[str] = set()
+    for candidate_repo_id, candidate_workspace_path in (
+        (repo_id, workspace_path),
+        (prev_repo_id, prev_workspace_path),
+    ):
+        resolved = resolve_binding_repo_id(
+            repo_id=candidate_repo_id,
+            workspace_path=candidate_workspace_path,
+            repo_id_by_workspace=repo_id_by_workspace,
+            hub_root=hub_root,
+        )
+        if resolved:
+            candidates.add(resolved)
+    return candidates
+
+
 def resolve_publish_repo_id(
     *,
     request: Request,
@@ -328,17 +353,15 @@ async def publish_automation_result(
                 channel_id = normalize_optional_text(binding.get("channel_id"))
                 if not channel_id or channel_id in seen_channels:
                     continue
-                binding_repo_id = resolve_binding_repo_id(
+                binding_repo_ids = resolve_binding_repo_candidates(
                     repo_id=binding.get("repo_id"),
                     workspace_path=binding.get("workspace_path"),
+                    prev_repo_id=binding.get("pma_prev_repo_id"),
+                    prev_workspace_path=binding.get("pma_prev_workspace_path"),
                     repo_id_by_workspace=repo_id_by_workspace,
                     hub_root=hub_root,
                 )
-                prev_repo_id = normalize_optional_text(binding.get("pma_prev_repo_id"))
-                if target_repo_id and target_repo_id not in {
-                    binding_repo_id,
-                    prev_repo_id,
-                }:
+                if target_repo_id and target_repo_id not in binding_repo_ids:
                     continue
                 seen_channels.add(channel_id)
                 targets += 1
@@ -405,19 +428,15 @@ async def publish_automation_result(
                 identity = (chat_id, thread_id)
                 if identity in seen_topics:
                     continue
-                binding_repo_id = resolve_binding_repo_id(
+                binding_repo_ids = resolve_binding_repo_candidates(
                     repo_id=getattr(topic, "repo_id", None),
                     workspace_path=getattr(topic, "workspace_path", None),
+                    prev_repo_id=getattr(topic, "pma_prev_repo_id", None),
+                    prev_workspace_path=getattr(topic, "pma_prev_workspace_path", None),
                     repo_id_by_workspace=repo_id_by_workspace,
                     hub_root=hub_root,
                 )
-                prev_repo_id = normalize_optional_text(
-                    getattr(topic, "pma_prev_repo_id", None)
-                )
-                if target_repo_id and target_repo_id not in {
-                    binding_repo_id,
-                    prev_repo_id,
-                }:
+                if target_repo_id and target_repo_id not in binding_repo_ids:
                     continue
                 seen_topics.add(identity)
                 targets += 1

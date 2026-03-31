@@ -310,6 +310,7 @@ export class TerminalManager {
   agentSelect: HTMLSelectElement | null = null;
   profileSelect: HTMLSelectElement | null = null;
   modelSelect: HTMLSelectElement | null = null;
+  modelInput: HTMLInputElement | null = null;
   reasoningSelect: HTMLSelectElement | null = null;
 
   // Voice state
@@ -549,6 +550,7 @@ export class TerminalManager {
     this.agentSelect = document.getElementById("terminal-agent-select") as HTMLSelectElement | null;
     this.profileSelect = document.getElementById("terminal-profile-select") as HTMLSelectElement | null;
     this.modelSelect = document.getElementById("terminal-model-select") as HTMLSelectElement | null;
+    this.modelInput = document.getElementById("terminal-model-input") as HTMLInputElement | null;
     this.reasoningSelect = document.getElementById("terminal-reasoning-select") as HTMLSelectElement | null;
 
     if (!this.statusEl || !this.connectBtn || !this.disconnectBtn || !this.resumeBtn) {
@@ -590,6 +592,7 @@ export class TerminalManager {
       agentSelect: this.agentSelect,
       profileSelect: this.profileSelect,
       modelSelect: this.modelSelect,
+      modelInput: this.modelInput,
       reasoningSelect: this.reasoningSelect,
     });
 
