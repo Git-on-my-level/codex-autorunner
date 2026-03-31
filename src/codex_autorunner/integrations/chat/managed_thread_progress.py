@@ -89,20 +89,24 @@ def apply_run_event_to_progress_tracker(
     if isinstance(run_event, ToolCall):
         tool_name = run_event.tool_name.strip() if run_event.tool_name else ""
         tracker.note_tool(tool_name or "Tool call")
-        return ProgressTrackerEventOutcome(changed=True)
+        return ProgressTrackerEventOutcome(changed=True, force=True)
 
     if isinstance(run_event, ApprovalRequested):
         summary = run_event.description.strip() if run_event.description else ""
         tracker.note_approval(summary or "Approval requested")
-        return ProgressTrackerEventOutcome(changed=True)
+        return ProgressTrackerEventOutcome(changed=True, force=True)
 
     if isinstance(run_event, RunNotice):
         notice = run_event.message.strip() if run_event.message else ""
         if not notice:
             notice = run_event.kind.strip() if run_event.kind else "notice"
         if run_event.kind in {"thinking", "reasoning"}:
+            prior_transient = tracker.transient_action
             tracker.note_thinking(notice)
-            return ProgressTrackerEventOutcome(changed=True)
+            return ProgressTrackerEventOutcome(
+                changed=True,
+                force=prior_transient is None or prior_transient.label != "thinking",
+            )
         if run_event.kind == "interrupted":
             if tracker.label == "done" and runtime_state.final_message:
                 return ProgressTrackerEventOutcome(changed=False)

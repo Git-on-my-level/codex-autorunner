@@ -37,10 +37,39 @@ def test_apply_run_event_to_progress_tracker_records_tool_calls() -> None:
     )
 
     assert outcome.changed is True
+    assert outcome.force is True
     assert outcome.terminal is False
     assert tracker.transient_action is not None
     assert tracker.transient_action.label == "tool"
     assert tracker.transient_action.text == "exec"
+
+
+def test_apply_run_event_to_progress_tracker_forces_first_thinking_notice() -> None:
+    tracker = _tracker()
+
+    first = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:00Z",
+            kind="thinking",
+            message="checking Discord progress updates",
+        ),
+        runtime_state=ProgressRuntimeState(),
+    )
+    second = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:01Z",
+            kind="thinking",
+            message="checking Discord progress updates in more detail",
+        ),
+        runtime_state=ProgressRuntimeState(),
+    )
+
+    assert first.changed is True
+    assert first.force is True
+    assert second.changed is True
+    assert second.force is False
 
 
 def test_apply_run_event_to_progress_tracker_updates_log_line_output() -> None:
