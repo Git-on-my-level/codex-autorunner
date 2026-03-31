@@ -1011,6 +1011,7 @@ class UsageConfig:
 
 @dataclasses.dataclass(frozen=True)
 class AgentConfig:
+    backend: Optional[str]
     binary: str
     serve_command: Optional[List[str]]
     base_url: Optional[str]
@@ -1144,6 +1145,13 @@ class RepoConfig:
             return agent.binary
         raise ConfigError(f"agents.{agent_id}.binary is required")
 
+    def agent_backend(self, agent_id: str) -> str:
+        agent = self.agents.get(agent_id)
+        backend = getattr(agent, "backend", None) if agent is not None else None
+        if isinstance(backend, str) and backend.strip():
+            return backend.strip().lower()
+        return str(agent_id or "").strip().lower()
+
     def agent_serve_command(self, agent_id: str) -> Optional[List[str]]:
         agent = self.agents.get(agent_id)
         if agent:
@@ -1194,6 +1202,13 @@ class HubConfig:
         if agent and agent.binary:
             return agent.binary
         raise ConfigError(f"agents.{agent_id}.binary is required")
+
+    def agent_backend(self, agent_id: str) -> str:
+        agent = self.agents.get(agent_id)
+        backend = getattr(agent, "backend", None) if agent is not None else None
+        if isinstance(backend, str) and backend.strip():
+            return backend.strip().lower()
+        return str(agent_id or "").strip().lower()
 
     def agent_serve_command(self, agent_id: str) -> Optional[List[str]]:
         agent = self.agents.get(agent_id)
@@ -2182,6 +2197,9 @@ def _parse_agents_config(
     for agent_id, agent_cfg in raw_agents.items():
         if not isinstance(agent_cfg, dict):
             continue
+        backend = agent_cfg.get("backend")
+        if not isinstance(backend, str) or not backend.strip():
+            backend = None
         binary = agent_cfg.get("binary")
         if not isinstance(binary, str) or not binary.strip():
             continue
@@ -2193,6 +2211,7 @@ def _parse_agents_config(
         if not isinstance(subagent_models, dict):
             subagent_models = None
         agents[str(agent_id)] = AgentConfig(
+            backend=backend,
             binary=binary,
             serve_command=serve_command,
             base_url=base_url,

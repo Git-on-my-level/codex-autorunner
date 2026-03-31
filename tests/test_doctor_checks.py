@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from codex_autorunner.bootstrap import seed_hub_files
-from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.core.config import AgentConfig, load_hub_config
 from codex_autorunner.core.destinations import DockerReadiness
 from codex_autorunner.core.managed_processes.registry import ProcessRecord
 from codex_autorunner.core.runtime import (
@@ -1154,6 +1154,52 @@ def test_hermes_doctor_checks_report_incompatible_runtime_for_enabled_workspaces
     assert check.severity == "error"
     assert "hermes acp" in check.message
     assert "hermes-main" in check.message
+
+
+def test_hermes_doctor_checks_report_configured_aliases_individually(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    hub_config = load_hub_config(hub_root)
+    hub_config.agents["hermes-m4-pma"] = AgentConfig(
+        backend="hermes",
+        binary="hermes-m4-pma",
+        serve_command=None,
+        base_url=None,
+        subagent_models=None,
+    )
+
+    observed_agent_ids: list[str] = []
+
+    def _fake_preflight(_config, *, agent_id="hermes"):
+        observed_agent_ids.append(agent_id)
+        return type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 1.2.3",
+                "launch_mode": None,
+                "message": f"Hermes {agent_id} ready.",
+                "fix": None,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.hermes_runtime_preflight",
+        _fake_preflight,
+    )
+
+    checks = hermes_doctor_checks(hub_config)
+
+    assert observed_agent_ids == ["hermes-m4-pma"]
+    assert len(checks) == 1
+    assert checks[0].check_id == "hub.hermes.binary.hermes-m4-pma"
+    assert checks[0].passed is True
+    assert "hermes-m4-pma" in checks[0].message
 
 
 def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):

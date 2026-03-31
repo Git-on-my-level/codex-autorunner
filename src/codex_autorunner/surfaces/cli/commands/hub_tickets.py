@@ -237,7 +237,7 @@ def register_hub_tickets_commands(
         if assign_agent:
             if assign_agent != "user":
                 try:
-                    validate_agent_id(assign_agent)
+                    validate_agent_id(assign_agent, repo_root)
                 except ValueError as exc:
                     raise_exit(str(exc), cause=exc)
 
@@ -300,7 +300,7 @@ def register_hub_tickets_commands(
 
         if agent != "user":
             try:
-                validate_agent_id(agent)
+                validate_agent_id(agent, repo_root)
             except ValueError as exc:
                 raise_exit(str(exc), cause=exc)
 
@@ -604,17 +604,17 @@ def register_hub_tickets_commands(
 
         if assign_agent and assign_agent != "user":
             try:
-                validate_agent_id(assign_agent)
+                validate_agent_id(assign_agent, config)
             except ValueError as exc:
                 raise_exit(str(exc), cause=exc)
         if final_review_agent != "user":
             try:
-                validate_agent_id(final_review_agent)
+                validate_agent_id(final_review_agent, config)
             except ValueError as exc:
                 raise_exit(str(exc), cause=exc)
         if pr_agent != "user":
             try:
-                validate_agent_id(pr_agent)
+                validate_agent_id(pr_agent, config)
             except ValueError as exc:
                 raise_exit(str(exc), cause=exc)
 

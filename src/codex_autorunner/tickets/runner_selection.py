@@ -221,7 +221,7 @@ def _validate_ticket_lint_retry(
         try:
             from ..agents.registry import validate_agent_id
 
-            agent_id = validate_agent_id(agent_id)
+            agent_id = validate_agent_id(agent_id, workspace_root)
         except Exception as exc:
             return TicketValidationResult(
                 status="paused",

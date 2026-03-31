@@ -77,7 +77,7 @@ async def execute_file_chat(
         return {"status": "interrupted", "detail": "File chat interrupted"}
 
     try:
-        agent_id = validate_agent_id(agent or "")
+        agent_id = validate_agent_id(agent or "", request.app.state)
     except ValueError:
         agent_id = "codex"
 

@@ -579,12 +579,13 @@ def _workspace_key(workspace_root: Path) -> str:
 def build_hermes_supervisor_from_config(
     config: RepoConfig | HubConfig,
     *,
+    agent_id: str = "hermes",
     approval_handler: Optional[HermesApprovalHandler] = None,
     default_approval_decision: str = "cancel",
     logger: Optional[logging.Logger] = None,
 ) -> Optional[HermesSupervisor]:
     try:
-        binary = config.agent_binary("hermes").strip()
+        binary = config.agent_binary(agent_id).strip()
     except Exception:
         return None
     if not binary:
@@ -597,11 +598,15 @@ def build_hermes_supervisor_from_config(
     )
 
 
-def hermes_binary_available(config: Optional[RepoConfig | HubConfig]) -> bool:
+def hermes_binary_available(
+    config: Optional[RepoConfig | HubConfig],
+    *,
+    agent_id: str = "hermes",
+) -> bool:
     if config is None:
         return False
     try:
-        binary = config.agent_binary("hermes").strip()
+        binary = config.agent_binary(agent_id).strip()
     except Exception:
         return False
     if not binary:
@@ -611,45 +616,49 @@ def hermes_binary_available(config: Optional[RepoConfig | HubConfig]) -> bool:
 
 def hermes_runtime_preflight(
     config: Optional[RepoConfig | HubConfig],
+    *,
+    agent_id: str = "hermes",
 ) -> RuntimePreflightResult:
+    normalized_agent_id = str(agent_id or "").strip().lower() or HERMES_RUNTIME_ID
+    binary_key = f"agents.{normalized_agent_id}.binary"
     if config is None:
         return RuntimePreflightResult(
-            runtime_id=HERMES_RUNTIME_ID,
+            runtime_id=normalized_agent_id,
             status="missing_binary",
             version=None,
             launch_mode=None,
             message="Hermes binary is not configured.",
-            fix="Set agents.hermes.binary in the repo or hub config.",
+            fix=f"Set {binary_key} in the repo or hub config.",
         )
     try:
-        binary = config.agent_binary("hermes").strip()
+        binary = config.agent_binary(normalized_agent_id).strip()
     except Exception:
         return RuntimePreflightResult(
-            runtime_id=HERMES_RUNTIME_ID,
+            runtime_id=normalized_agent_id,
             status="missing_binary",
             version=None,
             launch_mode=None,
             message="Hermes binary is not configured.",
-            fix="Set agents.hermes.binary in the repo or hub config.",
+            fix=f"Set {binary_key} in the repo or hub config.",
         )
     if not binary:
         return RuntimePreflightResult(
-            runtime_id=HERMES_RUNTIME_ID,
+            runtime_id=normalized_agent_id,
             status="missing_binary",
             version=None,
             launch_mode=None,
             message="Hermes binary is not configured.",
-            fix="Set agents.hermes.binary in the repo or hub config.",
+            fix=f"Set {binary_key} in the repo or hub config.",
         )
     binary_path = resolve_executable(binary)
     if binary_path is None:
         return RuntimePreflightResult(
-            runtime_id=HERMES_RUNTIME_ID,
+            runtime_id=normalized_agent_id,
             status="missing_binary",
             version=None,
             launch_mode=None,
             message=f"Hermes binary '{binary}' is not available on PATH.",
-            fix="Install Hermes or update agents.hermes.binary to a working executable path.",
+            fix=f"Install Hermes or update {binary_key} to a working executable path.",
         )
     import subprocess
 
@@ -673,7 +682,7 @@ def hermes_runtime_preflight(
         help_text = result.stdout + result.stderr
         if result.returncode not in (0, 1) or not help_text.strip():
             return RuntimePreflightResult(
-                runtime_id=HERMES_RUNTIME_ID,
+                runtime_id=normalized_agent_id,
                 status="incompatible",
                 version=version,
                 launch_mode=None,
@@ -682,7 +691,7 @@ def hermes_runtime_preflight(
             )
     except Exception as exc:
         return RuntimePreflightResult(
-            runtime_id=HERMES_RUNTIME_ID,
+            runtime_id=normalized_agent_id,
             status="incompatible",
             version=version,
             launch_mode=None,
@@ -690,7 +699,7 @@ def hermes_runtime_preflight(
             fix="Ensure Hermes binary is executable and supports `hermes acp` command.",
         )
     return RuntimePreflightResult(
-        runtime_id=HERMES_RUNTIME_ID,
+        runtime_id=normalized_agent_id,
         status="ready",
         version=version,
         launch_mode=None,

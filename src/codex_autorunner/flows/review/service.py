@@ -658,7 +658,7 @@ class ReviewService:
         state["status"] = "running"
         agent_input = payload.get("agent") or review_cfg.get("agent") or "opencode"
         try:
-            state["agent"] = validate_agent_id(agent_input)
+            state["agent"] = validate_agent_id(agent_input, config)
         except ValueError as exc:
             raise ReviewError(
                 f"Invalid agent '{agent_input}': {exc}",

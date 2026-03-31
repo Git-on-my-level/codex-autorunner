@@ -313,7 +313,9 @@ class DefaultAgentPool:
     def _get_orchestration_service(self) -> Any:
         if self._orchestration_service is not None:
             return self._orchestration_service
-        descriptors = self._agent_descriptors_override or get_registered_agents()
+        descriptors = self._agent_descriptors_override or get_registered_agents(
+            self._config
+        )
         harness_context = self._get_harness_context()
 
         def _make_harness(agent_id: str) -> Any:

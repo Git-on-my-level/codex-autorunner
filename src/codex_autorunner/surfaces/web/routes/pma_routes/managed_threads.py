@@ -341,7 +341,12 @@ def _raise_agent_workspace_runtime_not_ready(
 
 
 def build_managed_thread_orchestration_service(request: Request):
-    descriptors = get_registered_agents()
+    try:
+        descriptors = get_registered_agents(request.app.state)
+    except TypeError as exc:
+        if "positional argument" not in str(exc):
+            raise
+        descriptors = get_registered_agents()
 
     def _make_harness(agent_id: str):
         cache = getattr(request.app.state, "_managed_thread_harness_cache", None)

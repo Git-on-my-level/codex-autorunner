@@ -53,7 +53,7 @@ def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
             default_agent = agent_id
 
     if not agents:
-        fallback_descriptor = get_agent_descriptor("codex")
+        fallback_descriptor = get_agent_descriptor("codex", request.app.state)
         if fallback_descriptor is not None:
             agents = [
                 {
@@ -105,7 +105,7 @@ def build_agents_routes() -> APIRouter:
     async def list_agent_models(agent: str, request: Request):
         agent_id = _normalize_path_agent_id(agent)
         engine = request.app.state.engine
-        descriptor = get_agent_descriptor(agent_id)
+        descriptor = get_agent_descriptor(agent_id, request.app.state)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
         if "model_listing" not in descriptor.capabilities:
@@ -150,7 +150,7 @@ def build_agents_routes() -> APIRouter:
                 media_type="text/event-stream",
                 headers=SSE_HEADERS,
             )
-        descriptor = get_agent_descriptor(agent_id)
+        descriptor = get_agent_descriptor(agent_id, request.app.state)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
         if "event_streaming" not in descriptor.capabilities:

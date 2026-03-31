@@ -26,6 +26,7 @@ _RUNTIME_CAPABILITY_ALIASES = {
 class RuntimeAgentDescriptor(Protocol):
     id: str
     name: str
+    runtime_kind: str
     capabilities: frozenset[RuntimeCapability]
 
 
@@ -89,7 +90,7 @@ def build_agent_definition(
     return AgentDefinition(
         agent_id=descriptor.id,
         display_name=descriptor.name,
-        runtime_kind=descriptor.id,
+        runtime_kind=getattr(descriptor, "runtime_kind", descriptor.id),
         capabilities=merge_agent_capabilities(
             descriptor.capabilities,
             runtime_capabilities,

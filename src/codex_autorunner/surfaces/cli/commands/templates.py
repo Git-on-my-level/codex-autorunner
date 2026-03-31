@@ -156,7 +156,7 @@ def register_templates_commands(
         if set_agent:
             if set_agent != "user":
                 try:
-                    validate_agent_id(set_agent)
+                    validate_agent_id(set_agent, ctx.config)
                 except ValueError as exc:
                     raise_exit(str(exc), cause=exc)
             content = _apply_agent_override(content, set_agent, raise_exit)

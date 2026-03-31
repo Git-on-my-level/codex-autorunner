@@ -541,7 +541,7 @@ def build_templates_routes() -> APIRouter:
         if payload.set_agent:
             if payload.set_agent != "user":
                 try:
-                    validate_agent_id(payload.set_agent)
+                    validate_agent_id(payload.set_agent, request.app.state)
                 except ValueError as exc:
                     raise HTTPException(
                         status_code=400,

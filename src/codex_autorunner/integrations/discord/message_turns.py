@@ -1204,7 +1204,12 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
     if cached is not None:
         return cached
 
-    descriptors = get_registered_agents()
+    try:
+        descriptors = get_registered_agents(service)
+    except TypeError as exc:
+        if "positional argument" not in str(exc):
+            raise
+        descriptors = get_registered_agents()
 
     def _make_harness(agent_id: str) -> Any:
         if _should_use_legacy_orchestrator_harness(service):

@@ -480,7 +480,13 @@ def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
 
 
 def _build_runtime_harness(request: Request, agent_id: str) -> Any:
-    descriptor = get_registered_agents().get(agent_id)
+    try:
+        descriptors = get_registered_agents(request.app.state)
+    except TypeError as exc:
+        if "positional argument" not in str(exc):
+            raise
+        descriptors = get_registered_agents()
+    descriptor = descriptors.get(agent_id)
     if descriptor is None:
         raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_id}")
     try:
@@ -1150,7 +1156,7 @@ async def _execute_queue_item(
         from .....agents.registry import validate_agent_id
 
         try:
-            candidate = validate_agent_id(configured_default or "")
+            candidate = validate_agent_id(configured_default or "", request.app.state)
         except ValueError:
             candidate = None
         if candidate and candidate in available_ids:
@@ -1169,7 +1175,7 @@ async def _execute_queue_item(
     }
 
     try:
-        agent_id = validate_agent_id(agent or "")
+        agent_id = validate_agent_id(agent or "", request.app.state)
     except ValueError:
         agent_id = _resolve_default_agent(available_ids, available_default)
 

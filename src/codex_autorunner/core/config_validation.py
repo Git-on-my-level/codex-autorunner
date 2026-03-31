@@ -519,6 +519,13 @@ def _validate_agents_config(cfg: Dict[str, Any]) -> None:
     for agent_id, agent_cfg in agents_cfg.items():
         if not isinstance(agent_cfg, dict):
             raise ConfigError(f"agents.{agent_id} must be a mapping")
+        backend = agent_cfg.get("backend")
+        if backend is not None and (
+            not isinstance(backend, str) or not backend.strip()
+        ):
+            raise ConfigError(
+                f"agents.{agent_id}.backend must be a non-empty string when provided"
+            )
         binary = agent_cfg.get("binary")
         if not isinstance(binary, str) or not binary.strip():
             raise ConfigError(f"agents.{agent_id}.binary is required")

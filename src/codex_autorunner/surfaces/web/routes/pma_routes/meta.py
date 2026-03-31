@@ -72,7 +72,7 @@ def build_pma_meta_routes(
     async def list_pma_agent_models(agent: str, request: Request):
         agent_id = (agent or "").strip().lower()
         hub_root = request.app.state.config.root
-        descriptor = get_agent_descriptor(agent_id)
+        descriptor = get_agent_descriptor(agent_id, request.app.state)
         if descriptor is None:
             raise HTTPException(status_code=404, detail="Unknown agent")
         if "model_listing" not in descriptor.capabilities:

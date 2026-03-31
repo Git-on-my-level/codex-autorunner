@@ -15,6 +15,7 @@ from codex_autorunner.agents.registry import (
     reload_agents,
     validate_agent_id,
 )
+from codex_autorunner.core.config import AgentConfig
 
 
 @pytest.fixture
@@ -389,3 +390,58 @@ class TestHermesHarness:
         assert validate_agent_id("hermes") == "hermes"
         assert validate_agent_id("HERMES") == "hermes"
         assert validate_agent_id("  hermes  ") == "hermes"
+
+    def test_configured_hermes_alias_registers_and_builds_distinct_harness(
+        self, monkeypatch
+    ):
+        sentinel_supervisors: dict[str, object] = {}
+
+        class MockConfig:
+            agents = {
+                "hermes": AgentConfig(
+                    backend=None,
+                    binary="hermes",
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                ),
+                "hermes-m4-pma": AgentConfig(
+                    backend="hermes",
+                    binary="hermes-m4-pma",
+                    serve_command=None,
+                    base_url=None,
+                    subagent_models=None,
+                ),
+            }
+
+            @staticmethod
+            def agent_binary(agent_id: str) -> str:
+                return MockConfig.agents[agent_id].binary
+
+            @staticmethod
+            def agent_backend(agent_id: str) -> str:
+                agent = MockConfig.agents[agent_id]
+                return str(agent.backend or agent_id)
+
+        def _fake_build_supervisor(config, *, agent_id="hermes", **_kwargs):
+            assert config is MockConfig
+            supervisor = sentinel_supervisors.setdefault(agent_id, object())
+            return supervisor
+
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.build_hermes_supervisor_from_config",
+            _fake_build_supervisor,
+        )
+
+        ctx = SimpleNamespace(config=MockConfig, logger=None)
+
+        agents = get_registered_agents(MockConfig)
+        assert validate_agent_id("hermes-m4-pma", MockConfig) == "hermes-m4-pma"
+        assert agents["hermes-m4-pma"].runtime_kind == "hermes"
+
+        harness = agents["hermes-m4-pma"].make_harness(ctx)
+
+        assert str(harness.agent_id) == "hermes-m4-pma"
+        assert harness.display_name == "Hermes (hermes-m4-pma)"
+        assert harness._supervisor is sentinel_supervisors["hermes-m4-pma"]
+        assert ("hermes", "hermes-m4-pma") in ctx._agent_runtime_supervisors

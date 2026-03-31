@@ -123,13 +123,22 @@ def zeroclaw_runtime_preflight(hub_config: HubConfig):
     return _zeroclaw_runtime_preflight(hub_config)
 
 
-def _hermes_runtime_preflight(hub_config: HubConfig):
+def _hermes_runtime_preflight(hub_config: HubConfig, *, agent_id: str = "hermes"):
     module = importlib.import_module("codex_autorunner.agents.hermes.supervisor")
-    return module.hermes_runtime_preflight(hub_config)
+    return module.hermes_runtime_preflight(hub_config, agent_id=agent_id)
 
 
-def hermes_runtime_preflight(hub_config: HubConfig):
-    return _hermes_runtime_preflight(hub_config)
+def hermes_runtime_preflight(hub_config: HubConfig, *, agent_id: str = "hermes"):
+    return _hermes_runtime_preflight(hub_config, agent_id=agent_id)
+
+
+def _run_hermes_runtime_preflight(hub_config: HubConfig, *, agent_id: str = "hermes"):
+    try:
+        return hermes_runtime_preflight(hub_config, agent_id=agent_id)
+    except TypeError as exc:
+        if "agent_id" not in str(exc):
+            raise
+        return hermes_runtime_preflight(hub_config)
 
 
 def doctor(
@@ -1238,56 +1247,91 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
             if workspace.enabled and workspace.runtime.strip().lower() == "hermes"
         )
 
-    try:
-        configured_binary = hub_config.agent_binary("hermes").strip()
-    except Exception:
-        configured_binary = ""
-
-    explicit_binary_override = bool(configured_binary and configured_binary != "hermes")
-    if not enabled_workspaces and not explicit_binary_override:
-        return checks
-
     workspace_suffix = ""
     if enabled_workspaces:
         workspace_suffix = f" for enabled workspaces: {', '.join(enabled_workspaces)}"
-    result = hermes_runtime_preflight(hub_config)
-    severity = (
-        "info"
-        if result.status == "ready"
-        else ("error" if enabled_workspaces else "warning")
-    )
-    fix = result.fix
-    message = result.message
-    if workspace_suffix:
-        message = f"{message.rstrip('.')}{workspace_suffix}."
-    if result.status == "ready":
-        detail_parts = []
-        if result.version:
-            detail_parts.append(result.version)
-        if result.launch_mode:
-            detail_parts.append(f"launch_mode={result.launch_mode}")
-        suffix = f" ({', '.join(detail_parts)})" if detail_parts else ""
+
+    configured_hermes_agents: list[str] = []
+    for agent_id in sorted(getattr(hub_config, "agents", {}).keys()):
+        try:
+            backend_id = hub_config.agent_backend(agent_id)
+        except Exception:
+            backend_id = agent_id
+        if str(backend_id or "").strip().lower() == "hermes":
+            configured_hermes_agents.append(agent_id)
+
+    if not configured_hermes_agents:
+        configured_hermes_agents = ["hermes"]
+
+    should_report = bool(enabled_workspaces)
+    agent_ids_to_check: list[str] = []
+    for agent_id in configured_hermes_agents:
+        try:
+            configured_binary = hub_config.agent_binary(agent_id).strip()
+        except Exception:
+            configured_binary = ""
+        is_alias = agent_id != "hermes"
+        explicit_binary_override = bool(
+            configured_binary and configured_binary != "hermes"
+        )
+        if enabled_workspaces or is_alias or explicit_binary_override:
+            should_report = True
+            agent_ids_to_check.append(agent_id)
+
+    if not should_report:
+        return checks
+    if not agent_ids_to_check:
+        agent_ids_to_check = configured_hermes_agents
+
+    for agent_id in agent_ids_to_check:
+        result = _run_hermes_runtime_preflight(hub_config, agent_id=agent_id)
+        check_name = (
+            "Hermes runtime availability"
+            if agent_id == "hermes"
+            else f"Hermes runtime availability ({agent_id})"
+        )
+        check_id = (
+            "hub.hermes.binary"
+            if agent_id == "hermes"
+            else f"hub.hermes.binary.{agent_id}"
+        )
+        severity = (
+            "info"
+            if result.status == "ready"
+            else ("error" if enabled_workspaces else "warning")
+        )
+        fix = result.fix
+        message = result.message
+        if workspace_suffix:
+            message = f"{message.rstrip('.')}{workspace_suffix}."
+        if result.status == "ready":
+            detail_parts = []
+            if result.version:
+                detail_parts.append(result.version)
+            if result.launch_mode:
+                detail_parts.append(f"launch_mode={result.launch_mode}")
+            suffix = f" ({', '.join(detail_parts)})" if detail_parts else ""
+            checks.append(
+                DoctorCheck(
+                    name=check_name,
+                    passed=True,
+                    message=f"{message.rstrip('.')}{suffix}.",
+                    severity="info",
+                    check_id=check_id,
+                )
+            )
+            continue
+
         checks.append(
             DoctorCheck(
-                name="Hermes runtime availability",
-                passed=True,
-                message=f"{message.rstrip('.')}{suffix}.",
-                severity="info",
-                check_id="hub.hermes.binary",
+                name=check_name,
+                passed=False,
+                message=message,
+                severity=severity,
+                check_id=check_id,
+                fix=fix,
             )
         )
-        return checks
-
-    checks.append(
-        DoctorCheck(
-            name="Hermes runtime availability",
-            passed=False,
-            message=message,
-            severity=severity,
-            check_id="hub.hermes.binary",
-            fix=fix,
-        )
-    )
     return checks
 
 

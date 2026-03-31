@@ -52,6 +52,21 @@ agents:
 CAR does not install Hermes for you. The configured binary must already exist
 and be executable on the host that runs CAR.
 
+You can also expose multiple named CAR agents over the Hermes backend by adding
+aliases with `backend: hermes`:
+
+```yaml
+agents:
+  hermes:
+    binary: hermes
+  hermes-m4-pma:
+    backend: hermes
+    binary: hermes-m4-pma
+```
+
+Each configured alias is validated independently by `car doctor` and can be
+targeted explicitly by PMA, tickets, and other registry-driven CAR surfaces.
+
 ## Launch Expectations
 
 The CAR Hermes supervisor launches:

@@ -47,7 +47,13 @@ class TelegramCommandSupportMixin:
         normalized = normalize_chat_agent(agent, default=DEFAULT_CHAT_AGENT)
         if normalized is None:
             return None
-        return get_registered_agents().get(normalized)
+        try:
+            descriptors = get_registered_agents(self)
+        except TypeError as exc:
+            if "positional argument" not in str(exc):
+                raise
+            descriptors = get_registered_agents()
+        return descriptors.get(normalized)
 
     def _agent_display_name(self, agent: object) -> str:
         descriptor = self._agent_descriptor(agent)
@@ -74,9 +80,15 @@ class TelegramCommandSupportMixin:
         if not normalized:
             return []
         resolved = next(iter(normalized))
+        try:
+            descriptors = get_registered_agents(self)
+        except TypeError as exc:
+            if "positional argument" not in str(exc):
+                raise
+            descriptors = get_registered_agents()
         return sorted(
             descriptor.id
-            for descriptor in get_registered_agents().values()
+            for descriptor in descriptors.values()
             if resolved in descriptor.capabilities
         )
 
