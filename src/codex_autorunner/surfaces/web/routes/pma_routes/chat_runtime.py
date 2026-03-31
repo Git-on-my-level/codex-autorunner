@@ -107,20 +107,27 @@ def _resolve_agent_profile(
         except Exception:
             available_profiles = {}
     resolved_profile = _normalize_optional_text(requested_profile)
-    if resolved_profile is None:
-        resolved_profile = _normalize_optional_text(default_profile)
-    if resolved_profile is None and callable(default_profile_getter):
+    if resolved_profile is not None:
+        if resolved_profile not in available_profiles:
+            raise HTTPException(status_code=400, detail="profile is invalid")
+        return resolved_profile
+
+    fallback_profiles: list[Optional[str]] = [
+        _normalize_optional_text(default_profile),
+    ]
+    if callable(default_profile_getter):
         try:
-            resolved_profile = _normalize_optional_text(
-                default_profile_getter(agent_id)
+            fallback_profiles.append(
+                _normalize_optional_text(default_profile_getter(agent_id))
             )
         except Exception:
-            resolved_profile = None
-    if resolved_profile is None:
-        return None
-    if resolved_profile not in available_profiles:
-        raise HTTPException(status_code=400, detail="profile is invalid")
-    return resolved_profile
+            fallback_profiles.append(None)
+
+    for fallback_profile in fallback_profiles:
+        if fallback_profile is not None and fallback_profile in available_profiles:
+            return fallback_profile
+
+    return None
 
 
 def _build_idempotency_key(

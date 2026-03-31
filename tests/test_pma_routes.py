@@ -1842,6 +1842,39 @@ def test_pma_chat_hermes_profile_uses_profile_scoped_registry_binding(
     assert observed["start_turn"][1] == "hermes-session-m4"
 
 
+def test_pma_chat_codex_ignores_global_profile_default_when_agent_has_no_profiles(
+    hub_env,
+) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["enabled"] = True
+    cfg["pma"]["profile"] = "m4"
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {"m4": {"binary": "hermes-m4"}},
+        "default_profile": "m4",
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+    app = create_hub_app(hub_env.hub_root)
+    _install_fake_successful_chat_supervisor(
+        app,
+        turn_id="turn-codex-no-profile",
+        message="codex reply",
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/pma/chat",
+        json={"message": "hello codex without profile", "agent": "codex"},
+    )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload.get("profile") is None
+
+
 def test_pma_chat_codex_retries_with_fresh_conversation_after_stale_resume(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
