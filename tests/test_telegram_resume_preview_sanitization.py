@@ -40,8 +40,7 @@ def test_extract_first_user_preview_strips_leading_car_html_comments() -> None:
     preview = _extract_first_user_preview(
         {
             "first_user_message": (
-                "<!-- CAR:PMA_DOCS_GENERATED -->\n\n"
-                "Show the session datetime first."
+                "<!-- CAR:PMA_DOCS_GENERATED -->\n\n" "Show the session datetime first."
             )
         }
     )

@@ -24,11 +24,11 @@ from ....chat.agents import (
     chat_agent_supports_effort,
     normalize_chat_agent,
 )
-from ....chat.thread_summaries import _format_resume_timestamp
 from ....chat.status_diagnostics import (
     StatusBlockContext,
     build_status_block_lines,
 )
+from ....chat.thread_summaries import _format_resume_timestamp
 from ...adapter import (
     TelegramCallbackQuery,
     TelegramMessage,

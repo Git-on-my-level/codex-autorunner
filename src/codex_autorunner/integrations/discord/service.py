@@ -474,9 +474,7 @@ def _format_session_thread_picker_label(
         short_id = thread_id[:8]
         id_prefix = f"[{short_id}] "
         preview_budget = max(1, max_base_len - len(id_prefix))
-        base = (
-            f"{id_prefix}{_truncate_picker_text(fallback_preview_label, limit=preview_budget)}"
-        )
+        base = f"{id_prefix}{_truncate_picker_text(fallback_preview_label, limit=preview_budget)}"
     else:
         base = _truncate_picker_text(thread_id, limit=max_base_len)
     return f"{base}{current_suffix}"
