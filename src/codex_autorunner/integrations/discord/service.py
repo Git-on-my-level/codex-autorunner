@@ -131,10 +131,10 @@ from ...integrations.app_server.threads import (
 )
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
-    VALID_CHAT_AGENT_VALUES,
     build_agent_switch_state,
     chat_agent_supports_effort,
     normalize_chat_agent,
+    valid_chat_agent_values,
 )
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from ...integrations.chat.channel_directory import ChannelDirectoryStore
@@ -6308,9 +6308,7 @@ class DiscordBotService:
                 )
                 return
 
-        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
-        if agent not in self.VALID_AGENT_VALUES:
-            agent = self.DEFAULT_AGENT
+        agent = self._normalize_agent(binding.get("agent"))
         resource_kind = (
             str(binding.get("resource_kind")).strip()
             if isinstance(binding.get("resource_kind"), str)
@@ -6496,9 +6494,7 @@ class DiscordBotService:
                 )
                 return
 
-        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
-        if agent not in self.VALID_AGENT_VALUES:
-            agent = self.DEFAULT_AGENT
+        agent = self._normalize_agent(binding.get("agent"))
         resource_kind = (
             str(binding.get("resource_kind")).strip()
             if isinstance(binding.get("resource_kind"), str)
@@ -6613,9 +6609,7 @@ class DiscordBotService:
                 )
                 return
 
-        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
-        if agent not in self.VALID_AGENT_VALUES:
-            agent = self.DEFAULT_AGENT
+        agent = self._normalize_agent(binding.get("agent"))
 
         repo_id = (
             str(binding.get("repo_id")).strip()
@@ -7270,8 +7264,10 @@ class DiscordBotService:
             if resolved in descriptor.capabilities
         )
 
-    VALID_AGENT_VALUES = VALID_CHAT_AGENT_VALUES
     DEFAULT_AGENT = DEFAULT_CHAT_AGENT
+
+    def _known_agent_values(self) -> tuple[str, ...]:
+        return valid_chat_agent_values()
 
     async def _handle_car_agent(
         self,
@@ -7313,12 +7309,13 @@ class DiscordBotService:
             )
             return
 
-        desired = agent_name.lower().strip()
-        if desired not in self.VALID_AGENT_VALUES:
+        desired = normalize_chat_agent(agent_name)
+        if desired is None:
+            available = ", ".join(self._known_agent_values())
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"Invalid agent '{agent_name}'. Valid options: {', '.join(self.VALID_AGENT_VALUES)}",
+                f"Invalid agent '{agent_name}'. Valid options: {available}",
             )
             return
 
@@ -7376,12 +7373,7 @@ class DiscordBotService:
             )
             return
 
-        current_agent = binding.get("agent") or self.DEFAULT_AGENT
-        if not isinstance(current_agent, str):
-            current_agent = self.DEFAULT_AGENT
-        current_agent = current_agent.strip().lower()
-        if current_agent not in self.VALID_AGENT_VALUES:
-            current_agent = self.DEFAULT_AGENT
+        current_agent = self._normalize_agent(binding.get("agent"))
         current_model = binding.get("model_override")
         if not isinstance(current_model, str) or not current_model.strip():
             current_model = None
@@ -11819,9 +11811,7 @@ class DiscordBotService:
                 )
                 return
 
-        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
-        if agent not in self.VALID_AGENT_VALUES:
-            agent = self.DEFAULT_AGENT
+        agent = self._normalize_agent(binding.get("agent"))
         resource_kind = (
             str(binding.get("resource_kind")).strip()
             if isinstance(binding.get("resource_kind"), str)
@@ -11894,9 +11884,7 @@ class DiscordBotService:
             )
             return
 
-        current_agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
-        if current_agent not in self.VALID_AGENT_VALUES:
-            current_agent = self.DEFAULT_AGENT
+        current_agent = self._normalize_agent(binding.get("agent"))
 
         supports_review = self._agent_supports_capability(current_agent, "review")
         if not supports_review:
@@ -12067,9 +12055,7 @@ class DiscordBotService:
         )
         prompt_text = "\n".join(prompt_parts)
 
-        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
-        if agent not in self.VALID_AGENT_VALUES:
-            agent = self.DEFAULT_AGENT
+        agent = self._normalize_agent(binding.get("agent"))
         model_override = binding.get("model_override")
         if not isinstance(model_override, str) or not model_override.strip():
             model_override = None
@@ -12483,9 +12469,7 @@ class DiscordBotService:
             )
             return
 
-        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
-        if agent not in self.VALID_AGENT_VALUES:
-            agent = self.DEFAULT_AGENT
+        agent = self._normalize_agent(binding.get("agent"))
         model_override = binding.get("model_override")
         if not isinstance(model_override, str) or not model_override.strip():
             model_override = None
@@ -13067,10 +13051,6 @@ class DiscordBotService:
             )
             await self._respond_ephemeral(interaction_id, interaction_token, text)
             return
-
-        agent = (binding.get("agent") or self.DEFAULT_AGENT).strip().lower()
-        if agent not in self.VALID_AGENT_VALUES:
-            agent = self.DEFAULT_AGENT
 
         mode = "pma" if pma_enabled else "repo"
         orchestration_service, _binding_row, current_thread = (

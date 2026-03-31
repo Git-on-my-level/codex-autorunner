@@ -6,7 +6,7 @@ from ...core.update_targets import (
     UpdateTargetDefinition,
     all_update_target_definitions,
 )
-from ..chat.agents import CHAT_AGENT_DEFINITIONS
+from ..chat.agents import chat_agent_definitions
 from ..chat.model_selection import REASONING_EFFORT_VALUES
 
 DISCORD_BUTTON_STYLE_PRIMARY = 1
@@ -126,7 +126,7 @@ def build_agent_picker(
             description=definition.description,
             default=current_agent == definition.value,
         )
-        for definition in CHAT_AGENT_DEFINITIONS
+        for definition in chat_agent_definitions()
     ]
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]

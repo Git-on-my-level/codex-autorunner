@@ -6,10 +6,12 @@ from codex_autorunner.integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     build_agent_switch_state,
     chat_agent_command_choices,
+    chat_agent_definitions,
     chat_agent_description,
     chat_agent_supports_effort,
     default_chat_model_for_agent,
     normalize_chat_agent,
+    valid_chat_agent_values,
 )
 
 
@@ -86,3 +88,26 @@ def test_normalize_chat_agent_accepts_registered_command_choice(
     assert normalize_chat_agent("plugin-agent") == "plugin-agent"
     choices = chat_agent_command_choices()
     assert {"name": "plugin-agent", "value": "plugin-agent"} in choices
+
+
+def test_chat_agent_definitions_keep_builtins_first_and_append_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda: {
+            "plugin-agent": SimpleNamespace(name="Plugin Agent"),
+        },
+    )
+
+    definitions = chat_agent_definitions()
+
+    assert [definition.value for definition in definitions[:4]] == [
+        "codex",
+        "opencode",
+        "hermes",
+        "zeroclaw",
+    ]
+    assert definitions[-1].value == "plugin-agent"
+    assert definitions[-1].description == "Plugin Agent"
+    assert valid_chat_agent_values()[-1] == "plugin-agent"

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from codex_autorunner.integrations.chat.agents import CHAT_AGENT_DEFINITIONS
 from codex_autorunner.integrations.chat.model_selection import REASONING_EFFORT_VALUES
 from codex_autorunner.integrations.discord.components import (
@@ -117,6 +119,22 @@ class TestBuildAgentPicker:
         opencode = menu["options"][1]
         assert codex["default"] is False
         assert opencode["default"] is True
+
+    def test_builds_picker_with_registered_aliases(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.get_registered_agents",
+            lambda: {
+                "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
+            },
+        )
+
+        picker = build_agent_picker(current_agent="hermes-m4-pma")
+        menu = picker["components"][0]
+        values = [opt["value"] for opt in menu["options"]]
+
+        assert values[-1] == "hermes-m4-pma"
+        assert menu["options"][-1]["description"] == "Hermes (hermes-m4-pma)"
+        assert menu["options"][-1]["default"] is True
 
 
 class TestBuildModelPicker:

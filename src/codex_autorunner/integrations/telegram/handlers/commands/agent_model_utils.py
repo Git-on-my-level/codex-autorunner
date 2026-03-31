@@ -10,9 +10,10 @@ from .....integrations.app_server.client import (
     CodexAppServerClient,
     CodexAppServerResponseError,
 )
+from ....chat.agents import chat_agent_definitions
 from ...adapter import TelegramMessage
 from ...config import AppServerUnavailableError
-from ...constants import AGENT_PICKER_PROMPT, VALID_AGENT_VALUES
+from ...constants import AGENT_PICKER_PROMPT
 from ...state import normalize_agent
 from ...types import SelectionState
 
@@ -150,7 +151,8 @@ def _build_agent_options(
     availability: str,
 ) -> list[tuple[str, str]]:
     items: list[tuple[str, str]] = []
-    for agent in sorted(VALID_AGENT_VALUES):
+    for definition in chat_agent_definitions():
+        agent = definition.value
         label = agent
         if agent == current:
             label = f"{label} (current)"

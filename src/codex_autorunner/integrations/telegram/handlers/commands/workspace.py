@@ -46,7 +46,6 @@ from ...constants import (
     RESUME_PICKER_PROMPT,
     RESUME_REFRESH_LIMIT,
     THREAD_LIST_MAX_PAGES,
-    VALID_AGENT_VALUES,
 )
 from ...helpers import (
     _approval_age_seconds,
@@ -226,7 +225,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
     def _effective_agent(self, record: Optional["TelegramTopicRecord"]) -> str:
         if record:
             normalized = normalize_chat_agent(record.agent)
-            if normalized in VALID_AGENT_VALUES:
+            if normalized:
                 return normalized
         return DEFAULT_AGENT
 

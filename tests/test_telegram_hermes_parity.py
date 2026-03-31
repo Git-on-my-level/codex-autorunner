@@ -204,6 +204,32 @@ def test_agent_picker_includes_hermes() -> None:
     assert ("hermes", "hermes") in options
 
 
+def test_agent_picker_includes_registered_hermes_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda: {
+            "hermes-m4-pma": SimpleNamespace(
+                name="Hermes (hermes-m4-pma)",
+                capabilities=frozenset(
+                    {
+                        "durable_threads",
+                        "message_turns",
+                        "interrupt",
+                        "event_streaming",
+                        "approvals",
+                    }
+                ),
+            ),
+        },
+    )
+
+    options = _build_agent_options(current="codex", availability="available")
+
+    assert ("hermes-m4-pma", "hermes-m4-pma") in options
+
+
 @pytest.mark.anyio
 async def test_hermes_reports_resume_support() -> None:
     workspace = "/tmp/workspace"
@@ -213,6 +239,43 @@ async def test_hermes_reports_resume_support() -> None:
     )
 
     assert handler._agent_supports_resume("hermes") is True
+
+
+@pytest.mark.anyio
+async def test_agent_command_accepts_registered_hermes_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda: {
+            "hermes-m4-pma": SimpleNamespace(
+                name="Hermes (hermes-m4-pma)",
+                capabilities=frozenset(
+                    {
+                        "durable_threads",
+                        "message_turns",
+                        "interrupt",
+                        "event_streaming",
+                        "approvals",
+                    }
+                ),
+            ),
+        },
+    )
+    workspace = str(tmp_path)
+    record = TelegramTopicRecord(agent="codex", workspace_path=workspace)
+    handler = _HermesHandler(record, _ClientStub(workspace))
+
+    await handler._handle_agent(
+        _message("/agent hermes-m4-pma"),
+        "hermes-m4-pma",
+        _RuntimeStub(),
+    )
+
+    assert record.agent == "hermes-m4-pma"
+    assert handler.sent_messages
+    assert handler.sent_messages[0].startswith("Agent set to hermes-m4-pma")
 
 
 @pytest.mark.anyio

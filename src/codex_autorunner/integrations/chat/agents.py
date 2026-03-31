@@ -44,14 +44,51 @@ class ChatAgentSwitchState:
 
 
 def _valid_chat_agent_values() -> tuple[str, ...]:
-    values = set(VALID_CHAT_AGENT_VALUES)
+    return tuple(definition.value for definition in chat_agent_definitions())
+
+
+def chat_agent_definitions() -> tuple[ChatAgentDefinition, ...]:
+    ordered: list[ChatAgentDefinition] = []
+    seen: set[str] = set()
+
     try:
         from ...agents.registry import get_registered_agents
 
-        values.update(get_registered_agents().keys())
+        registered = get_registered_agents()
     except Exception:
-        pass
-    return tuple(sorted(values))
+        registered = {}
+
+    for definition in CHAT_AGENT_DEFINITIONS:
+        descriptor = registered.get(definition.value)
+        ordered.append(
+            ChatAgentDefinition(
+                value=definition.value,
+                description=(
+                    descriptor.name
+                    if descriptor is not None
+                    else definition.description
+                ),
+            )
+        )
+        seen.add(definition.value)
+
+    for agent_id in sorted(registered):
+        if agent_id in seen:
+            continue
+        descriptor = registered[agent_id]
+        ordered.append(
+            ChatAgentDefinition(
+                value=agent_id,
+                description=descriptor.name,
+            )
+        )
+        seen.add(agent_id)
+
+    return tuple(ordered)
+
+
+def valid_chat_agent_values() -> tuple[str, ...]:
+    return _valid_chat_agent_values()
 
 
 def normalize_chat_agent(
@@ -92,18 +129,10 @@ def default_chat_model_for_agent(agent: object) -> Optional[str]:
 
 
 def chat_agent_command_choices() -> tuple[dict[str, str], ...]:
-    from ...agents.registry import get_registered_agents
-
-    definitions = []
-    for agent_id, descriptor in get_registered_agents().items():
-        definitions.append(
-            ChatAgentDefinition(
-                value=agent_id,
-                description=descriptor.name,
-            )
-        )
-    definitions.sort(key=lambda d: d.value)
-    return tuple({"name": d.value, "value": d.value} for d in definitions)
+    return tuple(
+        {"name": definition.value, "value": definition.value}
+        for definition in chat_agent_definitions()
+    )
 
 
 def chat_agent_description() -> str:

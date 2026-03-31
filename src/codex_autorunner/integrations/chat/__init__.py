@@ -7,9 +7,11 @@ from .agents import (
     VALID_CHAT_AGENT_VALUES,
     ChatAgentSwitchState,
     build_agent_switch_state,
+    chat_agent_definitions,
     chat_agent_supports_effort,
     default_chat_model_for_agent,
     normalize_chat_agent,
+    valid_chat_agent_values,
 )
 from .bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
 from .callbacks import (
@@ -176,6 +178,7 @@ __all__ = [
     "build_agent_switch_state",
     "build_dispatch_context",
     "channel_entry_key",
+    "chat_agent_definitions",
     "chat_agent_supports_effort",
     "chat_doctor_checks",
     "chunk_text",
@@ -200,4 +203,5 @@ __all__ = [
     "run_chat_bootstrap_steps",
     "run_parity_checks",
     "should_trigger_plain_text_turn",
+    "valid_chat_agent_values",
 ]

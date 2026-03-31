@@ -14,7 +14,7 @@ from urllib.parse import quote, unquote
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
-from ..chat.agents import VALID_CHAT_AGENT_VALUES, normalize_chat_agent
+from ..chat.agents import normalize_chat_agent
 from ..chat.approval_modes import (
     APPROVAL_MODE_VALUES,
 )
@@ -29,7 +29,6 @@ TOPIC_ROOT = "root"
 APPROVAL_MODE_YOLO = "yolo"
 APPROVAL_MODE_SAFE = "safe"
 APPROVAL_MODES = set(APPROVAL_MODE_VALUES)
-AGENT_VALUES = set(VALID_CHAT_AGENT_VALUES)
 STALE_SCOPED_TOPIC_DAYS = 30
 MAX_SCOPED_TOPICS_PER_BASE = 5
 
@@ -44,10 +43,7 @@ def normalize_approval_mode(
 
 
 def normalize_agent(value: Optional[str]) -> Optional[str]:
-    normalized = normalize_chat_agent(value)
-    if normalized in AGENT_VALUES:
-        return normalized
-    return None
+    return normalize_chat_agent(value)
 
 
 def _encode_scope(scope: str) -> str:
