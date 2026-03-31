@@ -25,7 +25,6 @@ from ..types import (
     TurnRef,
 )
 from .runtime import (
-    build_turn_id,
     collect_opencode_output_from_events,
     extract_session_id,
     extract_turn_id,
@@ -811,9 +810,8 @@ class OpenCodeHarness(AgentHarness):
         if model is None:
             model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         model_payload = split_model_id(model)
-        turn_id = build_turn_id(conversation_id)
         try:
-            await client.prompt_async(
+            result = await client.prompt_async(
                 conversation_id,
                 message=prompt,
                 model=model_payload,
@@ -826,6 +824,9 @@ class OpenCodeHarness(AgentHarness):
                 conversation_id=conversation_id,
                 operation="start_turn",
             )
+        turn_id = extract_turn_id(conversation_id, result)
+        if turn_id:
+            _logger.debug("OpenCode turn started: %s", turn_id)
         self._pending_turns[(conversation_id, turn_id)] = _PendingTurnConfig(
             model_payload=model_payload,
             approval_mode=approval_mode,
@@ -868,7 +869,6 @@ class OpenCodeHarness(AgentHarness):
         if model is None:
             model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         arguments = prompt if prompt else ""
-        turn_id = build_turn_id(conversation_id)
         try:
             result = await client.send_command(
                 conversation_id,
@@ -883,9 +883,9 @@ class OpenCodeHarness(AgentHarness):
                 conversation_id=conversation_id,
                 operation="start_review",
             )
-        started_turn_id = extract_turn_id(conversation_id, result)
-        if started_turn_id:
-            _logger.debug("OpenCode review started: %s", started_turn_id)
+        turn_id = extract_turn_id(conversation_id, result)
+        if turn_id:
+            _logger.debug("OpenCode review started: %s", turn_id)
 
         self._pending_turns[(conversation_id, turn_id)] = _PendingTurnConfig(
             model_payload=split_model_id(model),
