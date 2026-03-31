@@ -10,6 +10,7 @@ from codex_autorunner.integrations.discord.components import (
     DISCORD_BUTTON_STYLE_SUCCESS,
     build_action_row,
     build_agent_picker,
+    build_agent_profile_picker,
     build_bind_picker,
     build_button,
     build_flow_runs_picker,
@@ -120,7 +121,7 @@ class TestBuildAgentPicker:
         assert codex["default"] is False
         assert opencode["default"] is True
 
-    def test_builds_picker_with_registered_aliases(self, monkeypatch) -> None:
+    def test_does_not_append_registered_hermes_aliases(self, monkeypatch) -> None:
         monkeypatch.setattr(
             "codex_autorunner.agents.registry.get_registered_agents",
             lambda context=None: {
@@ -128,13 +129,34 @@ class TestBuildAgentPicker:
             },
         )
 
-        picker = build_agent_picker(current_agent="hermes-m4-pma", context="repo-root")
+        picker = build_agent_picker(current_agent="hermes", context="repo-root")
         menu = picker["components"][0]
         values = [opt["value"] for opt in menu["options"]]
 
-        assert values[-1] == "hermes-m4-pma"
-        assert menu["options"][-1]["description"] == "Hermes (hermes-m4-pma)"
-        assert menu["options"][-1]["default"] is True
+        assert "hermes-m4-pma" not in values
+        assert menu["options"][2]["value"] == "hermes"
+        assert menu["options"][2]["default"] is True
+
+
+class TestBuildAgentProfilePicker:
+    def test_builds_picker_with_default_and_profiles(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            "codex_autorunner.agents.registry.get_registered_agents",
+            lambda context=None: {
+                "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
+            },
+        )
+
+        picker = build_agent_profile_picker(
+            current_profile="m4-pma",
+            context="repo-root",
+        )
+        menu = picker["components"][0]
+
+        assert menu["custom_id"] == "agent_profile_select"
+        assert menu["options"][0]["value"] == "clear"
+        assert menu["options"][1]["value"] == "m4-pma"
+        assert menu["options"][1]["default"] is True
 
 
 class TestBuildModelPicker:

@@ -329,6 +329,7 @@ class TelegramBotService(
         self._model_pending: dict[str, ModelOption] = {}
         self._model_catalog_cache: dict[str, tuple[Any, float]] = {}
         self._agent_options: dict[str, SelectionState] = {}
+        self._agent_profile_options: dict[str, SelectionState] = {}
         self._voice_config = voice_config
         self._voice_service = voice_service
         self._housekeeping_config = housekeeping_config

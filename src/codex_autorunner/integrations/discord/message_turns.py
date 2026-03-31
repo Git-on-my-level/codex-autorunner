@@ -455,7 +455,8 @@ async def handle_message_event(
         )
         return
 
-    agent = service._normalize_agent(binding.get("agent"))
+    agent, agent_profile = service._resolve_agent_state(binding)
+    runtime_agent = service._runtime_agent_for_binding(binding)
     model_override = binding.get("model_override")
     if not isinstance(model_override, str) or not model_override.strip():
         model_override = None
@@ -467,6 +468,7 @@ async def handle_message_event(
         workspace_root=workspace_root,
         pma_enabled=pma_enabled,
         agent=agent,
+        agent_profile=agent_profile,
     )
     pending_compact_seed = match_pending_compact_seed(
         binding.get("pending_compact_seed"),
@@ -802,7 +804,7 @@ async def handle_message_event(
             surface_kind="discord",
             workspace_root=workspace_root,
             prompt_text=turn_text,
-            agent_id=agent,
+            agent_id=runtime_agent,
             pma_enabled=pma_enabled,
         ),
         resolve_paused_flow_target=_resolve_paused_flow,
@@ -1733,6 +1735,7 @@ async def _run_discord_orchestrated_turn_for_message(
         else orchestrator_channel_key
     )
     binding = await service._store.get_binding(channel_id=channel_id)
+    runtime_agent = service._runtime_agent_for_binding(binding)
     repo_id = binding.get("repo_id") if isinstance(binding, dict) else None
     resource_kind = binding.get("resource_kind") if isinstance(binding, dict) else None
     resource_id = binding.get("resource_id") if isinstance(binding, dict) else None
@@ -1740,7 +1743,7 @@ async def _run_discord_orchestrated_turn_for_message(
         service,
         channel_id=channel_id,
         workspace_root=workspace_root,
-        agent=agent,
+        agent=runtime_agent,
         repo_id=repo_id if isinstance(repo_id, str) and repo_id.strip() else None,
         resource_kind=(
             resource_kind.strip()

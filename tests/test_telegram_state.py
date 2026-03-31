@@ -127,10 +127,11 @@ async def test_telegram_state_no_longer_needs_to_be_binding_authority(
         await store.close()
 
 
-def test_telegram_topic_record_from_dict_preserves_unknown_agent_alias() -> None:
+def test_telegram_topic_record_from_dict_migrates_legacy_hermes_alias() -> None:
     record = TelegramTopicRecord.from_dict(
         {"agent": "hermes-m4-pma"},
         default_approval_mode="yolo",
     )
 
-    assert record.agent == "hermes-m4-pma"
+    assert record.agent == "hermes"
+    assert record.agent_profile == "m4-pma"

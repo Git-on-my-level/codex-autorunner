@@ -9,6 +9,7 @@ from ...chat.handlers.selections import ChatSelectionHandlers
 from ...chat.models import ChatThreadRef
 from ..adapter import (
     AgentCallback,
+    AgentProfileCallback,
     CancelCallback,
     EffortCallback,
     FlowCallback,
@@ -22,6 +23,7 @@ from ..adapter import (
     UpdateCallback,
     UpdateConfirmCallback,
     build_agent_keyboard,
+    build_agent_profile_keyboard,
     build_bind_keyboard,
     build_effort_keyboard,
     build_flow_runs_keyboard,
@@ -33,6 +35,7 @@ from ..adapter import (
 )
 from ..constants import (
     AGENT_PICKER_PROMPT,
+    AGENT_PROFILE_PICKER_PROMPT,
     BIND_PICKER_PROMPT,
     DEFAULT_PAGE_SIZE,
     EFFORT_PICKER_PROMPT,
@@ -167,6 +170,22 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
                 key, callback, f"Agent already set to {current}."
             )
             return
+        if (
+            desired == "hermes"
+            and self._hermes_profile_options()
+            and callback.chat_id is not None
+        ):
+            await self._answer_callback(callback, "Select Hermes profile")
+            await self._send_agent_profile_picker(
+                key=key,
+                current=self._effective_agent_profile(record),
+                chat_id=callback.chat_id,
+                thread_id=callback.thread_id,
+                message_id=callback.message_id,
+                reply_to=callback.message_id,
+                requester_user_id=actor_id,
+            )
+            return
         note = await self._apply_agent_change(
             callback.chat_id, callback.thread_id, desired
         )
@@ -175,6 +194,37 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             key,
             callback,
             f"Agent set to {desired}{note}.",
+        )
+
+    async def _handle_agent_profile_callback(
+        self,
+        key: str,
+        callback: TelegramCallbackQuery,
+        parsed: AgentProfileCallback,
+    ) -> None:
+        state = self._agent_profile_options.get(key)
+        actor_id = (
+            str(callback.from_user_id) if callback.from_user_id is not None else None
+        )
+        if (
+            not state
+            or not self._selection_belongs_to_user(state, actor_id)
+            or not _selection_contains(state.items, parsed.profile)
+        ):
+            await self._answer_callback(callback, "Selection expired")
+            return
+        self._agent_profile_options.pop(key, None)
+        note = await self._apply_agent_change(
+            callback.chat_id,
+            callback.thread_id,
+            "hermes",
+            profile=parsed.profile,
+        )
+        await self._answer_callback(callback, "Hermes profile set")
+        await self._finalize_selection(
+            key,
+            callback,
+            f"Agent set to {self._effective_agent_label_from_values('hermes', parsed.profile)}{note}.",
         )
 
     async def _handle_pending_review_commit(
@@ -574,6 +624,18 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             include_cancel=True,
         )
 
+    def _build_agent_profile_keyboard(self, state: SelectionState) -> dict[str, Any]:
+        page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
+        options = [
+            (item_id, f"{idx}) {label}")
+            for idx, (item_id, label) in enumerate(page_items, 1)
+        ]
+        return build_agent_profile_keyboard(
+            options,
+            page_button=self._page_button("agent-profile", state),
+            include_cancel=True,
+        )
+
     def _build_model_keyboard(self, state: ModelPickerState) -> dict[str, Any]:
         page_items = _page_slice(state.items, state.page, DEFAULT_PAGE_SIZE)
         options = [
@@ -709,6 +771,13 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
                 return
             self._agent_options.pop(key, None)
             text = "Agent selection cancelled."
+        elif parsed.kind == "agent-profile":
+            state = self._agent_profile_options.get(key)
+            if not self._selection_belongs_to_user(state, actor_id):
+                await self._answer_callback(callback, "Selection expired")
+                return
+            self._agent_profile_options.pop(key, None)
+            text = "Hermes profile selection cancelled."
         elif parsed.kind == "model":
             state = self._model_options.get(key)
             if not self._selection_belongs_to_user(state, actor_id):
@@ -775,6 +844,10 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             state = self._agent_options.get(key)
             prompt_base = AGENT_PICKER_PROMPT
             build_keyboard = self._build_agent_keyboard
+        elif parsed.kind == "agent-profile":
+            state = self._agent_profile_options.get(key)
+            prompt_base = AGENT_PROFILE_PICKER_PROMPT
+            build_keyboard = self._build_agent_profile_keyboard
         elif parsed.kind == "model":
             state = self._model_options.get(key)
             prompt_base = MODEL_PICKER_PROMPT

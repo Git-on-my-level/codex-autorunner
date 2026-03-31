@@ -11,8 +11,9 @@ from typing import Any, Callable, Optional
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
+from ..chat.agents import normalize_hermes_profile
 
-DISCORD_STATE_SCHEMA_VERSION = 8
+DISCORD_STATE_SCHEMA_VERSION = 9
 _UNSET = object()
 
 
@@ -169,6 +170,7 @@ class DiscordStateStore:
         *,
         channel_id: str,
         agent: str,
+        agent_profile: Optional[str] | object = _UNSET,
         model_override: Optional[str] | object = _UNSET,
         reasoning_effort: Optional[str] | object = _UNSET,
     ) -> None:
@@ -176,6 +178,7 @@ class DiscordStateStore:
             self._update_agent_state_sync,
             channel_id,
             agent,
+            agent_profile,
             model_override,
             reasoning_effort,
         )
@@ -373,6 +376,8 @@ class DiscordStateStore:
             )
         if "agent" not in names:
             conn.execute("ALTER TABLE channel_bindings ADD COLUMN agent TEXT")
+        if "agent_profile" not in names:
+            conn.execute("ALTER TABLE channel_bindings ADD COLUMN agent_profile TEXT")
         if "model_override" not in names:
             conn.execute("ALTER TABLE channel_bindings ADD COLUMN model_override TEXT")
         if "reasoning_effort" not in names:
@@ -445,6 +450,9 @@ class DiscordStateStore:
     def _binding_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
         pma_enabled_raw = row["pma_enabled"] if "pma_enabled" in row.keys() else 0
         agent_raw = row["agent"] if "agent" in row.keys() else None
+        agent_profile_raw = (
+            row["agent_profile"] if "agent_profile" in row.keys() else None
+        )
         model_override_raw = (
             row["model_override"] if "model_override" in row.keys() else None
         )
@@ -476,6 +484,16 @@ class DiscordStateStore:
             if "pending_compact_session_key" in row.keys()
             else None
         )
+        agent = agent_raw if isinstance(agent_raw, str) else None
+        agent_profile = (
+            normalize_hermes_profile(agent_profile_raw)
+            if isinstance(agent_profile_raw, str)
+            else None
+        )
+        if agent_profile is None and isinstance(agent, str):
+            agent_profile = normalize_hermes_profile(agent)
+        if agent_profile is not None:
+            agent = "hermes"
         return {
             "channel_id": str(row["channel_id"]),
             "guild_id": row["guild_id"] if isinstance(row["guild_id"], str) else None,
@@ -539,7 +557,8 @@ class DiscordStateStore:
                 and isinstance(row["pma_prev_resource_id"], str)
                 else None
             ),
-            "agent": agent_raw if isinstance(agent_raw, str) else None,
+            "agent": agent,
+            "agent_profile": agent_profile,
             "model_override": (
                 model_override_raw if isinstance(model_override_raw, str) else None
             ),
@@ -693,16 +712,22 @@ class DiscordStateStore:
         self,
         channel_id: str,
         agent: str,
+        agent_profile: Optional[str] | object,
         model_override: Optional[str] | object,
         reasoning_effort: Optional[str] | object,
     ) -> None:
         conn = self._connection_sync()
         with conn:
-            if model_override is not _UNSET or reasoning_effort is not _UNSET:
+            if (
+                agent_profile is not _UNSET
+                or model_override is not _UNSET
+                or reasoning_effort is not _UNSET
+            ):
                 conn.execute(
                     """
                     UPDATE channel_bindings
                     SET agent = ?,
+                        agent_profile = ?,
                         model_override = ?,
                         reasoning_effort = ?,
                         updated_at = ?
@@ -710,6 +735,7 @@ class DiscordStateStore:
                     """,
                     (
                         agent,
+                        None if agent_profile is _UNSET else agent_profile,
                         None if model_override is _UNSET else model_override,
                         None if reasoning_effort is _UNSET else reasoning_effort,
                         now_iso(),
@@ -721,10 +747,16 @@ class DiscordStateStore:
                     """
                     UPDATE channel_bindings
                     SET agent = ?,
+                        agent_profile = ?,
                         updated_at = ?
                     WHERE channel_id = ?
                     """,
-                    (agent, now_iso(), channel_id),
+                    (
+                        agent,
+                        None if agent_profile is _UNSET else agent_profile,
+                        now_iso(),
+                        channel_id,
+                    ),
                 )
 
     def _update_model_state_sync(

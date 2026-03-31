@@ -13,6 +13,7 @@ from codex_autorunner.integrations.telegram.handlers.commands import (
 )
 from codex_autorunner.integrations.telegram.handlers.commands.agent_model_utils import (
     _build_agent_options,
+    _build_agent_profile_options,
 )
 from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
@@ -92,6 +93,7 @@ class _HermesHandler(TelegramCommandHandlers):
         self._resume_options: dict[str, object] = {}
         self._bind_options: dict[str, object] = {}
         self._agent_options: dict[str, object] = {}
+        self._agent_profile_options: dict[str, object] = {}
         self._model_options: dict[str, object] = {}
         self._model_pending: dict[str, object] = {}
         self._review_commit_options: dict[str, object] = {}
@@ -204,7 +206,7 @@ def test_agent_picker_includes_hermes() -> None:
     assert ("hermes", "hermes") in options
 
 
-def test_agent_picker_includes_registered_hermes_alias(
+def test_agent_picker_does_not_include_registered_hermes_alias(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -231,7 +233,41 @@ def test_agent_picker_includes_registered_hermes_alias(
         context="repo-root",
     )
 
-    assert ("hermes-m4-pma", "hermes-m4-pma") in options
+    assert ("hermes-m4-pma", "hermes-m4-pma") not in options
+    assert ("hermes", "hermes") in options
+
+
+def test_agent_profile_picker_includes_registered_hermes_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(
+                name="Hermes (hermes-m4-pma)",
+                capabilities=frozenset(
+                    {
+                        "durable_threads",
+                        "message_turns",
+                        "interrupt",
+                        "event_streaming",
+                        "approvals",
+                    }
+                ),
+            ),
+        },
+    )
+
+    options = _build_agent_profile_options(
+        current=None,
+        context=_HermesHandler(
+            TelegramTopicRecord(agent="codex"),
+            _ClientStub("/tmp/workspace"),
+        ),
+    )
+
+    assert options[0] == ("clear", "(default profile)")
+    assert ("m4-pma", "m4-pma") in options
 
 
 @pytest.mark.anyio
@@ -246,7 +282,7 @@ async def test_hermes_reports_resume_support() -> None:
 
 
 @pytest.mark.anyio
-async def test_agent_command_accepts_registered_hermes_alias(
+async def test_agent_command_accepts_hermes_profile_argument(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -272,14 +308,15 @@ async def test_agent_command_accepts_registered_hermes_alias(
     handler = _HermesHandler(record, _ClientStub(workspace))
 
     await handler._handle_agent(
-        _message("/agent hermes-m4-pma"),
-        "hermes-m4-pma",
+        _message("/agent hermes m4-pma"),
+        "hermes m4-pma",
         _RuntimeStub(),
     )
 
-    assert record.agent == "hermes-m4-pma"
+    assert record.agent == "hermes"
+    assert record.agent_profile == "m4-pma"
     assert handler.sent_messages
-    assert handler.sent_messages[0].startswith("Agent set to hermes-m4-pma")
+    assert handler.sent_messages[0].startswith("Agent set to hermes [m4-pma]")
 
 
 @pytest.mark.anyio

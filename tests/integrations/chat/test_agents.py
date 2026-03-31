@@ -9,8 +9,11 @@ from codex_autorunner.integrations.chat.agents import (
     chat_agent_definitions,
     chat_agent_description,
     chat_agent_supports_effort,
+    chat_hermes_profile_options,
     default_chat_model_for_agent,
     normalize_chat_agent,
+    resolve_chat_agent_and_profile,
+    resolve_chat_runtime_agent,
     valid_chat_agent_values,
 )
 
@@ -113,7 +116,7 @@ def test_chat_agent_definitions_keep_builtins_first_and_append_aliases(
     assert valid_chat_agent_values()[-1] == "plugin-agent"
 
 
-def test_normalize_chat_agent_uses_context_for_config_aliases(
+def test_resolve_chat_agent_and_profile_uses_context_for_config_aliases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _registered(context=None):
@@ -129,4 +132,16 @@ def test_normalize_chat_agent_uses_context_for_config_aliases(
     )
 
     assert normalize_chat_agent("hermes-m4-pma") is None
-    assert normalize_chat_agent("hermes-m4-pma", context="repo-root") == "hermes-m4-pma"
+    assert chat_hermes_profile_options("repo-root")[0].profile == "m4-pma"
+    assert resolve_chat_agent_and_profile("hermes-m4-pma", context="repo-root") == (
+        "hermes",
+        "m4-pma",
+    )
+    assert (
+        resolve_chat_runtime_agent(
+            "hermes",
+            "m4-pma",
+            context="repo-root",
+        )
+        == "hermes-m4-pma"
+    )

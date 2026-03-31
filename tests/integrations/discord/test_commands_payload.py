@@ -192,7 +192,7 @@ def test_agent_and_effort_options_include_choices() -> None:
     )
 
 
-def test_agent_options_include_contextual_aliases(monkeypatch) -> None:
+def test_agent_options_include_hermes_profile_choices(monkeypatch) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
         lambda context=None: (
@@ -207,7 +207,7 @@ def test_agent_options_include_contextual_aliases(monkeypatch) -> None:
     agent = _find_option(car_options, "agent")
     agent_name = _find_option(agent["options"], "name")
 
-    assert {"name": "hermes-m4-pma", "value": "hermes-m4-pma"} in agent_name.get(
-        "choices", []
-    )
-    assert "hermes-m4-pma" in agent_name["description"]
+    assert {"name": "hermes", "value": "hermes"} in agent_name.get("choices", [])
+    profile = _find_option(agent["options"], "profile")
+    assert profile["description"] == "Hermes profile id (optional)"
+    assert {"name": "m4-pma", "value": "m4-pma"} in profile.get("choices", [])

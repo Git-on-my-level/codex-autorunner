@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 
 from ..chat.callbacks import (
     CALLBACK_AGENT,
+    CALLBACK_AGENT_PROFILE,
     CALLBACK_APPROVAL,
     CALLBACK_BIND,
     CALLBACK_CANCEL,
@@ -38,6 +39,7 @@ _KIND_TO_ID = {
     "resume": CALLBACK_RESUME,
     "bind": CALLBACK_BIND,
     "agent": CALLBACK_AGENT,
+    "agent_profile": CALLBACK_AGENT_PROFILE,
     "model": CALLBACK_MODEL,
     "effort": CALLBACK_EFFORT,
     "update": CALLBACK_UPDATE,
@@ -89,6 +91,7 @@ def parse_callback_data(data: Optional[str]) -> Optional[Any]:
 def _legacy_constructors() -> dict[str, Callable[..., Any]]:
     from .adapter import (
         AgentCallback,
+        AgentProfileCallback,
         ApprovalCallback,
         BindCallback,
         CancelCallback,
@@ -117,6 +120,7 @@ def _legacy_constructors() -> dict[str, Callable[..., Any]]:
         CALLBACK_RESUME: ResumeCallback,
         CALLBACK_BIND: BindCallback,
         CALLBACK_AGENT: AgentCallback,
+        CALLBACK_AGENT_PROFILE: AgentProfileCallback,
         CALLBACK_MODEL: ModelCallback,
         CALLBACK_EFFORT: EffortCallback,
         CALLBACK_UPDATE: UpdateCallback,
@@ -165,6 +169,10 @@ def _encode_bind(payload: dict[str, Any]) -> str:
 
 def _encode_agent(payload: dict[str, Any]) -> str:
     return f"agent:{_required_str(payload, 'agent')}"
+
+
+def _encode_agent_profile(payload: dict[str, Any]) -> str:
+    return f"agent_profile:{_required_str(payload, 'profile')}"
 
 
 def _encode_model(payload: dict[str, Any]) -> str:
@@ -229,6 +237,7 @@ _ENCODERS: dict[str, Callable[[dict[str, Any]], str]] = {
     CALLBACK_RESUME: _encode_resume,
     CALLBACK_BIND: _encode_bind,
     CALLBACK_AGENT: _encode_agent,
+    CALLBACK_AGENT_PROFILE: _encode_agent_profile,
     CALLBACK_MODEL: _encode_model,
     CALLBACK_EFFORT: _encode_effort,
     CALLBACK_UPDATE: _encode_update,

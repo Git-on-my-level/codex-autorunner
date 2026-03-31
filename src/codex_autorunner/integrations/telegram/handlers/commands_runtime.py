@@ -2276,8 +2276,10 @@ class TelegramCommandHandlers(
             workspace_path=workspace_path,
         )
         try:
-            agent = self._effective_agent(record)
-            thread = await client.thread_start(workspace_path, agent=agent)
+            thread = await client.thread_start(
+                workspace_path,
+                **self._thread_start_kwargs(record),
+            )
         except Exception as exc:
             log_event(
                 self._logger,

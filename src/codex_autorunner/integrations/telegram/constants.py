@@ -72,6 +72,7 @@ RESUME_PICKER_PROMPT = (
 )
 BIND_PICKER_PROMPT = "Select a repo to bind (buttons below or reply with number/id)."
 AGENT_PICKER_PROMPT = "Select an agent (buttons below)."
+AGENT_PROFILE_PICKER_PROMPT = "Select a Hermes profile override (buttons below)."
 MODEL_PICKER_PROMPT = "Select a model (buttons below). Use /model <search> to filter."
 EFFORT_PICKER_PROMPT = "Select a reasoning effort for {model}."
 UPDATE_PICKER_PROMPT = "Select update target (buttons below)."

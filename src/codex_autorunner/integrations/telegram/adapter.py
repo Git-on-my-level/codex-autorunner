@@ -262,6 +262,11 @@ class AgentCallback:
 
 
 @dataclass(frozen=True)
+class AgentProfileCallback:
+    profile: str
+
+
+@dataclass(frozen=True)
 class ModelCallback:
     model_id: str
 
@@ -764,6 +769,12 @@ def encode_agent_callback(agent: str) -> str:
     return data
 
 
+def encode_agent_profile_callback(profile: str) -> str:
+    data = f"agent_profile:{profile}"
+    _validate_callback_data(data)
+    return data
+
+
 def encode_model_callback(model_id: str) -> str:
     data = f"model:{model_id}"
     _validate_callback_data(data)
@@ -846,6 +857,7 @@ def parse_callback_data(
         ResumeCallback,
         BindCallback,
         AgentCallback,
+        AgentProfileCallback,
         ModelCallback,
         EffortCallback,
         UpdateCallback,
@@ -958,6 +970,24 @@ def build_agent_keyboard(
         rows.append([InlineButton(label, callback_data)])
     if include_cancel:
         rows.append([InlineButton("Cancel", encode_cancel_callback("agent"))])
+    return build_inline_keyboard(rows)
+
+
+def build_agent_profile_keyboard(
+    options: Sequence[tuple[str, str]],
+    *,
+    page_button: Optional[tuple[str, str]] = None,
+    include_cancel: bool = False,
+) -> dict[str, Any]:
+    rows = [
+        [InlineButton(label, encode_agent_profile_callback(profile))]
+        for profile, label in options
+    ]
+    if page_button:
+        label, callback_data = page_button
+        rows.append([InlineButton(label, callback_data)])
+    if include_cancel:
+        rows.append([InlineButton("Cancel", encode_cancel_callback("agent-profile"))])
     return build_inline_keyboard(rows)
 
 

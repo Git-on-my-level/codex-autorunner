@@ -22,7 +22,11 @@ from ....app_server.client import CodexAppServerClient
 from ....chat.agents import (
     build_agent_switch_state,
     chat_agent_supports_effort,
-    normalize_chat_agent,
+    chat_hermes_profile_options,
+    format_chat_agent_selection,
+    normalize_hermes_profile,
+    resolve_chat_agent_and_profile,
+    resolve_chat_runtime_agent,
 )
 from ....chat.status_diagnostics import (
     StatusBlockContext,
@@ -78,6 +82,9 @@ from .agent_model_utils import (
 )
 from .agent_model_utils import (
     _model_list_with_agent_compat as _workspace_model_list_with_agent_compat,
+)
+from .agent_model_utils import (
+    _send_agent_profile_picker as _send_telegram_agent_profile_picker,
 )
 from .shared import TelegramCommandSupportMixin
 
@@ -187,15 +194,19 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         chat_id: int,
         thread_id: Optional[int],
         desired: str,
+        *,
+        profile: object = None,
     ) -> str:
         switch_state = build_agent_switch_state(
             desired,
+            profile,
             model_reset="agent_default",
             context=self,
         )
 
         def apply(record: "TelegramTopicRecord") -> None:
             record.agent = switch_state.agent
+            record.agent_profile = switch_state.profile
             record.active_thread_id = None
             record.thread_ids.clear()
             record.thread_summaries.clear()
@@ -214,6 +225,9 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
     ) -> None:
         await _handle_agent_command(self, message, args)
 
+    async def _send_agent_profile_picker(self, **kwargs: Any) -> None:
+        await _send_telegram_agent_profile_picker(self, **kwargs)
+
     def _effective_policies(
         self, record: "TelegramTopicRecord"
     ) -> tuple[Optional[str], Optional[Any]]:
@@ -227,11 +241,73 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         return approval_policy, sandbox_policy
 
     def _effective_agent(self, record: Optional["TelegramTopicRecord"]) -> str:
+        agent, _profile = self._effective_agent_state(record)
+        return agent
+
+    def _effective_agent_profile(
+        self, record: Optional["TelegramTopicRecord"]
+    ) -> Optional[str]:
+        _agent, profile = self._effective_agent_state(record)
+        return profile
+
+    def _effective_agent_state(
+        self, record: Optional["TelegramTopicRecord"]
+    ) -> tuple[str, Optional[str]]:
         if record:
-            normalized = normalize_chat_agent(record.agent, context=self)
-            if normalized:
-                return normalized
-        return DEFAULT_AGENT
+            return resolve_chat_agent_and_profile(
+                record.agent,
+                record.agent_profile,
+                default=DEFAULT_AGENT,
+                context=self,
+            )
+        return DEFAULT_AGENT, None
+
+    def _effective_runtime_agent(self, record: Optional["TelegramTopicRecord"]) -> str:
+        agent, profile = self._effective_agent_state(record)
+        return resolve_chat_runtime_agent(
+            agent,
+            profile,
+            default=DEFAULT_AGENT,
+            context=self,
+        )
+
+    def _effective_agent_label(self, record: Optional["TelegramTopicRecord"]) -> str:
+        agent, profile = self._effective_agent_state(record)
+        return self._effective_agent_label_from_values(agent, profile)
+
+    def _effective_agent_label_from_values(
+        self,
+        agent: str,
+        profile: Optional[str],
+    ) -> str:
+        return format_chat_agent_selection(agent, profile)
+
+    def _thread_start_kwargs(
+        self,
+        record: Optional["TelegramTopicRecord"] = None,
+        *,
+        agent: object = None,
+        profile: object = None,
+    ) -> dict[str, Any]:
+        if record is not None:
+            resolved_agent, resolved_profile = self._effective_agent_state(record)
+        else:
+            resolved_agent, resolved_profile = resolve_chat_agent_and_profile(
+                agent,
+                profile,
+                default=DEFAULT_AGENT,
+                context=self,
+            )
+        kwargs: dict[str, Any] = {"agent": resolved_agent}
+        if resolved_profile is not None:
+            kwargs["profile"] = resolved_profile
+        return kwargs
+
+    def _hermes_profile_options(self) -> tuple[Any, ...]:
+        return chat_hermes_profile_options(self)
+
+    def _normalize_hermes_profile(self, value: object) -> Optional[str]:
+        return normalize_hermes_profile(value, context=self)
 
     def _agent_supports_effort(self, agent: str) -> bool:
         return chat_agent_supports_effort(agent, self)
@@ -560,7 +636,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 self,
                 surface_key=await self._resolve_topic_key(chat_id, thread_id),
                 workspace_root=Path(updated.workspace_path),
-                agent=self._effective_agent(updated),
+                agent=self._effective_runtime_agent(updated),
                 repo_id=(
                     updated.repo_id.strip()
                     if isinstance(updated.repo_id, str) and updated.repo_id.strip()
@@ -739,7 +815,10 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 reply_to=message.message_id,
             )
             return None
-        thread = await client.thread_start(record.workspace_path or "", agent=agent)
+        thread = await client.thread_start(
+            record.workspace_path or "",
+            **self._thread_start_kwargs(record),
+        )
         if not await self._require_thread_workspace(
             message, record.workspace_path, thread, action="thread_start"
         ):
@@ -1093,7 +1172,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             self,
                             surface_key=key,
                             workspace_root=canonicalize_path(Path(hub_root)),
-                            agent=self._effective_agent(record),
+                            agent=self._effective_runtime_agent(record),
                             repo_id=(
                                 record.repo_id.strip()
                                 if isinstance(record.repo_id, str)
@@ -1241,7 +1320,10 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 )
                 return
             try:
-                thread = await client.thread_start(record.workspace_path, agent=agent)
+                thread = await client.thread_start(
+                    record.workspace_path,
+                    **self._thread_start_kwargs(record),
+                )
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -1330,7 +1412,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             self,
                             surface_key=key,
                             workspace_root=canonicalize_path(Path(hub_root)),
-                            agent=self._effective_agent(record),
+                            agent=self._effective_runtime_agent(record),
                             repo_id=(
                                 record.repo_id.strip()
                                 if isinstance(record.repo_id, str)
@@ -1456,7 +1538,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 self,
                 surface_key=key,
                 workspace_root=workspace_root,
-                agent=agent,
+                agent=self._effective_runtime_agent(record),
                 repo_id=(
                     record.repo_id.strip()
                     if isinstance(record.repo_id, str) and record.repo_id.strip()
@@ -1507,7 +1589,10 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 )
                 return
             try:
-                thread = await client.thread_start(record.workspace_path, agent=agent)
+                thread = await client.thread_start(
+                    record.workspace_path,
+                    **self._thread_start_kwargs(record),
+                )
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -1545,7 +1630,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 self,
                 surface_key=key,
                 workspace_root=Path(record.workspace_path),
-                agent=agent,
+                agent=self._effective_runtime_agent(record),
                 repo_id=(
                     record.repo_id.strip()
                     if isinstance(record.repo_id, str) and record.repo_id.strip()
@@ -1758,7 +1843,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 self,
                 surface_key=key,
                 workspace_root=workspace_root,
-                agent=agent,
+                agent=self._effective_runtime_agent(record),
                 repo_id=(
                     record.repo_id.strip()
                     if isinstance(record.repo_id, str) and record.repo_id.strip()
@@ -1809,7 +1894,10 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 )
                 return
             try:
-                thread = await client.thread_start(str(workspace_root), agent=agent)
+                thread = await client.thread_start(
+                    str(workspace_root),
+                    **self._thread_start_kwargs(record),
+                )
             except Exception as exc:
                 log_event(
                     self._logger,
@@ -1842,7 +1930,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 self,
                 surface_key=key,
                 workspace_root=workspace_root,
-                agent=agent,
+                agent=self._effective_runtime_agent(record),
                 repo_id=(
                     record.repo_id.strip()
                     if isinstance(record.repo_id, str) and record.repo_id.strip()
@@ -3102,7 +3190,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 self,
                 surface_key=key,
                 workspace_root=Path(updated_record.workspace_path),
-                agent=self._effective_agent(updated_record),
+                agent=self._effective_runtime_agent(updated_record),
                 repo_id=(
                     updated_record.repo_id.strip()
                     if isinstance(updated_record.repo_id, str)

@@ -1057,6 +1057,7 @@ async def _run_telegram_managed_thread_turn(
     )
     workspace_root = canonicalize_path(Path(record.workspace_path or ""))
     agent = handlers._effective_agent(record)
+    runtime_agent = handlers._effective_runtime_agent(record)
     repo_id = record.repo_id.strip() if isinstance(record.repo_id, str) else None
     current_backend_thread_id = (
         str(record.active_thread_id).strip()
@@ -1115,7 +1116,8 @@ async def _run_telegram_managed_thread_turn(
             )
         try:
             thread_result = await client.thread_start(
-                record.workspace_path, agent=agent
+                record.workspace_path,
+                **handlers._thread_start_kwargs(record),
             )
         except Exception as exc:
             log_event(
@@ -1184,7 +1186,7 @@ async def _run_telegram_managed_thread_turn(
         handlers,
         surface_key=topic_key,
         workspace_root=workspace_root,
-        agent=agent,
+        agent=runtime_agent,
         repo_id=repo_id or None,
         resource_kind=getattr(record, "resource_kind", None),
         resource_id=getattr(record, "resource_id", None),
@@ -1470,7 +1472,7 @@ async def _run_telegram_managed_thread_turn(
             handlers,
             surface_key=topic_key,
             workspace_root=workspace_root,
-            agent=agent,
+            agent=runtime_agent,
             repo_id=repo_id or None,
             resource_kind=getattr(record, "resource_kind", None),
             resource_id=getattr(record, "resource_id", None),
@@ -3027,12 +3029,15 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             )
             return any(marker in message for marker in missing_markers)
 
-        async def _start_new_thread(agent: str) -> Optional[str]:
+        async def _start_new_thread() -> Optional[str]:
             nonlocal record
             workspace_path = record.workspace_path
             if not workspace_path:
                 return None
-            thread = await client.thread_start(workspace_path, agent=agent)
+            thread = await client.thread_start(
+                workspace_path,
+                **self._thread_start_kwargs(record),
+            )
             if not await self._require_thread_workspace(
                 message, workspace_path, thread, action="thread_start"
             ):
@@ -3109,8 +3114,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                         transcript_message_id,
                         transcript_text,
                     )
-                agent = self._effective_agent(record)
-                thread_id = await _start_new_thread(agent)
+                thread_id = await _start_new_thread()
                 if not thread_id:
                     failure_message = "Failed to start a new thread."
                     if send_failure_response:
@@ -3167,10 +3171,13 @@ class ExecutionCommands(TelegramCommandSupportMixin):
 
             approval_policy, sandbox_policy = self._effective_policies(record)
             agent = self._effective_agent(record)
+            profile = self._effective_agent_profile(record)
             supports_effort = self._agent_supports_effort(agent)
             turn_kwargs: dict[str, Any] = {}
             if agent:
                 turn_kwargs["agent"] = agent
+            if profile is not None:
+                turn_kwargs["profile"] = profile
             if record.model:
                 turn_kwargs["model"] = record.model
             if record.effort and supports_effort:
@@ -3296,8 +3303,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                                 transcript_message_id,
                                 transcript_text,
                             )
-                        agent = self._effective_agent(record)
-                        thread_id = await _start_new_thread(agent)
+                        thread_id = await _start_new_thread()
                         if thread_id is None:
                             raise
                         turn_handle = await client.turn_start(
@@ -3366,7 +3372,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 await self._start_turn_progress(
                     turn_key,
                     ctx=ctx,
-                    agent=self._effective_agent(record),
+                    agent=self._effective_agent_label(record),
                     model=record.model,
                     label="working",
                 )
@@ -3568,7 +3574,11 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         when require_topics is enabled, while keeping a single shared context
         in the common case (require_topics disabled).
         """
-        agent = self._effective_agent(record)
+        runtime_agent_resolver = getattr(self, "_effective_runtime_agent", None)
+        if callable(runtime_agent_resolver):
+            agent = runtime_agent_resolver(record)
+        else:
+            agent = self._effective_agent(record)
         base_key = pma_base_key(agent)
 
         require_topics = getattr(self._config, "require_topics", False)
