@@ -256,7 +256,14 @@ def _resolve_runtime_agent_config(ctx: Any) -> Any:
     if root is None:
         return None
 
-    for loader in (load_hub_config, load_repo_config):
+    loaders: tuple[Callable[[Path], Any], ...] = (
+        lambda path: load_hub_config(path),
+        lambda path: load_repo_config(path),
+    )
+    if isinstance(ctx, Path):
+        loaders = tuple(reversed(loaders))
+
+    for loader in loaders:
         try:
             config = loader(root)
         except Exception:
