@@ -74,6 +74,35 @@ If you're working from a fresh clone of this repo, you can run the repo-local CL
 
 The shim will try `PYTHONPATH=src` first and, if dependencies are missing, will bootstrap a local `.venv` and install CAR.
 
+## SDLC Orchestrator Scaffold (Optional)
+
+This fork includes an optional scaffold at `mcp2-agent-config/` to run a staged SDLC flow (`prd -> techdoc -> design -> coding`) with connector-aware gates for MCP integrations.
+
+Quick run:
+
+```bash
+cd mcp2-agent-config
+cp credentials.template.json credentials.local.json
+node validate-credentials.cjs credentials.local.json
+node sdlc-orchestrator.cjs \
+  --credentials credentials.local.json \
+  --connectors connectors.map.json \
+  --out artifacts \
+  --project your-project-name
+```
+
+For strict CI gates:
+
+```bash
+node validate-credentials.cjs credentials.local.json --strict
+node sdlc-orchestrator.cjs \
+  --credentials credentials.local.json \
+  --connectors connectors.map.json \
+  --out artifacts \
+  --project your-project-name \
+  --strict
+```
+
 ## Architecture docs
 - [Interactively explore the architecture on Principal Forks](https://app.principal-ade.com/Principal-Forks/codex-autorunner)
 - [Codebase constitution](docs/car_constitution/10_CODEBASE_CONSTITUTION.md)

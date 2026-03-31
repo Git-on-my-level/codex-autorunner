@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "connectors": {
+    "notion": {
+      "mcp_server": "mcp2",
+      "tool_name": "notion",
+      "required_for_stages": [
+        "prd",
+        "techdoc",
+        "design"
+      ]
+    },
+    "googlestitch": {
+      "mcp_server": "mcp2",
+      "tool_name": "googlestitch",
+      "required_for_stages": [
+        "techdoc"
+      ]
+    },
+    "github": {
+      "mcp_server": "mcp2",
+      "tool_name": "github",
+      "required_for_stages": [
+        "coding"
+      ]
+    }
+  }
+}
