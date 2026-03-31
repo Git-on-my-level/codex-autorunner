@@ -339,7 +339,7 @@ async def _sync_discord_application_commands(
     if not config.application_id:
         raise DiscordBotConfigError(f"missing application id env '{config.app_id_env}'")
 
-    commands = build_application_commands()
+    commands = build_application_commands(config.root)
     async with rest_client_factory(bot_token=config.bot_token) as rest:
         await sync_func(
             rest,

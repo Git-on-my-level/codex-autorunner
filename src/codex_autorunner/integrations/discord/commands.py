@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from ...core.flows import FLOW_ACTION_SPECS
 from ...core.update_targets import update_target_command_choices
@@ -195,7 +195,7 @@ def _build_admin_subcommand_options() -> list[dict[str, Any]]:
     ]
 
 
-def build_application_commands() -> list[dict[str, Any]]:
+def build_application_commands(context: Optional[Any] = None) -> list[dict[str, Any]]:
     return [
         {
             "type": 1,
@@ -239,9 +239,9 @@ def build_application_commands() -> list[dict[str, Any]]:
                         {
                             "type": STRING,
                             "name": "name",
-                            "description": f"Agent name: {chat_agent_description()}",
+                            "description": f"Agent name: {chat_agent_description(context)}",
                             "required": False,
-                            "choices": list(chat_agent_command_choices()),
+                            "choices": list(chat_agent_command_choices(context)),
                         }
                     ],
                 },

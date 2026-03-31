@@ -2649,7 +2649,7 @@ async def test_component_interaction_agent_select_accepts_registered_alias(
 ) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
         },
     )
@@ -3554,7 +3554,7 @@ async def test_normalized_component_agent_select_accepts_registered_alias(
 ) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
         },
     )

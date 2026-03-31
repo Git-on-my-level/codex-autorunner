@@ -3604,7 +3604,7 @@ class DiscordBotService:
         if registration.scope == "guild" and not registration.guild_ids:
             raise ValueError("guild scope requires at least one guild_id")
 
-        commands = build_application_commands()
+        commands = build_application_commands(self)
         try:
             await sync_commands(
                 self._rest,
@@ -4957,12 +4957,12 @@ class DiscordBotService:
 
     def _normalize_agent(self, value: Any) -> str:
         return (
-            normalize_chat_agent(value, default=self.DEFAULT_AGENT)
+            normalize_chat_agent(value, default=self.DEFAULT_AGENT, context=self)
             or self.DEFAULT_AGENT
         )
 
     def _agent_supports_effort(self, agent: str) -> bool:
-        return chat_agent_supports_effort(agent)
+        return chat_agent_supports_effort(agent, self)
 
     def _agent_supports_resume(self, agent: str) -> bool:
         return self._agent_supports_capability(agent, "durable_threads")
@@ -7233,7 +7233,7 @@ class DiscordBotService:
 
     def _agent_descriptor(self, agent: object) -> AgentDescriptor | None:
         normalized = self._normalize_agent(agent)
-        return get_agent_descriptor(normalized)
+        return get_agent_descriptor(normalized, self)
 
     def _agent_display_name(self, agent: object) -> str:
         descriptor = self._agent_descriptor(agent)
@@ -7260,14 +7260,14 @@ class DiscordBotService:
         resolved = next(iter(normalized))
         return sorted(
             descriptor.id
-            for descriptor in get_registered_agents().values()
+            for descriptor in get_registered_agents(self).values()
             if resolved in descriptor.capabilities
         )
 
     DEFAULT_AGENT = DEFAULT_CHAT_AGENT
 
     def _known_agent_values(self) -> tuple[str, ...]:
-        return valid_chat_agent_values()
+        return valid_chat_agent_values(self)
 
     async def _handle_car_agent(
         self,
@@ -7305,11 +7305,11 @@ class DiscordBotService:
                         ]
                     )
                 ),
-                [build_agent_picker(current_agent=current_agent)],
+                [build_agent_picker(current_agent=current_agent, context=self)],
             )
             return
 
-        desired = normalize_chat_agent(agent_name)
+        desired = normalize_chat_agent(agent_name, context=self)
         if desired is None:
             available = ", ".join(self._known_agent_values())
             await self._respond_ephemeral(
@@ -7327,7 +7327,11 @@ class DiscordBotService:
             )
             return
 
-        switch_state = build_agent_switch_state(desired, model_reset="clear")
+        switch_state = build_agent_switch_state(
+            desired,
+            model_reset="clear",
+            context=self,
+        )
         await self._store.update_agent_state(
             channel_id=channel_id,
             agent=switch_state.agent,

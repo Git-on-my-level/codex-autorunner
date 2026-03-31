@@ -80,7 +80,7 @@ def test_normalize_chat_agent_accepts_registered_command_choice(
 ) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "plugin-agent": SimpleNamespace(name="Plugin Agent"),
         },
     )
@@ -95,7 +95,7 @@ def test_chat_agent_definitions_keep_builtins_first_and_append_aliases(
 ) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "plugin-agent": SimpleNamespace(name="Plugin Agent"),
         },
     )
@@ -111,3 +111,22 @@ def test_chat_agent_definitions_keep_builtins_first_and_append_aliases(
     assert definitions[-1].value == "plugin-agent"
     assert definitions[-1].description == "Plugin Agent"
     assert valid_chat_agent_values()[-1] == "plugin-agent"
+
+
+def test_normalize_chat_agent_uses_context_for_config_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _registered(context=None):
+        if context != "repo-root":
+            return {}
+        return {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
+        }
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        _registered,
+    )
+
+    assert normalize_chat_agent("hermes-m4-pma") is None
+    assert normalize_chat_agent("hermes-m4-pma", context="repo-root") == "hermes-m4-pma"

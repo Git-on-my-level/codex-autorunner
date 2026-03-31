@@ -209,7 +209,7 @@ def test_agent_picker_includes_registered_hermes_alias(
 ) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "hermes-m4-pma": SimpleNamespace(
                 name="Hermes (hermes-m4-pma)",
                 capabilities=frozenset(
@@ -225,7 +225,11 @@ def test_agent_picker_includes_registered_hermes_alias(
         },
     )
 
-    options = _build_agent_options(current="codex", availability="available")
+    options = _build_agent_options(
+        current="codex",
+        availability="available",
+        context="repo-root",
+    )
 
     assert ("hermes-m4-pma", "hermes-m4-pma") in options
 
@@ -248,7 +252,7 @@ async def test_agent_command_accepts_registered_hermes_alias(
 ) -> None:
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "hermes-m4-pma": SimpleNamespace(
                 name="Hermes (hermes-m4-pma)",
                 capabilities=frozenset(

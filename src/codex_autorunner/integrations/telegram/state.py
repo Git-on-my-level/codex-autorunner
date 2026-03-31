@@ -42,8 +42,8 @@ def normalize_approval_mode(
     return default
 
 
-def normalize_agent(value: Optional[str]) -> Optional[str]:
-    return normalize_chat_agent(value)
+def normalize_agent(value: Optional[str], *, context: Any = None) -> Optional[str]:
+    return normalize_chat_agent(value, context=context)
 
 
 def _encode_scope(scope: str) -> str:
@@ -305,7 +305,10 @@ class TelegramTopicRecord:
         last_update_id = payload.get("last_update_id") or payload.get("lastUpdateId")
         if not isinstance(last_update_id, int) or isinstance(last_update_id, bool):
             last_update_id = None
-        agent = normalize_agent(payload.get("agent"))
+        raw_agent = payload.get("agent")
+        agent = normalize_agent(raw_agent)
+        if agent is None and isinstance(raw_agent, str) and raw_agent.strip():
+            agent = raw_agent.strip().lower()
         model = payload.get("model")
         if not isinstance(model, str):
             model = None

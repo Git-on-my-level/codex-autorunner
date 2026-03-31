@@ -44,7 +44,11 @@ class TelegramCommandSupportMixin:
         return coerce_int(value)
 
     def _agent_descriptor(self, agent: object) -> Any:
-        normalized = normalize_chat_agent(agent, default=DEFAULT_CHAT_AGENT)
+        normalized = normalize_chat_agent(
+            agent,
+            default=DEFAULT_CHAT_AGENT,
+            context=self,
+        )
         if normalized is None:
             return None
         try:
@@ -59,7 +63,7 @@ class TelegramCommandSupportMixin:
         descriptor = self._agent_descriptor(agent)
         if descriptor is not None:
             return descriptor.name
-        normalized = normalize_chat_agent(agent)
+        normalized = normalize_chat_agent(agent, context=self)
         if isinstance(normalized, str) and normalized:
             return normalized
         if isinstance(agent, str) and agent.strip():

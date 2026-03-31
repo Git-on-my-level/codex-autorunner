@@ -11,6 +11,7 @@ from codex_autorunner.core.orchestration import (
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.telegram.state import (
     TelegramStateStore,
+    TelegramTopicRecord,
     topic_key,
 )
 from codex_autorunner.manifest import (
@@ -124,3 +125,12 @@ async def test_telegram_state_no_longer_needs_to_be_binding_authority(
         )
     finally:
         await store.close()
+
+
+def test_telegram_topic_record_from_dict_preserves_unknown_agent_alias() -> None:
+    record = TelegramTopicRecord.from_dict(
+        {"agent": "hermes-m4-pma"},
+        default_approval_mode="yolo",
+    )
+
+    assert record.agent == "hermes-m4-pma"

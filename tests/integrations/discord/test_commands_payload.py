@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from codex_autorunner.core.flows import FLOW_ACTION_NAMES, FLOW_ACTION_SPECS
 from codex_autorunner.core.update_targets import update_target_command_choices
 from codex_autorunner.integrations.chat.agents import (
@@ -188,3 +190,24 @@ def test_agent_and_effort_options_include_choices() -> None:
     assert update_target.get("choices", []) == list(
         update_target_command_choices(include_status=True)
     )
+
+
+def test_agent_options_include_contextual_aliases(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: (
+            {"hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)")}
+            if context == "repo-root"
+            else {}
+        ),
+    )
+
+    commands = build_application_commands("repo-root")
+    car_options = commands[0]["options"]
+    agent = _find_option(car_options, "agent")
+    agent_name = _find_option(agent["options"], "name")
+
+    assert {"name": "hermes-m4-pma", "value": "hermes-m4-pma"} in agent_name.get(
+        "choices", []
+    )
+    assert "hermes-m4-pma" in agent_name["description"]

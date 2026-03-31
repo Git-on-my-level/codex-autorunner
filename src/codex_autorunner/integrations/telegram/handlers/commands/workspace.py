@@ -188,7 +188,11 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         thread_id: Optional[int],
         desired: str,
     ) -> str:
-        switch_state = build_agent_switch_state(desired, model_reset="agent_default")
+        switch_state = build_agent_switch_state(
+            desired,
+            model_reset="agent_default",
+            context=self,
+        )
 
         def apply(record: "TelegramTopicRecord") -> None:
             record.agent = switch_state.agent
@@ -224,13 +228,13 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
 
     def _effective_agent(self, record: Optional["TelegramTopicRecord"]) -> str:
         if record:
-            normalized = normalize_chat_agent(record.agent)
+            normalized = normalize_chat_agent(record.agent, context=self)
             if normalized:
                 return normalized
         return DEFAULT_AGENT
 
     def _agent_supports_effort(self, agent: str) -> bool:
-        return chat_agent_supports_effort(agent)
+        return chat_agent_supports_effort(agent, self)
 
     def _agent_supports_resume(self, agent: str) -> bool:
         return self._agent_supports_capability(agent, "durable_threads")
@@ -518,7 +522,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             if info.get("rollout_path"):
                 record.rollout_path = info["rollout_path"]
             if info.get("agent") and (overwrite_defaults or record.agent is None):
-                normalized_agent = normalize_agent(info.get("agent"))
+                normalized_agent = normalize_agent(info.get("agent"), context=self)
                 if normalized_agent:
                     record.agent = normalized_agent
             if info.get("model") and (overwrite_defaults or record.model is None):

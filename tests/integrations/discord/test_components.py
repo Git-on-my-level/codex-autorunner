@@ -123,12 +123,12 @@ class TestBuildAgentPicker:
     def test_builds_picker_with_registered_aliases(self, monkeypatch) -> None:
         monkeypatch.setattr(
             "codex_autorunner.agents.registry.get_registered_agents",
-            lambda: {
+            lambda context=None: {
                 "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
             },
         )
 
-        picker = build_agent_picker(current_agent="hermes-m4-pma")
+        picker = build_agent_picker(current_agent="hermes-m4-pma", context="repo-root")
         menu = picker["components"][0]
         values = [opt["value"] for opt in menu["options"]]
 

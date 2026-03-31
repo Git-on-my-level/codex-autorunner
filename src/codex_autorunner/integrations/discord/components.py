@@ -116,6 +116,7 @@ def build_bind_picker(
 def build_agent_picker(
     *,
     current_agent: str,
+    context: Any = None,
     custom_id: str = "agent_select",
     placeholder: str = "Select an agent...",
 ) -> dict[str, Any]:
@@ -126,7 +127,7 @@ def build_agent_picker(
             description=definition.description,
             default=current_agent == definition.value,
         )
-        for definition in chat_agent_definitions()
+        for definition in chat_agent_definitions(context)
     ]
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
