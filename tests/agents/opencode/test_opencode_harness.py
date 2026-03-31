@@ -325,6 +325,68 @@ async def test_opencode_harness_keeps_turn_guard_through_resume_start_and_wait()
 
 
 @pytest.mark.asyncio
+async def test_opencode_harness_start_turn_uses_backend_turn_id_from_prompt_response() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient([])
+
+    async def _prompt_async(session_id: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "info": {"id": "backend-turn-1"},
+            "sessionID": session_id,
+            **kwargs,
+        }
+
+    client.prompt_async = _prompt_async  # type: ignore[method-assign]
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    assert turn.turn_id == "backend-turn-1"
+    assert ("session-1", "backend-turn-1") in harness._pending_turns
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_start_review_uses_backend_turn_id_from_command_response() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient([])
+
+    async def _send_command(session_id: str, **kwargs: object) -> dict[str, object]:
+        return {
+            "id": "backend-review-1",
+            "sessionID": session_id,
+            **kwargs,
+        }
+
+    client.send_command = _send_command  # type: ignore[method-assign]
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_review(
+        workspace,
+        "session-1",
+        prompt="review this",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    assert turn.turn_id == "backend-review-1"
+    assert ("session-1", "backend-review-1") in harness._pending_turns
+
+
+@pytest.mark.asyncio
 async def test_opencode_harness_releases_reserved_turn_when_start_turn_setup_fails() -> (
     None
 ):
