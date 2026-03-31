@@ -342,7 +342,7 @@ async def test_normalize_runtime_thread_raw_event_handles_official_session_updat
     assert state.token_usage == {"total_tokens": 42}
 
 
-async def test_recover_post_completion_outcome_requires_canonical_final_message() -> (
+async def test_recover_post_completion_outcome_uses_streamed_output_after_completion() -> (
     None
 ):
     outcome = RuntimeThreadOutcome(
@@ -357,7 +357,9 @@ async def test_recover_post_completion_outcome_requires_canonical_final_message(
         assistant_stream_text="partial output",
         completed_seen=True,
     )
-    assert recover_post_completion_outcome(outcome, partial_only_state) == outcome
+    recovered_from_stream = recover_post_completion_outcome(outcome, partial_only_state)
+    assert recovered_from_stream.status == "ok"
+    assert recovered_from_stream.assistant_text == "partial output"
 
     final_message_state = RuntimeThreadRunEventState(
         assistant_stream_text="partial output",
@@ -388,6 +390,23 @@ async def test_recover_post_completion_outcome_recovers_interrupted_with_final_m
     recovered = recover_post_completion_outcome(outcome, state)
     assert recovered.status == "ok"
     assert recovered.assistant_text == "final canonical output"
+
+
+async def test_recover_post_completion_outcome_requires_completion_signal() -> None:
+    outcome = RuntimeThreadOutcome(
+        status="error",
+        assistant_text="",
+        error="App-server disconnected",
+        backend_thread_id="thread-1",
+        backend_turn_id="turn-1",
+    )
+
+    state = RuntimeThreadRunEventState(
+        assistant_stream_text="partial output",
+        completed_seen=False,
+    )
+
+    assert recover_post_completion_outcome(outcome, state) == outcome
 
 
 async def test_terminal_run_event_from_outcome_uses_streamed_fallback_text() -> None:

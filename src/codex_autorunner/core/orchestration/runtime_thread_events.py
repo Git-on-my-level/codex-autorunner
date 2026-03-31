@@ -256,7 +256,7 @@ def recover_post_completion_outcome(
 
     if outcome.status not in {"error", "interrupted"} or not state.completed_seen:
         return outcome
-    assistant_text = outcome.assistant_text or state.assistant_message_text
+    assistant_text = outcome.assistant_text or state.best_assistant_text()
     if not isinstance(assistant_text, str) or not assistant_text.strip():
         return outcome
     return RuntimeThreadOutcome(

@@ -4336,6 +4336,76 @@ async def test_message_create_streaming_turn_recovers_if_wait_disconnects_after_
 
 
 @pytest.mark.anyio
+async def test_message_create_streaming_turn_recovers_if_wait_times_out_after_streamed_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    final_text = "completed answer survives timeout"
+    harness = _patch_streaming_harness(
+        monkeypatch,
+        [
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=final_text,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
+        ],
+        assistant_text="",
+        wait_for_stream=False,
+    )
+
+    async def _hanging_wait_for_turn(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        await asyncio.sleep(1.0)
+        return SimpleNamespace(status="ok", assistant_text="", errors=[])
+
+    monkeypatch.setattr(harness, "wait_for_turn", _hanging_wait_for_turn)
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "DISCORD_PMA_TIMEOUT_SECONDS",
+        0.05,
+    )
+
+    try:
+        await service.run_forever()
+        assert any(
+            final_text in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "Turn failed:" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+        assert not any(
+            "(No response text returned.)" in msg["payload"].get("content", "")
+            for msg in rest.channel_messages
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_failure_before_completion_still_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
