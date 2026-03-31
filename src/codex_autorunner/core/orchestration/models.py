@@ -121,6 +121,8 @@ class ThreadTarget:
     status_turn_id: Optional[str] = None
     last_execution_id: Optional[str] = None
     last_message_preview: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     compact_seed: Optional[str] = None
     thread_kind: Optional[str] = None
     context_profile: Optional[CarContextProfile] = None
@@ -178,6 +180,8 @@ class ThreadTarget:
             last_message_preview=_normalize_optional_text(
                 data.get("last_message_preview")
             ),
+            created_at=_normalize_optional_text(data.get("created_at")),
+            updated_at=_normalize_optional_text(data.get("updated_at")),
             compact_seed=_normalize_optional_text(data.get("compact_seed")),
             thread_kind=_normalize_optional_text(
                 data.get("thread_kind") or metadata.get("thread_kind")

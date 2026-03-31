@@ -982,6 +982,57 @@ def test_session_thread_picker_label_strips_injected_context_from_preview() -> N
     assert "Resume this thread" in label
 
 
+def test_session_thread_picker_label_prioritizes_datetime_and_first_user_message() -> (
+    None
+):
+    thread_id = "019cc77b-ec10-7981-8e8b-ec5db4619efb"
+    label = discord_service_module._format_session_thread_picker_label(
+        thread_id,
+        {
+            "id": thread_id,
+            "created_at": "2026-03-31T09:15:00Z",
+            "first_user_message": (
+                "<injected context>\nworkspace details\n</injected context>\n\n"
+                "Fix the Discord resume labels."
+            ),
+            "last_user_message": "Latest request that should not win",
+            "last_assistant_message": "Latest assistant reply",
+        },
+        is_current=False,
+    )
+    assert label.startswith("2026-03-31 09:15Z")
+    assert "Fix the Discord resume labels." in label
+    assert "Latest request that should not win" not in label
+
+
+def test_discord_thread_picker_label_prioritizes_datetime_and_strips_car_comment() -> (
+    None
+):
+    service = object.__new__(DiscordBotService)
+    label = DiscordBotService._format_discord_thread_picker_label(
+        service,
+        SimpleNamespace(
+            thread_target_id="thread-1",
+            agent_id="codex",
+            display_name="discord:1475097865088139386",
+            lifecycle_status="archived",
+            created_at="2026-03-31T09:15:00Z",
+            updated_at="2026-03-31T10:20:00Z",
+            status_changed_at="2026-03-31T10:20:00Z",
+            last_message_preview=(
+                "<!-- CAR:PMA_DOCS_GENERATED -->\n\n"
+                "Follow up on the resume picker cleanup."
+            ),
+            compact_seed=None,
+        ),
+        is_current=False,
+    )
+    assert label.startswith("2026-03-31 09:15Z")
+    assert "Follow up on the resume picker cleanup." in label
+    assert "CAR:PMA_DOCS_GENERATED" not in label
+    assert "archived" not in label
+
+
 @pytest.mark.anyio
 async def test_model_list_with_agent_compat_retries_without_agent() -> None:
     class _FakeClient:

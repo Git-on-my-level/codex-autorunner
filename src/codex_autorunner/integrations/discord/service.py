@@ -233,6 +233,8 @@ from ..chat.thread_summaries import (
     _coerce_thread_list,
     _extract_thread_list_cursor,
     _extract_thread_preview_parts,
+    _format_resume_picker_label,
+    _format_resume_timestamp,
 )
 from ..telegram.constants import DEFAULT_SKILLS_LIST_LIMIT
 from ..telegram.helpers import _format_skills_list
@@ -438,22 +440,42 @@ def _format_session_thread_picker_label(
     max_label_len = 100
     current_suffix = " (current)" if is_current else ""
     max_base_len = max_label_len - len(current_suffix)
+    if _format_resume_timestamp(entry):
+        preview_label: Optional[str] = None
+        user_preview, assistant_preview = _extract_thread_preview_parts(entry)
+        user_preview = _truncate_picker_text(user_preview or "", limit=72) or None
+        assistant_preview = (
+            _truncate_picker_text(assistant_preview or "", limit=72) or None
+        )
+        if user_preview and assistant_preview:
+            preview_label = f"U: {user_preview} | A: {assistant_preview}"
+        elif user_preview:
+            preview_label = f"U: {user_preview}"
+        elif assistant_preview:
+            preview_label = f"A: {assistant_preview}"
+        base = _format_resume_picker_label(
+            thread_id,
+            entry,
+            limit=max_base_len,
+            fallback_preview=preview_label,
+        )
+        return f"{base}{current_suffix}"
     user_preview, assistant_preview = _extract_thread_preview_parts(entry)
     user_preview = _truncate_picker_text(user_preview or "", limit=72) or None
     assistant_preview = _truncate_picker_text(assistant_preview or "", limit=72) or None
-    preview_label: Optional[str] = None
+    fallback_preview_label: Optional[str] = None
     if user_preview and assistant_preview:
-        preview_label = f"U: {user_preview} | A: {assistant_preview}"
+        fallback_preview_label = f"U: {user_preview} | A: {assistant_preview}"
     elif user_preview:
-        preview_label = f"U: {user_preview}"
+        fallback_preview_label = f"U: {user_preview}"
     elif assistant_preview:
-        preview_label = f"A: {assistant_preview}"
-    if preview_label:
+        fallback_preview_label = f"A: {assistant_preview}"
+    if fallback_preview_label:
         short_id = thread_id[:8]
         id_prefix = f"[{short_id}] "
         preview_budget = max(1, max_base_len - len(id_prefix))
         base = (
-            f"{id_prefix}{_truncate_picker_text(preview_label, limit=preview_budget)}"
+            f"{id_prefix}{_truncate_picker_text(fallback_preview_label, limit=preview_budget)}"
         )
     else:
         base = _truncate_picker_text(thread_id, limit=max_base_len)
@@ -2119,21 +2141,35 @@ class DiscordBotService:
         is_current: bool,
     ) -> str:
         thread_id = str(getattr(thread, "thread_target_id", "") or "").strip()
-        short_id = thread_id[:8] if thread_id else "unknown"
-        agent = str(getattr(thread, "agent_id", "") or "").strip() or "agent"
-        lifecycle_status = (
-            str(getattr(thread, "lifecycle_status", "") or "").strip().lower()
-        )
         last_preview = str(getattr(thread, "last_message_preview", "") or "").strip()
-        display_name = str(getattr(thread, "display_name", "") or "").strip()
-        base = display_name or f"{agent} {short_id}"
-        parts = [base]
-        if lifecycle_status and lifecycle_status not in {"active", "running"}:
-            parts.append(lifecycle_status)
-        if last_preview:
-            preview = truncate_for_discord(last_preview, max_len=60)
-            parts.append(preview)
-        label = " · ".join(parts)
+        compact_seed = str(getattr(thread, "compact_seed", "") or "").strip()
+        entry = {
+            "created_at": getattr(thread, "created_at", None),
+            "updated_at": getattr(thread, "updated_at", None),
+            "status_changed_at": getattr(thread, "status_changed_at", None),
+        }
+        if _format_resume_timestamp(entry):
+            label = _format_resume_picker_label(
+                thread_id,
+                entry,
+                limit=100,
+                fallback_preview=last_preview or compact_seed or None,
+            )
+        else:
+            short_id = thread_id[:8] if thread_id else "unknown"
+            agent = str(getattr(thread, "agent_id", "") or "").strip() or "agent"
+            lifecycle_status = (
+                str(getattr(thread, "lifecycle_status", "") or "").strip().lower()
+            )
+            display_name = str(getattr(thread, "display_name", "") or "").strip()
+            base = display_name or f"{agent} {short_id}"
+            parts = [base]
+            if lifecycle_status and lifecycle_status not in {"active", "running"}:
+                parts.append(lifecycle_status)
+            if last_preview:
+                preview = truncate_for_discord(last_preview, max_len=60)
+                parts.append(preview)
+            label = " · ".join(parts)
         if is_current:
             label = f"{label} (current)"
         return truncate_for_discord(label, max_len=100)

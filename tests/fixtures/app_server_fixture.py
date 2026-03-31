@@ -144,6 +144,7 @@ class FixtureServer:
             if self._scenario == "thread_list_compact_seed":
                 entry = {
                     "id": "thread-compact",
+                    "created_at": "2026-03-31T09:15:00Z",
                     "first_user_message": (
                         "Context from previous conversation:\n\n"
                         "Goals: Fix resume labels\n\n"

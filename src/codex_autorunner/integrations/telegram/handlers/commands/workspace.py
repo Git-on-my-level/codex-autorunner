@@ -24,6 +24,7 @@ from ....chat.agents import (
     chat_agent_supports_effort,
     normalize_chat_agent,
 )
+from ....chat.thread_summaries import _format_resume_timestamp
 from ....chat.status_diagnostics import (
     StatusBlockContext,
     build_status_block_lines,
@@ -2498,7 +2499,12 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 seen_item_ids.add(candidate_id)
                 label = _format_thread_preview(entry)
                 button_label = _extract_first_user_preview(entry)
-                if button_label:
+                timestamp = _format_resume_timestamp(entry)
+                if timestamp and button_label:
+                    button_labels[candidate_id] = f"{timestamp} · {button_label}"
+                elif timestamp:
+                    button_labels[candidate_id] = timestamp
+                elif button_label:
                     button_labels[candidate_id] = button_label
                 if label == "(no preview)":
                     cached_preview = local_previews.get(candidate_id)
@@ -2526,7 +2532,12 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                     else:
                         label = _format_thread_preview(entry_data)
                         button_label = _extract_first_user_preview(entry_data)
-                        if button_label:
+                        timestamp = _format_resume_timestamp(entry_data)
+                        if timestamp and button_label:
+                            button_labels[thread_id] = f"{timestamp} · {button_label}"
+                        elif timestamp:
+                            button_labels[thread_id] = timestamp
+                        elif button_label:
                             button_labels[thread_id] = button_label
                         if label == "(no preview)":
                             cached_preview = _thread_summary_preview(record, thread_id)
@@ -2540,7 +2551,12 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                         continue
                     label = _format_thread_preview(entry)
                     button_label = _extract_first_user_preview(entry)
-                    if button_label:
+                    timestamp = _format_resume_timestamp(entry)
+                    if timestamp and button_label:
+                        button_labels[entry_id] = f"{timestamp} · {button_label}"
+                    elif timestamp:
+                        button_labels[entry_id] = timestamp
+                    elif button_label:
                         button_labels[entry_id] = button_label
                     items.append((entry_id, label))
         if missing_ids:

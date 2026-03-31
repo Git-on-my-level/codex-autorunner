@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
@@ -177,6 +178,37 @@ _DISPATCH_BEGIN_STRIP_RE = re.compile(
     r"(?s)^\s*(?:<prior context>\s*)?##\s*My request for Codex:\s*",
     re.IGNORECASE,
 )
+_LEADING_HTML_COMMENT_RE = re.compile(r"(?s)^\s*(?:<!--.*?-->\s*)+")
+
+_FIRST_USER_PREVIEW_KEYS = (
+    "first_user_message",
+    "firstUserMessage",
+    "first_user",
+    "firstUser",
+    "initial_user_message",
+    "initialUserMessage",
+    "initial_user",
+    "initialUser",
+    "first_message",
+    "firstMessage",
+    "initial_message",
+    "initialMessage",
+)
+
+_THREAD_SESSION_TIMESTAMP_KEYS = (
+    "created_at",
+    "createdAt",
+    "started_at",
+    "startedAt",
+    "updated_at",
+    "updatedAt",
+    "last_active_at",
+    "lastActiveAt",
+    "status_changed_at",
+    "statusChangedAt",
+    "status_updated_at",
+    "statusUpdatedAt",
+)
 
 
 def _is_ignored_first_user_preview(text: Optional[str]) -> bool:
@@ -201,10 +233,50 @@ def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return text
     stripped = _strip_dispatch_begin(text)
+    if not isinstance(stripped, str):
+        return None
+    stripped = _LEADING_HTML_COMMENT_RE.sub("", stripped)
     stripped = strip_injected_context_blocks(stripped)
     if _is_ignored_first_user_preview(stripped):
         return None
     return stripped
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+        if seconds > 1e12:
+            seconds /= 1000.0
+        try:
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except Exception:
+            try:
+                return _coerce_datetime(float(text))
+            except Exception:
+                return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed
+    return None
+
+
+def _format_resume_timestamp(entry: Any) -> Optional[str]:
+    payload = _coerce_thread_payload(entry)
+    for key in _THREAD_SESSION_TIMESTAMP_KEYS:
+        parsed = _coerce_datetime(payload.get(key))
+        if parsed is not None:
+            return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+    return None
 
 
 def _normalize_preview_text(text: str) -> str:
@@ -243,6 +315,22 @@ def _tail_text_lines(path: Path, max_lines: int) -> list[str]:
         return []
 
 
+def _head_text_lines(path: Path, max_lines: int) -> list[str]:
+    if max_lines <= 0:
+        return []
+    try:
+        lines: list[str] = []
+        with path.open("rb") as handle:
+            for _ in range(max_lines):
+                line = handle.readline()
+                if not line:
+                    break
+                lines.append(line.decode("utf-8", errors="replace"))
+        return lines
+    except OSError:
+        return []
+
+
 def _extract_text_payload(payload: Any) -> Optional[str]:
     if isinstance(payload, str):
         text = payload.strip()
@@ -267,6 +355,91 @@ def _extract_text_payload(payload: Any) -> Optional[str]:
         if content is not None:
             return _extract_text_payload(content)
     return None
+
+
+def _extract_turns_first_user_preview(turns: Any) -> Optional[str]:
+    if not isinstance(turns, list):
+        return None
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        candidates: list[Any] = []
+        for key in ("items", "messages", "input", "output"):
+            value = turn.get(key)
+            if value is not None:
+                candidates.append(value)
+        if not candidates:
+            candidates.append(turn)
+        for candidate in candidates:
+            if isinstance(candidate, list):
+                iterable: Iterable[Any] = candidate
+            else:
+                iterable = (candidate,)
+            for item in iterable:
+                for role, text in _iter_role_texts(item):
+                    if role == "user" and text:
+                        sanitized = _sanitize_user_preview(text)
+                        if sanitized:
+                            return sanitized
+    return None
+
+
+def _extract_rollout_first_user_preview(path: Path) -> Optional[str]:
+    lines = _head_text_lines(path, RESUME_PREVIEW_SCAN_LINES)
+    if not lines:
+        return None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for role, text in _iter_role_texts(payload):
+            if role == "user" and text:
+                sanitized = _sanitize_user_preview(text)
+                if sanitized:
+                    return sanitized
+    return None
+
+
+def _extract_raw_first_user_preview(entry: Any) -> Optional[str]:
+    payload = _coerce_thread_payload(entry)
+    user_preview = _sanitize_user_preview(
+        _coerce_preview_field(payload, _FIRST_USER_PREVIEW_KEYS)
+    )
+    turns = payload.get("turns")
+    if not user_preview and turns:
+        user_preview = _extract_turns_first_user_preview(turns)
+    rollout_path = _extract_rollout_path(payload)
+    if not user_preview and rollout_path:
+        path = Path(rollout_path)
+        if path.exists():
+            user_preview = _extract_rollout_first_user_preview(path)
+    return user_preview
+
+
+def _format_resume_picker_label(
+    thread_id: str,
+    entry: Any,
+    *,
+    limit: int,
+    fallback_preview: Optional[str] = None,
+) -> str:
+    timestamp = _format_resume_timestamp(entry)
+    user_preview = _extract_raw_first_user_preview(entry)
+    sanitized_fallback = _sanitize_user_preview(fallback_preview)
+    tail = user_preview or sanitized_fallback or fallback_preview
+    if isinstance(tail, str):
+        tail = _normalize_preview_text(tail)
+    if timestamp and tail:
+        return _truncate_text(f"{timestamp} · {tail}", limit)
+    if timestamp:
+        return _truncate_text(timestamp, limit)
+    if tail:
+        return _truncate_text(tail, limit)
+    return _truncate_text(thread_id, limit)
 
 
 def _iter_role_texts(

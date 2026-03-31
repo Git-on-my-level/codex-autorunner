@@ -11,6 +11,7 @@ from ...integrations.chat.compaction import (
     COMPACT_SEED_SUFFIX,
 )
 from ...integrations.chat.thread_summaries import (
+    _extract_raw_first_user_preview,
     _extract_thread_preview_parts,
     _iter_role_texts,
     _tail_text_lines,
@@ -64,6 +65,7 @@ DISPATCH_BEGIN_STRIP_RE = re.compile(
     r"(?s)^\s*(?:<prior context>\s*)?##\s*My request for Codex:\s*",
     re.IGNORECASE,
 )
+LEADING_HTML_COMMENT_RE = re.compile(r"(?s)^\s*(?:<!--.*?-->\s*)+")
 
 
 def _is_ignored_first_user_preview(text: Optional[str]) -> bool:
@@ -88,6 +90,7 @@ def _sanitize_user_preview(text: Optional[str]) -> Optional[str]:
     if not isinstance(text, str):
         return text
     stripped = _strip_dispatch_begin(text)
+    stripped = LEADING_HTML_COMMENT_RE.sub("", stripped)
     stripped = strip_injected_context_blocks(stripped)
     if _is_ignored_first_user_preview(stripped):
         return None
@@ -427,32 +430,7 @@ def _extract_thread_resume_parts(entry: Any) -> tuple[Optional[str], Optional[st
 
 
 def _extract_first_user_preview(entry: Any) -> Optional[str]:
-    entry = _coerce_thread_payload(entry)
-    user_preview_keys = (
-        "first_user_message",
-        "firstUserMessage",
-        "first_user",
-        "firstUser",
-        "initial_user_message",
-        "initialUserMessage",
-        "initial_user",
-        "initialUser",
-        "first_message",
-        "firstMessage",
-        "initial_message",
-        "initialMessage",
-    )
-    user_preview = _sanitize_user_preview(
-        _coerce_preview_field(entry, user_preview_keys)
-    )
-    turns = entry.get("turns")
-    if not user_preview and turns:
-        user_preview = _extract_turns_first_user_preview(turns)
-    rollout_path = _extract_rollout_path(entry)
-    if not user_preview and rollout_path:
-        path = Path(rollout_path)
-        if path.exists():
-            user_preview = _extract_rollout_first_user_preview(path)
+    user_preview = _extract_raw_first_user_preview(entry)
     special_preview = _special_preview_from_text(user_preview)
     if special_preview:
         return _preview_from_text(special_preview, RESUME_PREVIEW_USER_LIMIT)
