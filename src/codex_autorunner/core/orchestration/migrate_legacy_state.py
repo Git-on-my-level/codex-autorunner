@@ -359,7 +359,7 @@ def backfill_legacy_automation_state(hub_root: Path, conn: Any) -> dict[str, int
     for entry in timer_rows:
         if not isinstance(entry, dict):
             continue
-        payload = {
+        payload: dict[str, Any] = {
             "metadata": (
                 entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
             ),
@@ -794,7 +794,7 @@ def backfill_legacy_audit_entries(hub_root: Path, conn: Any) -> dict[str, int]:
         audit_id = str(entry.get("entry_id") or "").strip()
         if not audit_id:
             continue
-        payload = {
+        payload: dict[str, Any] = {
             "entry_id": audit_id,
             "thread_id": entry.get("thread_id"),
             "turn_id": entry.get("turn_id"),
