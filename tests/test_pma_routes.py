@@ -293,7 +293,11 @@ def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={
+                "agent": "codex",
+                "resource_kind": "repo",
+                "resource_id": hub_env.repo_id,
+            },
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -1749,6 +1753,93 @@ def test_pma_chat_hermes_reuses_agent_scoped_registry_binding(hub_env) -> None:
     assert resp.json()["status"] == "ok"
     assert observed["resume"] == (hub_env.hub_root, "hermes-session-stored")
     assert observed["start_turn"][1] == "hermes-session-stored"
+
+
+def test_pma_chat_hermes_profile_uses_profile_scoped_registry_binding(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("pma", {})
+    cfg["pma"]["enabled"] = True
+    cfg["pma"]["profile"] = "m4"
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {"m4": {"binary": "hermes-m4"}},
+        "default_profile": "m4",
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+    app = create_hub_app(hub_env.hub_root)
+    registry = app.state.app_server_threads
+    registry.set_thread_id("pma.hermes.profile.m4", "hermes-session-m4")
+    observed: dict[str, Any] = {}
+
+    class _HermesSupervisor:
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def create_session(
+            self, workspace_root: Path, title: Optional[str] = None
+        ):
+            _ = workspace_root, title
+            raise AssertionError("should resume stored Hermes session for profile")
+
+        async def resume_session(self, workspace_root: Path, conversation_id: str):
+            observed["resume"] = (workspace_root, conversation_id)
+            return type("Session", (), {"session_id": conversation_id})()
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str] = None,
+            approval_mode: Optional[str] = None,
+        ) -> str:
+            observed["start_turn"] = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                approval_mode,
+            )
+            return "hermes-turn-profile"
+
+        async def wait_for_turn(self, *_args: Any, **_kwargs: Any):
+            return type(
+                "Result",
+                (),
+                {
+                    "status": "completed",
+                    "assistant_text": "hermes profile reply",
+                    "raw_events": [],
+                    "errors": [],
+                },
+            )()
+
+        async def interrupt_turn(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        async def stream_turn_events(self, *_args: Any, **_kwargs: Any):
+            if False:
+                yield {}
+
+    fake_supervisor = _HermesSupervisor()
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.build_hermes_supervisor_from_config",
+        lambda *args, **kwargs: fake_supervisor,
+    )
+
+    client = TestClient(app)
+    resp = client.post(
+        "/hub/pma/chat",
+        json={"message": "hello hermes profile", "agent": "hermes"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert observed["resume"] == (hub_env.hub_root, "hermes-session-m4")
+    assert observed["start_turn"][1] == "hermes-session-m4"
 
 
 def test_pma_chat_codex_retries_with_fresh_conversation_after_stale_resume(

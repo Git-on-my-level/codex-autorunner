@@ -137,6 +137,7 @@ function els() {
         patchDiscardBtn: document.getElementById("ticket-patch-discard"),
         // Agent control selects (for chat)
         agentSelect: document.getElementById("ticket-chat-agent-select"),
+        profileSelect: document.getElementById("ticket-chat-profile-select"),
         modelSelect: document.getElementById("ticket-chat-model-select"),
         reasoningSelect: document.getElementById("ticket-chat-reasoning-select"),
     };
@@ -792,7 +793,7 @@ export async function deleteTicket() {
  * Initialize the ticket editor - wire up event listeners
  */
 export function initTicketEditor() {
-    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, prevBtn, nextBtn, fmAgent, fmModel, fmReasoning, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, modelSelect, reasoningSelect, } = els();
+    const { modal, content, deleteBtn, closeBtn, newBtn, insertCheckboxBtn, undoBtn, prevBtn, nextBtn, fmAgent, fmModel, fmReasoning, fmDone, fmTitle, chatInput, chatSendBtn, chatCancelBtn, patchApplyBtn, patchDiscardBtn, agentSelect, profileSelect, modelSelect, reasoningSelect, } = els();
     if (!modal)
         return;
     // Prevent double initialization
@@ -802,6 +803,7 @@ export function initTicketEditor() {
     // Initialize agent controls for ticket chat (populates agent/model/reasoning selects)
     initAgentControls({
         agentSelect,
+        profileSelect,
         modelSelect,
         reasoningSelect,
     });

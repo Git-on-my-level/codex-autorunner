@@ -31,10 +31,15 @@ def build_pma_meta_routes(
         agents, default_agent = _available_agents(request)
         defaults = _get_pma_config(request)
         payload: dict[str, Any] = {"agents": agents, "default": default_agent}
-        if defaults.get("model") or defaults.get("reasoning"):
+        if (
+            defaults.get("profile")
+            or defaults.get("model")
+            or defaults.get("reasoning")
+        ):
             payload["defaults"] = {
                 key: value
                 for key, value in {
+                    "profile": defaults.get("profile"),
                     "model": defaults.get("model"),
                     "reasoning": defaults.get("reasoning"),
                 }.items()

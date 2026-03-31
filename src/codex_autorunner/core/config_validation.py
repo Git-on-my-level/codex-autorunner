@@ -533,6 +533,63 @@ def _validate_agents_config(cfg: Dict[str, Any]) -> None:
             agent_cfg.get("serve_command"), (list, str)
         ):
             raise ConfigError(f"agents.{agent_id}.serve_command must be a list or str")
+        default_profile = agent_cfg.get("default_profile")
+        if default_profile is not None and (
+            not isinstance(default_profile, str) or not default_profile.strip()
+        ):
+            raise ConfigError(
+                f"agents.{agent_id}.default_profile must be a non-empty string when provided"
+            )
+        profiles = agent_cfg.get("profiles")
+        if profiles is not None and not isinstance(profiles, dict):
+            raise ConfigError(
+                f"agents.{agent_id}.profiles must be a mapping when provided"
+            )
+        if isinstance(profiles, dict):
+            normalized_profile_ids: set[str] = set()
+            for profile_id, profile_cfg in profiles.items():
+                normalized_profile_id = str(profile_id or "").strip().lower()
+                if not normalized_profile_id:
+                    raise ConfigError(
+                        f"agents.{agent_id}.profiles keys must be non-empty strings"
+                    )
+                normalized_profile_ids.add(normalized_profile_id)
+                if not isinstance(profile_cfg, dict):
+                    raise ConfigError(
+                        f"agents.{agent_id}.profiles.{profile_id} must be a mapping"
+                    )
+                profile_backend = profile_cfg.get("backend")
+                if profile_backend is not None and (
+                    not isinstance(profile_backend, str) or not profile_backend.strip()
+                ):
+                    raise ConfigError(
+                        f"agents.{agent_id}.profiles.{profile_id}.backend must be a non-empty string when provided"
+                    )
+                profile_binary = profile_cfg.get("binary")
+                if profile_binary is not None and (
+                    not isinstance(profile_binary, str) or not profile_binary.strip()
+                ):
+                    raise ConfigError(
+                        f"agents.{agent_id}.profiles.{profile_id}.binary must be a non-empty string when provided"
+                    )
+                if "serve_command" in profile_cfg and not isinstance(
+                    profile_cfg.get("serve_command"), (list, str)
+                ):
+                    raise ConfigError(
+                        f"agents.{agent_id}.profiles.{profile_id}.serve_command must be a list or str"
+                    )
+                display_name = profile_cfg.get("display_name")
+                if display_name is not None and (
+                    not isinstance(display_name, str) or not display_name.strip()
+                ):
+                    raise ConfigError(
+                        f"agents.{agent_id}.profiles.{profile_id}.display_name must be a non-empty string when provided"
+                    )
+            if isinstance(default_profile, str) and default_profile.strip():
+                if default_profile.strip().lower() not in normalized_profile_ids:
+                    raise ConfigError(
+                        f"agents.{agent_id}.default_profile must reference a configured profile"
+                    )
 
 
 def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:

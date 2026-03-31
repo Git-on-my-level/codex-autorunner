@@ -17,7 +17,7 @@ from .....agents.base import (
 )
 from .....agents.codex.harness import CodexHarness
 from .....agents.opencode.harness import OpenCodeHarness
-from .....agents.registry import get_registered_agents
+from .....agents.registry import get_registered_agents, wrap_requested_agent_context
 from .....core.orchestration import (
     FreshConversationRequiredError,
     SurfaceThreadMessageRequest,
@@ -90,10 +90,44 @@ def _get_pma_config(request: Request) -> dict[str, Any]:
     return pma_config_from_raw(raw)
 
 
+def _resolve_agent_profile(
+    request: Request,
+    agent_id: str,
+    requested_profile: Optional[str],
+    *,
+    default_profile: Optional[str] = None,
+) -> Optional[str]:
+    config = getattr(request.app.state, "config", None)
+    profile_getter = getattr(config, "agent_profiles", None)
+    default_profile_getter = getattr(config, "agent_default_profile", None)
+    available_profiles: dict[str, Any] = {}
+    if callable(profile_getter):
+        try:
+            available_profiles = profile_getter(agent_id) or {}
+        except Exception:
+            available_profiles = {}
+    resolved_profile = _normalize_optional_text(requested_profile)
+    if resolved_profile is None:
+        resolved_profile = _normalize_optional_text(default_profile)
+    if resolved_profile is None and callable(default_profile_getter):
+        try:
+            resolved_profile = _normalize_optional_text(
+                default_profile_getter(agent_id)
+            )
+        except Exception:
+            resolved_profile = None
+    if resolved_profile is None:
+        return None
+    if resolved_profile not in available_profiles:
+        raise HTTPException(status_code=400, detail="profile is invalid")
+    return resolved_profile
+
+
 def _build_idempotency_key(
     *,
     lane_id: str,
     agent: Optional[str],
+    profile: Optional[str],
     model: Optional[str],
     reasoning: Optional[str],
     client_turn_id: Optional[str],
@@ -102,6 +136,7 @@ def _build_idempotency_key(
     return service_build_idempotency_key(
         lane_id=lane_id,
         agent=agent,
+        profile=profile,
         model=model,
         reasoning=reasoning,
         client_turn_id=client_turn_id,
@@ -134,6 +169,7 @@ def _format_last_result(
         ),
         "client_turn_id": result.get("client_turn_id") or "",
         "agent": current.get("agent"),
+        "profile": current.get("profile"),
         "thread_id": result.get("thread_id") or current.get("thread_id"),
         "turn_id": result.get("turn_id") or current.get("turn_id"),
         "started_at": current.get("started_at"),
@@ -175,6 +211,7 @@ def _build_transcript_metadata(
     current: dict[str, Any],
     prompt_message: Optional[str],
     lifecycle_event: Optional[dict[str, Any]],
+    profile: Optional[str],
     model: Optional[str],
     reasoning: Optional[str],
     duration_ms: Optional[int],
@@ -184,6 +221,7 @@ def _build_transcript_metadata(
     metadata: dict[str, Any] = {
         "status": result.get("status") or "error",
         "agent": current.get("agent"),
+        "profile": profile,
         "thread_id": result.get("thread_id") or current.get("thread_id"),
         "turn_id": _resolve_transcript_turn_id(result, current),
         "client_turn_id": current.get("client_turn_id") or "",
@@ -232,6 +270,7 @@ async def _persist_transcript(
     current: dict[str, Any],
     prompt_message: Optional[str],
     lifecycle_event: Optional[dict[str, Any]],
+    profile: Optional[str],
     model: Optional[str],
     reasoning: Optional[str],
     duration_ms: Optional[int],
@@ -246,6 +285,7 @@ async def _persist_transcript(
         current=current,
         prompt_message=prompt_message,
         lifecycle_event=lifecycle_event,
+        profile=profile,
         model=model,
         reasoning=reasoning,
         duration_ms=duration_ms,
@@ -286,6 +326,7 @@ async def _finalize_result(
     store: Optional[PmaStateStore] = None,
     prompt_message: Optional[str] = None,
     lifecycle_event: Optional[dict[str, Any]] = None,
+    profile: Optional[str] = None,
     model: Optional[str] = None,
     reasoning: Optional[str] = None,
     timeline_events: Optional[list[RunEvent]] = None,
@@ -319,6 +360,7 @@ async def _finalize_result(
         current=current_snapshot,
         prompt_message=prompt_message,
         lifecycle_event=lifecycle_event,
+        profile=profile or _normalize_optional_text(current_snapshot.get("profile")),
         model=model,
         reasoning=reasoning,
         duration_ms=duration_ms,
@@ -391,6 +433,7 @@ async def _interrupt_active(
     event.set()
     current = await runtime.get_current_snapshot()
     agent_id = (current.get("agent") or "").strip().lower()
+    profile = _normalize_optional_text(current.get("profile"))
     thread_id = current.get("thread_id")
     turn_id = current.get("turn_id")
     client_turn_id = current.get("client_turn_id")
@@ -412,7 +455,7 @@ async def _interrupt_active(
 
     if agent_id and thread_id:
         try:
-            harness = _build_runtime_harness(request, agent_id)
+            harness = _build_runtime_harness(request, agent_id, profile)
         except HTTPException:
             harness = None
         if harness is not None and callable(getattr(harness, "supports", None)):
@@ -426,6 +469,7 @@ async def _interrupt_active(
         "interrupted": bool(event.is_set()),
         "detail": reason,
         "agent": agent_id or None,
+        "profile": profile,
         "thread_id": thread_id,
         "turn_id": turn_id,
     }
@@ -479,7 +523,9 @@ def _raw_events_show_completion(raw_events: tuple[Any, ...]) -> bool:
     return False
 
 
-def _build_runtime_harness(request: Request, agent_id: str) -> Any:
+def _build_runtime_harness(
+    request: Request, agent_id: str, profile: Optional[str] = None
+) -> Any:
     try:
         descriptors = get_registered_agents(request.app.state)
     except TypeError as exc:
@@ -490,7 +536,13 @@ def _build_runtime_harness(request: Request, agent_id: str) -> Any:
     if descriptor is None:
         raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_id}")
     try:
-        return descriptor.make_harness(request.app.state)
+        return descriptor.make_harness(
+            wrap_requested_agent_context(
+                request.app.state,
+                agent_id=agent_id,
+                profile=profile,
+            )
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -1080,6 +1132,7 @@ async def _execute_queue_item(
     client_turn_id = payload.get("client_turn_id")
     message = payload.get("message", "")
     agent = payload.get("agent")
+    profile = _normalize_optional_text(payload.get("profile"))
     model = _normalize_optional_text(payload.get("model"))
     reasoning = _normalize_optional_text(payload.get("reasoning"))
     lifecycle_event = payload.get("lifecycle_event")
@@ -1145,6 +1198,7 @@ async def _execute_queue_item(
                 store=store,
                 prompt_message=message,
                 lifecycle_event=lifecycle_event,
+                profile=profile,
                 model=model,
                 reasoning=reasoning,
                 timeline_events=timeline_events,
@@ -1178,6 +1232,13 @@ async def _execute_queue_item(
         agent_id = validate_agent_id(agent or "", request.app.state)
     except ValueError:
         agent_id = _resolve_default_agent(available_ids, available_default)
+
+    profile = _resolve_agent_profile(
+        request,
+        agent_id,
+        profile,
+        default_profile=_normalize_optional_text(defaults.get("profile")),
+    )
 
     safety_checker = runtime.get_safety_checker(hub_root, request)
     safety_check = safety_checker.check_chat_start(agent_id, message, client_turn_id)
@@ -1223,7 +1284,7 @@ async def _execute_queue_item(
         )
 
         snapshot = await snapshot_builder(supervisor, hub_root=hub_root)
-        prompt_state_key = pma_base_key(agent_id)
+        prompt_state_key = pma_base_key(agent_id, profile)
         prompt = format_pma_prompt(
             prompt_base,
             snapshot,
@@ -1258,6 +1319,7 @@ async def _execute_queue_item(
             client_turn_id=client_turn_id or "",
             status="running",
             agent=agent_id,
+            profile=profile,
             thread_id=thread_id,
             turn_id=turn_id,
         )
@@ -1311,7 +1373,7 @@ async def _execute_queue_item(
         _request: SurfaceThreadMessageRequest,
     ) -> dict[str, Any]:
         try:
-            harness = _build_runtime_harness(request, agent_id)
+            harness = _build_runtime_harness(request, agent_id, profile)
         except HTTPException as exc:
             return {"status": "error", "detail": str(exc.detail)}
         if not callable(getattr(harness, "supports", None)):
@@ -1331,7 +1393,7 @@ async def _execute_queue_item(
             model=model,
             reasoning=reasoning,
             thread_registry=registry,
-            thread_key=pma_base_key(agent_id),
+            thread_key=pma_base_key(agent_id, profile),
             on_meta=_meta,
         )
 
@@ -1343,7 +1405,10 @@ async def _execute_queue_item(
                 prompt_text=message,
                 agent_id=agent_id,
                 pma_enabled=True,
-                metadata={"client_turn_id": client_turn_id or ""},
+                metadata={
+                    "client_turn_id": client_turn_id or "",
+                    "profile": profile or "",
+                },
             ),
             resolve_paused_flow_target=_resolve_no_flow,
             submit_flow_reply=_submit_flow_reply,
@@ -1459,6 +1524,7 @@ def build_chat_runtime_router(
         message = (body.get("message") or "").strip()
         stream = bool(body.get("stream", False))
         agent = _normalize_optional_text(body.get("agent"))
+        profile = _normalize_optional_text(body.get("profile"))
         model = _normalize_optional_text(body.get("model"))
         reasoning = _normalize_optional_text(body.get("reasoning"))
         client_turn_id = (body.get("client_turn_id") or "").strip() or None
@@ -1482,6 +1548,7 @@ def build_chat_runtime_router(
         idempotency_key = _build_idempotency_key(
             lane_id=lane_id,
             agent=agent,
+            profile=profile,
             model=model,
             reasoning=reasoning,
             client_turn_id=client_turn_id,
@@ -1491,6 +1558,7 @@ def build_chat_runtime_router(
         payload = {
             "message": message,
             "agent": agent,
+            "profile": profile,
             "model": model,
             "reasoning": reasoning,
             "client_turn_id": client_turn_id,
@@ -1570,12 +1638,17 @@ def build_chat_runtime_router(
     async def new_pma_session(request: Request) -> dict[str, Any]:
         body = await request.json()
         agent = _normalize_optional_text(body.get("agent"))
+        profile = _normalize_optional_text(body.get("profile"))
         lane_id = (body.get("lane_id") or "pma:default").strip()
 
         hub_root = request.app.state.config.root
         lifecycle_router = PmaLifecycleRouter(hub_root)
 
-        result = await lifecycle_router.new(agent=agent, lane_id=lane_id)
+        result = await lifecycle_router.new(
+            agent=agent,
+            profile=profile,
+            lane_id=lane_id,
+        )
 
         if result.status != "ok":
             raise HTTPException(status_code=500, detail=result.error)
@@ -1594,11 +1667,12 @@ def build_chat_runtime_router(
         body = await request.json() if request.headers.get("content-type") else {}
         raw_agent = (body.get("agent") or "").strip().lower()
         agent = raw_agent or None
+        profile = _normalize_optional_text(body.get("profile"))
 
         hub_root = request.app.state.config.root
         lifecycle_router = PmaLifecycleRouter(hub_root)
 
-        result = await lifecycle_router.reset(agent=agent)
+        result = await lifecycle_router.reset(agent=agent, profile=profile)
 
         if result.status != "ok":
             raise HTTPException(status_code=500, detail=result.error)
@@ -1646,11 +1720,12 @@ def build_chat_runtime_router(
         body = await request.json()
         raw_agent = (body.get("agent") or "").strip().lower()
         agent = raw_agent or None
+        profile = _normalize_optional_text(body.get("profile"))
 
         hub_root = request.app.state.config.root
         lifecycle_router = PmaLifecycleRouter(hub_root)
 
-        result = await lifecycle_router.reset(agent=agent)
+        result = await lifecycle_router.reset(agent=agent, profile=profile)
 
         if result.status != "ok":
             raise HTTPException(status_code=500, detail=result.error)
@@ -1697,13 +1772,15 @@ def build_chat_runtime_router(
         request: Request,
         thread_id: str,
         agent: str = "codex",
+        profile: Optional[str] = None,
         since_event_id: Optional[int] = None,
     ):
         agent_id = (agent or "").strip().lower()
+        profile = _normalize_optional_text(profile)
         resume_after = resolve_resume_after(request, since_event_id)
         if not thread_id:
             raise HTTPException(status_code=400, detail="thread_id is required")
-        harness = _build_runtime_harness(request, agent_id)
+        harness = _build_runtime_harness(request, agent_id, profile)
         events = getattr(request.app.state, "app_server_events", None)
         if isinstance(harness, CodexHarness) and events is not None:
             return StreamingResponse(

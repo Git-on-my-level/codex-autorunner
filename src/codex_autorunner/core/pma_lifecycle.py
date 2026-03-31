@@ -91,7 +91,7 @@ class PmaLifecycleRouter:
         self._safety_checker = PmaSafetyChecker(hub_root, config=safety_config)
 
     def _clear_runtime_state_for_agent(
-        self, agent: Optional[str]
+        self, agent: Optional[str], profile: Optional[str] = None
     ) -> tuple[list[str], list[str]]:
         registry = AppServerThreadRegistry(
             self._hub_root / ".codex-autorunner" / "app_server_threads.json"
@@ -99,9 +99,11 @@ class PmaLifecycleRouter:
 
         cleared_thread_keys: list[str] = []
         cleared_prompt_state_keys: list[str] = []
-        prefixes = pma_prefixes_for_reset(agent)
+        prefixes = pma_prefixes_for_reset(agent, profile)
         codex_prefix = pma_prefixes_for_reset("codex")[0]
-        preserve_nested_agent_families = agent not in ("all", None, "")
+        preserve_nested_agent_families = agent not in ("all", None, "") and (
+            profile is None
+        )
         active_nested_agent_prefixes = self._discover_nested_pma_agent_prefixes(
             tuple(registry.load().keys()),
             tuple(list_pma_prompt_state_session_keys(self._hub_root)),
@@ -170,6 +172,7 @@ class PmaLifecycleRouter:
         self,
         *,
         agent: Optional[str] = None,
+        profile: Optional[str] = None,
         lane_id: str = "pma:default",
         metadata: Optional[dict[str, Any]] = None,
     ) -> LifecycleCommandResult:
@@ -192,7 +195,7 @@ class PmaLifecycleRouter:
             event_id = self._generate_event_id()
             timestamp = now_iso()
             cleared_keys, cleared_prompt_state_keys = (
-                self._clear_runtime_state_for_agent(agent)
+                self._clear_runtime_state_for_agent(agent, profile)
             )
 
             # Create artifact
@@ -201,6 +204,7 @@ class PmaLifecycleRouter:
                 "command": LifecycleCommand.NEW.value,
                 "timestamp": timestamp,
                 "agent": agent,
+                "profile": profile,
                 "lane_id": lane_id,
                 "cleared_threads": cleared_keys,
                 "cleared_prompt_state_keys": cleared_prompt_state_keys,
@@ -220,6 +224,7 @@ class PmaLifecycleRouter:
                     "cleared_threads": cleared_keys,
                     "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "lane_id": lane_id,
+                    "profile": profile,
                 },
             )
 
@@ -230,6 +235,7 @@ class PmaLifecycleRouter:
                     "event_type": "pma_lifecycle_new",
                     "timestamp": timestamp,
                     "agent": agent,
+                    "profile": profile,
                     "lane_id": lane_id,
                     "cleared_threads": cleared_keys,
                     "cleared_prompt_state_keys": cleared_prompt_state_keys,
@@ -243,6 +249,7 @@ class PmaLifecycleRouter:
                 "pma.lifecycle.new",
                 event_id=event_id,
                 agent=agent,
+                profile=profile,
                 lane_id=lane_id,
                 cleared_threads=cleared_keys,
                 cleared_prompt_state_keys=cleared_prompt_state_keys,
@@ -257,6 +264,7 @@ class PmaLifecycleRouter:
                     "cleared_threads": cleared_keys,
                     "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "agent": agent,
+                    "profile": profile,
                     "lane_id": lane_id,
                 },
             )
@@ -268,6 +276,7 @@ class PmaLifecycleRouter:
                 "pma.lifecycle.new.failed",
                 exc=exc,
                 agent=agent,
+                profile=profile,
                 lane_id=lane_id,
             )
             return LifecycleCommandResult(
@@ -281,6 +290,7 @@ class PmaLifecycleRouter:
         self,
         *,
         agent: Optional[str] = None,
+        profile: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> LifecycleCommandResult:
         """
@@ -297,7 +307,7 @@ class PmaLifecycleRouter:
             event_id = self._generate_event_id()
             timestamp = now_iso()
             cleared_keys, cleared_prompt_state_keys = (
-                self._clear_runtime_state_for_agent(agent)
+                self._clear_runtime_state_for_agent(agent, profile)
             )
 
             # Create artifact
@@ -306,6 +316,7 @@ class PmaLifecycleRouter:
                 "command": LifecycleCommand.RESET.value,
                 "timestamp": timestamp,
                 "agent": agent,
+                "profile": profile,
                 "cleared_threads": cleared_keys,
                 "cleared_prompt_state_keys": cleared_prompt_state_keys,
                 "metadata": metadata or {},
@@ -323,6 +334,7 @@ class PmaLifecycleRouter:
                     "command": "reset",
                     "cleared_threads": cleared_keys,
                     "cleared_prompt_state_keys": cleared_prompt_state_keys,
+                    "profile": profile,
                 },
             )
 
@@ -333,6 +345,7 @@ class PmaLifecycleRouter:
                     "event_type": "pma_lifecycle_reset",
                     "timestamp": timestamp,
                     "agent": agent,
+                    "profile": profile,
                     "cleared_threads": cleared_keys,
                     "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "artifact_path": str(artifact_path),
@@ -345,6 +358,7 @@ class PmaLifecycleRouter:
                 "pma.lifecycle.reset",
                 event_id=event_id,
                 agent=agent,
+                profile=profile,
                 cleared_threads=cleared_keys,
                 cleared_prompt_state_keys=cleared_prompt_state_keys,
             )
@@ -358,6 +372,7 @@ class PmaLifecycleRouter:
                     "cleared_threads": cleared_keys,
                     "cleared_prompt_state_keys": cleared_prompt_state_keys,
                     "agent": agent,
+                    "profile": profile,
                 },
             )
 

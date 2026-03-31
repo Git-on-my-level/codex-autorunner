@@ -50,6 +50,8 @@ _REHYDRATION_TRANSCRIPT_LIMIT = 3
 _REHYDRATION_TEXT_LIMIT = 4_000
 logger = logging.getLogger(__name__)
 
+HarnessFactory = Callable[..., RuntimeThreadHarness]
+
 
 class BusyInterruptFailedError(RuntimeError):
     """Busy-policy interrupt failed while the original execution remained active."""
@@ -436,8 +438,33 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
     definition_catalog: AgentDefinitionCatalog
     thread_store: ThreadExecutionStore
-    harness_factory: Callable[[str], RuntimeThreadHarness]
+    harness_factory: HarnessFactory
     binding_store: Optional[OrchestrationBindingStore] = None
+
+    @staticmethod
+    def _resolve_thread_agent_profile(thread: ThreadTarget) -> Optional[str]:
+        return (
+            str(thread.agent_profile).strip().lower()
+            if isinstance(thread.agent_profile, str) and thread.agent_profile.strip()
+            else None
+        )
+
+    def _harness_for_agent(
+        self, agent_id: str, profile: Optional[str] = None
+    ) -> RuntimeThreadHarness:
+        factory = self.harness_factory
+        try:
+            return factory(agent_id, profile)
+        except TypeError as exc:
+            if "positional argument" not in str(exc):
+                raise
+            return factory(agent_id)
+
+    def _harness_for_thread(self, thread: ThreadTarget) -> RuntimeThreadHarness:
+        return self._harness_for_agent(
+            thread.agent_id,
+            self._resolve_thread_agent_profile(thread),
+        )
 
     def list_agent_definitions(self) -> list[AgentDefinition]:
         return self.definition_catalog.list_definitions()
@@ -658,7 +685,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
     async def resolve_backend_runtime_instance_id(
         self, agent_id: str, workspace_root: Path
     ) -> Optional[str]:
-        harness = self.harness_factory(agent_id)
+        harness = self._harness_for_agent(agent_id)
         await harness.ensure_ready(workspace_root)
         return await _resolve_harness_runtime_instance_id(harness, workspace_root)
 
@@ -710,6 +737,11 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             message_text=raw_message_text,
             kind=str(request_data.get("kind") or "message"),  # type: ignore[arg-type]
             busy_policy="queue",
+            agent_profile=(
+                str(request_data["agent_profile"])
+                if request_data.get("agent_profile") is not None
+                else None
+            ),
             model=(
                 str(request_data["model"])
                 if request_data.get("model") is not None
@@ -1094,7 +1126,10 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
         if execution.status != "running":
             return execution
-        harness = harness or self.harness_factory(definition.agent_id)
+        harness = harness or self._harness_for_agent(
+            definition.agent_id,
+            request.agent_profile,
+        )
         return await self._start_execution(
             thread,
             request,
@@ -1135,7 +1170,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         thread, execution, request, _client_request_id, sandbox_policy = claimed
         if not thread.workspace_root:
             raise RuntimeError("Thread target is missing workspace_root")
-        harness = harness or self.harness_factory(thread.agent_id)
+        harness = harness or self._harness_for_thread(thread)
         return await self._start_execution(
             thread,
             request,
@@ -1165,7 +1200,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                 thread_target_id, execution.execution_id
             )
 
-        harness = self.harness_factory(thread.agent_id)
+        harness = self._harness_for_thread(thread)
         if not harness.supports("interrupt"):
             raise RuntimeError(f"Agent '{thread.agent_id}' does not support interrupt")
         log_event(
@@ -1309,7 +1344,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
 
         runtime_instance_id: Optional[str] = None
         if thread.workspace_root:
-            harness = self.harness_factory(thread.agent_id)
+            harness = self._harness_for_thread(thread)
             runtime_instance_id = await _resolve_harness_runtime_instance_id(
                 harness, Path(thread.workspace_root)
             )
@@ -1771,7 +1806,7 @@ def get_surface_orchestration_ingress(owner: Any) -> SurfaceOrchestrationIngress
 def build_harness_backed_orchestration_service(
     *,
     descriptors: Mapping[str, RuntimeAgentDescriptor],
-    harness_factory: Callable[[str], RuntimeThreadHarness],
+    harness_factory: HarnessFactory,
     thread_store: Optional[ThreadExecutionStore] = None,
     pma_thread_store: Optional[PmaThreadStore] = None,
     definition_catalog: Optional[AgentDefinitionCatalog] = None,

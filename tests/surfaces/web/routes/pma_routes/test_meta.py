@@ -103,3 +103,59 @@ def test_pma_models_endpoint_returns_unknown_agent_for_unregistered() -> None:
     assert response.status_code == 404
     data = response.json()
     assert "Unknown agent" in data["detail"]
+
+
+def test_pma_agents_includes_profile_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 0.1.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+
+    app = FastAPI()
+    router = app.router
+    app.state.app_server_supervisor = MagicMock()
+    app.state.opencode_supervisor = MagicMock()
+    app.state.app_server_events = MagicMock()
+    app.state.config = SimpleNamespace(
+        root="/tmp/test-hub",
+        raw={"pma": {"enabled": True, "profile": "m4"}},
+        agent_binary=lambda _agent_id, profile=None: (
+            "hermes" if profile else "zeroclaw"
+        ),
+        agent_profiles=lambda agent_id: (
+            {"m4": SimpleNamespace(display_name="M4 PMA")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_default_profile=lambda agent_id: "m4" if agent_id == "hermes" else None,
+    )
+    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+
+    def get_runtime_state():
+        return SimpleNamespace(
+            get_safety_checker=lambda _hub_root, _request: MagicMock(
+                _audit_log=MagicMock(list_recent=lambda limit: []),
+                get_stats=lambda: {},
+            )
+        )
+
+    build_pma_meta_routes(router, get_runtime_state)
+
+    with TestClient(app) as client:
+        response = client.get("/agents")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["defaults"] == {"profile": "m4"}
+    agents = {agent["id"]: agent for agent in payload["agents"]}
+    assert agents["hermes"]["default_profile"] == "m4"

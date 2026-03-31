@@ -74,7 +74,21 @@ def _normalize_pma_agent_family(agent: Optional[str]) -> Optional[str]:
     return normalized
 
 
-def pma_base_key(agent: str) -> str:
+def _normalize_profile_segment(profile: Optional[str]) -> Optional[str]:
+    if not isinstance(profile, str):
+        return None
+    normalized = profile.strip().lower()
+    return normalized or None
+
+
+def _append_profile_suffix(base_key: str, profile: Optional[str]) -> str:
+    normalized_profile = _normalize_profile_segment(profile)
+    if normalized_profile is None:
+        return base_key
+    return f"{base_key}.profile.{normalized_profile}"
+
+
+def pma_base_key(agent: str, profile: Optional[str] = None) -> str:
     """
     Return the base PMA registry key for the given agent.
 
@@ -85,12 +99,11 @@ def pma_base_key(agent: str) -> str:
         PMA_OPENCODE_KEY if agent is "opencode", otherwise PMA_KEY.
     """
     normalized = _normalize_pma_agent_family(agent)
-    if normalized is None:
-        return PMA_KEY
-    return f"{PMA_KEY}.{normalized}"
+    base_key = PMA_KEY if normalized is None else f"{PMA_KEY}.{normalized}"
+    return _append_profile_suffix(base_key, profile)
 
 
-def pma_prefix_for_agent(agent: Optional[str]) -> str:
+def pma_prefix_for_agent(agent: Optional[str], profile: Optional[str] = None) -> str:
     """
     Return the PMA registry key prefix for the given agent.
 
@@ -103,12 +116,13 @@ def pma_prefix_for_agent(agent: Optional[str]) -> str:
         PMA_OPENCODE_PREFIX if agent is "opencode", otherwise PMA_PREFIX.
     """
     normalized = _normalize_pma_agent_family(agent)
-    if normalized is None:
-        return PMA_PREFIX
-    return f"{PMA_KEY}.{normalized}."
+    base_key = PMA_KEY if normalized is None else f"{PMA_KEY}.{normalized}"
+    return f"{_append_profile_suffix(base_key, profile)}."
 
 
-def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
+def pma_prefixes_for_reset(
+    agent: Optional[str], profile: Optional[str] = None
+) -> list[str]:
     """
     Return the list of PMA registry key prefixes to reset for a given agent.
 
@@ -123,6 +137,10 @@ def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
         List of prefixes to reset.
     """
     normalized = _normalize_pma_agent_family(agent)
+    normalized_profile = _normalize_profile_segment(profile)
+    if normalized_profile is not None:
+        base_key = PMA_KEY if normalized is None else f"{PMA_KEY}.{normalized}"
+        return [f"{_append_profile_suffix(base_key, normalized_profile)}."]
     if normalized is None:
         if agent in {None, "", "all", "codex"}:
             return [PMA_PREFIX]
@@ -131,7 +149,11 @@ def pma_prefixes_for_reset(agent: Optional[str]) -> list[str]:
 
 
 def pma_topic_scoped_key(
-    agent: str, chat_id: int, thread_id: Optional[int], topic_key_fn=None
+    agent: str,
+    chat_id: int,
+    thread_id: Optional[int],
+    topic_key_fn=None,
+    profile: Optional[str] = None,
 ) -> str:
     """
     Build a topic-scoped PMA registry key.
@@ -148,7 +170,7 @@ def pma_topic_scoped_key(
     Returns:
         Topic-scoped key like "pma.{chat_id}:{thread}" or "pma.opencode.{chat_id}:{thread}".
     """
-    base = pma_base_key(agent)
+    base = pma_base_key(agent, profile)
     if topic_key_fn is None:
         from ..telegram.state import topic_key as _default_topic_key
 

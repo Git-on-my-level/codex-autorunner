@@ -226,6 +226,44 @@ def test_create_managed_thread_accepts_explicit_context_profile(hub_env) -> None
     assert resp.json()["thread"]["context_profile"] == "car_core"
 
 
+def test_create_managed_thread_persists_agent_profile(hub_env) -> None:
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg.setdefault("agents", {})
+    cfg["agents"]["hermes"] = {
+        "binary": "hermes",
+        "profiles": {
+            "m4": {
+                "display_name": "M4 PMA",
+                "binary": "hermes-m4",
+            }
+        },
+        "default_profile": "m4",
+    }
+    write_test_config(hub_env.hub_root / CONFIG_FILENAME, cfg)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/threads",
+            json={
+                "agent": "hermes",
+                "profile": "m4",
+                **_repo_owner(hub_env),
+                "name": "Hermes M4 thread",
+            },
+        )
+
+    assert resp.status_code == 200
+    thread = resp.json()["thread"]
+    assert thread["agent"] == "hermes"
+    assert thread["agent_profile"] == "m4"
+
+    store = PmaThreadStore(hub_env.hub_root)
+    stored = store.get_thread(thread["managed_thread_id"])
+    assert stored is not None
+    assert stored["metadata"]["agent_profile"] == "m4"
+
+
 def test_create_managed_thread_accepts_explicit_approval_mode(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 

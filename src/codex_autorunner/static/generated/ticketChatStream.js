@@ -28,6 +28,8 @@ export async function performTicketChatRequest(ticketIndex, message, signal, opt
     };
     if (options.agent)
         payload.agent = options.agent;
+    if (options.profile)
+        payload.profile = options.profile;
     if (options.model)
         payload.model = options.model;
     if (options.reasoning)

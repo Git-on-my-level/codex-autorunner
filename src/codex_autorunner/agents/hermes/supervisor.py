@@ -580,12 +580,18 @@ def build_hermes_supervisor_from_config(
     config: RepoConfig | HubConfig,
     *,
     agent_id: str = "hermes",
+    profile: Optional[str] = None,
     approval_handler: Optional[HermesApprovalHandler] = None,
     default_approval_decision: str = "cancel",
     logger: Optional[logging.Logger] = None,
 ) -> Optional[HermesSupervisor]:
     try:
-        binary = config.agent_binary(agent_id).strip()
+        try:
+            binary = config.agent_binary(agent_id, profile=profile).strip()
+        except TypeError as exc:
+            if "profile" not in str(exc):
+                raise
+            binary = config.agent_binary(agent_id).strip()
     except Exception:
         return None
     if not binary:
@@ -602,11 +608,17 @@ def hermes_binary_available(
     config: Optional[RepoConfig | HubConfig],
     *,
     agent_id: str = "hermes",
+    profile: Optional[str] = None,
 ) -> bool:
     if config is None:
         return False
     try:
-        binary = config.agent_binary(agent_id).strip()
+        try:
+            binary = config.agent_binary(agent_id, profile=profile).strip()
+        except TypeError as exc:
+            if "profile" not in str(exc):
+                raise
+            binary = config.agent_binary(agent_id).strip()
     except Exception:
         return False
     if not binary:
@@ -618,9 +630,15 @@ def hermes_runtime_preflight(
     config: Optional[RepoConfig | HubConfig],
     *,
     agent_id: str = "hermes",
+    profile: Optional[str] = None,
 ) -> RuntimePreflightResult:
     normalized_agent_id = str(agent_id or "").strip().lower() or HERMES_RUNTIME_ID
-    binary_key = f"agents.{normalized_agent_id}.binary"
+    normalized_profile = str(profile or "").strip().lower()
+    binary_key = (
+        f"agents.{normalized_agent_id}.profiles.{normalized_profile}.binary"
+        if normalized_profile
+        else f"agents.{normalized_agent_id}.binary"
+    )
     if config is None:
         return RuntimePreflightResult(
             runtime_id=normalized_agent_id,
@@ -631,7 +649,15 @@ def hermes_runtime_preflight(
             fix=f"Set {binary_key} in the repo or hub config.",
         )
     try:
-        binary = config.agent_binary(normalized_agent_id).strip()
+        try:
+            binary = config.agent_binary(
+                normalized_agent_id,
+                profile=normalized_profile or None,
+            ).strip()
+        except TypeError as exc:
+            if "profile" not in str(exc):
+                raise
+            binary = config.agent_binary(normalized_agent_id).strip()
     except Exception:
         return RuntimePreflightResult(
             runtime_id=normalized_agent_id,

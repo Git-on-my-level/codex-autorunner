@@ -36,6 +36,9 @@ def _available_agents(request: Request) -> tuple[list[dict[str, Any]], str]:
             "name": descriptor.name,
             "capabilities": sorted(map_agent_capabilities(descriptor.capabilities)),
         }
+        agent_profiles = _serialize_agent_profiles(request, agent_id)
+        if agent_profiles["profiles"]:
+            agent_data.update(agent_profiles)
         if agent_id == "codex":
             agent_data["protocol_version"] = "2.0"
         if agent_id == "opencode":
@@ -90,6 +93,44 @@ def _serialize_model_catalog(catalog: ModelCatalog) -> dict[str, Any]:
             }
             for model in catalog.models
         ],
+    }
+
+
+def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]:
+    config = getattr(request.app.state, "config", None)
+    profile_getter = getattr(config, "agent_profiles", None)
+    default_getter = getattr(config, "agent_default_profile", None)
+    profiles: list[dict[str, Any]] = []
+    if callable(profile_getter):
+        try:
+            configured_profiles = profile_getter(agent_id)
+        except Exception:
+            configured_profiles = {}
+        if isinstance(configured_profiles, dict):
+            for profile_id in sorted(configured_profiles):
+                profile_cfg = configured_profiles.get(profile_id)
+                display_name = None
+                if profile_cfg is not None:
+                    display_name = getattr(profile_cfg, "display_name", None)
+                profiles.append(
+                    {
+                        "id": profile_id,
+                        "display_name": (
+                            str(display_name).strip()
+                            if isinstance(display_name, str) and display_name.strip()
+                            else profile_id
+                        ),
+                    }
+                )
+    default_profile = None
+    if callable(default_getter):
+        try:
+            default_profile = default_getter(agent_id)
+        except Exception:
+            default_profile = None
+    return {
+        "default_profile": default_profile,
+        "profiles": profiles,
     }
 
 

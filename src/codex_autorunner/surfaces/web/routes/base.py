@@ -26,6 +26,7 @@ from ..static_assets import index_response_headers, render_index_html
 from ..static_refresh import refresh_static_assets
 from .shared import (
     build_codex_terminal_cmd,
+    build_hermes_terminal_cmd,
     build_opencode_terminal_cmd,
 )
 
@@ -148,6 +149,13 @@ def build_base_routes(static_dir: Path) -> APIRouter:
         repo_path = str(engine.repo_root)
         state_path = engine.state_path
         agent = (ws.query_params.get("agent") or "codex").strip().lower()
+        profile = (ws.query_params.get("profile") or "").strip().lower() or None
+        default_profile = getattr(engine.config, "agent_default_profile", None)
+        if profile is None and callable(default_profile):
+            try:
+                profile = default_profile(agent)
+            except Exception:
+                profile = None
         model = (ws.query_params.get("model") or "").strip() or None
         reasoning = (ws.query_params.get("reasoning") or "").strip() or None
         session_id = None
@@ -210,7 +218,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
 
             if not active_session:
                 mapped_session_id = repo_to_session.get(
-                    terminal_service.session_key(repo_path, agent)
+                    terminal_service.session_key(repo_path, agent, profile)
                 )
                 if mapped_session_id:
                     mapped_session = terminal_sessions.get(mapped_session_id)
@@ -223,7 +231,8 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         terminal_sessions.pop(mapped_session_id, None)
                         session_registry.pop(mapped_session_id, None)
                         repo_to_session.pop(
-                            terminal_service.session_key(repo_path, agent), None
+                            terminal_service.session_key(repo_path, agent, profile),
+                            None,
                         )
                         _mark_dirty()
                 if attach_only:
@@ -264,6 +273,10 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         engine.config.agent_binary("opencode"),
                         model,
                     )
+                elif agent == "hermes":
+                    cmd = build_hermes_terminal_cmd(
+                        engine.config.agent_binary("hermes", profile=profile)
+                    )
                 else:
                     cmd = build_codex_terminal_cmd(
                         engine,
@@ -277,17 +290,18 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     active_session = ActiveSession(
                         session_id, pty, asyncio.get_running_loop()
                     )
+                    session_agent = agent if not profile else f"{agent}@{profile}"
                     terminal_sessions[session_id] = active_session
                     session_registry[session_id] = SessionRecord(
                         repo_path=repo_path,
                         created_at=now_iso(),
                         last_seen_at=now_iso(),
                         status="active",
-                        agent=agent,
+                        agent=session_agent,
                     )
-                    repo_to_session[terminal_service.session_key(repo_path, agent)] = (
-                        session_id
-                    )
+                    repo_to_session[
+                        terminal_service.session_key(repo_path, agent, profile)
+                    ] = session_id
                     _mark_dirty()
                 except FileNotFoundError:
                     binary = cmd[0] if cmd else "codex"
@@ -303,24 +317,25 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                     return
             if active_session:
                 if session_id and session_id not in session_registry:
+                    session_agent = agent if not profile else f"{agent}@{profile}"
                     session_registry[session_id] = SessionRecord(
                         repo_path=repo_path,
                         created_at=now_iso(),
                         last_seen_at=now_iso(),
                         status="active",
-                        agent=agent,
+                        agent=session_agent,
                     )
                     _mark_dirty()
                 if (
                     session_id
                     and repo_to_session.get(
-                        terminal_service.session_key(repo_path, agent)
+                        terminal_service.session_key(repo_path, agent, profile)
                     )
                     != session_id
                 ):
-                    repo_to_session[terminal_service.session_key(repo_path, agent)] = (
-                        session_id
-                    )
+                    repo_to_session[
+                        terminal_service.session_key(repo_path, agent, profile)
+                    ] = session_id
                     _mark_dirty()
                 _maybe_persist_sessions(force=True)
 

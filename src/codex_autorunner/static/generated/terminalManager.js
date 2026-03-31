@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, buildWsUrl, getAuthToken, isMobileViewport } from "./utils.js";
-import { getSelectedAgent, getSelectedModel, getSelectedReasoning, initAgentControls, } from "./agentControls.js";
+import { getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, initAgentControls, } from "./agentControls.js";
 function base64UrlEncode(value) {
     if (!value)
         return null;
@@ -181,6 +181,7 @@ export class TerminalManager {
         this.resumeBtn = null;
         this.jumpBottomBtn = null;
         this.agentSelect = null;
+        this.profileSelect = null;
         this.modelSelect = null;
         this.reasoningSelect = null;
         // Voice state
@@ -400,6 +401,7 @@ export class TerminalManager {
         this.resumeBtn = document.getElementById("terminal-resume");
         this.jumpBottomBtn = document.getElementById("terminal-jump-bottom");
         this.agentSelect = document.getElementById("terminal-agent-select");
+        this.profileSelect = document.getElementById("terminal-profile-select");
         this.modelSelect = document.getElementById("terminal-model-select");
         this.reasoningSelect = document.getElementById("terminal-reasoning-select");
         if (!this.statusEl || !this.connectBtn || !this.disconnectBtn || !this.resumeBtn) {
@@ -437,6 +439,7 @@ export class TerminalManager {
         this._initTextInputPanel();
         initAgentControls({
             agentSelect: this.agentSelect,
+            profileSelect: this.profileSelect,
             modelSelect: this.modelSelect,
             reasoningSelect: this.reasoningSelect,
         });
@@ -2306,10 +2309,13 @@ export class TerminalManager {
             queryParams.append("terminal_debug", "1");
         if (!isAttach) {
             const selectedAgent = getSelectedAgent();
+            const selectedProfile = getSelectedProfile(selectedAgent);
             const selectedModel = getSelectedModel(selectedAgent);
             const selectedReasoning = getSelectedReasoning(selectedAgent);
             if (selectedAgent)
                 queryParams.append("agent", selectedAgent);
+            if (selectedProfile)
+                queryParams.append("profile", selectedProfile);
             if (selectedModel)
                 queryParams.append("model", selectedModel);
             if (selectedReasoning)

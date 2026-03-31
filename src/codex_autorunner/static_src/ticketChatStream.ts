@@ -17,6 +17,7 @@ interface ChatRequestPayload {
   message: string;
   stream: boolean;
   agent?: string;
+  profile?: string;
   model?: string;
   reasoning?: string;
   client_turn_id?: string;
@@ -24,6 +25,7 @@ interface ChatRequestPayload {
 
 interface ChatRequestOptions {
   agent?: string;
+  profile?: string;
   model?: string;
   reasoning?: string;
   clientTurnId?: string;
@@ -57,6 +59,7 @@ export async function performTicketChatRequest(
     stream: true,
   };
   if (options.agent) payload.agent = options.agent;
+  if (options.profile) payload.profile = options.profile;
   if (options.model) payload.model = options.model;
   if (options.reasoning) payload.reasoning = options.reasoning;
   if (options.clientTurnId) payload.client_turn_id = options.clientTurnId;

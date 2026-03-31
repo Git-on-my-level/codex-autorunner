@@ -1,6 +1,7 @@
 import { api, flash, buildWsUrl, getAuthToken, isMobileViewport } from "./utils.js";
 import {
   getSelectedAgent,
+  getSelectedProfile,
   getSelectedModel,
   getSelectedReasoning,
   initAgentControls,
@@ -307,6 +308,7 @@ export class TerminalManager {
   resumeBtn: HTMLButtonElement | null = null;
   jumpBottomBtn: HTMLButtonElement | null = null;
   agentSelect: HTMLSelectElement | null = null;
+  profileSelect: HTMLSelectElement | null = null;
   modelSelect: HTMLSelectElement | null = null;
   reasoningSelect: HTMLSelectElement | null = null;
 
@@ -545,6 +547,7 @@ export class TerminalManager {
     this.resumeBtn = document.getElementById("terminal-resume") as HTMLButtonElement | null;
     this.jumpBottomBtn = document.getElementById("terminal-jump-bottom") as HTMLButtonElement | null;
     this.agentSelect = document.getElementById("terminal-agent-select") as HTMLSelectElement | null;
+    this.profileSelect = document.getElementById("terminal-profile-select") as HTMLSelectElement | null;
     this.modelSelect = document.getElementById("terminal-model-select") as HTMLSelectElement | null;
     this.reasoningSelect = document.getElementById("terminal-reasoning-select") as HTMLSelectElement | null;
 
@@ -585,6 +588,7 @@ export class TerminalManager {
     this._initTextInputPanel();
     initAgentControls({
       agentSelect: this.agentSelect,
+      profileSelect: this.profileSelect,
       modelSelect: this.modelSelect,
       reasoningSelect: this.reasoningSelect,
     });
@@ -2469,9 +2473,11 @@ export class TerminalManager {
     if (this.terminalDebug) queryParams.append("terminal_debug", "1");
     if (!isAttach) {
       const selectedAgent = getSelectedAgent();
+      const selectedProfile = getSelectedProfile(selectedAgent);
       const selectedModel = getSelectedModel(selectedAgent);
       const selectedReasoning = getSelectedReasoning(selectedAgent);
       if (selectedAgent) queryParams.append("agent", selectedAgent);
+      if (selectedProfile) queryParams.append("profile", selectedProfile);
       if (selectedModel) queryParams.append("model", selectedModel);
       if (selectedReasoning) queryParams.append("reasoning", selectedReasoning);
     }

@@ -16,6 +16,7 @@ import {
 } from "./fileboxCatalog.js";
 import {
   getSelectedAgent,
+  getSelectedProfile,
   getSelectedModel,
   getSelectedReasoning,
   initAgentControls,
@@ -512,6 +513,7 @@ function getElements() {
     messagesEl: document.getElementById("pma-chat-messages"),
     historyHeader: document.getElementById("pma-chat-history-header"),
     agentSelect: document.getElementById("pma-chat-agent-select") as HTMLSelectElement | null,
+    profileSelect: document.getElementById("pma-chat-profile-select") as HTMLSelectElement | null,
     modelSelect: document.getElementById("pma-chat-model-select") as HTMLSelectElement | null,
     reasoningSelect: document.getElementById("pma-chat-reasoning-select") as HTMLSelectElement | null,
     chatUploadInput: document.getElementById("pma-chat-upload-input") as HTMLInputElement | null,
@@ -683,6 +685,7 @@ async function initPMA(): Promise<void> {
 
   initAgentControls({
     agentSelect: elements.agentSelect,
+    profileSelect: elements.profileSelect,
     modelSelect: elements.modelSelect,
     reasoningSelect: elements.reasoningSelect,
   });
@@ -848,6 +851,7 @@ async function sendMessage(): Promise<void> {
   elements.input.style.height = "auto";
 
   const agent = elements.agentSelect?.value || getSelectedAgent();
+  const profile = elements.profileSelect?.value || getSelectedProfile(agent);
   const model = elements.modelSelect?.value || getSelectedModel(agent);
   const reasoning = elements.reasoningSelect?.value || getSelectedReasoning(agent);
   const clientTurnId = newClientTurnId();
@@ -891,6 +895,7 @@ async function sendMessage(): Promise<void> {
       client_turn_id: clientTurnId,
     };
     if (agent) payload.agent = agent;
+    if (profile) payload.profile = profile;
     if (model) payload.model = model;
     if (reasoning) payload.reasoning = reasoning;
 
@@ -1289,10 +1294,15 @@ function resetThread(): void {
 async function startNewThreadOnServer(): Promise<void> {
   const elements = getElements();
   const rawAgent = (elements.agentSelect?.value || getSelectedAgent() || "").trim().toLowerCase();
-  const selectedAgent = rawAgent === "codex" || rawAgent === "opencode" ? rawAgent : undefined;
+  const selectedAgent = rawAgent || undefined;
+  const selectedProfile = elements.profileSelect?.value || getSelectedProfile(rawAgent);
   await api("/hub/pma/new", {
     method: "POST",
-    body: { agent: selectedAgent, lane_id: DEFAULT_PMA_LANE_ID },
+    body: {
+      agent: selectedAgent,
+      profile: selectedProfile || undefined,
+      lane_id: DEFAULT_PMA_LANE_ID,
+    },
   });
 }
 

@@ -1330,6 +1330,9 @@ def build_managed_thread_runtime_routes(
         metadata = thread.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
+        agent_profile = normalize_optional_text(
+            thread.get("agent_profile") or metadata.get("agent_profile")
+        )
         context_profile = normalize_car_context_profile(
             thread.get("context_profile") or metadata.get("context_profile"),
             default=default_managed_thread_context_profile(
@@ -1370,6 +1373,7 @@ def build_managed_thread_runtime_routes(
                     target_kind="thread",
                     message_text=message,
                     busy_policy=busy_policy,
+                    agent_profile=agent_profile,
                     model=model,
                     reasoning=reasoning,
                     approval_mode=approval_policy,
@@ -1544,7 +1548,6 @@ def build_managed_thread_runtime_routes(
             }
             if notification is not None:
                 queued_payload["notification"] = notification
-            ensure_managed_thread_queue_worker(request.app, managed_thread_id)
             return queued_payload
 
         accepted_payload: dict[str, Any] = {

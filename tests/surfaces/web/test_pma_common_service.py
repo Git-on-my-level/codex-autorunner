@@ -30,6 +30,7 @@ def test_pma_config_from_raw_uses_defaults_for_missing_values() -> None:
     assert config == {
         "enabled": True,
         "default_agent": None,
+        "profile": None,
         "model": None,
         "reasoning": None,
         "managed_thread_terminal_followup_default": True,
@@ -43,6 +44,7 @@ def test_pma_config_from_raw_normalizes_and_coerces_values() -> None:
         "pma": {
             "enabled": 0,
             "default_agent": " codex ",
+            "profile": " m4 ",
             "model": " gpt-test ",
             "reasoning": " high ",
             "active_context_max_lines": "350",
@@ -52,6 +54,7 @@ def test_pma_config_from_raw_normalizes_and_coerces_values() -> None:
     config = pma_config_from_raw(raw)
     assert config["enabled"] is False
     assert config["default_agent"] == "codex"
+    assert config["profile"] == "m4"
     assert config["model"] == "gpt-test"
     assert config["reasoning"] == "high"
     assert config["managed_thread_terminal_followup_default"] is True

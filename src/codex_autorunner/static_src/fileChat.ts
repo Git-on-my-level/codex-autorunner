@@ -8,6 +8,7 @@ import {
 
 export interface FileChatOptions {
   agent?: string;
+  profile?: string;
   model?: string;
   reasoning?: string;
   clientTurnId?: string;
@@ -75,6 +76,7 @@ export async function sendFileChat(
   };
   if (options.clientTurnId) payload.client_turn_id = options.clientTurnId;
   if (options.agent) payload.agent = options.agent;
+  if (options.profile) payload.profile = options.profile;
   if (options.model) payload.model = options.model;
   if (options.reasoning) payload.reasoning = options.reasoning;
 

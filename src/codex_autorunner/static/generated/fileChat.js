@@ -18,6 +18,8 @@ export async function sendFileChat(target, message, controller, handlers = {}, o
         payload.client_turn_id = options.clientTurnId;
     if (options.agent)
         payload.agent = options.agent;
+    if (options.profile)
+        payload.profile = options.profile;
     if (options.model)
         payload.model = options.model;
     if (options.reasoning)

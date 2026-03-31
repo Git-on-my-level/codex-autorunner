@@ -234,7 +234,9 @@ def test_send_message_persists_turns_and_reuses_backend_thread(hub_env) -> None:
     store = PmaThreadStore(hub_env.hub_root)
     thread = store.get_thread(managed_thread_id)
     assert thread is not None
-    assert thread["backend_thread_id"] == "backend-thread-1"
+    runtime_binding = store.get_thread_runtime_binding(managed_thread_id)
+    assert runtime_binding is not None
+    assert runtime_binding.backend_thread_id == "backend-thread-1"
     assert thread["last_turn_id"] == second_payload["managed_turn_id"]
     assert thread["last_message_preview"] == "second prompt"
 
@@ -713,6 +715,7 @@ def test_send_message_after_restart_does_not_duplicate_compact_seed(
 
 def test_send_message_queues_when_running_turn_exists(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -721,11 +724,7 @@ def test_send_message_queues_when_running_turn_exists(hub_env) -> None:
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
-
-    store = PmaThreadStore(hub_env.hub_root)
-    running_turn = store.create_turn(managed_thread_id, prompt="still running")
-
-    with TestClient(app) as client:
+        running_turn = store.create_turn(managed_thread_id, prompt="still running")
         resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
             json={"message": "blocked"},
@@ -749,6 +748,7 @@ def test_send_message_queues_when_running_turn_exists(hub_env) -> None:
 
 def test_send_message_rejects_when_running_turn_exists_if_busy_reject(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
 
     with TestClient(app) as client:
         create_resp = client.post(
@@ -757,11 +757,7 @@ def test_send_message_rejects_when_running_turn_exists_if_busy_reject(hub_env) -
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
-
-    store = PmaThreadStore(hub_env.hub_root)
-    running_turn = store.create_turn(managed_thread_id, prompt="still running")
-
-    with TestClient(app) as client:
+        running_turn = store.create_turn(managed_thread_id, prompt="still running")
         resp = client.post(
             f"/hub/pma/threads/{managed_thread_id}/messages",
             json={"message": "blocked", "busy_policy": "reject"},
@@ -1409,7 +1405,9 @@ def test_send_message_defaults_agent_from_agent_workspace_runtime(hub_env) -> No
     assert thread["agent"] == "zeroclaw"
     assert thread["resource_kind"] == "agent_workspace"
     assert thread["resource_id"] == workspace.id
-    assert thread["backend_thread_id"] == "zeroclaw-session-1"
+    runtime_binding = store.get_thread_runtime_binding(managed_thread_id)
+    assert runtime_binding is not None
+    assert runtime_binding.backend_thread_id == "zeroclaw-session-1"
     assert thread["last_turn_id"] == second_payload["managed_turn_id"]
 
     transcript = PmaTranscriptStore(hub_env.hub_root).read_transcript(

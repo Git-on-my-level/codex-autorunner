@@ -21,6 +21,7 @@ def pma_config_from_raw(raw: Any) -> dict[str, Any]:
     return {
         "enabled": bool(pma_config.get("enabled", True)),
         "default_agent": normalize_optional_text(pma_config.get("default_agent")),
+        "profile": normalize_optional_text(pma_config.get("profile")),
         "model": normalize_optional_text(pma_config.get("model")),
         "reasoning": normalize_optional_text(pma_config.get("reasoning")),
         "managed_thread_terminal_followup_default": bool(
@@ -43,10 +44,12 @@ def build_idempotency_key(
     reasoning: Optional[str],
     client_turn_id: Optional[str],
     message: str,
+    profile: Optional[str] = None,
 ) -> str:
     payload = {
         "lane_id": lane_id,
         "agent": agent,
+        "profile": profile,
         "model": model,
         "reasoning": reasoning,
         "client_turn_id": client_turn_id,

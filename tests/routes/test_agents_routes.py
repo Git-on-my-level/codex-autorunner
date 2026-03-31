@@ -232,6 +232,49 @@ def test_models_endpoint_returns_capability_error_for_hermes(monkeypatch) -> Non
     assert "hermes" in data["detail"]
 
 
+def test_list_agents_includes_configured_profiles(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 0.1.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+
+    app = FastAPI()
+    app.state.app_server_supervisor = MagicMock()
+    app.state.opencode_supervisor = MagicMock()
+    app.state.app_server_events = MagicMock()
+    app.state.config = SimpleNamespace(
+        agent_binary=lambda _agent_id, profile=None: (
+            "hermes" if profile else "zeroclaw"
+        ),
+        agent_profiles=lambda agent_id: (
+            {"m4": SimpleNamespace(display_name="M4 PMA")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_default_profile=lambda agent_id: "m4" if agent_id == "hermes" else None,
+    )
+    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+    app.include_router(build_agents_routes())
+
+    with TestClient(app) as client:
+        response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    agents = {agent["id"]: agent for agent in response.json()["agents"]}
+    assert agents["hermes"]["default_profile"] == "m4"
+    assert agents["hermes"]["profiles"] == [{"id": "m4", "display_name": "M4 PMA"}]
+
+
 def test_models_endpoint_returns_capability_error_for_unknown_agent() -> None:
     client = _build_client(with_supervisors=True)
 

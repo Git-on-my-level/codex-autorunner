@@ -774,6 +774,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
     "pma": {
         "enabled": True,
         "default_agent": "codex",
+        "profile": None,
         "model": None,
         "reasoning": None,
         "max_upload_bytes": 10_000_000,
@@ -968,6 +969,7 @@ class OpenCodeConfig:
 class PmaConfig:
     enabled: bool
     default_agent: str
+    profile: Optional[str]
     model: Optional[str]
     reasoning: Optional[str]
     managed_thread_terminal_followup_default: bool
@@ -1010,12 +1012,24 @@ class UsageConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class AgentProfileConfig:
+    display_name: Optional[str] = None
+    backend: Optional[str] = None
+    binary: Optional[str] = None
+    serve_command: Optional[List[str]] = None
+    base_url: Optional[str] = None
+    subagent_models: Optional[Dict[str, str]] = None
+
+
+@dataclasses.dataclass(frozen=True)
 class AgentConfig:
     backend: Optional[str]
     binary: str
     serve_command: Optional[List[str]]
     base_url: Optional[str]
     subagent_models: Optional[Dict[str, str]]
+    default_profile: Optional[str] = None
+    profiles: Optional[Dict[str, AgentProfileConfig]] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1139,24 +1153,75 @@ class RepoConfig:
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
 
-    def agent_binary(self, agent_id: str) -> str:
+    def resolved_agent_config(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> AgentConfig:
         agent = self.agents.get(agent_id)
+        if agent is None:
+            raise ConfigError(f"agents.{agent_id}.binary is required")
+        normalized_profile = str(profile or "").strip().lower()
+        if not normalized_profile:
+            return agent
+        profile_config = (agent.profiles or {}).get(normalized_profile)
+        if profile_config is None:
+            raise ConfigError(
+                f"agents.{agent_id}.profiles.{normalized_profile} is not configured"
+            )
+        return AgentConfig(
+            backend=profile_config.backend or agent.backend,
+            binary=profile_config.binary or agent.binary,
+            serve_command=(
+                list(profile_config.serve_command)
+                if profile_config.serve_command
+                else (list(agent.serve_command) if agent.serve_command else None)
+            ),
+            base_url=profile_config.base_url or agent.base_url,
+            subagent_models=(
+                dict(profile_config.subagent_models)
+                if profile_config.subagent_models
+                else (
+                    dict(agent.subagent_models)
+                    if agent.subagent_models is not None
+                    else None
+                )
+            ),
+            default_profile=agent.default_profile,
+            profiles=agent.profiles,
+        )
+
+    def agent_binary(self, agent_id: str, *, profile: Optional[str] = None) -> str:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
         if agent and agent.binary:
             return agent.binary
         raise ConfigError(f"agents.{agent_id}.binary is required")
 
-    def agent_backend(self, agent_id: str) -> str:
-        agent = self.agents.get(agent_id)
+    def agent_backend(self, agent_id: str, *, profile: Optional[str] = None) -> str:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
         backend = getattr(agent, "backend", None) if agent is not None else None
         if isinstance(backend, str) and backend.strip():
             return backend.strip().lower()
         return str(agent_id or "").strip().lower()
 
-    def agent_serve_command(self, agent_id: str) -> Optional[List[str]]:
-        agent = self.agents.get(agent_id)
+    def agent_serve_command(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> Optional[List[str]]:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
         if agent:
             return list(agent.serve_command) if agent.serve_command else None
         return None
+
+    def agent_profiles(self, agent_id: str) -> Dict[str, AgentProfileConfig]:
+        agent = self.agents.get(agent_id)
+        if agent is None or not isinstance(agent.profiles, dict):
+            return {}
+        return dict(agent.profiles)
+
+    def agent_default_profile(self, agent_id: str) -> Optional[str]:
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return None
+        value = str(agent.default_profile or "").strip().lower()
+        return value or None
 
 
 @dataclasses.dataclass
@@ -1197,24 +1262,75 @@ class HubConfig:
     housekeeping: HousekeepingConfig
     durable_writes: bool
 
-    def agent_binary(self, agent_id: str) -> str:
+    def resolved_agent_config(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> AgentConfig:
         agent = self.agents.get(agent_id)
+        if agent is None:
+            raise ConfigError(f"agents.{agent_id}.binary is required")
+        normalized_profile = str(profile or "").strip().lower()
+        if not normalized_profile:
+            return agent
+        profile_config = (agent.profiles or {}).get(normalized_profile)
+        if profile_config is None:
+            raise ConfigError(
+                f"agents.{agent_id}.profiles.{normalized_profile} is not configured"
+            )
+        return AgentConfig(
+            backend=profile_config.backend or agent.backend,
+            binary=profile_config.binary or agent.binary,
+            serve_command=(
+                list(profile_config.serve_command)
+                if profile_config.serve_command
+                else (list(agent.serve_command) if agent.serve_command else None)
+            ),
+            base_url=profile_config.base_url or agent.base_url,
+            subagent_models=(
+                dict(profile_config.subagent_models)
+                if profile_config.subagent_models
+                else (
+                    dict(agent.subagent_models)
+                    if agent.subagent_models is not None
+                    else None
+                )
+            ),
+            default_profile=agent.default_profile,
+            profiles=agent.profiles,
+        )
+
+    def agent_binary(self, agent_id: str, *, profile: Optional[str] = None) -> str:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
         if agent and agent.binary:
             return agent.binary
         raise ConfigError(f"agents.{agent_id}.binary is required")
 
-    def agent_backend(self, agent_id: str) -> str:
-        agent = self.agents.get(agent_id)
+    def agent_backend(self, agent_id: str, *, profile: Optional[str] = None) -> str:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
         backend = getattr(agent, "backend", None) if agent is not None else None
         if isinstance(backend, str) and backend.strip():
             return backend.strip().lower()
         return str(agent_id or "").strip().lower()
 
-    def agent_serve_command(self, agent_id: str) -> Optional[List[str]]:
-        agent = self.agents.get(agent_id)
+    def agent_serve_command(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> Optional[List[str]]:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
         if agent:
             return list(agent.serve_command) if agent.serve_command else None
         return None
+
+    def agent_profiles(self, agent_id: str) -> Dict[str, AgentProfileConfig]:
+        agent = self.agents.get(agent_id)
+        if agent is None or not isinstance(agent.profiles, dict):
+            return {}
+        return dict(agent.profiles)
+
+    def agent_default_profile(self, agent_id: str) -> Optional[str]:
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return None
+        value = str(agent.default_profile or "").strip().lower()
+        return value or None
 
 
 # Alias used by existing code paths that only support repo mode
@@ -1980,6 +2096,8 @@ def _parse_pma_config(
     default_agent = str(
         cfg.get("default_agent", defaults.get("default_agent", "codex"))
     )
+    profile_raw = cfg.get("profile", defaults.get("profile"))
+    profile = str(profile_raw).strip().lower() or None if profile_raw else None
     model_raw = cfg.get("model", defaults.get("model"))
     model = str(model_raw).strip() or None if model_raw else None
     reasoning_raw = cfg.get("reasoning", defaults.get("reasoning"))
@@ -2120,6 +2238,7 @@ def _parse_pma_config(
     return PmaConfig(
         enabled=enabled,
         default_agent=default_agent,
+        profile=profile,
         model=model,
         reasoning=reasoning,
         managed_thread_terminal_followup_default=managed_thread_terminal_followup_default,
@@ -2210,12 +2329,54 @@ def _parse_agents_config(
         subagent_models = agent_cfg.get("subagent_models")
         if not isinstance(subagent_models, dict):
             subagent_models = None
+        default_profile = agent_cfg.get("default_profile")
+        if not isinstance(default_profile, str) or not default_profile.strip():
+            default_profile = None
+        else:
+            default_profile = default_profile.strip().lower()
+        profiles_raw = agent_cfg.get("profiles")
+        profiles: Optional[Dict[str, AgentProfileConfig]] = None
+        if isinstance(profiles_raw, dict):
+            parsed_profiles: Dict[str, AgentProfileConfig] = {}
+            for profile_id, profile_cfg in profiles_raw.items():
+                normalized_profile_id = str(profile_id or "").strip().lower()
+                if not normalized_profile_id or not isinstance(profile_cfg, dict):
+                    continue
+                profile_backend = profile_cfg.get("backend")
+                if not isinstance(profile_backend, str) or not profile_backend.strip():
+                    profile_backend = None
+                profile_serve_command = None
+                if "serve_command" in profile_cfg:
+                    profile_serve_command = _parse_command(
+                        profile_cfg.get("serve_command")
+                    )
+                profile_base_url = profile_cfg.get("base_url")
+                profile_subagent_models = profile_cfg.get("subagent_models")
+                if not isinstance(profile_subagent_models, dict):
+                    profile_subagent_models = None
+                display_name = profile_cfg.get("display_name")
+                if not isinstance(display_name, str) or not display_name.strip():
+                    display_name = None
+                binary_override = profile_cfg.get("binary")
+                if not isinstance(binary_override, str) or not binary_override.strip():
+                    binary_override = None
+                parsed_profiles[normalized_profile_id] = AgentProfileConfig(
+                    display_name=display_name.strip() if display_name else None,
+                    backend=profile_backend,
+                    binary=binary_override,
+                    serve_command=profile_serve_command,
+                    base_url=profile_base_url,
+                    subagent_models=profile_subagent_models,
+                )
+            profiles = parsed_profiles or None
         agents[str(agent_id)] = AgentConfig(
             backend=backend,
             binary=binary,
             serve_command=serve_command,
             base_url=base_url,
             subagent_models=subagent_models,
+            default_profile=default_profile,
+            profiles=profiles,
         )
     return agents
 

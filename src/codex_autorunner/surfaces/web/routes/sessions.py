@@ -43,9 +43,14 @@ def _relative_repo_key(repo_key: str, repo_root: Path) -> str:
         return _relative_repo_path(repo_key, repo_root)
     repo_path, agent = repo_key.split(":", 1)
     rel = _relative_repo_path(repo_path, repo_root)
+    profile = None
+    if "@" in agent:
+        agent, profile = agent.split("@", 1)
     agent = normalize_string_lower(agent) or ""
     if not agent or agent == "codex":
         return rel
+    if isinstance(profile, str) and profile.strip():
+        return f"{rel}:{agent}@{profile.strip().lower()}"
     return f"{rel}:{agent}"
 
 

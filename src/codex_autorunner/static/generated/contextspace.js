@@ -1,6 +1,6 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { api, flash, setButtonLoading } from "./utils.js";
-import { initAgentControls, getSelectedAgent, getSelectedModel, getSelectedReasoning, } from "./agentControls.js";
+import { initAgentControls, getSelectedAgent, getSelectedProfile, getSelectedModel, getSelectedReasoning, } from "./agentControls.js";
 import { fetchContextspace, ingestSpecToTickets, listTickets, writeContextspace, } from "./contextspaceApi.js";
 import { applyDraft, discardDraft, fetchPendingDraft, sendFileChat, interruptFileChat, newClientTurnId, streamTurnEvents, } from "./fileChat.js";
 import { DocEditor } from "./docEditor.js";
@@ -93,6 +93,7 @@ function els() {
         chatEventsList: document.getElementById("contextspace-chat-events-list"),
         chatEventsToggle: document.getElementById("contextspace-chat-events-toggle"),
         agentSelect: document.getElementById("contextspace-chat-agent-select"),
+        profileSelect: document.getElementById("contextspace-chat-profile-select"),
         modelSelect: document.getElementById("contextspace-chat-model-select"),
         reasoningSelect: document.getElementById("contextspace-chat-reasoning-select"),
     };
@@ -574,6 +575,7 @@ async function sendChat() {
         target: currentTarget(),
     });
     const agent = getSelectedAgent();
+    const profile = getSelectedProfile(agent) || undefined;
     const model = getSelectedModel(agent) || undefined;
     const reasoning = getSelectedReasoning(agent) || undefined;
     try {
@@ -623,7 +625,7 @@ async function sendChat() {
                 workspaceChat.render();
                 clearPendingTurnState();
             },
-        }, { agent, model, reasoning, clientTurnId });
+        }, { agent, profile, model, reasoning, clientTurnId });
     }
     catch (err) {
         const message = err.message || "Chat failed";
@@ -676,11 +678,11 @@ async function resetThread() {
     }
 }
 export async function initContextspace() {
-    const { root, fileSelect, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, generateBtn, mobileGenerate, chatInput, chatSend, chatCancel, chatNewThread, agentSelect, modelSelect, reasoningSelect, } = els();
+    const { root, fileSelect, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, generateBtn, mobileGenerate, chatInput, chatSend, chatCancel, chatNewThread, agentSelect, profileSelect, modelSelect, reasoningSelect, } = els();
     if (!root)
         return;
     hideRemovedControls();
-    initAgentControls({ agentSelect, modelSelect, reasoningSelect });
+    initAgentControls({ agentSelect, profileSelect, modelSelect, reasoningSelect });
     await initDocChatVoice({
         buttonId: "contextspace-chat-voice",
         inputId: "contextspace-chat-input",

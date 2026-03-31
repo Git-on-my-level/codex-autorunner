@@ -203,6 +203,7 @@
     "cleanup_require_archive": true,
     "context_log_tail_lines": 120,
     "default_agent": "codex",
+    "profile": null,
     "docs_max_chars": 12000,
     "enabled": true,
     "filebox_inbox_max_age_days": 7,

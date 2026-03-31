@@ -65,9 +65,12 @@ class AgentDescriptor:
 
 
 class _RequestedAgentContext:
-    def __init__(self, delegate: Any, *, agent_id: str) -> None:
+    def __init__(
+        self, delegate: Any, *, agent_id: str, profile: Optional[str] = None
+    ) -> None:
         object.__setattr__(self, "_delegate", delegate)
         object.__setattr__(self, "_requested_agent_id", agent_id)
+        object.__setattr__(self, "_requested_agent_profile", profile)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._delegate, name)
@@ -150,7 +153,14 @@ def _resolve_requested_agent_id(ctx: Any, *, default: str) -> str:
     return default
 
 
-def _runtime_supervisor_cache(ctx: Any) -> dict[tuple[str, str], Any]:
+def _resolve_requested_agent_profile(ctx: Any) -> Optional[str]:
+    requested = getattr(ctx, "_requested_agent_profile", None)
+    if isinstance(requested, str) and requested.strip():
+        return requested.strip().lower()
+    return None
+
+
+def _runtime_supervisor_cache(ctx: Any) -> dict[tuple[str, str, str], Any]:
     cache = getattr(ctx, "_agent_runtime_supervisors", None)
     if isinstance(cache, dict):
         return cache
@@ -162,20 +172,32 @@ def _runtime_supervisor_cache(ctx: Any) -> dict[tuple[str, str], Any]:
     return cache
 
 
-def _run_hermes_preflight(config: Any, *, agent_id: str) -> Any:
+def _run_hermes_preflight(
+    config: Any, *, agent_id: str, profile: Optional[str] = None
+) -> Any:
     try:
-        return hermes_runtime_preflight(config, agent_id=agent_id)
+        return hermes_runtime_preflight(
+            config,
+            agent_id=agent_id,
+            profile=profile,
+        )
     except TypeError as exc:
-        if "agent_id" not in str(exc):
+        if "agent_id" not in str(exc) and "profile" not in str(exc):
             raise
         return hermes_runtime_preflight(config)
 
 
 def _make_hermes_harness(ctx: Any) -> AgentHarness:
     requested_agent_id = _resolve_requested_agent_id(ctx, default="hermes")
+    requested_profile = _resolve_requested_agent_profile(ctx)
     cache = _runtime_supervisor_cache(ctx)
-    supervisor = cache.get(("hermes", requested_agent_id))
-    if supervisor is None and requested_agent_id == "hermes":
+    cache_key = ("hermes", requested_agent_id, requested_profile or "")
+    supervisor = cache.get(cache_key)
+    if (
+        supervisor is None
+        and requested_agent_id == "hermes"
+        and requested_profile is None
+    ):
         supervisor = getattr(ctx, "hermes_supervisor", None)
     if supervisor is None:
         config = _resolve_runtime_agent_config(ctx)
@@ -185,14 +207,15 @@ def _make_hermes_harness(ctx: Any) -> AgentHarness:
         supervisor = build_hermes_supervisor_from_config(
             config,
             agent_id=requested_agent_id,
+            profile=requested_profile,
             logger=logger,
             approval_handler=_resolve_surface_approval_handler(ctx),
             default_approval_decision=_resolve_default_approval_decision(ctx),
         )
         if supervisor is None:
             raise RuntimeError("Hermes harness unavailable: binary not configured")
-        cache[("hermes", requested_agent_id)] = supervisor
-        if requested_agent_id == "hermes":
+        cache[cache_key] = supervisor
+        if requested_agent_id == "hermes" and requested_profile is None:
             try:
                 ctx.hermes_supervisor = supervisor
             except Exception:
@@ -202,15 +225,24 @@ def _make_hermes_harness(ctx: Any) -> AgentHarness:
 
 def _check_hermes_health(ctx: Any) -> bool:
     requested_agent_id = _resolve_requested_agent_id(ctx, default="hermes")
+    requested_profile = _resolve_requested_agent_profile(ctx)
     cache = _runtime_supervisor_cache(ctx)
-    supervisor = cache.get(("hermes", requested_agent_id))
-    if supervisor is None and requested_agent_id == "hermes":
+    supervisor = cache.get(("hermes", requested_agent_id, requested_profile or ""))
+    if (
+        supervisor is None
+        and requested_agent_id == "hermes"
+        and requested_profile is None
+    ):
         supervisor = getattr(ctx, "hermes_supervisor", None)
     if supervisor is not None:
         return True
     config = _resolve_runtime_agent_config(ctx)
     if config is not None:
-        result = _run_hermes_preflight(config, agent_id=requested_agent_id)
+        result = _run_hermes_preflight(
+            config,
+            agent_id=requested_agent_id,
+            profile=requested_profile,
+        )
         return bool(getattr(result, "status", None) == "ready")
     binary = getattr(ctx, "hermes_binary", None)
     if isinstance(binary, str) and binary.strip():
@@ -286,6 +318,12 @@ def _resolve_context_root(ctx: Any) -> Optional[Path]:
         if isinstance(root, Path):
             return root
     return None
+
+
+def wrap_requested_agent_context(
+    delegate: Any, *, agent_id: str, profile: Optional[str] = None
+) -> Any:
+    return _RequestedAgentContext(delegate, agent_id=agent_id, profile=profile)
 
 
 def _alias_display_name(
@@ -623,4 +661,5 @@ __all__ = [
     "normalize_agent_capabilities",
     "reload_agents",
     "validate_agent_id",
+    "wrap_requested_agent_context",
 ]

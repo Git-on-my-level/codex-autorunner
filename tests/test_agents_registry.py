@@ -14,6 +14,7 @@ from codex_autorunner.agents.registry import (
     has_capability,
     reload_agents,
     validate_agent_id,
+    wrap_requested_agent_context,
 )
 from codex_autorunner.core.config import AgentConfig
 
@@ -444,7 +445,7 @@ class TestHermesHarness:
         assert str(harness.agent_id) == "hermes-m4-pma"
         assert harness.display_name == "Hermes (hermes-m4-pma)"
         assert harness._supervisor is sentinel_supervisors["hermes-m4-pma"]
-        assert ("hermes", "hermes-m4-pma") in ctx._agent_runtime_supervisors
+        assert ("hermes", "hermes-m4-pma", "") in ctx._agent_runtime_supervisors
 
     def test_validate_agent_id_prefers_repo_config_for_path_context(self, monkeypatch):
         calls: list[str] = []
@@ -496,3 +497,11 @@ class TestHermesHarness:
 
         assert validate_agent_id("hermes-m4-pma", Path("/tmp/repo")) == "hermes-m4-pma"
         assert calls == ["repo"]
+
+    def test_wrap_requested_agent_context_preserves_profile(self):
+        ctx = SimpleNamespace()
+
+        wrapped = wrap_requested_agent_context(ctx, agent_id="hermes", profile="m4")
+
+        assert wrapped._requested_agent_id == "hermes"
+        assert wrapped._requested_agent_profile == "m4"

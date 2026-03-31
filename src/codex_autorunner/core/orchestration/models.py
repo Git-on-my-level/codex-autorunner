@@ -105,6 +105,7 @@ class ThreadTarget:
 
     thread_target_id: str
     agent_id: str
+    agent_profile: Optional[str] = None
     backend_thread_id: Optional[str] = None
     backend_runtime_instance_id: Optional[str] = None
     repo_id: Optional[str] = None
@@ -144,6 +145,9 @@ class ThreadTarget:
         return cls(
             thread_target_id=thread_target_id,
             agent_id=agent,
+            agent_profile=_normalize_optional_text(
+                data.get("agent_profile") or metadata.get("agent_profile")
+            ),
             backend_thread_id=_normalize_optional_text(data.get("backend_thread_id")),
             backend_runtime_instance_id=_normalize_optional_text(
                 data.get("backend_runtime_instance_id")
@@ -202,6 +206,7 @@ class MessageRequest:
     message_text: str
     kind: MessageRequestKind = "message"
     busy_policy: BusyThreadPolicy = "queue"
+    agent_profile: Optional[str] = None
     model: Optional[str] = None
     reasoning: Optional[str] = None
     approval_mode: Optional[str] = None

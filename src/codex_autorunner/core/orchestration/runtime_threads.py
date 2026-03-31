@@ -74,7 +74,7 @@ async def begin_runtime_thread_execution(
         raise KeyError(f"Unknown thread target '{request.target_id}'")
     if not thread.workspace_root:
         raise RuntimeError("Thread target is missing workspace_root")
-    harness = service.harness_factory(thread.agent_id)
+    harness = service._harness_for_thread(thread)
     execution = await service.send_message(
         request,
         client_request_id=client_request_id,
@@ -106,7 +106,7 @@ async def begin_next_queued_runtime_thread_execution(
     thread, execution, request, _client_request_id, sandbox_policy = claimed
     if not thread.workspace_root:
         raise RuntimeError("Thread target is missing workspace_root")
-    harness = service.harness_factory(thread.agent_id)
+    harness = service._harness_for_thread(thread)
     refreshed = await service._start_execution(
         thread,
         request,

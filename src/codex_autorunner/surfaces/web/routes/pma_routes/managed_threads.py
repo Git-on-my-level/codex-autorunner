@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from .....agents.registry import get_registered_agents
+from .....agents.registry import get_registered_agents, wrap_requested_agent_context
 from .....core.car_context import (
     default_managed_thread_context_profile,
     normalize_car_context_profile,
@@ -209,6 +209,9 @@ def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
         metadata.get("approval_mode"),
         default="yolo",
     )
+    payload["agent_profile"] = normalize_optional_text(
+        thread.get("agent_profile") or metadata.get("agent_profile")
+    )
     payload.update(
         _build_operator_status_fields(
             normalized_status=payload["normalized_status"],
@@ -276,6 +279,7 @@ def _serialize_thread_target(
     payload = {
         "managed_thread_id": thread.thread_target_id,
         "agent": thread.agent_id,
+        "agent_profile": normalize_optional_text(thread.agent_profile),
         "repo_id": thread.repo_id,
         "resource_kind": thread.resource_kind,
         "resource_id": thread.resource_id,
@@ -348,19 +352,26 @@ def build_managed_thread_orchestration_service(request: Request):
             raise
         descriptors = get_registered_agents()
 
-    def _make_harness(agent_id: str):
+    def _make_harness(agent_id: str, profile: Optional[str] = None):
         cache = getattr(request.app.state, "_managed_thread_harness_cache", None)
         if not isinstance(cache, dict):
             cache = {}
             request.app.state._managed_thread_harness_cache = cache
-        cached = cache.get(agent_id)
+        cache_key = (agent_id, profile or "")
+        cached = cache.get(cache_key)
         if cached is not None:
             return cached
         descriptor = descriptors.get(agent_id)
         if descriptor is None:
             raise KeyError(f"Unknown agent definition '{agent_id}'")
-        harness = descriptor.make_harness(request.app.state)
-        cache[agent_id] = harness
+        harness = descriptor.make_harness(
+            wrap_requested_agent_context(
+                request.app.state,
+                agent_id=agent_id,
+                profile=profile,
+            )
+        )
+        cache[cache_key] = harness
         return harness
 
     return build_harness_backed_orchestration_service(
@@ -644,6 +655,28 @@ def build_managed_thread_crud_routes(
                     "the runtime"
                 ),
             )
+        requested_profile = normalize_optional_text(payload.profile)
+        config = getattr(request.app.state, "config", None)
+        profile_getter = getattr(config, "agent_profiles", None)
+        default_profile_getter = getattr(config, "agent_default_profile", None)
+        available_profiles: dict[str, Any] = {}
+        if callable(profile_getter):
+            try:
+                available_profiles = profile_getter(agent_id) or {}
+            except Exception:
+                available_profiles = {}
+        if requested_profile is None and callable(default_profile_getter):
+            try:
+                requested_profile = normalize_optional_text(
+                    default_profile_getter(agent_id)
+                )
+            except Exception:
+                requested_profile = None
+        if (
+            requested_profile is not None
+            and requested_profile not in available_profiles
+        ):
+            raise HTTPException(status_code=400, detail="profile is invalid")
         context_profile = normalize_car_context_profile(
             payload.context_profile,
             default=default_managed_thread_context_profile(resource_kind=resource_kind),
@@ -655,6 +688,8 @@ def build_managed_thread_crud_routes(
             "context_profile": context_profile,
             "approval_mode": approval_mode,
         }
+        if requested_profile is not None:
+            metadata["agent_profile"] = requested_profile
 
         service = build_managed_thread_orchestration_service(request)
         try:
