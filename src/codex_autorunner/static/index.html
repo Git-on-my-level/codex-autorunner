@@ -154,6 +154,8 @@
         <div class="pma-chat-agent-controls">
           <select id="pma-chat-agent-select" title="Agent"></select>
           <select id="pma-chat-model-select" title="Model"></select>
+          <input class="agent-model-input hidden" id="pma-chat-model-input" placeholder="Manual model override"
+            spellcheck="false" title="Manual model override" type="text">
           <select id="pma-chat-reasoning-select" title="Reasoning"></select>
           <div class="pma-view-toggle" role="tablist" aria-label="PMA view">
             <button class="pma-view-btn active" data-view="chat" role="tab" aria-selected="true" type="button">Chat</button>
@@ -563,6 +565,8 @@
                 <div class="doc-agent-controls">
                   <select id="contextspace-chat-agent-select" title="Agent"></select>
                   <select id="contextspace-chat-model-select" title="Model"></select>
+                  <input class="agent-model-input hidden" id="contextspace-chat-model-input"
+                    placeholder="Manual model override" spellcheck="false" title="Manual model override" type="text">
                   <select id="contextspace-chat-reasoning-select" title="Reasoning"></select>
                 </div>
                 <div class="doc-chat-input-row compose-row">
@@ -805,6 +809,9 @@
                   <div class="ticket-chat-agent-controls">
                     <select class="mobile-hide-empty" id="ticket-chat-agent-select" title="Agent"></select>
                     <select id="ticket-chat-model-select" title="Model"></select>
+                    <input class="agent-model-input hidden" id="ticket-chat-model-input"
+                      placeholder="Manual model override" spellcheck="false" title="Manual model override"
+                      type="text">
                     <select id="ticket-chat-reasoning-select" title="Reasoning"></select>
                   </div>
                   <div class="ticket-chat-input-row">
@@ -915,6 +922,8 @@
             <div class="terminal-agent-controls">
               <select id="terminal-agent-select" title="Agent"></select>
               <select id="terminal-model-select" title="Model"></select>
+              <input class="agent-model-input hidden" id="terminal-model-input" placeholder="Manual model override"
+                spellcheck="false" title="Manual model override" type="text">
               <select id="terminal-reasoning-select" title="Reasoning"></select>
             </div>
             <div class="terminal-toolbar-extras">

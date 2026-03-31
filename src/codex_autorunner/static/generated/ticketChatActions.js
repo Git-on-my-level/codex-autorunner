@@ -81,8 +81,18 @@ export function getTicketChatElements() {
         discardBtn: document.getElementById("ticket-patch-discard"),
         agentSelect: document.getElementById("ticket-chat-agent-select"),
         modelSelect: document.getElementById("ticket-chat-model-select"),
+        modelInput: document.getElementById("ticket-chat-model-input"),
         reasoningSelect: document.getElementById("ticket-chat-reasoning-select"),
     };
+}
+function resolveTicketChatModel(agent, controls) {
+    const selectedModel = controls.modelSelect?.value || "";
+    if (selectedModel)
+        return selectedModel;
+    const manualModel = controls.modelInput?.value?.trim() || "";
+    if (manualModel)
+        return manualModel;
+    return getSelectedModel(agent) || undefined;
 }
 export function resetTicketChatState() {
     ticketChatState.status = "idle";
@@ -313,9 +323,7 @@ export async function sendTicketChat() {
     const agent = els.agentSelect
         ? (els.agentSelect.value || "codex")
         : (getSelectedAgent() || "codex");
-    const model = els.modelSelect
-        ? (els.modelSelect.value || undefined)
-        : (getSelectedModel(agent) || undefined);
+    const model = resolveTicketChatModel(agent, els);
     const reasoning = els.reasoningSelect
         ? (els.reasoningSelect.value || undefined)
         : (getSelectedReasoning(agent) || undefined);
@@ -350,6 +358,9 @@ export async function sendTicketChat() {
         renderTicketChat();
     }
 }
+export const __ticketChatActionsTest = {
+    resolveTicketChatModel,
+};
 export async function cancelTicketChat() {
     if (ticketChatState.status !== "running")
         return;
