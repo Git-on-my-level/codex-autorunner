@@ -137,6 +137,7 @@ function els() {
     chatEventsToggle: document.getElementById("contextspace-chat-events-toggle") as HTMLButtonElement | null,
     agentSelect: document.getElementById("contextspace-chat-agent-select") as HTMLSelectElement | null,
     modelSelect: document.getElementById("contextspace-chat-model-select") as HTMLSelectElement | null,
+    modelInput: document.getElementById("contextspace-chat-model-input") as HTMLInputElement | null,
     reasoningSelect: document.getElementById("contextspace-chat-reasoning-select") as HTMLSelectElement | null,
   };
 }
@@ -771,12 +772,13 @@ export async function initContextspace(): Promise<void> {
     chatNewThread,
     agentSelect,
     modelSelect,
+    modelInput,
     reasoningSelect,
   } = els();
   if (!root) return;
 
   hideRemovedControls();
-  initAgentControls({ agentSelect, modelSelect, reasoningSelect });
+  initAgentControls({ agentSelect, modelSelect, modelInput, reasoningSelect });
   await initDocChatVoice({
     buttonId: "contextspace-chat-voice",
     inputId: "contextspace-chat-input",

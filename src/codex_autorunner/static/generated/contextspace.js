@@ -94,6 +94,7 @@ function els() {
         chatEventsToggle: document.getElementById("contextspace-chat-events-toggle"),
         agentSelect: document.getElementById("contextspace-chat-agent-select"),
         modelSelect: document.getElementById("contextspace-chat-model-select"),
+        modelInput: document.getElementById("contextspace-chat-model-input"),
         reasoningSelect: document.getElementById("contextspace-chat-reasoning-select"),
     };
 }
@@ -676,11 +677,11 @@ async function resetThread() {
     }
 }
 export async function initContextspace() {
-    const { root, fileSelect, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, generateBtn, mobileGenerate, chatInput, chatSend, chatCancel, chatNewThread, agentSelect, modelSelect, reasoningSelect, } = els();
+    const { root, fileSelect, saveBtn, saveBtnMobile, reloadBtn, reloadBtnMobile, patchApply, patchDiscard, patchReload, generateBtn, mobileGenerate, chatInput, chatSend, chatCancel, chatNewThread, agentSelect, modelSelect, modelInput, reasoningSelect, } = els();
     if (!root)
         return;
     hideRemovedControls();
-    initAgentControls({ agentSelect, modelSelect, reasoningSelect });
+    initAgentControls({ agentSelect, modelSelect, modelInput, reasoningSelect });
     await initDocChatVoice({
         buttonId: "contextspace-chat-voice",
         inputId: "contextspace-chat-input",

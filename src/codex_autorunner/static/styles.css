@@ -5120,7 +5120,9 @@ button.icon-btn {
 }
 
 .doc-agent-controls select,
-.agent-controls select {
+.doc-agent-controls .agent-model-input,
+.agent-controls select,
+.agent-controls .agent-model-input {
   min-height: 28px;
   padding: 4px 8px;
   font-size: 11px;
@@ -5135,19 +5137,25 @@ button.icon-btn {
 }
 
 .doc-agent-controls select:hover,
-.agent-controls select:hover {
+.doc-agent-controls .agent-model-input:hover,
+.agent-controls select:hover,
+.agent-controls .agent-model-input:hover {
   border-color: var(--accent);
 }
 
 .doc-agent-controls select:focus,
-.agent-controls select:focus {
+.doc-agent-controls .agent-model-input:focus,
+.agent-controls select:focus,
+.agent-controls .agent-model-input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(108, 245, 216, 0.15);
 }
 
 .doc-agent-controls select:disabled,
-.agent-controls select:disabled {
+.doc-agent-controls .agent-model-input:disabled,
+.agent-controls select:disabled,
+.agent-controls .agent-model-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -5206,7 +5214,8 @@ button.icon-btn {
   min-width: 0;
 }
 
-.terminal-agent-controls select {
+.terminal-agent-controls select,
+.terminal-agent-controls .agent-model-input {
   min-height: 28px;
   padding: 4px 8px;
   font-size: 11px;
@@ -5220,17 +5229,20 @@ button.icon-btn {
   max-width: 180px;
 }
 
-.terminal-agent-controls select:hover {
+.terminal-agent-controls select:hover,
+.terminal-agent-controls .agent-model-input:hover {
   border-color: var(--accent);
 }
 
-.terminal-agent-controls select:focus {
+.terminal-agent-controls select:focus,
+.terminal-agent-controls .agent-model-input:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(108, 245, 216, 0.15);
 }
 
-.terminal-agent-controls select:disabled {
+.terminal-agent-controls select:disabled,
+.terminal-agent-controls .agent-model-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -8474,7 +8486,8 @@ button.loading::after {
     gap: 4px;
   }
 
-  #terminal .terminal-agent-controls select {
+  #terminal .terminal-agent-controls select,
+  #terminal .terminal-agent-controls .agent-model-input {
     min-height: 32px;
     padding: 4px 6px;
     font-size: 11px;
@@ -8858,7 +8871,9 @@ button.loading::after {
   }
 
   .doc-agent-controls select,
-  .agent-controls select {
+  .doc-agent-controls .agent-model-input,
+  .agent-controls select,
+  .agent-controls .agent-model-input {
     min-height: 30px;
     padding: 4px 6px;
     font-size: 11px;
@@ -12145,7 +12160,8 @@ button.filebox-delete:hover {
   align-items: center;
 }
 
-.ticket-chat-agent-controls select {
+.ticket-chat-agent-controls select,
+.ticket-chat-agent-controls .agent-model-input {
   font-size: 11px;
   padding: 4px 8px;
   background: var(--bg);
@@ -12155,7 +12171,8 @@ button.filebox-delete:hover {
   min-width: 100px;
 }
 
-.ticket-chat-agent-controls select:disabled {
+.ticket-chat-agent-controls select:disabled,
+.ticket-chat-agent-controls .agent-model-input:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -12641,7 +12658,8 @@ button.filebox-delete:hover {
     padding: 4px;
   }
 
-  .ticket-chat-agent-controls select {
+  .ticket-chat-agent-controls select,
+  .ticket-chat-agent-controls .agent-model-input {
     font-size: 10px;
     min-width: 80px;
   }
@@ -13102,7 +13120,8 @@ button.filebox-delete:hover {
   flex-wrap: wrap;
 }
 
-.pma-chat-agent-controls select {
+.pma-chat-agent-controls select,
+.pma-chat-agent-controls .agent-model-input {
   height: 26px;
   padding: 0 6px;
   font-size: 11px;
@@ -13115,16 +13134,19 @@ button.filebox-delete:hover {
   max-width: 110px;
 }
 
-.pma-chat-agent-controls select:hover {
+.pma-chat-agent-controls select:hover,
+.pma-chat-agent-controls .agent-model-input:hover {
   border-color: rgba(108, 245, 216, 0.4);
 }
 
-.pma-chat-agent-controls select:focus {
+.pma-chat-agent-controls select:focus,
+.pma-chat-agent-controls .agent-model-input:focus {
   outline: none;
   border-color: var(--accent);
 }
 
-.pma-chat-agent-controls select:disabled {
+.pma-chat-agent-controls select:disabled,
+.pma-chat-agent-controls .agent-model-input:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -13879,7 +13901,8 @@ button.filebox-delete:hover {
     gap: 4px;
   }
 
-  .pma-chat-agent-controls select {
+  .pma-chat-agent-controls select,
+  .pma-chat-agent-controls .agent-model-input {
     max-width: 80px;
     font-size: 10px;
     padding: 2px 4px;

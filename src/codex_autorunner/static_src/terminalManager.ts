@@ -308,6 +308,7 @@ export class TerminalManager {
   jumpBottomBtn: HTMLButtonElement | null = null;
   agentSelect: HTMLSelectElement | null = null;
   modelSelect: HTMLSelectElement | null = null;
+  modelInput: HTMLInputElement | null = null;
   reasoningSelect: HTMLSelectElement | null = null;
 
   // Voice state
@@ -546,6 +547,7 @@ export class TerminalManager {
     this.jumpBottomBtn = document.getElementById("terminal-jump-bottom") as HTMLButtonElement | null;
     this.agentSelect = document.getElementById("terminal-agent-select") as HTMLSelectElement | null;
     this.modelSelect = document.getElementById("terminal-model-select") as HTMLSelectElement | null;
+    this.modelInput = document.getElementById("terminal-model-input") as HTMLInputElement | null;
     this.reasoningSelect = document.getElementById("terminal-reasoning-select") as HTMLSelectElement | null;
 
     if (!this.statusEl || !this.connectBtn || !this.disconnectBtn || !this.resumeBtn) {
@@ -586,6 +588,7 @@ export class TerminalManager {
     initAgentControls({
       agentSelect: this.agentSelect,
       modelSelect: this.modelSelect,
+      modelInput: this.modelInput,
       reasoningSelect: this.reasoningSelect,
     });
 

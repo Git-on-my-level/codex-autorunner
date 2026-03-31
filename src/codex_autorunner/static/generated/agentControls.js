@@ -29,7 +29,7 @@ const agentControlsRefresh = createSmartRefresh({
                 .map((model) => `${model.id}:${model.display_name || ""}:${model.supports_reasoning ? "1" : "0"}:${model.reasoning_options.join(",")}`)
                 .join("|")}`
             : "none";
-        return `${agentsSig}::${payload.defaultAgent}::${catalogSig}`;
+        return `${agentsSig}::${payload.defaultAgent}::${payload.mode}::${catalogSig}`;
     },
     render: (payload) => {
         renderAgentControls(payload);
@@ -177,6 +177,19 @@ function getLabelText(agentId) {
     const entry = agentList.find((agent) => agent.id === agentId);
     return entry?.name || agentId;
 }
+function agentHasCapability(agentId, capability) {
+    const entry = agentList.find((agent) => agent.id === agentId);
+    return Array.isArray(entry?.capabilities) && entry.capabilities.includes(capability);
+}
+function modelControlModeForAgent(agentId) {
+    if (agentHasCapability(agentId, "model_listing")) {
+        return "catalog";
+    }
+    if (agentHasCapability(agentId, "message_turns")) {
+        return "manual";
+    }
+    return "none";
+}
 function ensureAgentOptions(select) {
     if (!select)
         return;
@@ -197,14 +210,14 @@ function ensureAgentOptions(select) {
     });
     select.value = selected;
 }
-function ensureModelOptions(select, catalog) {
+function ensureModelOptions(select, catalog, mode) {
     if (!select)
         return;
     select.innerHTML = "";
-    if (!catalog || !Array.isArray(catalog.models) || !catalog.models.length) {
+    if (mode !== "catalog" || !catalog || !Array.isArray(catalog.models) || !catalog.models.length) {
         const option = document.createElement("option");
         option.value = "";
-        option.textContent = "No models";
+        option.textContent = mode === "manual" ? "Manual override" : "No models";
         select.appendChild(option);
         select.disabled = true;
         return;
@@ -240,6 +253,17 @@ function ensureReasoningOptions(select, model) {
         select.appendChild(option);
     });
 }
+function ensureManualModelInput(input, { agent, mode, }) {
+    if (!input)
+        return;
+    const isManual = mode === "manual";
+    input.classList.toggle("hidden", !isManual);
+    input.disabled = !isManual;
+    input.value = isManual ? getSelectedModel(agent) : "";
+    input.placeholder = isManual
+        ? `Manual ${getLabelText(agent)} model override`
+        : "Manual model override";
+}
 function resolveSelectedModel(agent, catalog) {
     if (!catalog?.models?.length)
         return "";
@@ -271,21 +295,28 @@ async function loadAgentControlsPayload() {
         ensureFallbackAgents();
     }
     const selectedAgent = getSelectedAgent();
-    let catalog = modelCatalogs.get(selectedAgent);
-    if (!catalog) {
-        try {
-            catalog = await loadModelCatalog(selectedAgent);
+    const mode = modelControlModeForAgent(selectedAgent);
+    let catalog = null;
+    if (mode === "catalog") {
+        if (modelCatalogs.has(selectedAgent)) {
+            catalog = modelCatalogs.get(selectedAgent) || null;
         }
-        catch (err) {
-            console.warn(`Failed to load model catalog for ${selectedAgent}`, err);
-            catalog = null;
+        else {
+            try {
+                catalog = await loadModelCatalog(selectedAgent);
+            }
+            catch (err) {
+                console.warn(`Failed to load model catalog for ${selectedAgent}`, err);
+                catalog = null;
+            }
         }
     }
     return {
         agents: [...agentList],
         defaultAgent,
         selectedAgent,
-        catalog: catalog || null,
+        mode,
+        catalog,
     };
 }
 function renderAgentControls(payload) {
@@ -294,11 +325,12 @@ function renderAgentControls(payload) {
     controls.forEach((control) => {
         ensureAgentOptions(control.agentSelect);
     });
-    const catalog = payload.catalog;
+    const { catalog, mode } = payload;
     // Update model and reasoning options
     controls.forEach((control) => {
-        ensureModelOptions(control.modelSelect, catalog);
-        if (catalog) {
+        ensureModelOptions(control.modelSelect, catalog, mode);
+        ensureManualModelInput(control.modelInput, { agent: selectedAgent, mode });
+        if (mode === "catalog" && catalog) {
             const selectedModelId = resolveSelectedModel(selectedAgent, catalog);
             setSelectedModel(selectedAgent, selectedModelId);
             if (control.modelSelect) {
@@ -311,10 +343,12 @@ function renderAgentControls(payload) {
             if (control.reasoningSelect) {
                 control.reasoningSelect.value = selectedReasoning;
             }
+            return;
         }
-        else {
-            ensureReasoningOptions(control.reasoningSelect, null);
+        if (mode !== "catalog") {
+            setSelectedReasoning(selectedAgent, "");
         }
+        ensureReasoningOptions(control.reasoningSelect, null);
     });
 }
 export async function refreshAgentControls(request = {}) {
@@ -323,12 +357,14 @@ export async function refreshAgentControls(request = {}) {
 async function handleAgentChange(nextAgent) {
     const previous = getSelectedAgent();
     setSelectedAgent(nextAgent);
-    try {
-        await loadModelCatalog(nextAgent);
-    }
-    catch (err) {
-        setSelectedAgent(previous);
-        flash(`Failed to load ${getLabelText(nextAgent)} models; staying on ${getLabelText(previous)}.`, "error");
+    if (modelControlModeForAgent(nextAgent) === "catalog") {
+        try {
+            await loadModelCatalog(nextAgent);
+        }
+        catch (err) {
+            setSelectedAgent(previous);
+            flash(`Failed to load ${getLabelText(nextAgent)} models; staying on ${getLabelText(previous)}.`, "error");
+        }
     }
     await refreshAgentControls({ force: true, reason: "manual" });
 }
@@ -336,6 +372,10 @@ async function handleModelChange(nextModel) {
     const agent = getSelectedAgent();
     setSelectedModel(agent, nextModel);
     await refreshAgentControls({ force: true, reason: "manual" });
+}
+function handleManualModelInput(nextModel) {
+    const agent = getSelectedAgent();
+    setSelectedModel(agent, nextModel.trim());
 }
 async function handleReasoningChange(nextReasoning) {
     const agent = getSelectedAgent();
@@ -346,32 +386,39 @@ async function handleReasoningChange(nextReasoning) {
  * @param {AgentControlConfig} [config]
  */
 export function initAgentControls(config = {}) {
-    const { agentSelect, modelSelect, reasoningSelect } = config;
-    if (!agentSelect && !modelSelect && !reasoningSelect) {
+    const { agentSelect, modelSelect, modelInput, reasoningSelect } = config;
+    if (!agentSelect && !modelSelect && !modelInput && !reasoningSelect) {
         return;
     }
-    const control = { agentSelect, modelSelect, reasoningSelect };
+    const control = { agentSelect, modelSelect, modelInput, reasoningSelect };
     controls.push(control);
     // Immediately populate agent options from in-memory list (synchronous)
     ensureAgentOptions(agentSelect);
-    ensureModelOptions(modelSelect, null);
+    ensureModelOptions(modelSelect, null, "none");
+    ensureManualModelInput(modelInput, { agent: getSelectedAgent(), mode: "none" });
     ensureReasoningOptions(reasoningSelect, null);
     if (agentSelect) {
         agentSelect.addEventListener("change", (event) => {
             const target = event.target;
-            handleAgentChange(target.value);
+            void handleAgentChange(target.value);
         });
     }
     if (modelSelect) {
         modelSelect.addEventListener("change", (event) => {
             const target = event.target;
-            handleModelChange(target.value);
+            void handleModelChange(target.value);
+        });
+    }
+    if (modelInput) {
+        modelInput.addEventListener("input", (event) => {
+            const target = event.target;
+            handleManualModelInput(target.value);
         });
     }
     if (reasoningSelect) {
         reasoningSelect.addEventListener("change", (event) => {
             const target = event.target;
-            handleReasoningChange(target.value);
+            void handleReasoningChange(target.value);
         });
     }
     // Async refresh to load from API (will update if API returns different data)
@@ -382,3 +429,16 @@ export function initAgentControls(config = {}) {
 export async function ensureAgentCatalog() {
     await refreshAgentControls({ force: true, reason: "manual" });
 }
+export const __agentControlsTest = {
+    modelControlModeForAgent,
+    reset() {
+        agentControlsRefresh.reset();
+        controls.length = 0;
+        agentsLoaded = false;
+        agentsLoadPromise = null;
+        agentList = [...FALLBACK_AGENTS];
+        defaultAgent = "codex";
+        modelCatalogs.clear();
+        modelCatalogPromises.clear();
+    },
+};
