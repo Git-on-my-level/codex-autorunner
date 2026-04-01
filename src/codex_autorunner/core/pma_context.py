@@ -42,6 +42,7 @@ from .freshness import (
 from .hub import HubSupervisor
 from .hub_inbox_resolution import (
     MESSAGE_PENDING_AUTO_DISMISS_STATE,
+    MESSAGE_RESOLVED_STATES,
     clear_message_resolution,
     find_message_resolution,
     find_message_resolution_entry,
@@ -934,6 +935,8 @@ def _maybe_auto_dismiss_terminal_inbox_item(
         if isinstance(pending, dict)
         else ""
     )
+    if pending_state in MESSAGE_RESOLVED_STATES:
+        return pending
     pending_reason = (
         str(pending.get("reason") or "").strip() if isinstance(pending, dict) else ""
     )
