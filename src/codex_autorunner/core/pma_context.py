@@ -2938,11 +2938,20 @@ def _paused_dispatch_resume_invalid_reason(repo_root: Path) -> Optional[str]:
     preflight = ticket_flow_inbox_preflight(repo_root)
     if preflight.is_recoverable:
         return None
-    if preflight.reason_code != "no_tickets":
-        return None
+    if preflight.reason_code == "no_tickets":
+        return (
+            "Latest dispatch is stale; ticket flow resume preflight would fail because "
+            f"no tickets remain in {safe_relpath(repo_root / '.codex-autorunner' / 'tickets', repo_root)}"
+        )
+    # deleted_context / invalid_state — workspace or ticket dir is gone
+    if preflight.reason:
+        return (
+            "Latest dispatch is stale; ticket flow resume preflight would fail: "
+            + preflight.reason
+        )
     return (
-        "Latest dispatch is stale; ticket flow resume preflight would fail because "
-        f"no tickets remain in {safe_relpath(repo_root / '.codex-autorunner' / 'tickets', repo_root)}"
+        "Latest dispatch is stale; ticket flow resume preflight would fail "
+        f"in {safe_relpath(repo_root)}"
     )
 
 
