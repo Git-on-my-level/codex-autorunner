@@ -108,7 +108,20 @@ def _resolve_agent_profile(
             available_profiles = {}
     resolved_profile = _normalize_optional_text(requested_profile)
     if resolved_profile is not None:
-        if resolved_profile not in available_profiles:
+        if agent_id == "hermes":
+            hermes_valid = set(available_profiles.keys())
+            try:
+                from .....integrations.chat.agents import chat_hermes_profile_options
+
+                hermes_valid |= {
+                    opt.profile
+                    for opt in chat_hermes_profile_options(request.app.state)
+                }
+            except Exception:
+                pass
+            if resolved_profile not in hermes_valid:
+                raise HTTPException(status_code=400, detail="profile is invalid")
+        elif resolved_profile not in available_profiles:
             raise HTTPException(status_code=400, detail="profile is invalid")
         return resolved_profile
 
@@ -123,9 +136,24 @@ def _resolve_agent_profile(
         except Exception:
             fallback_profiles.append(None)
 
+    fallback_keys: set[str] = set(available_profiles.keys())
+    if agent_id == "hermes":
+        try:
+            from .....integrations.chat.agents import chat_hermes_profile_options
+
+            fallback_keys |= {
+                opt.profile for opt in chat_hermes_profile_options(request.app.state)
+            }
+        except Exception:
+            pass
+
     for fallback_profile in fallback_profiles:
-        if fallback_profile is not None and fallback_profile in available_profiles:
-            return fallback_profile
+        if fallback_profile is not None:
+            if agent_id == "hermes":
+                if fallback_profile in fallback_keys:
+                    return fallback_profile
+            elif fallback_profile in available_profiles:
+                return fallback_profile
 
     return None
 
@@ -539,15 +567,31 @@ def _build_runtime_harness(
         if "positional argument" not in str(exc):
             raise
         descriptors = get_registered_agents()
-    descriptor = descriptors.get(agent_id)
+    effective_agent_id = agent_id
+    effective_profile = profile
+    if agent_id == "hermes":
+        try:
+            from .....integrations.chat.agents import resolve_chat_runtime_agent
+
+            runtime_agent = resolve_chat_runtime_agent(
+                "hermes", profile, context=request.app.state
+            )
+        except Exception:
+            runtime_agent = agent_id
+        if runtime_agent != "hermes":
+            effective_agent_id = runtime_agent
+            effective_profile = None
+    descriptor = descriptors.get(effective_agent_id)
     if descriptor is None:
-        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_id}")
+        raise HTTPException(
+            status_code=404, detail=f"Unknown agent: {effective_agent_id}"
+        )
     try:
         return descriptor.make_harness(
             wrap_requested_agent_context(
                 request.app.state,
-                agent_id=agent_id,
-                profile=profile,
+                agent_id=effective_agent_id,
+                profile=effective_profile,
             )
         )
     except Exception as exc:

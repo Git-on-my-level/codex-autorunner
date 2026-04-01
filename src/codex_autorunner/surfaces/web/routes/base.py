@@ -274,8 +274,26 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         model,
                     )
                 elif agent == "hermes":
+                    binary_agent = "hermes"
+                    binary_profile = profile
+                    if profile:
+                        try:
+                            from ....integrations.chat.agents import (
+                                chat_hermes_profile_options,
+                            )
+
+                            for opt in chat_hermes_profile_options(app.state):
+                                if (
+                                    opt.profile == profile
+                                    and opt.runtime_agent != "hermes"
+                                ):
+                                    binary_agent = opt.runtime_agent
+                                    binary_profile = None
+                                    break
+                        except Exception:
+                            pass
                     cmd = build_hermes_terminal_cmd(
-                        engine.config.agent_binary("hermes", profile=profile)
+                        engine.config.agent_binary(binary_agent, profile=binary_profile)
                     )
                 else:
                     cmd = build_codex_terminal_cmd(

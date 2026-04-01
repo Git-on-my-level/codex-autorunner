@@ -335,6 +335,25 @@ def _alias_display_name(
     return f"{backend_descriptor.name} ({agent_id})"
 
 
+def _infer_backend_id_by_prefix(
+    backend_id: str,
+    base_agents: dict[str, AgentDescriptor],
+) -> Optional[str]:
+    """If *backend_id* is not a known backend, try shorter prefixes at ``-``/``_`` boundaries."""
+    if not backend_id:
+        return None
+    boundary_prefixes: list[str] = []
+    for i, ch in enumerate(backend_id):
+        if ch in "-_" and i > 0:
+            boundary_prefixes.append(backend_id[:i])
+    if not boundary_prefixes:
+        return None
+    for prefix in sorted(boundary_prefixes, key=len, reverse=True):
+        if prefix in base_agents:
+            return prefix
+    return None
+
+
 def _build_config_alias_agents(context: Any) -> dict[str, AgentDescriptor]:
     config = _resolve_runtime_agent_config(context)
     if config is None:
@@ -356,6 +375,17 @@ def _build_config_alias_agents(context: Any) -> dict[str, AgentDescriptor]:
         if not backend_id:
             continue
         backend_descriptor = base_agents.get(backend_id)
+        if backend_descriptor is None:
+            inferred = _infer_backend_id_by_prefix(backend_id, base_agents)
+            if inferred is not None:
+                _logger.info(
+                    "Inferred backend %r for configured agent %r (prefix of unresolved id %r)",
+                    inferred,
+                    agent_id,
+                    backend_id,
+                )
+                backend_id = inferred
+                backend_descriptor = base_agents.get(backend_id)
         if backend_descriptor is None:
             _logger.warning(
                 "Configured agent %s references unknown backend %s",

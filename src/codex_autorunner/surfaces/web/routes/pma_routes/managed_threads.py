@@ -672,10 +672,18 @@ def build_managed_thread_crud_routes(
                 )
             except Exception:
                 requested_profile = None
-        if (
-            requested_profile is not None
-            and requested_profile not in available_profiles
-        ):
+        valid_profiles = set(available_profiles.keys())
+        if agent_id == "hermes":
+            try:
+                from .....integrations.chat.agents import chat_hermes_profile_options
+
+                valid_profiles |= {
+                    opt.profile
+                    for opt in chat_hermes_profile_options(request.app.state)
+                }
+            except Exception:
+                pass
+        if requested_profile is not None and requested_profile not in valid_profiles:
             raise HTTPException(status_code=400, detail="profile is invalid")
         context_profile = normalize_car_context_profile(
             payload.context_profile,

@@ -1202,6 +1202,58 @@ def test_hermes_doctor_checks_report_configured_aliases_individually(
     assert "hermes-m4-pma" in checks[0].message
 
 
+def test_hermes_doctor_detects_prefix_alias_missing_backend_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+
+    hub_config = load_hub_config(hub_root)
+    hub_config.agents["hermes-m4-pma"] = AgentConfig(
+        backend=None,
+        binary="hermes-m4-pma",
+        serve_command=None,
+        base_url=None,
+        subagent_models=None,
+    )
+
+    observed_agent_ids: list[str] = []
+
+    def _fake_preflight(_config, *, agent_id="hermes"):
+        observed_agent_ids.append(agent_id)
+        return type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 1.2.3",
+                "launch_mode": None,
+                "message": f"Hermes {agent_id} ready.",
+                "fix": None,
+            },
+        )()
+
+    monkeypatch.setattr(
+        "codex_autorunner.core.runtime.hermes_runtime_preflight",
+        _fake_preflight,
+    )
+
+    checks = hermes_doctor_checks(hub_config)
+
+    assert observed_agent_ids == ["hermes-m4-pma"]
+    metadata = [
+        c for c in checks if c.check_id == "hub.hermes.alias_metadata.hermes-m4-pma"
+    ]
+    assert len(metadata) == 1
+    assert metadata[0].severity == "warning"
+    assert metadata[0].passed is False
+    assert "backend: hermes" in metadata[0].message
+    runtime = [c for c in checks if c.check_id == "hub.hermes.binary.hermes-m4-pma"]
+    assert len(runtime) == 1
+    assert runtime[0].passed is True
+
+
 def test_chat_doctor_checks_use_parity_contract_group(monkeypatch):
     monkeypatch.setattr(
         "codex_autorunner.integrations.chat.doctor.run_parity_checks",

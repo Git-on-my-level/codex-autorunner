@@ -15,6 +15,8 @@ from codex_autorunner.core.app_server_threads import (
     file_chat_discord_key,
     normalize_feature_key,
     pma_base_key,
+    pma_legacy_alias_keys,
+    pma_legacy_migration_fallback_keys,
     pma_prefix_for_agent,
     pma_prefixes_for_reset,
     pma_topic_scoped_key,
@@ -463,3 +465,42 @@ class TestPmaPrefixesForReset:
         for agent in (None, "all", ""):
             result = pma_prefixes_for_reset(agent)
             assert result == [PMA_PREFIX]
+
+
+class TestPmaLegacyAliasMigration:
+    def test_legacy_keys_include_hyphen_and_underscore_alias_shapes(self) -> None:
+        keys = pma_legacy_alias_keys("hermes", "m4-pma")
+        new_key = pma_base_key("hermes", "m4-pma")
+        assert pma_base_key("hermes-m4-pma") in keys
+        assert pma_base_key("hermes_m4_pma") in keys
+        assert new_key not in keys
+        assert len(keys) >= 2
+
+    def test_migration_fallback_appends_topic_suffix_to_each_legacy_base(self) -> None:
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        canonical = f"{logical_base}.123:root"
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        assert fallbacks
+        for fb in fallbacks:
+            assert fb.startswith("pma.")
+            assert fb.endswith(".123:root")
+        assert pma_base_key("hermes-m4-pma") + ".123:root" in fallbacks
+
+    def test_get_thread_id_with_fallback_migrates_topic_scoped_legacy_key(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "app_server_threads.json"
+        registry = AppServerThreadRegistry(path)
+        agent, profile = "hermes", "m4-pma"
+        logical_base = pma_base_key(agent, profile)
+        topic = "99:7"
+        canonical = f"{logical_base}.{topic}"
+        legacy = pma_base_key("hermes-m4-pma") + f".{topic}"
+        registry.set_thread_id(legacy, "thread-migrated")
+        fallbacks = pma_legacy_migration_fallback_keys(canonical, agent, profile)
+        assert legacy in fallbacks
+        resolved = registry.get_thread_id_with_fallback(canonical, *fallbacks)
+        assert resolved == "thread-migrated"
+        assert registry.get_thread_id(canonical) == "thread-migrated"
+        assert registry.get_thread_id(legacy) is None

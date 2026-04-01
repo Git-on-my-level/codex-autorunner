@@ -185,6 +185,9 @@ class _ExecutionStub(ExecutionCommands):
     def _effective_agent(self, _record: TelegramTopicRecord) -> str:
         return "codex"
 
+    def _effective_agent_state(self, _record: TelegramTopicRecord) -> tuple[str, None]:
+        return "codex", None
+
 
 @pytest.mark.anyio
 async def test_pma_prompt_routing_uses_hub_root(tmp_path: Path) -> None:
@@ -6102,6 +6105,60 @@ async def test_require_topics_uses_scoped_pma_registry_key(
         topic_key_fn=mock_topic_key,
     )
     assert pma_key == expected_key
+
+
+def test_pma_registry_key_matches_logical_hermes_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_autorunner.core.app_server_threads import pma_base_key
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes M4 PMA"),
+        },
+    )
+    hub_config = SimpleNamespace(
+        agent_profiles=lambda agent_id: (
+            {"m4-pma": SimpleNamespace(display_name="M4 PMA")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_binary=lambda agent_id, **kw: "hermes",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry._resolve_runtime_agent_config",
+        lambda ctx: hub_config,
+    )
+
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="hermes-m4-pma",
+    )
+    handler = _PMAHandler(
+        record, _PMAClientStub(), tmp_path, AppServerThreadRegistry(tmp_path / "t.json")
+    )
+    expected = pma_base_key("hermes", "m4-pma")
+    assert handler._pma_registry_key(record, None) == expected
+
+    record_split = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="hermes",
+        agent_profile="m4-pma",
+    )
+    handler_split = _PMAHandler(
+        record_split,
+        _PMAClientStub(),
+        tmp_path,
+        AppServerThreadRegistry(tmp_path / "t2.json"),
+    )
+    assert handler_split._pma_registry_key(record_split, None) == expected
+    assert expected != pma_base_key("hermes-m4-pma")
 
 
 class _HelpHandlersStub:

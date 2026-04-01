@@ -1252,6 +1252,7 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
         workspace_suffix = f" for enabled workspaces: {', '.join(enabled_workspaces)}"
 
     configured_hermes_agents: list[str] = []
+    hermes_agent_ids_seen: set[str] = set()
     for agent_id in sorted(getattr(hub_config, "agents", {}).keys()):
         try:
             backend_id = hub_config.agent_backend(agent_id)
@@ -1259,6 +1260,42 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
             backend_id = agent_id
         if str(backend_id or "").strip().lower() == "hermes":
             configured_hermes_agents.append(agent_id)
+            hermes_agent_ids_seen.add(agent_id)
+
+    for agent_id in sorted(getattr(hub_config, "agents", {}).keys()):
+        if agent_id in hermes_agent_ids_seen:
+            continue
+        normalized_id = str(agent_id or "").strip().lower()
+        if not (
+            normalized_id.startswith("hermes-") or normalized_id.startswith("hermes_")
+        ):
+            continue
+        try:
+            agent_cfg = hub_config.agents.get(agent_id)
+            explicit_backend = getattr(agent_cfg, "backend", None)
+            if (
+                isinstance(explicit_backend, str)
+                and explicit_backend.strip()
+                and explicit_backend.strip().lower() != "hermes"
+            ):
+                continue
+        except Exception:
+            pass
+        configured_hermes_agents.append(agent_id)
+        hermes_agent_ids_seen.add(agent_id)
+        checks.append(
+            DoctorCheck(
+                name=f"Hermes alias metadata ({agent_id})",
+                passed=False,
+                message=(
+                    f"Agent {agent_id!r} looks like a Hermes alias (id prefix) but has no "
+                    "explicit backend: hermes metadata."
+                ),
+                severity="warning",
+                check_id=f"hub.hermes.alias_metadata.{agent_id}",
+                fix="Set backend: hermes for this agent in hub configuration.",
+            )
+        )
 
     if not configured_hermes_agents:
         configured_hermes_agents = ["hermes"]
