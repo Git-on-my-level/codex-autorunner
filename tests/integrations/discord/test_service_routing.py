@@ -4892,11 +4892,6 @@ async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
         outbox_manager=_FakeOutboxManager(),
     )
 
-    async def _should_not_build_orchestrator(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("legacy BackendOrchestrator should not be used")
-
-    service._orchestrator_for_workspace = _should_not_build_orchestrator  # type: ignore[assignment]
-
     try:
         await service.run_forever()
         _orch, binding_row, thread = service._get_discord_thread_binding(
@@ -4952,11 +4947,6 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
     monkeypatch.setattr(
         discord_service_module, "reset_branch_from_origin_main", _fake_reset_branch
     )
-
-    async def _should_not_build_orchestrator(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("legacy BackendOrchestrator should not be used")
-
-    service._orchestrator_for_workspace = _should_not_build_orchestrator  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -5037,16 +5027,6 @@ async def test_car_newt_runs_hub_setup_commands_for_bound_workspace(
 
     hub_supervisor = _HubSupervisorStub()
     service._hub_supervisor = hub_supervisor  # type: ignore[assignment]
-
-    class _FakeOrchestrator:
-        def reset_thread_id(self, _session_key: str) -> bool:
-            return True
-
-    async def _fake_orchestrator_for_workspace(*args: Any, **kwargs: Any):
-        _ = args, kwargs
-        return _FakeOrchestrator()
-
-    service._orchestrator_for_workspace = _fake_orchestrator_for_workspace  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -5136,11 +5116,6 @@ async def test_car_new_resets_pma_session_key_for_current_agent(tmp_path: Path) 
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-
-    async def _should_not_build_orchestrator(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("legacy BackendOrchestrator should not be used")
-
-    service._orchestrator_for_workspace = _should_not_build_orchestrator  # type: ignore[assignment]
 
     try:
         await service.run_forever()
@@ -6482,47 +6457,6 @@ async def test_car_experimental_unknown_action_returns_guidance(
 
 
 @pytest.mark.anyio
-async def test_car_new_ignores_legacy_backend_factory(tmp_path: Path) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-
-    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
-    await store.initialize()
-
-    await store.upsert_binding(
-        channel_id="channel-1",
-        guild_id=None,
-        workspace_path=str(workspace),
-        repo_id=None,
-    )
-
-    rest = _FakeRest()
-    gateway = _FakeGateway([_interaction(name="new", options=[])])
-
-    service = DiscordBotService(
-        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
-        logger=logging.getLogger("test"),
-        rest_client=rest,
-        gateway_client=gateway,
-        state_store=store,
-        outbox_manager=_FakeOutboxManager(),
-        backend_orchestrator_factory=lambda _workspace_root: (_ for _ in ()).throw(
-            AssertionError("legacy backend factory should not be used")
-        ),
-    )
-
-    try:
-        await service.run_forever()
-        assert len(rest.interaction_responses) == 1
-        assert rest.interaction_responses[0]["payload"]["type"] == 5
-        assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "fresh repo session" in content
-    finally:
-        await store.close()
-
-
-@pytest.mark.anyio
 async def test_car_command_raises_on_invalid_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -6538,39 +6472,6 @@ async def test_car_command_raises_on_invalid_workspace(
                 ],
             )
         ]
-    )
-
-    class RaiseErrorBackendOrchestrator:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        async def run_turn(
-            self,
-            agent: str,
-            messages: list[dict[str, Any]],
-            *,
-            model_override: str | None = None,
-            session_key: str,
-            session_id: str | None = None,
-            workspace_root: Path,
-            reasoning_effort: str | None = None,
-            autorunner_effort_override: str | None = None,
-        ) -> Any:
-            raise RuntimeError("Simulated backend error")
-
-        def get_thread_id(self, session_key: str) -> str | None:
-            return None
-
-        def set_thread_id(self, session_key: str, thread_id: str) -> None:
-            pass
-
-        def close(self) -> None:
-            pass
-
-    monkeypatch.setattr(
-        discord_service_module,
-        "BackendOrchestrator",
-        RaiseErrorBackendOrchestrator,
     )
 
     service = DiscordBotService(

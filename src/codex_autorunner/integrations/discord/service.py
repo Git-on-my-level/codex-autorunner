@@ -117,7 +117,6 @@ from ...core.utils import (
     is_within,
 )
 from ...flows.ticket_flow.runtime_helpers import build_ticket_flow_controller
-from ...integrations.agents.backend_orchestrator import BackendOrchestrator
 from ...integrations.agents.opencode_supervisor_factory import (
     build_opencode_supervisor_from_repo_config,
 )
@@ -524,20 +523,6 @@ class _DiscordPendingApproval:
     future: asyncio.Future[ApprovalDecision]
 
 
-class _DiscordBackendNotificationRouter:
-    def __init__(
-        self,
-        *,
-        notification_handler: Callable[[Mapping[str, object]], Awaitable[None]],
-        approval_handler: Callable[[dict[str, Any]], Awaitable[ApprovalDecision]],
-    ) -> None:
-        self._notification_handler = notification_handler
-        self.approval_handler = approval_handler
-
-    async def __call__(self, payload: Mapping[str, object]) -> None:
-        await self._notification_handler(payload)
-
-
 class _DiscordAppServerSupervisorAdapter:
     def __init__(self, service: "DiscordBotService") -> None:
         self._service = service
@@ -640,9 +625,6 @@ class DiscordBotService:
         manifest_path: Optional[Path] = None,
         chat_adapter: Optional[DiscordChatAdapter] = None,
         dispatcher: Optional[ChatDispatcher] = None,
-        backend_orchestrator_factory: Optional[
-            Callable[[Path], BackendOrchestrator]
-        ] = None,
         update_repo_url: Optional[str] = None,
         update_repo_ref: Optional[str] = None,
         update_skip_checks: bool = False,
@@ -654,7 +636,6 @@ class DiscordBotService:
         self._config = config
         self._logger = logger
         self._manifest_path = manifest_path
-        self._backend_orchestrator_factory = backend_orchestrator_factory
         self._update_repo_url = update_repo_url
         self._update_repo_ref = update_repo_ref
         self._update_skip_checks = update_skip_checks
@@ -728,8 +709,6 @@ class DiscordBotService:
                 event, context
             ),
         )
-        self._backend_orchestrators: dict[str, BackendOrchestrator] = {}
-        self._backend_lock = asyncio.Lock()
         self._app_server_supervisors: dict[str, WorkspaceAppServerSupervisor] = {}
         self._app_server_lock = asyncio.Lock()
         self._opencode_supervisors: dict[str, _OpenCodeSupervisorCacheEntry] = {}
@@ -2486,49 +2465,6 @@ class DiscordBotService:
                 break
         return items
 
-    async def _orchestrator_for_workspace(
-        self,
-        workspace_root: Path,
-        *,
-        channel_id: str,
-        agent_id: Optional[str] = None,
-    ) -> BackendOrchestrator:
-        key = f"{channel_id}:{workspace_root}"
-        async with self._backend_lock:
-            existing = self._backend_orchestrators.get(key)
-            if existing is not None:
-                return existing
-            if self._backend_orchestrator_factory is not None:
-                orchestrator = self._backend_orchestrator_factory(workspace_root)
-            else:
-                repo_config = load_repo_config(
-                    workspace_root,
-                    hub_path=self._hub_config_path,
-                )
-                shared_opencode_supervisor = None
-                if agent_id == "opencode":
-                    # Share the Discord service's workspace supervisor with the
-                    # backend orchestrator so idle pruning sees the same
-                    # active-turn bookkeeping as the running managed turn.
-                    shared_opencode_supervisor = (
-                        await self._opencode_supervisor_for_workspace(workspace_root)
-                    )
-                orchestrator = BackendOrchestrator(
-                    repo_root=workspace_root,
-                    config=repo_config,
-                    notification_handler=_DiscordBackendNotificationRouter(
-                        notification_handler=cast(
-                            Callable[[Mapping[str, object]], Awaitable[None]],
-                            self.app_server_events.handle_notification,
-                        ),
-                        approval_handler=self._handle_backend_approval_request,
-                    ),
-                    logger=self._logger,
-                    shared_opencode_supervisor=shared_opencode_supervisor,
-                )
-            self._backend_orchestrators[key] = orchestrator
-            return orchestrator
-
     def _register_discord_turn_approval_context(
         self, *, started_execution: Any, channel_id: str
     ) -> None:
@@ -3766,12 +3702,6 @@ class DiscordBotService:
         if self._owns_store:
             with contextlib.suppress(Exception):
                 await self._store.close()
-        async with self._backend_lock:
-            orchestrators = list(self._backend_orchestrators.values())
-            self._backend_orchestrators.clear()
-        for orchestrator in orchestrators:
-            with contextlib.suppress(Exception):
-                await orchestrator.close_all()
         await self._close_all_app_server_supervisors()
         await self._close_all_opencode_supervisors()
         self._reap_managed_processes(stage="shutdown")

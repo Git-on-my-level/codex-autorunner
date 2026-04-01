@@ -307,14 +307,33 @@ def gather_hub_messages(
         item_type = str(item.get("item_type") or "run_dispatch")
         seq_raw = item.get("seq")
         item_seq = seq_raw if isinstance(seq_raw, int) and seq_raw > 0 else None
-        if find_message_resolution(
-            dismissals,
-            run_id=run_id,
-            item_type=item_type,
-            seq=item_seq,
-            scope_key=scope_key,
+        candidate_item_types = [item_type]
+        if item_seq is None and not bool(item.get("dispatch_actionable")):
+            candidate_item_types.extend(
+                ["run_failed", "run_stopped", "run_state_attention"]
+            )
+        if any(
+            find_message_resolution(
+                dismissals,
+                run_id=run_id,
+                item_type=candidate_type,
+                seq=item_seq,
+                scope_key=scope_key,
+            )
+            for candidate_type in dict.fromkeys(candidate_item_types)
         ):
             continue
+        if item_seq is None and not bool(item.get("dispatch_actionable")):
+            if any(
+                str(resolution.get("run_id") or "").strip() == run_id
+                and str(resolution.get("item_type") or "").strip()
+                in {"run_failed", "run_stopped", "run_state_attention"}
+                and str(resolution.get("resolution_state") or "").strip().lower()
+                in {"", "dismissed", "resolved"}
+                for resolution in dismissals.values()
+                if isinstance(resolution, dict)
+            ):
+                continue
         copied = dict(item)
         copied["resolution_state"] = message_resolution_state(item_type)
         copied["resolvable_actions"] = message_resolvable_actions(item_type)

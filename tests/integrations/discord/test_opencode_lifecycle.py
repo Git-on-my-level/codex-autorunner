@@ -557,14 +557,15 @@ async def test_discord_orchestrator_shares_workspace_opencode_supervisor(
     )
 
     try:
-        orchestrator = await service._orchestrator_for_workspace(
-            workspace,
-            channel_id="discord-orchestration:opencode",
-            agent_id="opencode",
-        )
+        orchestration_service = service._discord_thread_service()
+        harness = orchestration_service.harness_factory("opencode")
 
-        backend_factory = orchestrator._backend_factory
-        assert backend_factory._ensure_opencode_supervisor() is shared_supervisor
-        assert backend_factory._owns_opencode_supervisor is False
+        await harness.ensure_ready(workspace)
+
+        assert harness._supervisor is service.opencode_supervisor
+        assert (
+            await service.opencode_supervisor._resolve_supervisor(workspace)  # type: ignore[attr-defined]
+            is shared_supervisor
+        )
     finally:
         await store.close()

@@ -9,7 +9,6 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Optional, cast
 
 from ...agents.base import (
@@ -45,7 +44,6 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
-from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
 from ...core.pma_context import (
     build_hub_snapshot,
     format_pma_discoverability_preamble,
@@ -964,229 +962,6 @@ def _build_managed_thread_input_items(
     return normalized or None
 
 
-def _should_use_legacy_orchestrator_harness(service: Any) -> bool:
-    bound = getattr(service, "_orchestrator_for_workspace", None)
-    if bound is None:
-        return False
-    original = getattr(type(service), "_orchestrator_for_workspace", None)
-    bound_func = getattr(bound, "__func__", None)
-    if original is not None and bound_func is not None:
-        if bound_func is not original:
-            return True
-    elif original is not None and bound is not original:
-        return True
-    return bool(getattr(service, "_backend_orchestrator_factory", None))
-
-
-class _LegacyOrchestratorRuntimeHarness:
-    display_name = "Legacy Discord Orchestrator"
-    capabilities = frozenset(
-        {"durable_threads", "message_turns", "interrupt", "event_streaming"}
-    )
-
-    def __init__(self, service: Any, agent_id: str) -> None:
-        self._service = service
-        self._agent_id = agent_id
-        self._turns: dict[str, dict[str, Any]] = {}
-
-    def supports(self, capability: str) -> bool:
-        return capability in self.capabilities
-
-    async def ensure_ready(self, workspace_root: Path) -> None:
-        _ = workspace_root
-
-    async def _orchestrator(self, workspace_root: Path) -> Any:
-        return await self._service._orchestrator_for_workspace(
-            workspace_root,
-            channel_id=f"discord-orchestration:{self._agent_id}",
-            agent_id=self._agent_id,
-        )
-
-    async def new_conversation(
-        self, workspace_root: Path, title: Optional[str] = None
-    ) -> SimpleNamespace:
-        _ = workspace_root, title
-        return SimpleNamespace(id=f"legacy-thread-{uuid.uuid4().hex[:8]}")
-
-    async def resume_conversation(
-        self, workspace_root: Path, conversation_id: str
-    ) -> SimpleNamespace:
-        _ = workspace_root
-        return SimpleNamespace(id=conversation_id)
-
-    async def start_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        prompt: str,
-        model: Optional[str],
-        reasoning: Optional[str],
-        *,
-        approval_mode: Optional[str],
-        sandbox_policy: Optional[Any],
-        input_items: Optional[list[dict[str, Any]]] = None,
-    ) -> SimpleNamespace:
-        _ = approval_mode, sandbox_policy
-        orchestrator = await self._orchestrator(workspace_root)
-        state = self._service._build_runner_state(
-            agent=self._agent_id,
-            model_override=model,
-            reasoning_effort=reasoning,
-        )
-        run_events = orchestrator.run_turn(
-            agent_id=self._agent_id,
-            state=state,
-            prompt=prompt,
-            input_items=input_items,
-            model=model,
-            reasoning=reasoning,
-            session_key=conversation_id,
-            session_id=conversation_id,
-            workspace_root=workspace_root,
-        )
-        queue: asyncio.Queue[Any] = asyncio.Queue()
-        done = asyncio.Event()
-        result: dict[str, Any] = {
-            "status": "running",
-            "assistant_text": "",
-            "error": None,
-        }
-        session_id = conversation_id
-        assistant_fallback = ""
-        final_message = ""
-        completed_seen = False
-        turn_id = f"legacy-turn-{uuid.uuid4().hex[:8]}"
-
-        def _record_event(event: Any) -> None:
-            nonlocal session_id
-            nonlocal assistant_fallback
-            nonlocal final_message
-            nonlocal completed_seen
-            if isinstance(event, Started):
-                if isinstance(event.session_id, str) and event.session_id:
-                    session_id = event.session_id
-            elif isinstance(event, OutputDelta):
-                if (
-                    event.delta_type
-                    in {
-                        RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
-                        RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
-                    }
-                    and isinstance(event.content, str)
-                    and event.content
-                ):
-                    assistant_fallback = merge_assistant_stream_text(
-                        assistant_fallback,
-                        event.content,
-                    )
-            elif isinstance(event, Completed):
-                final_message = event.final_message or final_message
-                completed_seen = True
-            elif isinstance(event, Failed) and not completed_seen:
-                result["error"] = event.error_message or "Turn failed"
-            elif isinstance(event, Failed):
-                from . import service as discord_service_module
-
-                discord_service_module.log_event(
-                    self._service._logger,
-                    logging.WARNING,
-                    "discord.turn.failed_late_ignored",
-                    conversation_id=session_id,
-                    agent=self._agent_id,
-                    error_message=event.error_message or "Turn failed",
-                )
-
-        try:
-            first_event = await run_events.__anext__()
-        except StopAsyncIteration:
-            first_event = None
-        if first_event is not None:
-            _record_event(first_event)
-            queue.put_nowait(first_event)
-
-        async def _pump_remaining() -> None:
-            try:
-                async for event in run_events:
-                    _record_event(event)
-                    await queue.put(event)
-            except Exception as exc:
-                result["error"] = str(exc) or "Turn failed"
-            finally:
-                if completed_seen or not result.get("error"):
-                    result["status"] = "ok"
-                    result["error"] = None
-                    result["assistant_text"] = final_message or assistant_fallback
-                else:
-                    result["status"] = "error"
-                    result["assistant_text"] = ""
-                done.set()
-
-        task = asyncio.create_task(_pump_remaining())
-        self._turns[turn_id] = {
-            "queue": queue,
-            "done": done,
-            "task": task,
-            "result": result,
-            "state": state,
-        }
-        return SimpleNamespace(conversation_id=session_id, turn_id=turn_id)
-
-    async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
-        raise AssertionError("legacy harness review mode is not implemented")
-
-    async def wait_for_turn(
-        self,
-        workspace_root: Path,
-        conversation_id: str,
-        turn_id: Optional[str],
-        *,
-        timeout: Optional[float] = None,
-    ) -> SimpleNamespace:
-        _ = workspace_root, conversation_id, timeout
-        if not isinstance(turn_id, str) or turn_id not in self._turns:
-            return SimpleNamespace(
-                status="error",
-                assistant_text="",
-                errors=["Turn failed"],
-            )
-        turn = self._turns[turn_id]
-        await turn["done"].wait()
-        result = turn["result"]
-        errors = [result["error"]] if result.get("error") else []
-        return SimpleNamespace(
-            status=result["status"],
-            assistant_text=result["assistant_text"],
-            errors=errors,
-        )
-
-    async def interrupt(
-        self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
-    ) -> None:
-        turn = self._turns.get(turn_id or "")
-        orchestrator = await self._orchestrator(workspace_root)
-        interrupt = getattr(orchestrator, "interrupt", None)
-        if callable(interrupt):
-            state = turn.get("state") if isinstance(turn, dict) else None
-            await interrupt(self._agent_id, state)
-
-    async def stream_events(
-        self, workspace_root: Path, conversation_id: str, turn_id: str
-    ):
-        _ = workspace_root, conversation_id
-        turn = self._turns.get(turn_id)
-        if not isinstance(turn, dict):
-            if False:
-                yield ""
-            return
-        queue = turn["queue"]
-        done = turn["done"]
-        while True:
-            if done.is_set() and queue.empty():
-                break
-            event = await queue.get()
-            yield event
-
-
 def build_discord_thread_orchestration_service(service: Any) -> Any:
     cached = getattr(service, "_discord_thread_orchestration_service", None)
     if cached is None:
@@ -1202,8 +977,6 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
         descriptors = get_registered_agents()
 
     def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
-        if _should_use_legacy_orchestrator_harness(service):
-            return _LegacyOrchestratorRuntimeHarness(service, agent_id)
         descriptor = descriptors.get(agent_id)
         if descriptor is None:
             raise KeyError(f"Unknown agent definition '{agent_id}'")

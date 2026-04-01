@@ -1,4 +1,7 @@
 {
+  // Run `.vscode/tasks.json` “folder open” tasks without a prompt (trusted workspace).
+  "task.allowAutomaticTasks": "on",
+
   // Enable format on save
   "editor.formatOnSave": true,
   "editor.codeActionsOnSave": {

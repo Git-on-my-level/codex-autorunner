@@ -27,7 +27,17 @@ from ...core.flows.workspace_root import (
 from ...core.runtime import RuntimeContext
 from ...integrations.agents import build_backend_orchestrator
 from ...integrations.agents.build_agent_pool import build_agent_pool
+from ...tickets.files import list_ticket_paths, safe_relpath
 from .definition import build_ticket_flow_definition
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TicketFlowInboxPreflight:
+    is_recoverable: bool
+    reason_code: Optional[str] = None
+    reason: Optional[str] = None
 
 
 @dataclass
@@ -163,6 +173,54 @@ def list_active_ticket_flow_runs(repo_root: Path) -> list[FlowRunRecord]:
         for record in list_ticket_flow_runs(repo_root)
         if record.status.is_active() or record.status.is_paused()
     ]
+
+
+def ticket_flow_inbox_preflight(repo_root: Path) -> TicketFlowInboxPreflight:
+    repo_root = repo_root.resolve()
+    if not repo_root.exists():
+        return TicketFlowInboxPreflight(
+            is_recoverable=False,
+            reason_code="invalid_state",
+            reason=f"Ticket flow workspace is missing: {repo_root}",
+        )
+
+    state_root = repo_root / ".codex-autorunner"
+    if not state_root.exists() or not state_root.is_dir():
+        return TicketFlowInboxPreflight(
+            is_recoverable=False,
+            reason_code="deleted_context",
+            reason=(
+                "Ticket flow preflight failed because runtime state is missing at "
+                f"{safe_relpath(state_root, repo_root)}"
+            ),
+        )
+
+    ticket_dir = state_root / "tickets"
+    if not ticket_dir.exists() or not ticket_dir.is_dir():
+        return TicketFlowInboxPreflight(
+            is_recoverable=False,
+            reason_code="deleted_context",
+            reason=(
+                "Ticket flow preflight failed because the ticket directory is missing at "
+                f"{safe_relpath(ticket_dir, repo_root)}"
+            ),
+        )
+
+    try:
+        if list_ticket_paths(ticket_dir):
+            return TicketFlowInboxPreflight(is_recoverable=True)
+    except Exception as exc:
+        logger.warning("Could not inspect ticket dir for inbox preflight: %s", exc)
+        return TicketFlowInboxPreflight(is_recoverable=True)
+
+    return TicketFlowInboxPreflight(
+        is_recoverable=False,
+        reason_code="no_tickets",
+        reason=(
+            "Ticket flow preflight failed because no tickets remain in "
+            f"{safe_relpath(ticket_dir, repo_root)}"
+        ),
+    )
 
 
 def spawn_ticket_flow_worker(

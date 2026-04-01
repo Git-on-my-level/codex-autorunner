@@ -73,6 +73,7 @@ def test_pma_config_defaults(tmp_path: Path) -> None:
     assert pma_config.get("max_repos") == 25
     assert pma_config.get("max_messages") == 10
     assert pma_config.get("max_text_chars") == 10_000
+    assert pma_config.get("inbox_auto_dismiss_grace_seconds") == 3600
     assert config.pma.managed_thread_terminal_followup_default is True
 
 
@@ -95,6 +96,21 @@ def test_pma_generated_files_refreshed_without_force(tmp_path: Path) -> None:
     assert refreshed_about != "custom about"
     assert "CAR:PMA_DOCS_GENERATED" in refreshed_prompt
     assert "CAR:PMA_DOCS_GENERATED" in refreshed_about
+
+
+def test_pma_inbox_auto_dismiss_grace_configurable(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    config_path = tmp_path / ".codex-autorunner" / "config.yml"
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    payload.setdefault("pma", {})["inbox_auto_dismiss_grace_seconds"] = 15
+    config_path.write_text(
+        GENERATED_CONFIG_HEADER + yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    config = load_hub_config(tmp_path)
+    assert config.pma.inbox_auto_dismiss_grace_seconds == 15
 
 
 def test_pma_generated_config_upgrades_stale_default_without_force(
