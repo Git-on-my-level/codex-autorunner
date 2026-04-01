@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -49,6 +50,39 @@ class _PendingTurnConfig:
         default_factory=list
     )
     progress_event_history: list[dict[str, Any]] = field(default_factory=list)
+    pre_connected_event_queue: Optional[asyncio.Queue[Any]] = None
+    pre_connected_stream_task: Optional[asyncio.Task[None]] = None
+    pre_connected_queue_exhausted: bool = False
+
+
+async def _pre_connect_event_stream(
+    client: Any,
+    workspace_root: Path,
+    conversation_id: str,
+) -> tuple[asyncio.Queue[Any], asyncio.Task[None]]:
+    """Start SSE event stream before prompt so no events are missed."""
+    event_queue: asyncio.Queue[Any] = asyncio.Queue()
+    ready_event = asyncio.Event()
+
+    async def _stream_to_queue() -> None:
+        try:
+            async for event in client.stream_events(
+                directory=str(workspace_root),
+                session_id=conversation_id,
+                ready_event=ready_event,
+            ):
+                await event_queue.put(event)
+        except Exception:
+            _logger.debug("Pre-connected SSE stream error", exc_info=True)
+        finally:
+            await event_queue.put(None)
+
+    task = asyncio.create_task(_stream_to_queue())
+    try:
+        await asyncio.wait_for(ready_event.wait(), timeout=2.0)
+    except asyncio.TimeoutError:
+        _logger.debug("SSE pre-connect timed out after 2s, continuing anyway")
+    return event_queue, task
 
 
 def _path_is_within(root: Path, candidate: Path) -> bool:
@@ -819,6 +853,9 @@ class OpenCodeHarness(AgentHarness):
         if model is None:
             model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         model_payload = split_model_id(model)
+        event_queue, stream_task = await _pre_connect_event_stream(
+            client, canonical_workspace, conversation_id
+        )
         try:
             result = await client.prompt_async(
                 conversation_id,
@@ -827,6 +864,9 @@ class OpenCodeHarness(AgentHarness):
                 variant=reasoning,
             )
         except Exception as exc:
+            stream_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stream_task
             await self._release_turn_client(reserved_workspace)
             _raise_fresh_conversation_error(
                 exc,
@@ -846,6 +886,8 @@ class OpenCodeHarness(AgentHarness):
                 if approval_mode is not None or sandbox_policy is not None
                 else "ignore"
             ),
+            pre_connected_event_queue=event_queue,
+            pre_connected_stream_task=stream_task,
         )
         return TurnRef(
             conversation_id=conversation_id,
@@ -878,6 +920,9 @@ class OpenCodeHarness(AgentHarness):
         if model is None:
             model = DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         arguments = prompt if prompt else ""
+        event_queue, stream_task = await _pre_connect_event_stream(
+            client, canonical_workspace, conversation_id
+        )
         try:
             result = await client.send_command(
                 conversation_id,
@@ -886,6 +931,9 @@ class OpenCodeHarness(AgentHarness):
                 model=model,
             )
         except Exception as exc:
+            stream_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stream_task
             await self._release_turn_client(reserved_workspace)
             _raise_fresh_conversation_error(
                 exc,
@@ -906,6 +954,8 @@ class OpenCodeHarness(AgentHarness):
                 if approval_mode is not None or sandbox_policy is not None
                 else "ignore"
             ),
+            pre_connected_event_queue=event_queue,
+            pre_connected_stream_task=stream_task,
         )
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
@@ -1028,61 +1078,73 @@ class OpenCodeHarness(AgentHarness):
                 for queue in list(pending.progress_event_subscribers):
                     queue.put_nowait(None)
 
-            async def _event_stream() -> AsyncIterator[Any]:
+            def _process_stream_event(event: Any) -> None:
+                payload = event.data
                 try:
-                    async for event in client.stream_events(
-                        directory=str(workspace_root),
-                        session_id=conversation_id,
+                    parsed = json.loads(payload) if payload else {}
+                except json.JSONDecodeError:
+                    parsed = {"raw": payload}
+                if isinstance(parsed, dict):
+                    wrapped = {"message": {"method": event.event, "params": parsed}}
+                    raw_events.append(wrapped)
+                    event_session_id = extract_session_id(parsed)
+                    status_type = None
+                    if event.event == "session.status":
+                        properties = parsed.get("properties")
+                        if isinstance(properties, dict):
+                            status = properties.get("status") or {}
+                        else:
+                            status = parsed.get("status") or {}
+                        if isinstance(status, dict):
+                            status_type = status.get("type") or status.get("status")
+                    is_idle = event.event == "session.idle" or (
+                        event.event == "session.status"
+                        and isinstance(status_type, str)
+                        and status_type.lower() == "idle"
+                    )
+                    if (
+                        event_session_id == conversation_id
+                        and not is_idle
+                        and event_session_id
                     ):
-                        payload = event.data
-                        try:
-                            parsed = json.loads(payload) if payload else {}
-                        except json.JSONDecodeError:
-                            parsed = {"raw": payload}
-                        if isinstance(parsed, dict):
-                            wrapped = {
-                                "message": {"method": event.event, "params": parsed}
-                            }
-                            raw_events.append(wrapped)
-                            session_id = extract_session_id(parsed)
-                            status_type = None
-                            if event.event == "session.status":
-                                properties = parsed.get("properties")
-                                if isinstance(properties, dict):
-                                    status = properties.get("status") or {}
-                                else:
-                                    status = parsed.get("status") or {}
-                                if isinstance(status, dict):
-                                    status_type = status.get("type") or status.get(
-                                        "status"
-                                    )
-                            is_idle = event.event == "session.idle" or (
-                                event.event == "session.status"
-                                and isinstance(status_type, str)
-                                and status_type.lower() == "idle"
-                            )
-                            if (
-                                session_id == conversation_id
-                                and not is_idle
-                                and session_id
-                            ):
-                                _publish_progress_event(wrapped)
-                            elif not is_idle:
-                                log_event(
-                                    _logger,
-                                    logging.DEBUG,
-                                    "opencode.progress_event.skipped",
-                                    method=event.event,
-                                    conversation_id=conversation_id,
-                                    event_session_id=session_id,
-                                    reason=(
-                                        "missing_session_id"
-                                        if not session_id
-                                        else "session_mismatch"
-                                    ),
-                                    shape_hint=_progress_event_shape_hint(parsed),
-                                )
-                        yield event
+                        _publish_progress_event(wrapped)
+                    elif not is_idle:
+                        log_event(
+                            _logger,
+                            logging.DEBUG,
+                            "opencode.progress_event.skipped",
+                            method=event.event,
+                            conversation_id=conversation_id,
+                            event_session_id=event_session_id,
+                            reason=(
+                                "missing_session_id"
+                                if not event_session_id
+                                else "session_mismatch"
+                            ),
+                            shape_hint=_progress_event_shape_hint(parsed),
+                        )
+
+            async def _event_stream() -> AsyncIterator[Any]:
+                pre_queue = pending.pre_connected_event_queue
+                try:
+                    if (
+                        pre_queue is not None
+                        and not pending.pre_connected_queue_exhausted
+                    ):
+                        while True:
+                            event = await pre_queue.get()
+                            if event is None:
+                                pending.pre_connected_queue_exhausted = True
+                                break
+                            _process_stream_event(event)
+                            yield event
+                    if pre_queue is None or pending.pre_connected_queue_exhausted:
+                        async for event in client.stream_events(
+                            directory=str(workspace_root),
+                            session_id=conversation_id,
+                        ):
+                            _process_stream_event(event)
+                            yield event
                 finally:
                     _close_progress_streams()
 
@@ -1193,11 +1255,18 @@ class OpenCodeHarness(AgentHarness):
                 return await _collect()
             return await asyncio.wait_for(_collect(), timeout=timeout)
         finally:
+            pre_stream_task = (
+                pending.pre_connected_stream_task if pending is not None else None
+            )
             reserved_workspace = (
                 pending.reserved_workspace_root if pending is not None else None
             )
             if turn_id is not None:
                 self._pending_turns.pop((conversation_id, turn_id), None)
+            if pre_stream_task is not None and not pre_stream_task.done():
+                pre_stream_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await pre_stream_task
             await self._release_turn_client(reserved_workspace)
 
 
