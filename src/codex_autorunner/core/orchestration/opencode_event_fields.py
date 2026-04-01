@@ -25,9 +25,20 @@ def extract_message_part(params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
+    properties = extract_message_properties(params)
+    info = properties.get("info")
+    if isinstance(info, dict):
+        return info
+    info = params.get("info")
+    if isinstance(info, dict):
+        return info
+    return {}
+
+
 def extract_message_id(params: dict[str, Any]) -> Optional[str]:
     properties = extract_message_properties(params)
-    info = coerce_dict(properties.get("info"))
+    info = extract_message_info(params)
     part = extract_message_part(params)
     for source, keys in (
         (info, ("id", *_MESSAGE_ID_KEYS)),
@@ -43,8 +54,7 @@ def extract_message_id(params: dict[str, Any]) -> Optional[str]:
 
 
 def extract_message_role(params: dict[str, Any]) -> Optional[str]:
-    properties = extract_message_properties(params)
-    info = coerce_dict(properties.get("info"))
+    info = extract_message_info(params)
     role = info.get("role")
     if isinstance(role, str) and role:
         return role

@@ -20,22 +20,7 @@ from ...core.orchestration.opencode_event_fields import (
 
 
 def _as_params(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {}
-    info = payload.get("info")
-    if not isinstance(info, dict):
-        return payload
-    properties = payload.get("properties")
-    if isinstance(properties, dict):
-        if isinstance(properties.get("info"), dict):
-            return payload
-        merged_properties = dict(properties)
-    else:
-        merged_properties = {}
-    merged_properties["info"] = info
-    merged_payload = dict(payload)
-    merged_payload["properties"] = merged_properties
-    return merged_payload
+    return payload if isinstance(payload, dict) else {}
 
 
 def extract_message_id(payload: Any) -> Optional[str]:

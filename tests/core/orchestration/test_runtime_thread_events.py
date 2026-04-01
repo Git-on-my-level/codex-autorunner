@@ -987,3 +987,48 @@ async def test_normalize_runtime_thread_raw_event_flushes_assistant_message_part
     assert isinstance(resolved[0], OutputDelta)
     assert resolved[0].content == "assistant reply"
     assert state.best_assistant_text() == "assistant reply"
+
+
+async def test_normalize_runtime_thread_raw_event_reads_top_level_info_for_role_updates() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    pending = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.delta",
+                    "params": {
+                        "properties": {
+                            "partID": "part-legacy",
+                            "messageID": "assistant-legacy",
+                            "delta": "hello",
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    resolved = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.updated",
+                    "params": {
+                        "info": {"id": "assistant-legacy", "role": "assistant"},
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert pending == []
+    assert len(resolved) == 1
+    assert isinstance(resolved[0], OutputDelta)
+    assert resolved[0].content == "hello"
+    assert state.best_assistant_text() == "hello"
