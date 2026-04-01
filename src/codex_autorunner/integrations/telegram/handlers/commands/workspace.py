@@ -82,19 +82,12 @@ from .agent_model_utils import (
     _model_list_all_with_agent_compat,
 )
 from .agent_model_utils import (
-    _model_list_with_agent_compat as _workspace_model_list_with_agent_compat,
-)
-from .agent_model_utils import (
     _send_agent_profile_picker as _send_telegram_agent_profile_picker,
 )
 from .shared import TelegramCommandSupportMixin
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
-
-
-# Backward-compatible symbols kept for external tests/importers.
-_model_list_with_agent_compat = _workspace_model_list_with_agent_compat
 
 
 @dataclass

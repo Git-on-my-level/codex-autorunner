@@ -1,4 +1,4 @@
-from codex_autorunner.codex_cli import apply_codex_options
+from codex_autorunner.core.utils import apply_codex_options
 
 
 def test_apply_codex_options_does_not_prepend_before_binary_when_no_subcommand():

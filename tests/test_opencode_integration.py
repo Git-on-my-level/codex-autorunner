@@ -8,13 +8,13 @@ from typing import AsyncGenerator, Optional
 import pytest
 
 from codex_autorunner.agents.opencode.client import OpenCodeClient
-from codex_autorunner.agents.opencode.events import parse_sse_lines
 from codex_autorunner.agents.opencode.harness import OpenCodeHarness
 from codex_autorunner.agents.opencode.supervisor import (
     OpenCodeSupervisor,
     OpenCodeSupervisorError,
 )
 from codex_autorunner.core.managed_processes.registry import read_process_record
+from codex_autorunner.core.sse import parse_sse_lines
 from codex_autorunner.workspace import canonical_workspace_root, workspace_id_for_path
 
 

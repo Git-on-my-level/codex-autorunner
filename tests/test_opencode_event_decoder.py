@@ -12,13 +12,13 @@ from codex_autorunner.agents.opencode.event_decoder import (
     decode_sse_event,
     parse_message_response,
 )
-from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.agents.opencode.protocol_types import (
     MessageEvent,
     PermissionEvent,
     QuestionEvent,
     UsageEvent,
 )
+from codex_autorunner.core.sse import SSEEvent
 
 
 class TestDecodeSSEEvent:

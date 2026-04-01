@@ -4,13 +4,13 @@ import time
 import pytest
 
 from codex_autorunner.agents.opencode import runtime as opencode_runtime
-from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.agents.opencode.runtime import (
     collect_opencode_output,
     collect_opencode_output_from_events,
     extract_session_id,
     parse_message_response,
 )
+from codex_autorunner.core.sse import SSEEvent
 
 
 async def _iter_events(events):

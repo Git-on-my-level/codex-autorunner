@@ -70,10 +70,6 @@ class WorkflowPublishConfig:
     include: tuple[str, ...]
 
 
-# Backward-compatible alias for older imports.
-WorkflowOutboxConfig = WorkflowPublishConfig
-
-
 @dataclass(frozen=True)
 class DemoWorkflowConfig:
     workflow_path: Path
@@ -960,7 +956,6 @@ __all__ = [
     "DemoWorkflowRunResult",
     "WorkflowDemoCaptureConfig",
     "WorkflowExportConfig",
-    "WorkflowOutboxConfig",
     "WorkflowPublishConfig",
     "WorkflowServiceConfig",
     "WorkflowServiceSession",

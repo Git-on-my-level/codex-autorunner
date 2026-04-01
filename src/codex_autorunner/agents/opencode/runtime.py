@@ -21,6 +21,7 @@ import httpx
 
 from ...core.coercion import coerce_int
 from ...core.logging_utils import log_event
+from ...core.sse import SSEEvent
 from ...core.utils import resolve_opencode_auth_path
 from .constants import (
     OPENCODE_CONTEXT_WINDOW_KEYS,
@@ -44,7 +45,6 @@ from .event_fields import (
 from .event_fields import (
     extract_part_message_id as extract_event_part_message_id,
 )
-from .events import SSEEvent
 from .usage_decoder import extract_usage, extract_usage_field
 
 PermissionDecision = str

@@ -4,9 +4,9 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.agents.opencode.events import SSEEvent
 from codex_autorunner.agents.opencode.runtime import extract_session_id
 from codex_autorunner.core.ports.run_event import Completed, OutputDelta, TokenUsage
+from codex_autorunner.core.sse import SSEEvent
 from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 

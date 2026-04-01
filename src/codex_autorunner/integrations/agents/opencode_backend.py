@@ -7,7 +7,6 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 from ...agents.opencode.client import OpenCodeClient
 from ...agents.opencode.event_decoder import decode_sse_event
-from ...agents.opencode.events import SSEEvent
 from ...agents.opencode.logging import OpenCodeEventFormatter
 from ...agents.opencode.runtime import (
     OpenCodeTurnOutput,
@@ -38,6 +37,7 @@ from ...core.ports.run_event import (
     TokenUsage,
     ToolCall,
 )
+from ...core.sse import SSEEvent
 from ...core.text_delta_coalescer import StreamingTextCoalescer
 from ...core.usage import persist_opencode_usage_snapshot
 

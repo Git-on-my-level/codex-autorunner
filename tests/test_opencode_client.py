@@ -11,7 +11,7 @@ from codex_autorunner.agents.opencode.client import (
     _normalize_sse_event,
     _normalize_template_path,
 )
-from codex_autorunner.agents.opencode.events import SSEEvent
+from codex_autorunner.core.sse import SSEEvent
 
 
 def test_normalize_sse_event_unwraps_payload() -> None:
