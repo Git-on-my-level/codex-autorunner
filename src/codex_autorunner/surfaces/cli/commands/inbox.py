@@ -27,6 +27,47 @@ def register_inbox_commands(
             cause=exc,
         )
 
+    def _resolve_inbox_item(
+        *,
+        payload: dict[str, Any],
+        path: Optional[Path],
+        base_path: Optional[str],
+        output_json: bool,
+        pretty: bool,
+    ) -> None:
+        config = require_hub_config(path)
+        resolve_url = build_server_url(
+            config, "/hub/messages/resolve", base_path_override=base_path
+        )
+        try:
+            resolved = request_json(
+                "POST",
+                resolve_url,
+                payload=payload,
+                token_env=config.server_auth_token_env,
+                timeout_seconds=10.0,
+            )
+        except (
+            httpx.HTTPError,
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            OSError,
+        ) as exc:
+            _hub_request_error("Failed to resolve hub inbox item.", resolve_url, exc)
+
+        if output_json:
+            typer.echo(json.dumps(resolved, indent=2 if pretty else None))
+            return
+
+        resolved_payload = (
+            resolved.get("resolved", {}) if isinstance(resolved, dict) else {}
+        )
+        typer.echo(
+            "Resolved inbox item: "
+            f"repo={resolved_payload.get('repo_id')} run={resolved_payload.get('run_id')} "
+            f"type={resolved_payload.get('item_type')} seq={resolved_payload.get('seq')}"
+        )
+
     @app.command("resolve")
     def hub_inbox_resolve(
         repo_id: str = typer.Option(..., "--repo-id", help="Hub repo id"),
@@ -53,7 +94,6 @@ def register_inbox_commands(
         pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
     ):
         """Resolve a single hub inbox item (currently dismiss only)."""
-        config = require_hub_config(path)
         if action != "dismiss":
             raise_exit("Only --action dismiss is currently supported.")
 
@@ -69,35 +109,55 @@ def register_inbox_commands(
         if reason:
             payload["reason"] = reason
 
-        resolve_url = build_server_url(
-            config, "/hub/messages/resolve", base_path_override=base_path
+        _resolve_inbox_item(
+            payload=payload,
+            path=path,
+            base_path=base_path,
+            output_json=output_json,
+            pretty=pretty,
         )
-        try:
-            resolved = request_json(
-                "POST",
-                resolve_url,
-                payload=payload,
-                token_env=config.server_auth_token_env,
-                timeout_seconds=10.0,
-            )
-        except (
-            httpx.HTTPError,
-            httpx.ConnectError,
-            httpx.TimeoutException,
-            OSError,
-        ) as exc:
-            _hub_request_error("Failed to resolve hub inbox item.", resolve_url, exc)
 
-        if output_json:
-            typer.echo(json.dumps(resolved, indent=2 if pretty else None))
-            return
-        resolved_payload = (
-            resolved.get("resolved", {}) if isinstance(resolved, dict) else {}
-        )
-        typer.echo(
-            "Resolved inbox item: "
-            f"repo={resolved_payload.get('repo_id')} run={resolved_payload.get('run_id')} "
-            f"type={resolved_payload.get('item_type')} seq={resolved_payload.get('seq')}"
+    @app.command("dismiss")
+    def hub_inbox_dismiss(
+        repo_id: str = typer.Option(..., "--repo-id", help="Hub repo id"),
+        run_id: str = typer.Option(..., "--run-id", help="Flow run id"),
+        seq: Optional[int] = typer.Option(
+            None, "--seq", help="Dispatch sequence number"
+        ),
+        item_type: Optional[str] = typer.Option(
+            None, "--item-type", help="Inbox item type (auto-detected when omitted)"
+        ),
+        reason: Optional[str] = typer.Option(None, "--reason", help="Dismissal reason"),
+        path: Optional[Path] = typer.Option(
+            None, "--path", "--hub", help="Hub root path"
+        ),
+        base_path: Optional[str] = typer.Option(
+            None, "--base-path", help="Override hub server base path (e.g. /car)"
+        ),
+        output_json: bool = typer.Option(
+            True, "--json/--no-json", help="Emit JSON output (default: true)"
+        ),
+        pretty: bool = typer.Option(False, "--pretty", help="Pretty-print JSON output"),
+    ):
+        """Dismiss a single hub inbox item."""
+        payload: dict[str, Any] = {
+            "repo_id": repo_id,
+            "run_id": run_id,
+            "action": "dismiss",
+        }
+        if seq is not None:
+            payload["seq"] = seq
+        if item_type:
+            payload["item_type"] = item_type
+        if reason:
+            payload["reason"] = reason
+
+        _resolve_inbox_item(
+            payload=payload,
+            path=path,
+            base_path=base_path,
+            output_json=output_json,
+            pretty=pretty,
         )
 
     @app.command("clear")

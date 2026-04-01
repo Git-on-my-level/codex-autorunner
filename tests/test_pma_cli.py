@@ -1,5 +1,6 @@
 """Tests for PMA CLI commands."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.filebox import BOXES
+from codex_autorunner.core.pma_audit import PmaActionType, PmaAuditLog
 from codex_autorunner.surfaces.cli import pma_cli
 from codex_autorunner.surfaces.cli.pma_cli import pma_app
 
@@ -83,6 +85,7 @@ def test_pma_cli_thread_list_help_shows_json_option():
     assert result.exit_code == 0
     output = result.stdout
     assert "--json" in output, "PMA thread list should support --json"
+    assert "--ndjson" in output, "PMA thread list should support --ndjson"
 
 
 def test_pma_cli_thread_send_help_shows_json_option():
@@ -539,6 +542,259 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
             {"limit": 50, "level": "info"},
         ),
     ]
+
+
+def test_pma_cli_thread_compact_dry_run_with_status_filter(
+    monkeypatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".codex-autorunner").mkdir()
+    (tmp_path / ".codex-autorunner" / "config.yml").write_text(
+        "pma: {}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = payload, token_env
+        calls.append((method, url, params))
+        if method == "GET" and url.endswith("/hub/pma/threads"):
+            return {
+                "threads": [
+                    {
+                        "managed_thread_id": "thread-1",
+                        "agent": "codex",
+                        "status": "completed",
+                        "status_reason": "managed_turn_completed",
+                        "repo_id": "repo-1",
+                        "resource_kind": "repo",
+                        "resource_id": "repo-1",
+                        "chat_bound": True,
+                        "cleanup_protected": True,
+                    },
+                    {
+                        "managed_thread_id": "thread-2",
+                        "agent": "codex",
+                        "status": "completed",
+                        "status_reason": "managed_turn_completed",
+                        "repo_id": "repo-1",
+                        "resource_kind": "repo",
+                        "resource_id": "repo-1",
+                    },
+                ]
+            }
+        raise AssertionError(f"unexpected call: {method} {url}")
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "compact",
+            "--status",
+            "completed",
+            "--summary",
+            "cleanup",
+            "--dry-run",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Dry run summary: 2 threads would be compacted" in result.stdout
+    assert "thread-1 agent=codex status=completed" in result.stdout
+    assert "chat_bound=yes" in result.stdout
+    assert "protected=yes" in result.stdout
+    assert "thread-2 agent=codex status=completed" in result.stdout
+    assert calls == [
+        (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads",
+            {"status": "completed", "limit": 1000},
+        )
+    ]
+
+    audit_entries = PmaAuditLog(tmp_path).list_recent(
+        action_type=PmaActionType.SESSION_COMPACT
+    )
+    assert audit_entries
+    assert audit_entries[-1].details["mode"] == "dry_run"
+    assert audit_entries[-1].details["thread_ids"] == ["thread-1", "thread-2"]
+
+
+def test_pma_cli_thread_compact_executes_batch_for_completed_threads(
+    monkeypatch, tmp_path: Path
+) -> None:
+    (tmp_path / ".codex-autorunner").mkdir()
+    (tmp_path / ".codex-autorunner" / "config.yml").write_text(
+        "pma: {}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+    calls: list[
+        tuple[
+            str,
+            str,
+            dict[str, object] | None,
+            dict[str, object] | None,
+        ]
+    ] = []
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = token_env
+        calls.append((method, url, payload, params))
+        if method == "GET" and url.endswith("/hub/pma/threads"):
+            return {
+                "threads": [
+                    {
+                        "managed_thread_id": "thread-1",
+                        "agent": "codex",
+                        "status": "completed",
+                        "status_reason": "managed_turn_completed",
+                        "repo_id": "repo-1",
+                        "resource_kind": "repo",
+                        "resource_id": "repo-1",
+                        "chat_bound": True,
+                        "cleanup_protected": True,
+                    },
+                    {
+                        "managed_thread_id": "thread-2",
+                        "agent": "codex",
+                        "status": "completed",
+                        "status_reason": "managed_turn_completed",
+                        "repo_id": "repo-1",
+                        "resource_kind": "repo",
+                        "resource_id": "repo-1",
+                    },
+                ]
+            }
+        if method == "POST" and url.endswith("/hub/pma/threads/thread-1/compact"):
+            return {
+                "thread": {"managed_thread_id": "thread-1", "compact_seed": "cleanup"}
+            }
+        if method == "POST" and url.endswith("/hub/pma/threads/thread-2/compact"):
+            return {
+                "thread": {"managed_thread_id": "thread-2", "compact_seed": "cleanup"}
+            }
+        raise AssertionError(f"unexpected call: {method} {url}")
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "compact",
+            "--status",
+            "completed",
+            "--summary",
+            "cleanup",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Dry run summary: 2 threads would be compacted" in result.stdout
+    assert "Compacted thread-1" in result.stdout
+    assert "Compacted thread-2" in result.stdout
+    assert "Compacted 2 threads" in result.stdout
+    assert calls == [
+        (
+            "GET",
+            "http://127.0.0.1:4321/hub/pma/threads",
+            None,
+            {"status": "completed", "limit": 1000},
+        ),
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-1/compact",
+            {"summary": "cleanup", "reset_backend": True},
+            None,
+        ),
+        (
+            "POST",
+            "http://127.0.0.1:4321/hub/pma/threads/thread-2/compact",
+            {"summary": "cleanup", "reset_backend": True},
+            None,
+        ),
+    ]
+
+    audit_entries = PmaAuditLog(tmp_path).list_recent(
+        action_type=PmaActionType.SESSION_COMPACT
+    )
+    assert audit_entries
+    assert audit_entries[-1].details["mode"] == "result"
+    assert audit_entries[-1].details["thread_ids"] == ["thread-1", "thread-2"]
+
+
+def test_pma_cli_thread_compact_all_requires_force(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / ".codex-autorunner").mkdir()
+    (tmp_path / ".codex-autorunner" / "config.yml").write_text(
+        "pma: {}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "thread",
+            "compact",
+            "--all",
+            "--summary",
+            "cleanup",
+            "--path",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--force is required" in result.output
 
 
 def test_pma_cli_thread_send_reports_queued_busy_thread(
@@ -1044,6 +1300,12 @@ def test_pma_cli_thread_archive_preserves_not_found_detail(
     assert "possible base-path mismatch" not in result.output
 
 
+def test_resolve_hub_path_uses_loaded_hub_root_for_worktree_path(hub_env) -> None:
+    resolved = pma_cli._resolve_hub_path(hub_env.repo_root)
+
+    assert resolved == hub_env.hub_root
+
+
 def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -1162,6 +1424,125 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
             },
         ),
     ]
+
+
+def test_pma_cli_thread_list_json_emits_array(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = payload, token_env, params
+        assert method == "GET"
+        assert url == "http://127.0.0.1:4321/hub/pma/threads"
+        return {
+            "threads": [
+                {
+                    "managed_thread_id": "thread-1",
+                    "agent": "codex",
+                    "status": "idle",
+                    "status_reason": "thread_created",
+                },
+                {
+                    "managed_thread_id": "thread-2",
+                    "agent": "opencode",
+                    "status": "running",
+                    "status_reason": "turn_active",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--json", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert isinstance(parsed, list)
+    assert [item["managed_thread_id"] for item in parsed] == ["thread-1", "thread-2"]
+    assert all(isinstance(item, dict) for item in parsed)
+
+
+def test_pma_cli_thread_list_ndjson_emits_one_object_per_line(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = payload, token_env, params
+        assert method == "GET"
+        assert url == "http://127.0.0.1:4321/hub/pma/threads"
+        return {
+            "threads": [
+                {
+                    "managed_thread_id": "thread-1",
+                    "agent": "codex",
+                    "status": "idle",
+                },
+                {
+                    "managed_thread_id": "thread-2",
+                    "agent": "opencode",
+                    "status": "running",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--ndjson", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    parsed = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert [item["managed_thread_id"] for item in parsed] == ["thread-1", "thread-2"]
+
+
+def test_pma_cli_thread_list_rejects_json_and_ndjson_together(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--json", "--ndjson", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "Choose only one of --json or --ndjson." in result.output
 
 
 def test_pma_cli_thread_spawn_rejects_invalid_context_profile(

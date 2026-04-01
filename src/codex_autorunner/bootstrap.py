@@ -330,14 +330,16 @@ You are an **abstraction layer, not an executor**. Coordinate tickets and flows 
 - Use managed threads for exploratory/review/quick-fix/interactive debugging work in one repo.
 - Use ticket flows for structured, multi-step deliverables with acceptance criteria or cross-repo changes.
 - Managed thread state is visible in `hub_snapshot.pma_threads`.
+- For hub-scoped PMA CLI commands, include `--path <hub_root>` so they resolve the
+  intended hub config instead of relying on the current working directory.
 - CLI primitives:
-  - `car pma thread spawn --agent codex --repo <repo_id> --name <label>`
-  - `car pma thread send --id <managed_thread_id> --message "..." --watch`
-  - `car pma thread send --id <managed_thread_id> --message-file prompt.md --watch`
-  - `car pma thread send --id <managed_thread_id> --message "..." --notify-on terminal --notify-lane <lane_id>`
-  - `car pma thread status --id <managed_thread_id>`
-  - `car pma thread compact --id <id> --summary "..."`
-  - `car pma thread archive --id <id>`
+  - `car pma thread spawn --agent codex --repo <repo_id> --name <label> --path <hub_root>`
+  - `car pma thread send --id <managed_thread_id> --message "..." --watch --path <hub_root>`
+  - `car pma thread send --id <managed_thread_id> --message-file prompt.md --watch --path <hub_root>`
+  - `car pma thread send --id <managed_thread_id> --message "..." --notify-on terminal --notify-lane <lane_id> --path <hub_root>`
+  - `car pma thread status --id <managed_thread_id> --path <hub_root>`
+  - `car pma thread compact --id <id> --summary "..." --path <hub_root>`
+  - `car pma thread archive --id <id> --path <hub_root>`
 
 ## Automation primitives (event-driven continuity)
 
