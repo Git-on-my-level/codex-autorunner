@@ -10,10 +10,14 @@ from .....integrations.app_server.client import (
     CodexAppServerClient,
     CodexAppServerResponseError,
 )
-from ....chat.agents import chat_agent_definitions, normalize_chat_agent
+from ....chat.agents import (
+    chat_agent_definitions,
+    format_chat_agent_selection,
+    normalize_chat_agent,
+)
 from ...adapter import TelegramMessage
 from ...config import AppServerUnavailableError
-from ...constants import AGENT_PICKER_PROMPT
+from ...constants import AGENT_PICKER_PROMPT, AGENT_PROFILE_PICKER_PROMPT
 from ...types import SelectionState
 
 _INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
@@ -28,8 +32,14 @@ async def _handle_agent_command(
 ) -> None:
     record = await commands._router.ensure_topic(message.chat_id, message.thread_id)
     current = commands._effective_agent(record)
+    current_profile = commands._effective_agent_profile(record)
     key = await commands._resolve_topic_key(message.chat_id, message.thread_id)
     commands._agent_options.pop(key, None)
+    agent_profile_options = getattr(commands, "_agent_profile_options", None)
+    if not isinstance(agent_profile_options, dict):
+        agent_profile_options = {}
+        commands._agent_profile_options = agent_profile_options
+    agent_profile_options.pop(key, None)
     argv = commands._parse_command_args(args)
     if not argv:
         await _send_agent_picker(
@@ -56,6 +66,23 @@ async def _handle_agent_command(
             reply_to=message.message_id,
         )
         return
+    desired_profile = None
+    if desired == "hermes" and len(argv) > 1:
+        desired_profile = commands._normalize_hermes_profile(argv[1])
+        if desired_profile is None:
+            known = ", ".join(
+                option.profile for option in commands._hermes_profile_options()
+            )
+            await commands._send_message(
+                message.chat_id,
+                (
+                    f"Unknown Hermes profile '{argv[1]}'."
+                    + (f" Known profiles: {known}." if known else "")
+                ),
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
     workspace_path, error = commands._resolve_workspace_path(record, allow_pma=True)
     if workspace_path is None:
         await commands._send_message(
@@ -100,22 +127,45 @@ async def _handle_agent_command(
         )
         return
     if desired == current:
-        await commands._send_message(
-            message.chat_id,
-            f"Agent already set to {current}.",
+        if desired != "hermes" or desired_profile == current_profile:
+            await commands._send_message(
+                message.chat_id,
+                f"Agent already set to {commands._effective_agent_label(record)}.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+    if (
+        desired == "hermes"
+        and desired_profile is None
+        and commands._hermes_profile_options()
+    ):
+        await _send_agent_profile_picker(
+            commands,
+            key=key,
+            current=current_profile,
+            chat_id=message.chat_id,
             thread_id=message.thread_id,
+            message_id=message.message_id,
             reply_to=message.message_id,
+            requester_user_id=(
+                str(message.from_user_id) if message.from_user_id is not None else None
+            ),
         )
         return
     note = await commands._apply_agent_change(
-        message.chat_id, message.thread_id, desired
+        message.chat_id,
+        message.thread_id,
+        desired,
+        profile=desired_profile,
     )
     await commands._send_message(
         message.chat_id,
-        f"Agent set to {desired}{note}.",
+        f"Agent set to {format_chat_agent_selection(desired, desired_profile)}{note}.",
         thread_id=message.thread_id,
         reply_to=message.message_id,
     )
+    return
 
 
 async def _send_agent_picker(
@@ -148,6 +198,35 @@ async def _send_agent_picker(
     )
 
 
+async def _send_agent_profile_picker(
+    commands: Any,
+    *,
+    key: str,
+    current: Optional[str],
+    chat_id: int,
+    thread_id: Optional[int],
+    message_id: Optional[int],
+    reply_to: Optional[int],
+    requester_user_id: Optional[str],
+) -> None:
+    items = _build_agent_profile_options(current=current, context=commands)
+    state = SelectionState(items=items, requester_user_id=requester_user_id)
+    keyboard = commands._build_agent_profile_keyboard(state)
+    agent_profile_options = getattr(commands, "_agent_profile_options", None)
+    if not isinstance(agent_profile_options, dict):
+        agent_profile_options = {}
+        commands._agent_profile_options = agent_profile_options
+    agent_profile_options[key] = state
+    commands._touch_cache_timestamp("agent_profile_options", key)
+    await commands._send_message(
+        chat_id,
+        commands._selection_prompt(AGENT_PROFILE_PICKER_PROMPT, state),
+        thread_id=thread_id,
+        reply_to=reply_to or message_id,
+        reply_markup=keyboard,
+    )
+
+
 def _build_agent_options(
     *,
     current: str,
@@ -163,6 +242,20 @@ def _build_agent_options(
         if agent == "opencode" and availability != "available":
             label = f"{label} ({availability})"
         items.append((agent, label))
+    return items
+
+
+def _build_agent_profile_options(
+    *,
+    current: Optional[str],
+    context: Any = None,
+) -> list[tuple[str, str]]:
+    items = [("clear", "(default profile)")]
+    for option in context._hermes_profile_options():
+        label = option.profile
+        if current == option.profile:
+            label = f"{label} (current)"
+        items.append((option.profile, label))
     return items
 
 

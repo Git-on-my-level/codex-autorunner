@@ -4,6 +4,7 @@ from typing import Any, Sequence
 
 from ..adapter import (
     AgentCallback,
+    AgentProfileCallback,
     ApprovalCallback,
     BindCallback,
     CancelCallback,
@@ -83,6 +84,9 @@ async def handle_callback(handlers: Any, callback: TelegramCallbackQuery) -> Non
     elif isinstance(parsed, AgentCallback):
         if key:
             await handlers._handle_agent_callback(key, callback, parsed)
+    elif isinstance(parsed, AgentProfileCallback):
+        if key:
+            await handlers._handle_agent_profile_callback(key, callback, parsed)
     elif isinstance(parsed, ModelCallback):
         if key:
             await handlers._handle_model_callback(key, callback, parsed)

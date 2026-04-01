@@ -26,6 +26,14 @@ class ChatAgentDefinition:
     description: str
 
 
+@dataclass(frozen=True)
+class ChatAgentProfileOption:
+    agent: str
+    profile: str
+    runtime_agent: str
+    description: str
+
+
 CHAT_AGENT_DEFINITIONS: tuple[ChatAgentDefinition, ...] = (
     ChatAgentDefinition(value="codex", description="Codex"),
     ChatAgentDefinition(value="opencode", description="OpenCode"),
@@ -39,8 +47,43 @@ class ChatAgentSwitchState:
     """Normalized runtime state that should apply after an agent switch."""
 
     agent: str
+    profile: Optional[str]
     model: Optional[str]
     effort: Optional[str]
+
+
+def _registered_agents(context: Any = None) -> dict[str, Any]:
+    try:
+        from ...agents.registry import get_registered_agents
+
+        return get_registered_agents(context)
+    except Exception:
+        return {}
+
+
+def _agent_runtime_kind(agent_id: str, descriptor: Any) -> str:
+    raw_runtime_kind = getattr(descriptor, "runtime_kind", None)
+    if isinstance(raw_runtime_kind, str) and raw_runtime_kind.strip():
+        return raw_runtime_kind.strip().lower()
+    normalized_agent_id = str(agent_id or "").strip().lower()
+    if normalized_agent_id == "hermes" or normalized_agent_id.startswith("hermes-"):
+        return "hermes"
+    return normalized_agent_id
+
+
+def _legacy_hermes_profile_from_agent(agent_id: object) -> Optional[str]:
+    if not isinstance(agent_id, str):
+        return None
+    normalized = agent_id.strip().lower()
+    prefix = "hermes-"
+    if not normalized.startswith(prefix):
+        return None
+    profile = normalized[len(prefix) :].strip()
+    return profile or None
+
+
+def _hermes_profile_from_runtime_agent(agent_id: str) -> str:
+    return _legacy_hermes_profile_from_agent(agent_id) or str(agent_id).strip().lower()
 
 
 def _valid_chat_agent_values(context: Any = None) -> tuple[str, ...]:
@@ -50,13 +93,7 @@ def _valid_chat_agent_values(context: Any = None) -> tuple[str, ...]:
 def chat_agent_definitions(context: Any = None) -> tuple[ChatAgentDefinition, ...]:
     ordered: list[ChatAgentDefinition] = []
     seen: set[str] = set()
-
-    try:
-        from ...agents.registry import get_registered_agents
-
-        registered = get_registered_agents(context)
-    except Exception:
-        registered = {}
+    registered = _registered_agents(context)
 
     for definition in CHAT_AGENT_DEFINITIONS:
         descriptor = registered.get(definition.value)
@@ -76,6 +113,8 @@ def chat_agent_definitions(context: Any = None) -> tuple[ChatAgentDefinition, ..
         if agent_id in seen:
             continue
         descriptor = registered[agent_id]
+        if _agent_runtime_kind(agent_id, descriptor) == "hermes":
+            continue
         ordered.append(
             ChatAgentDefinition(
                 value=agent_id,
@@ -89,6 +128,108 @@ def chat_agent_definitions(context: Any = None) -> tuple[ChatAgentDefinition, ..
 
 def valid_chat_agent_values(context: Any = None) -> tuple[str, ...]:
     return _valid_chat_agent_values(context)
+
+
+def chat_hermes_profile_options(
+    context: Any = None,
+) -> tuple[ChatAgentProfileOption, ...]:
+    registered = _registered_agents(context)
+    options: list[ChatAgentProfileOption] = []
+    seen_profiles: set[str] = set()
+    for agent_id in sorted(registered):
+        descriptor = registered[agent_id]
+        if agent_id == "hermes":
+            continue
+        if _agent_runtime_kind(agent_id, descriptor) != "hermes":
+            continue
+        profile = _hermes_profile_from_runtime_agent(agent_id)
+        if not profile or profile in seen_profiles:
+            continue
+        options.append(
+            ChatAgentProfileOption(
+                agent="hermes",
+                profile=profile,
+                runtime_agent=agent_id,
+                description=str(getattr(descriptor, "name", "") or agent_id),
+            )
+        )
+        seen_profiles.add(profile)
+    return tuple(options)
+
+
+def normalize_hermes_profile(value: object, *, context: Any = None) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    compact = "".join(ch for ch in normalized if ch.isalnum())
+    for option in chat_hermes_profile_options(context):
+        if normalized in {option.profile, option.runtime_agent}:
+            return option.profile
+        if compact in {
+            "".join(ch for ch in option.profile if ch.isalnum()),
+            "".join(ch for ch in option.runtime_agent if ch.isalnum()),
+        }:
+            return option.profile
+    return _legacy_hermes_profile_from_agent(normalized)
+
+
+def resolve_chat_agent_and_profile(
+    agent: object,
+    profile: object = None,
+    *,
+    default: Optional[str] = DEFAULT_CHAT_AGENT,
+    context: Any = None,
+) -> tuple[str, Optional[str]]:
+    normalized_agent = normalize_chat_agent(agent, default=None, context=context)
+    legacy_hermes_profile = None
+    if normalized_agent is None:
+        legacy_hermes_profile = normalize_hermes_profile(agent, context=context)
+        if legacy_hermes_profile is not None:
+            normalized_agent = "hermes"
+    if normalized_agent is None:
+        normalized_agent = default or DEFAULT_CHAT_AGENT
+    normalized_profile = None
+    if normalized_agent == "hermes":
+        normalized_profile = normalize_hermes_profile(profile, context=context)
+        if normalized_profile is None:
+            normalized_profile = legacy_hermes_profile
+    return normalized_agent, normalized_profile
+
+
+def resolve_chat_runtime_agent(
+    agent: object,
+    profile: object = None,
+    *,
+    default: Optional[str] = DEFAULT_CHAT_AGENT,
+    context: Any = None,
+) -> str:
+    normalized_agent, normalized_profile = resolve_chat_agent_and_profile(
+        agent,
+        profile,
+        default=default,
+        context=context,
+    )
+    if normalized_agent != "hermes" or normalized_profile is None:
+        return normalized_agent
+    for option in chat_hermes_profile_options(context):
+        if option.profile == normalized_profile:
+            return option.runtime_agent
+    return normalized_agent
+
+
+def format_chat_agent_selection(agent: object, profile: object = None) -> str:
+    normalized_agent = (
+        str(agent or "").strip().lower() or DEFAULT_CHAT_AGENT
+        if isinstance(agent, str)
+        else DEFAULT_CHAT_AGENT
+    )
+    if normalized_agent != "hermes":
+        return normalized_agent
+    if isinstance(profile, str) and profile.strip():
+        return f"{normalized_agent} [{profile.strip().lower()}]"
+    return normalized_agent
 
 
 def normalize_chat_agent(
@@ -149,17 +290,17 @@ def chat_agent_description(context: Any = None) -> str:
 
 def build_agent_switch_state(
     agent: object,
+    profile: object = None,
     *,
     model_reset: AgentModelResetMode,
     context: Any = None,
 ) -> ChatAgentSwitchState:
-    normalized = normalize_chat_agent(
+    normalized, normalized_profile = resolve_chat_agent_and_profile(
         agent,
+        profile,
         default=DEFAULT_CHAT_AGENT,
         context=context,
     )
-    if normalized is None:
-        normalized = DEFAULT_CHAT_AGENT
     model = (
         default_chat_model_for_agent(normalized, context)
         if model_reset == "agent_default"
@@ -167,6 +308,7 @@ def build_agent_switch_state(
     )
     return ChatAgentSwitchState(
         agent=normalized,
+        profile=normalized_profile,
         model=model,
         effort=None,
     )

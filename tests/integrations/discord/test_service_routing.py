@@ -215,6 +215,12 @@ async def test_discord_message_turns_route_through_orchestration_ingress(
             self._store = _StoreStub()
             self._logger = logging.getLogger("test")
 
+        def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
+            return str(binding.get("agent") or "codex"), None
+
+        def _runtime_agent_for_binding(self, binding: dict[str, object]) -> str:
+            return str(binding.get("agent") or "codex")
+
         def _normalize_agent(self, value: object) -> str:
             return str(value or "codex")
 
@@ -297,6 +303,12 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
         def __init__(self) -> None:
             self._store = _StoreStub()
             self._logger = logging.getLogger("test")
+
+        def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
+            return str(binding.get("agent") or "codex"), None
+
+        def _runtime_agent_for_binding(self, binding: dict[str, object]) -> str:
+            return str(binding.get("agent") or "codex")
 
         def _normalize_agent(self, value: object) -> str:
             return str(value or "codex")
@@ -2694,7 +2706,7 @@ async def test_component_interaction_agent_select_updates_agent(tmp_path: Path) 
 
 
 @pytest.mark.anyio
-async def test_component_interaction_agent_select_accepts_registered_alias(
+async def test_component_interaction_agent_select_prompts_for_hermes_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2716,7 +2728,7 @@ async def test_component_interaction_agent_select_accepts_registered_alias(
     )
     rest = _FakeRest()
     gateway = _FakeGateway(
-        [_component_interaction(custom_id="agent_select", values=["hermes-m4-pma"])]
+        [_component_interaction(custom_id="agent_select", values=["hermes"])]
     )
     service = DiscordBotService(
         _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
@@ -2731,10 +2743,12 @@ async def test_component_interaction_agent_select_accepts_registered_alias(
         await service.run_forever()
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
-        assert binding.get("agent") == "hermes-m4-pma"
+        assert binding.get("agent") == "hermes"
+        assert binding.get("agent_profile") is None
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "agent set to hermes-m4-pma" in content
+        assert "agent set to hermes" in content
+        assert "select a hermes profile" in content
     finally:
         await store.close()
 
@@ -3057,6 +3071,7 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
         *,
         workspace_root: Path,
         agent: str,
+        agent_profile: str | None = None,
         current_thread_id: str | None,
         mode: str,
         repo_id: str | None = None,
@@ -3067,6 +3082,7 @@ async def test_car_session_resume_with_partial_thread_prompts_filtered_picker(
         _ = (
             workspace_root,
             agent,
+            agent_profile,
             current_thread_id,
             mode,
             repo_id,
@@ -3599,7 +3615,7 @@ async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -
 
 
 @pytest.mark.anyio
-async def test_normalized_component_agent_select_accepts_registered_alias(
+async def test_normalized_component_agent_select_prompts_for_hermes_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3632,16 +3648,18 @@ async def test_normalized_component_agent_select_accepts_registered_alias(
     try:
         event = _normalized_component_event(
             component_id="agent_select",
-            values=["hermes-m4-pma"],
+            values=["hermes"],
         )
         context = build_dispatch_context(event)
         await service._handle_normalized_interaction(event, context)
         binding = await store.get_binding(channel_id="channel-1")
         assert binding is not None
-        assert binding.get("agent") == "hermes-m4-pma"
+        assert binding.get("agent") == "hermes"
+        assert binding.get("agent_profile") is None
         assert len(rest.interaction_responses) == 1
         content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
-        assert "agent set to hermes-m4-pma" in content
+        assert "agent set to hermes" in content
+        assert "select a hermes profile" in content
     finally:
         await store.close()
 
@@ -3721,6 +3739,7 @@ async def test_normalized_interaction_session_resume_without_thread_uses_picker(
         *,
         workspace_root: Path,
         agent: str,
+        agent_profile: str | None = None,
         current_thread_id: str | None,
         mode: str,
         repo_id: str | None = None,
@@ -3731,6 +3750,7 @@ async def test_normalized_interaction_session_resume_without_thread_uses_picker(
         _ = (
             workspace_root,
             agent,
+            agent_profile,
             current_thread_id,
             mode,
             repo_id,

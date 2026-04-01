@@ -252,9 +252,12 @@ def _activated_record_allows_plain_text_turn(
 async def _clear_pending_options(
     handlers: Any, key: str, message: TelegramMessage
 ) -> None:
+    agent_profile_options = getattr(handlers, "_agent_profile_options", None)
     handlers._resume_options.pop(key, None)
     handlers._bind_options.pop(key, None)
     handlers._agent_options.pop(key, None)
+    if isinstance(agent_profile_options, dict):
+        agent_profile_options.pop(key, None)
     handlers._model_options.pop(key, None)
     handlers._model_pending.pop(key, None)
     handlers._review_commit_options.pop(key, None)
@@ -550,10 +553,13 @@ async def handle_message_inner(
             _log_message_policy_result(handlers, message, command_policy_result)
             await _clear_placeholder()
             return
+        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
         _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
         _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
         handlers._flow_run_options.pop(key, None)
         handlers._agent_options.pop(key, None)
+        if isinstance(agent_profile_options, dict):
+            agent_profile_options.pop(key, None)
         handlers._model_options.pop(key, None)
         handlers._model_pending.pop(key, None)
 
@@ -593,12 +599,15 @@ async def handle_message_inner(
         await _clear_placeholder()
         return
     if command:
+        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
         if command.name != "resume":
             _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
         if command.name != "bind":
             _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
         if command.name != "agent":
             handlers._agent_options.pop(key, None)
+            if isinstance(agent_profile_options, dict):
+                agent_profile_options.pop(key, None)
         if command.name != "model":
             handlers._model_options.pop(key, None)
             handlers._model_pending.pop(key, None)
@@ -617,9 +626,12 @@ async def handle_message_inner(
             )
             await handlers._dismiss_review_custom_prompt(message, pending_review_custom)
     else:
+        agent_profile_options = getattr(handlers, "_agent_profile_options", None)
         _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
         _pop_pending_state_if_owned(handlers._bind_options, key, actor_id)
         handlers._agent_options.pop(key, None)
+        if isinstance(agent_profile_options, dict):
+            agent_profile_options.pop(key, None)
         handlers._model_options.pop(key, None)
         handlers._model_pending.pop(key, None)
         review_state = _pop_pending_state_if_owned(

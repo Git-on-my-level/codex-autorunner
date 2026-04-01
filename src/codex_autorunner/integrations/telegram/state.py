@@ -14,7 +14,7 @@ from urllib.parse import quote, unquote
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
-from ..chat.agents import normalize_chat_agent
+from ..chat.agents import normalize_chat_agent, normalize_hermes_profile
 from ..chat.approval_modes import (
     APPROVAL_MODE_VALUES,
 )
@@ -202,6 +202,7 @@ class TelegramTopicRecord:
     pending_compact_seed_thread_id: Optional[str] = None
     last_update_id: Optional[int] = None
     agent: Optional[str] = None
+    agent_profile: Optional[str] = None
     model: Optional[str] = None
     effort: Optional[str] = None
     summary: Optional[str] = None
@@ -309,6 +310,20 @@ class TelegramTopicRecord:
         agent = normalize_agent(raw_agent)
         if agent is None and isinstance(raw_agent, str) and raw_agent.strip():
             agent = raw_agent.strip().lower()
+        raw_agent_profile = payload.get("agent_profile") or payload.get("agentProfile")
+        if not isinstance(raw_agent_profile, str):
+            agent_profile = None
+        else:
+            agent_profile = normalize_hermes_profile(raw_agent_profile)
+        legacy_hermes_profile = normalize_hermes_profile(agent)
+        if agent_profile is None and legacy_hermes_profile is not None:
+            agent_profile = legacy_hermes_profile
+        if agent_profile is None and isinstance(raw_agent_profile, str):
+            raw_stripped = raw_agent_profile.strip().lower()
+            if raw_stripped and agent == "hermes":
+                agent_profile = raw_stripped
+        if agent_profile is not None:
+            agent = "hermes"
         model = payload.get("model")
         if not isinstance(model, str):
             model = None
@@ -370,6 +385,7 @@ class TelegramTopicRecord:
             pending_compact_seed_thread_id=pending_compact_seed_thread_id,
             last_update_id=last_update_id,
             agent=agent,
+            agent_profile=agent_profile,
             model=model,
             effort=effort,
             summary=summary,
@@ -406,6 +422,7 @@ class TelegramTopicRecord:
             "pending_compact_seed_thread_id": self.pending_compact_seed_thread_id,
             "last_update_id": self.last_update_id,
             "agent": self.agent,
+            "agent_profile": self.agent_profile,
             "model": self.model,
             "effort": self.effort,
             "summary": self.summary,

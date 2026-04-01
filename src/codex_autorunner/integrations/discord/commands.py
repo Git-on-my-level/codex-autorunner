@@ -4,7 +4,11 @@ from typing import Any, Optional
 
 from ...core.flows import FLOW_ACTION_SPECS
 from ...core.update_targets import update_target_command_choices
-from ..chat.agents import chat_agent_command_choices, chat_agent_description
+from ..chat.agents import (
+    chat_agent_command_choices,
+    chat_agent_description,
+    chat_hermes_profile_options,
+)
 from ..chat.model_selection import (
     reasoning_effort_command_choices,
     reasoning_effort_description,
@@ -196,6 +200,10 @@ def _build_admin_subcommand_options() -> list[dict[str, Any]]:
 
 
 def build_application_commands(context: Optional[Any] = None) -> list[dict[str, Any]]:
+    hermes_profile_choices = [
+        {"name": option.profile, "value": option.profile}
+        for option in chat_hermes_profile_options(context)
+    ]
     return [
         {
             "type": 1,
@@ -242,7 +250,14 @@ def build_application_commands(context: Optional[Any] = None) -> list[dict[str, 
                             "description": f"Agent name: {chat_agent_description(context)}",
                             "required": False,
                             "choices": list(chat_agent_command_choices(context)),
-                        }
+                        },
+                        {
+                            "type": STRING,
+                            "name": "profile",
+                            "description": "Hermes profile id (optional)",
+                            "required": False,
+                            "choices": hermes_profile_choices,
+                        },
                     ],
                 },
                 {

@@ -133,7 +133,12 @@ from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
     build_agent_switch_state,
     chat_agent_supports_effort,
+    chat_hermes_profile_options,
+    format_chat_agent_selection,
     normalize_chat_agent,
+    normalize_hermes_profile,
+    resolve_chat_agent_and_profile,
+    resolve_chat_runtime_agent,
     valid_chat_agent_values,
 )
 from ...integrations.chat.bootstrap import ChatBootstrapStep, run_chat_bootstrap_steps
@@ -263,6 +268,7 @@ from .components import (
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_action_row,
     build_agent_picker,
+    build_agent_profile_picker,
     build_bind_picker,
     build_button,
     build_flow_runs_picker,
@@ -345,6 +351,7 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
 )
 MODEL_SEARCH_FETCH_LIMIT = 200
 SESSION_RESUME_SELECT_ID = "session_resume_select"
+AGENT_PROFILE_SELECT_ID = "agent_profile_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 UPDATE_TARGET_SELECT_ID = "update_target_select"
 UPDATE_CONFIRM_PREFIX = "update_confirm"
@@ -2081,10 +2088,17 @@ class DiscordBotService:
         workspace_root: Path,
         pma_enabled: bool,
         agent: str,
+        agent_profile: Optional[str] = None,
     ) -> str:
+        session_agent = resolve_chat_runtime_agent(
+            agent,
+            agent_profile,
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
         if pma_enabled:
-            return pma_base_key(agent)
-        return file_chat_discord_key(agent, channel_id, str(workspace_root))
+            return pma_base_key(session_agent)
+        return file_chat_discord_key(session_agent, channel_id, str(workspace_root))
 
     def _build_runner_state(
         self,
@@ -2178,11 +2192,18 @@ class DiscordBotService:
         channel_id: str,
         workspace_root: Path,
         agent: str,
+        agent_profile: Optional[str] = None,
         repo_id: Optional[str],
         resource_kind: Optional[str],
         resource_id: Optional[str],
         pma_enabled: bool,
     ) -> tuple[bool, str]:
+        runtime_agent = resolve_chat_runtime_agent(
+            agent,
+            agent_profile,
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
         mode = "pma" if pma_enabled else "repo"
         orchestration_service, _binding, current_thread = (
             self._get_discord_thread_binding(
@@ -2251,7 +2272,7 @@ class DiscordBotService:
             resource_id=resource_id,
         )
         replacement = orchestration_service.create_thread_target(
-            agent,
+            runtime_agent,
             workspace_root,
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
@@ -2262,7 +2283,7 @@ class DiscordBotService:
             surface_kind="discord",
             surface_key=channel_id,
             thread_target_id=replacement.thread_target_id,
-            agent_id=agent,
+            agent_id=runtime_agent,
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
             resource_id=owner_id,
@@ -2277,12 +2298,19 @@ class DiscordBotService:
         channel_id: str,
         thread_target_id: str,
         agent: str,
+        agent_profile: Optional[str] = None,
         repo_id: Optional[str],
         resource_kind: Optional[str] = None,
         resource_id: Optional[str] = None,
         workspace_root: Optional[Path] = None,
         pma_enabled: bool,
     ) -> Any:
+        runtime_agent = resolve_chat_runtime_agent(
+            agent,
+            agent_profile,
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
         mode = "pma" if pma_enabled else "repo"
         orchestration_service = self._discord_thread_service()
         owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
@@ -2295,7 +2323,7 @@ class DiscordBotService:
             surface_kind="discord",
             surface_key=channel_id,
             thread_target_id=thread_target_id,
-            agent_id=agent,
+            agent_id=runtime_agent,
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
             resource_id=owner_id,
@@ -2308,6 +2336,7 @@ class DiscordBotService:
         *,
         workspace_root: Path,
         agent: str,
+        agent_profile: Optional[str] = None,
         current_thread_id: Optional[str],
         mode: str,
         repo_id: Optional[str] = None,
@@ -2315,6 +2344,12 @@ class DiscordBotService:
         resource_id: Optional[str] = None,
         limit: int = DISCORD_SELECT_OPTION_MAX_OPTIONS,
     ) -> list[tuple[str, str]]:
+        runtime_agent = resolve_chat_runtime_agent(
+            agent,
+            agent_profile,
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
         orchestration_service = self._discord_thread_service()
         owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
             workspace_root,
@@ -2323,7 +2358,7 @@ class DiscordBotService:
             resource_id=resource_id,
         )
         threads = orchestration_service.list_thread_targets(
-            agent_id=agent,
+            agent_id=runtime_agent,
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
             resource_id=owner_id,
@@ -2333,7 +2368,7 @@ class DiscordBotService:
         filtered: list[Any] = []
         bound_modes_by_thread_id: dict[str, set[str]] = {}
         for binding in orchestration_service.list_bindings(
-            agent_id=agent,
+            agent_id=runtime_agent,
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
             resource_id=owner_id,
@@ -4995,6 +5030,33 @@ class DiscordBotService:
             or self.DEFAULT_AGENT
         )
 
+    def _normalize_agent_profile(self, value: Any) -> Optional[str]:
+        return normalize_hermes_profile(value, context=self)
+
+    def _resolve_agent_state(
+        self, binding: Optional[Mapping[str, Any]]
+    ) -> tuple[str, Optional[str]]:
+        if binding is None:
+            return self.DEFAULT_AGENT, None
+        return resolve_chat_agent_and_profile(
+            binding.get("agent"),
+            binding.get("agent_profile"),
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
+
+    def _runtime_agent_for_binding(self, binding: Optional[Mapping[str, Any]]) -> str:
+        agent, profile = self._resolve_agent_state(binding)
+        return resolve_chat_runtime_agent(
+            agent,
+            profile,
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
+
+    def _format_agent_state(self, agent: str, profile: Optional[str]) -> str:
+        return format_chat_agent_selection(agent, profile)
+
     def _agent_supports_effort(self, agent: str) -> bool:
         return chat_agent_supports_effort(agent, self)
 
@@ -5414,7 +5476,7 @@ class DiscordBotService:
             )
             return
 
-        agent = self._normalize_agent(binding.get("agent"))
+        agent, agent_profile = self._resolve_agent_state(binding)
         rate_limits = await self._read_status_rate_limits(workspace_path, agent=agent)
         approval_mode = normalize_approval_mode(
             binding.get("approval_mode"),
@@ -6342,7 +6404,7 @@ class DiscordBotService:
                 )
                 return
 
-        agent = self._normalize_agent(binding.get("agent"))
+        agent, agent_profile = self._resolve_agent_state(binding)
         resource_kind = (
             str(binding.get("resource_kind")).strip()
             if isinstance(binding.get("resource_kind"), str)
@@ -6361,6 +6423,7 @@ class DiscordBotService:
                 channel_id=channel_id,
                 workspace_root=workspace_root,
                 agent=agent,
+                agent_profile=agent_profile,
                 repo_id=(
                     str(binding.get("repo_id")).strip()
                     if isinstance(binding.get("repo_id"), str)
@@ -6394,7 +6457,7 @@ class DiscordBotService:
         state_label = "cleared previous thread" if had_previous else "new thread ready"
 
         text = format_discord_message(
-            f"Started a fresh {mode_label} session for `{agent}` ({state_label})."
+            f"Started a fresh {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` ({state_label})."
         )
         await self._send_or_respond_public(
             interaction_id=interaction_id,
@@ -6528,7 +6591,7 @@ class DiscordBotService:
                 )
                 return
 
-        agent = self._normalize_agent(binding.get("agent"))
+        agent, agent_profile = self._resolve_agent_state(binding)
         resource_kind = (
             str(binding.get("resource_kind")).strip()
             if isinstance(binding.get("resource_kind"), str)
@@ -6547,6 +6610,7 @@ class DiscordBotService:
                 channel_id=channel_id,
                 workspace_root=workspace_root,
                 agent=agent,
+                agent_profile=agent_profile,
                 repo_id=(
                     str(binding.get("repo_id")).strip()
                     if isinstance(binding.get("repo_id"), str)
@@ -6587,7 +6651,7 @@ class DiscordBotService:
         )
 
         text = format_discord_message(
-            f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{agent}` ({state_label}).{setup_note}"
+            f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` ({state_label}).{setup_note}"
         )
         await self._send_or_respond_public(
             interaction_id=interaction_id,
@@ -6643,7 +6707,8 @@ class DiscordBotService:
                 )
                 return
 
-        agent = self._normalize_agent(binding.get("agent"))
+        agent, agent_profile = self._resolve_agent_state(binding)
+        runtime_agent = self._runtime_agent_for_binding(binding)
 
         repo_id = (
             str(binding.get("repo_id")).strip()
@@ -6678,6 +6743,7 @@ class DiscordBotService:
             thread_items = self._list_discord_thread_targets_for_picker(
                 workspace_root=workspace_root,
                 agent=agent,
+                agent_profile=agent_profile,
                 current_thread_id=current_thread_id,
                 mode=mode,
                 repo_id=repo_id,
@@ -6745,13 +6811,17 @@ class DiscordBotService:
                     ),
                 )
                 return
-            if str(getattr(target_thread, "agent_id", "") or "").strip() != agent:
+            if (
+                str(getattr(target_thread, "agent_id", "") or "").strip()
+                != runtime_agent
+            ):
                 await self._send_or_respond_ephemeral(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
                     deferred=deferred,
                     text=format_discord_message(
-                        f"Selected thread belongs to a different agent. Current agent: `{agent}`."
+                        "Selected thread belongs to a different agent. "
+                        f"Current agent: `{self._format_agent_state(agent, agent_profile)}`."
                     ),
                 )
                 return
@@ -6769,6 +6839,7 @@ class DiscordBotService:
                 channel_id=channel_id,
                 thread_target_id=thread_id,
                 agent=agent,
+                agent_profile=agent_profile,
                 repo_id=repo_id,
                 resource_kind=resource_kind,
                 resource_id=resource_id,
@@ -6778,12 +6849,13 @@ class DiscordBotService:
             await self._store.clear_pending_compact_seed(channel_id=channel_id)
             mode_label = "PMA" if pma_enabled else "repo"
             text = format_discord_message(
-                f"Resumed {mode_label} session for `{agent}` with thread `{thread_id}`."
+                f"Resumed {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` with thread `{thread_id}`."
             )
         else:
             thread_items = self._list_discord_thread_targets_for_picker(
                 workspace_root=workspace_root,
                 agent=agent,
+                agent_profile=agent_profile,
                 current_thread_id=current_thread_id,
                 mode=mode,
                 repo_id=repo_id,
@@ -7323,28 +7395,46 @@ class DiscordBotService:
             )
             return
 
-        current_agent = self._normalize_agent(binding.get("agent"))
+        current_agent, current_profile = self._resolve_agent_state(binding)
         agent_name = options.get("name")
+        profile_name = options.get("profile")
 
-        if not agent_name:
+        def _agent_picker_components(
+            *,
+            agent: str,
+            profile: Optional[str],
+        ) -> list[dict[str, Any]]:
+            components = [build_agent_picker(current_agent=agent, context=self)]
+            if agent == "hermes" and chat_hermes_profile_options(self):
+                components.append(
+                    build_agent_profile_picker(
+                        current_profile=profile,
+                        context=self,
+                        custom_id=AGENT_PROFILE_SELECT_ID,
+                    )
+                )
+            return components
+
+        if not agent_name and not profile_name:
+            lines = [f"Current agent: {current_agent}"]
+            if current_agent == "hermes":
+                lines.append(f"Hermes profile: {current_profile or '(default)'}")
+            lines.extend(["", "Select an agent:"])
             await self._respond_with_components(
                 interaction_id,
                 interaction_token,
-                format_discord_message(
-                    "\n".join(
-                        [
-                            f"Current agent: {current_agent}",
-                            "",
-                            "Select an agent:",
-                        ]
-                    )
+                format_discord_message("\n".join(lines)),
+                _agent_picker_components(
+                    agent=current_agent,
+                    profile=current_profile,
                 ),
-                [build_agent_picker(current_agent=current_agent, context=self)],
             )
             return
 
-        desired = normalize_chat_agent(agent_name, context=self)
-        if desired is None:
+        desired_agent = current_agent
+        if agent_name:
+            desired_agent = normalize_chat_agent(agent_name, context=self) or ""
+        if not desired_agent:
             available = ", ".join(self._known_agent_values())
             await self._respond_ephemeral(
                 interaction_id,
@@ -7353,33 +7443,131 @@ class DiscordBotService:
             )
             return
 
-        if desired == current_agent:
+        desired_profile = current_profile if desired_agent == "hermes" else None
+        if profile_name is not None:
+            if desired_agent != "hermes":
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Hermes profiles can only be selected when the active agent is Hermes.",
+                )
+                return
+            normalized_profile_name = str(profile_name).strip().lower()
+            if normalized_profile_name in {"", "clear", "reset", "default"}:
+                desired_profile = None
+            else:
+                desired_profile = self._normalize_agent_profile(profile_name)
+                if desired_profile is None:
+                    available_profiles = ", ".join(
+                        option.profile for option in chat_hermes_profile_options(self)
+                    )
+                    suffix = (
+                        f" Known Hermes profiles: {available_profiles}."
+                        if available_profiles
+                        else ""
+                    )
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        f"Unknown Hermes profile '{profile_name}'.{suffix}",
+                    )
+                    return
+
+        if desired_agent == current_agent and desired_profile == current_profile:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"Agent already set to {current_agent}.",
+                (
+                    f"Agent already set to {self._format_agent_state(current_agent, current_profile)}."
+                ),
             )
             return
 
         switch_state = build_agent_switch_state(
-            desired,
+            desired_agent,
+            desired_profile,
             model_reset="clear",
             context=self,
         )
-        await self._store.update_agent_state(
-            channel_id=channel_id,
-            agent=switch_state.agent,
-            model_override=switch_state.model,
-            reasoning_effort=switch_state.effort,
+        agent_changed = switch_state.agent != current_agent
+        if agent_changed:
+            await self._store.update_agent_state(
+                channel_id=channel_id,
+                agent=switch_state.agent,
+                agent_profile=switch_state.profile,
+                model_override=switch_state.model,
+                reasoning_effort=switch_state.effort,
+            )
+            await self._store.clear_pending_compact_seed(channel_id=channel_id)
+        else:
+            await self._store.update_agent_state(
+                channel_id=channel_id,
+                agent=switch_state.agent,
+                agent_profile=switch_state.profile,
+            )
+
+        selection_label = self._format_agent_state(
+            switch_state.agent,
+            switch_state.profile,
         )
-        await self._store.clear_pending_compact_seed(channel_id=channel_id)
+        if (
+            switch_state.agent == "hermes"
+            and agent_changed
+            and profile_name is None
+            and chat_hermes_profile_options(self)
+        ):
+            await self._respond_with_components(
+                interaction_id,
+                interaction_token,
+                format_discord_message(
+                    "\n".join(
+                        [
+                            f"Agent set to {selection_label}.",
+                            "",
+                            "Select a Hermes profile to override the default runtime, or leave it at `(default profile)`.",
+                        ]
+                    )
+                ),
+                _agent_picker_components(
+                    agent=switch_state.agent,
+                    profile=switch_state.profile,
+                ),
+            )
+            return
+
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Agent set to {switch_state.agent}. Will apply on the next turn.",
+            f"Agent set to {selection_label}. Will apply on the next turn.",
         )
 
     VALID_REASONING_EFFORTS = REASONING_EFFORT_VALUES
+
+    async def _handle_agent_profile_picker_selection(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        selected_profile: str,
+    ) -> None:
+        profile_value = selected_profile.strip()
+        if not profile_value:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Please select a Hermes profile and try again.",
+            )
+            return
+        profile_option = (
+            "clear" if profile_value in {"clear", "reset"} else profile_value
+        )
+        await self._handle_car_agent(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            options={"profile": profile_option},
+        )
 
     def _pending_interaction_scope_key(
         self,
@@ -7411,7 +7599,7 @@ class DiscordBotService:
             )
             return
 
-        current_agent = self._normalize_agent(binding.get("agent"))
+        current_agent, _current_profile = self._resolve_agent_state(binding)
         current_model = binding.get("model_override")
         if not isinstance(current_model, str) or not current_model.strip():
             current_model = None
@@ -7731,7 +7919,7 @@ class DiscordBotService:
             return
 
         binding = await self._store.get_binding(channel_id=channel_id)
-        current_agent = self._normalize_agent(binding.get("agent") if binding else None)
+        current_agent, _current_profile = self._resolve_agent_state(binding)
 
         if self._agent_supports_effort(current_agent):
             pending_key = self._pending_interaction_scope_key(
@@ -10733,6 +10921,23 @@ class DiscordBotService:
                 )
                 return
 
+            if custom_id == AGENT_PROFILE_SELECT_ID:
+                values = extract_component_values(interaction_payload)
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a Hermes profile and try again.",
+                    )
+                    return
+                await self._handle_agent_profile_picker_selection(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    selected_profile=values[0],
+                )
+                return
+
             if custom_id == "model_select":
                 values = extract_component_values(interaction_payload)
                 if not values:
@@ -11140,6 +11345,22 @@ class DiscordBotService:
                     interaction_token,
                     channel_id=channel_id,
                     options={"name": values[0]},
+                )
+                return
+
+            if custom_id == AGENT_PROFILE_SELECT_ID:
+                if not values:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Please select a Hermes profile and try again.",
+                    )
+                    return
+                await self._handle_agent_profile_picker_selection(
+                    interaction_id,
+                    interaction_token,
+                    channel_id=channel_id,
+                    selected_profile=values[0],
                 )
                 return
 
@@ -11849,7 +12070,7 @@ class DiscordBotService:
                 )
                 return
 
-        agent = self._normalize_agent(binding.get("agent"))
+        agent, agent_profile = self._resolve_agent_state(binding)
         resource_kind = (
             str(binding.get("resource_kind")).strip()
             if isinstance(binding.get("resource_kind"), str)
@@ -11868,6 +12089,7 @@ class DiscordBotService:
                 channel_id=channel_id,
                 workspace_root=workspace_root,
                 agent=agent,
+                agent_profile=agent_profile,
                 repo_id=(
                     str(binding.get("repo_id")).strip()
                     if isinstance(binding.get("repo_id"), str)
@@ -11886,6 +12108,7 @@ class DiscordBotService:
                 channel_id=channel_id,
                 workspace_root=str(workspace_root),
                 agent=agent,
+                agent_profile=agent_profile,
                 exc=exc,
             )
             await self._respond_ephemeral(
@@ -11901,7 +12124,7 @@ class DiscordBotService:
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Reset {mode_label} thread state ({state_label}) for `{agent}`.",
+            f"Reset {mode_label} thread state ({state_label}) for `{self._format_agent_state(agent, agent_profile)}`.",
         )
 
     async def _handle_car_review(
@@ -11922,7 +12145,7 @@ class DiscordBotService:
             )
             return
 
-        current_agent = self._normalize_agent(binding.get("agent"))
+        current_agent, current_profile = self._resolve_agent_state(binding)
 
         supports_review = self._agent_supports_capability(current_agent, "review")
         if not supports_review:
@@ -12093,7 +12316,7 @@ class DiscordBotService:
         )
         prompt_text = "\n".join(prompt_parts)
 
-        agent = self._normalize_agent(binding.get("agent"))
+        agent, agent_profile = self._resolve_agent_state(binding)
         model_override = binding.get("model_override")
         if not isinstance(model_override, str) or not model_override.strip():
             model_override = None
@@ -12106,6 +12329,7 @@ class DiscordBotService:
             workspace_root=workspace_root,
             pma_enabled=False,
             agent=agent,
+            agent_profile=agent_profile,
         )
 
         log_event(
@@ -12117,6 +12341,7 @@ class DiscordBotService:
             target_type=target_type,
             target_value=target_value,
             agent=agent,
+            agent_profile=agent_profile,
         )
 
         try:
@@ -12507,7 +12732,7 @@ class DiscordBotService:
             )
             return
 
-        agent = self._normalize_agent(binding.get("agent"))
+        agent, agent_profile = self._resolve_agent_state(binding)
         model_override = binding.get("model_override")
         if not isinstance(model_override, str) or not model_override.strip():
             model_override = None
@@ -12584,6 +12809,7 @@ class DiscordBotService:
                     channel_id=channel_id,
                     workspace_root=workspace_root,
                     agent=agent,
+                    agent_profile=agent_profile,
                     repo_id=(
                         str(binding.get("repo_id")).strip()
                         if isinstance(binding.get("repo_id"), str)
@@ -12651,6 +12877,7 @@ class DiscordBotService:
                         channel_id=channel_id,
                         thread_target_id=restored.thread_target_id,
                         agent=agent,
+                        agent_profile=agent_profile,
                         repo_id=(
                             str(binding.get("repo_id")).strip()
                             if isinstance(binding.get("repo_id"), str)

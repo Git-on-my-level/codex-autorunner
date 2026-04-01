@@ -6,7 +6,7 @@ from ...core.update_targets import (
     UpdateTargetDefinition,
     all_update_target_definitions,
 )
-from ..chat.agents import chat_agent_definitions
+from ..chat.agents import chat_agent_definitions, chat_hermes_profile_options
 from ..chat.model_selection import REASONING_EFFORT_VALUES
 
 DISCORD_BUTTON_STYLE_PRIMARY = 1
@@ -129,6 +129,48 @@ def build_agent_picker(
         )
         for definition in chat_agent_definitions(context)
     ]
+    return build_action_row(
+        [build_select_menu(custom_id, options, placeholder=placeholder)]
+    )
+
+
+def build_agent_profile_picker(
+    *,
+    current_profile: Optional[str],
+    context: Any = None,
+    custom_id: str = "agent_profile_select",
+    placeholder: str = "Select a Hermes profile...",
+) -> dict[str, Any]:
+    options = [
+        build_select_option(
+            label="(default profile)",
+            value="clear",
+            description="Use the base Hermes runtime",
+            default=not current_profile,
+        )
+    ]
+    rendered_profiles: set[str] = set()
+    option_limit = max(0, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1)
+    for option in chat_hermes_profile_options(context)[:option_limit]:
+        rendered_profiles.add(option.profile)
+        options.append(
+            build_select_option(
+                label=option.profile,
+                value=option.profile,
+                description=option.description,
+                default=current_profile == option.profile,
+            )
+        )
+    if current_profile and current_profile not in rendered_profiles:
+        if len(options) >= DISCORD_SELECT_OPTION_MAX_OPTIONS:
+            options.pop()
+        options.append(
+            build_select_option(
+                label=f"{current_profile} (current)",
+                value=current_profile,
+                default=True,
+            )
+        )
     return build_action_row(
         [build_select_menu(custom_id, options, placeholder=placeholder)]
     )
