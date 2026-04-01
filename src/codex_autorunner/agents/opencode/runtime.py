@@ -32,6 +32,18 @@ from .constants import (
     OPENCODE_USAGE_TOTAL_KEYS,
 )
 from .event_decoder import parse_message_response as decode_message_response
+from .event_fields import (
+    extract_message_id as extract_event_message_id,
+)
+from .event_fields import (
+    extract_message_role as extract_event_message_role,
+)
+from .event_fields import (
+    extract_part_id as extract_event_part_id,
+)
+from .event_fields import (
+    extract_part_message_id as extract_event_part_message_id,
+)
 from .events import SSEEvent
 from .usage_decoder import extract_usage, extract_usage_field
 
@@ -760,62 +772,16 @@ async def collect_opencode_output_from_events(
         _extract_model_ids(model_payload) if isinstance(model_payload, dict) else None
     )
 
-    def _message_id_from_info(info: Any) -> Optional[str]:
-        if not isinstance(info, dict):
-            return None
-        for key in ("id", "messageID", "messageId", "message_id"):
-            value = info.get(key)
-            if isinstance(value, str) and value:
-                return value
-        return None
-
-    def _message_id_from_part(part: Any, *, payload: Any = None) -> Optional[str]:
-        if not isinstance(part, dict):
-            part = {}
-        for source in (
-            part,
-            payload.get("properties") if isinstance(payload, dict) else None,
-            payload if isinstance(payload, dict) else None,
-        ):
-            if not isinstance(source, dict):
-                continue
-            for key in ("messageID", "messageId", "message_id"):
-                value = source.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        return None
-
-    def _part_id_from_part(part: Any, *, payload: Any = None) -> Optional[str]:
-        if not isinstance(part, dict):
-            part = {}
-        for source in (
-            part,
-            payload.get("properties") if isinstance(payload, dict) else None,
-            payload if isinstance(payload, dict) else None,
-        ):
-            if not isinstance(source, dict):
-                continue
-            for key in ("id", "partID", "partId", "part_id"):
-                value = source.get(key)
-                if isinstance(value, str) and value:
-                    return value
-        return None
-
     def _register_message_role(payload: Any) -> tuple[Optional[str], Optional[str]]:
         nonlocal message_roles_seen
         if not isinstance(payload, dict):
             return None, None
-        info = payload.get("info")
-        if not isinstance(info, dict):
-            properties = payload.get("properties")
-            if isinstance(properties, dict):
-                info = properties.get("info")
-        role = info.get("role") if isinstance(info, dict) else None
-        msg_id = _message_id_from_info(info)
+        role = extract_event_message_role(payload)
+        msg_id = extract_event_message_id(payload)
         if isinstance(role, str) and msg_id:
             message_roles[msg_id] = role
             message_roles_seen = True
-        return msg_id, role if isinstance(role, str) else None
+        return msg_id, role
 
     def _flush_pending_no_id_as_assistant() -> None:
         nonlocal no_id_role
@@ -1490,8 +1456,8 @@ async def collect_opencode_output_from_events(
                     part_with_session["sessionID"] = event_session_id
                 part_type = part_dict.get("type") if part_dict else None
                 part_ignored = bool(part_dict.get("ignored")) if part_dict else False
-                part_message_id = _message_id_from_part(part_dict, payload=payload)
-                part_id = _part_id_from_part(part_dict, payload=payload)
+                part_message_id = extract_event_part_message_id(payload)
+                part_id = extract_event_part_id(payload)
                 if (
                     isinstance(part_id, str)
                     and part_id

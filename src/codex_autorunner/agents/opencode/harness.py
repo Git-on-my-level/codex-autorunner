@@ -25,6 +25,21 @@ from ..types import (
     TerminalTurnResult,
     TurnRef,
 )
+from .event_fields import (
+    extract_message_id as _shared_extract_message_id,
+)
+from .event_fields import (
+    extract_message_role as _shared_extract_message_role,
+)
+from .event_fields import (
+    extract_part_id as _shared_extract_part_id,
+)
+from .event_fields import (
+    extract_part_message_id as _shared_extract_part_message_id,
+)
+from .event_fields import (
+    extract_part_type as _shared_extract_part_type,
+)
 from .runtime import (
     collect_opencode_output_from_events,
     extract_session_id,
@@ -322,27 +337,11 @@ def _extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_message_id(params: dict[str, Any]) -> Optional[str]:
-    info = _extract_message_info(params)
-    for key in ("id", "messageID", "messageId", "message_id"):
-        value = info.get(key)
-        if isinstance(value, str) and value:
-            return value
-    for key in ("messageID", "messageId", "message_id"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+    return _shared_extract_message_id(params)
 
 
 def _extract_message_role(params: dict[str, Any]) -> Optional[str]:
-    info = _extract_message_info(params)
-    role = info.get("role")
-    if isinstance(role, str) and role:
-        return role
-    role = params.get("role")
-    if isinstance(role, str) and role:
-        return role
-    return None
+    return _shared_extract_message_role(params)
 
 
 def _normalize_message_phase(value: Any) -> Optional[str]:
@@ -381,60 +380,17 @@ def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
 
 
 def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
-    properties = params.get("properties")
-    part = properties.get("part") if isinstance(properties, dict) else None
-    if not isinstance(part, dict):
-        part = {}
-    for source in (
-        part,
-        properties if isinstance(properties, dict) else None,
-        params,
-    ):
-        if not isinstance(source, dict):
-            continue
-        for key in ("messageID", "messageId", "message_id"):
-            value = source.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return None
+    return _shared_extract_part_message_id(params)
 
 
 def _extract_part_id(params: dict[str, Any]) -> Optional[str]:
-    properties = params.get("properties")
-    part = properties.get("part") if isinstance(properties, dict) else None
-    if not isinstance(part, dict):
-        part = {}
-    for source in (
-        part,
-        properties if isinstance(properties, dict) else None,
-        params,
-    ):
-        if not isinstance(source, dict):
-            continue
-        for key in ("id", "partID", "partId", "part_id"):
-            value = source.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return None
+    return _shared_extract_part_id(params)
 
 
 def _extract_part_type(
     params: dict[str, Any], part_types: Optional[dict[str, str]] = None
 ) -> Optional[str]:
-    properties = params.get("properties")
-    part = properties.get("part") if isinstance(properties, dict) else None
-    part_type_raw = part.get("type") if isinstance(part, dict) else None
-    part_type: Optional[str] = None
-    if isinstance(part_type_raw, str):
-        normalized = part_type_raw.strip().lower()
-        part_type = normalized or None
-    part_id = _extract_part_id(params)
-    if part_types is not None and isinstance(part_id, str) and part_id:
-        if isinstance(part_type, str):
-            part_types[part_id] = part_type
-        else:
-            part_type = part_types.get(part_id)
-    return part_type
+    return _shared_extract_part_type(params, part_types=part_types)
 
 
 def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
