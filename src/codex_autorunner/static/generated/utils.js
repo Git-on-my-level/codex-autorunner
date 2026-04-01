@@ -497,6 +497,7 @@ export function confirmModal(message, options = {}) {
         const okBtn = document.getElementById("confirm-modal-ok");
         const cancelBtn = document.getElementById("confirm-modal-cancel");
         if (!overlay || !messageEl || !okBtn || !cancelBtn) {
+            flash("Confirmation dialog is unavailable (expected #confirm-modal markup is missing).", "error");
             resolve(false);
             return;
         }

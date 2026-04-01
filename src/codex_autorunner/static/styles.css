@@ -1416,6 +1416,12 @@ main {
   padding: var(--sp-1) 0;
 }
 
+/* Matches button:disabled look but keeps clicks (handler shows a toast). */
+button#hub-cleanup-all-threads.hub-cleanup-all--empty {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .hub-repo-control {
   display: inline-flex;
   align-items: center;
