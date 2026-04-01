@@ -303,6 +303,68 @@ def test_managed_thread_tail_snapshot_marks_hermes_stream_available(
     assert payload["phase"] == "booting_runtime"
 
 
+def test_managed_thread_tail_snapshot_marks_opencode_stream_available(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class _OpenCodeHarnessEmptyStream:
+        def progress_event_stream(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ):
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _stream():
+                if False:
+                    yield None
+
+            return _stream()
+
+    fake_service = SimpleNamespace(
+        thread=SimpleNamespace(
+            thread_target_id="thread-opencode-snap",
+            agent_id="opencode",
+            backend_thread_id="opencode-session-snap",
+            workspace_root=str(hub_env.repo_root.resolve()),
+        ),
+        execution=SimpleNamespace(
+            execution_id="turn-opencode-snap",
+            backend_id="opencode-turn-snap",
+            status="running",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=None,
+            output_text="",
+        ),
+        harness_factory=lambda _agent_id: _OpenCodeHarnessEmptyStream(),
+    )
+    fake_service.get_thread_target = lambda _thread_id: fake_service.thread
+    fake_service.get_running_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_latest_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_execution = (
+        lambda _thread_id, _execution_id: fake_service.execution
+    )
+    fake_service.get_queue_depth = lambda _thread_id: 0
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        lambda request: fake_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/hub/pma/threads/thread-opencode-snap/tail")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["agent"] == "opencode"
+    assert payload["stream_available"] is True
+    assert payload["events"] == []
+    assert payload["phase"] == "booting_runtime"
+    assert payload["phase"] != "no_stream_available"
+
+
 def test_managed_thread_tail_events_streams_hermes_runtime_events(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -467,6 +529,158 @@ def test_managed_thread_tail_events_reuses_active_harness_state(
     assert resp.headers["content-type"].startswith("text/event-stream")
     assert "event: tail" in resp.text
     assert "assistant_update" in resp.text
+
+
+def test_managed_thread_tail_snapshot_includes_opencode_list_progress_events(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    buffered_raw = [
+        {"method": "prompt/progress", "params": {"text": "Working..."}},
+    ]
+
+    class _OpenCodeHarnessWithListProgress:
+        def __init__(self, events: list[dict[str, Any]]) -> None:
+            self._events = list(events)
+
+        def progress_event_stream(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ):
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _stream():
+                for event in self._events:
+                    yield event
+
+            return _stream()
+
+        def list_progress_events(
+            self, conversation_id: str, turn_id: str
+        ) -> list[dict[str, Any]]:
+            _ = conversation_id, turn_id
+            return list(self._events)
+
+    harness = _OpenCodeHarnessWithListProgress(buffered_raw)
+    fake_service = SimpleNamespace(
+        thread=SimpleNamespace(
+            thread_target_id="thread-opencode-list",
+            agent_id="opencode",
+            backend_thread_id="opencode-session-list",
+            workspace_root=str(hub_env.repo_root.resolve()),
+        ),
+        execution=SimpleNamespace(
+            execution_id="turn-opencode-list",
+            backend_id="opencode-turn-list",
+            status="running",
+            started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=None,
+            output_text="",
+        ),
+        harness_factory=lambda _agent_id: harness,
+    )
+    fake_service.get_thread_target = lambda _thread_id: fake_service.thread
+    fake_service.get_running_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_latest_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_execution = (
+        lambda _thread_id, _execution_id: fake_service.execution
+    )
+    fake_service.get_queue_depth = lambda _thread_id: 0
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        lambda request: fake_service,
+    )
+
+    with TestClient(app) as client:
+        resp = client.get("/hub/pma/threads/thread-opencode-list/tail")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["stream_available"] is True
+    assert len(payload["events"]) >= 1
+    first = payload["events"][0]
+    assert first.get("event_type") == "assistant_update"
+    assert "Working" in str(first.get("summary") or "")
+
+
+def test_managed_thread_tail_snapshot_stream_available_when_backend_binding_appears(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class _MutableThread:
+        thread_target_id = "thread-opencode-bind"
+        agent_id = "opencode"
+        backend_thread_id = "opencode-session-bind"
+        workspace_root: str
+
+        def __init__(self, root: Path) -> None:
+            self.workspace_root = str(root.resolve())
+
+    class _MutableExecution:
+        execution_id = "turn-opencode-bind"
+        backend_id: str | None = None
+        status = "running"
+        started_at: str
+        finished_at = None
+        output_text = ""
+
+        def __init__(self) -> None:
+            self.started_at = datetime.now(timezone.utc).isoformat()
+
+    thread_obj = _MutableThread(hub_env.repo_root)
+    exec_obj = _MutableExecution()
+
+    class _OpenCodeHarnessEmptyStream:
+        def progress_event_stream(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ):
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _stream():
+                if False:
+                    yield None
+
+            return _stream()
+
+    fake_service = SimpleNamespace(
+        thread=thread_obj,
+        execution=exec_obj,
+        harness_factory=lambda _agent_id: _OpenCodeHarnessEmptyStream(),
+    )
+    fake_service.get_thread_target = lambda _thread_id: fake_service.thread
+    fake_service.get_running_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_latest_execution = lambda _thread_id: fake_service.execution
+    fake_service.get_execution = lambda _tid, _eid: fake_service.execution
+    fake_service.get_queue_depth = lambda _thread_id: 0
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        lambda request: fake_service,
+    )
+
+    with TestClient(app) as client:
+        resp_before = client.get("/hub/pma/threads/thread-opencode-bind/tail")
+    assert resp_before.status_code == 200
+    before = resp_before.json()
+    assert before["stream_available"] is False
+
+    exec_obj.backend_id = "opencode-turn-bind"
+
+    with TestClient(app) as client:
+        resp_after = client.get("/hub/pma/threads/thread-opencode-bind/tail")
+    assert resp_after.status_code == 200
+    after = resp_after.json()
+    assert after["stream_available"] is True
+    assert after["backend_thread_id"] == "opencode-session-bind"
+    assert after["backend_turn_id"] == "opencode-turn-bind"
 
 
 def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> None:

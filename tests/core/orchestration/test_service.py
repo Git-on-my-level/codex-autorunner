@@ -67,6 +67,18 @@ class _FakeHarness:
     start_review_calls: list[dict[str, Any]] = field(default_factory=list)
     interrupt_calls: list[tuple[Path, str, Optional[str]]] = field(default_factory=list)
     interrupt_error: Optional[Exception] = None
+    # When set, start_turn/start_review assert execution has provisional backend_id.
+    provisional_backend_assert: Optional[tuple[Any, str]] = None
+
+    def _assert_provisional_backend_id(self, conversation_id: str) -> None:
+        pair = self.provisional_backend_assert
+        if pair is None:
+            return
+        svc, thread_target_id = pair
+        running = svc.get_running_execution(thread_target_id)
+        assert running is not None
+        assert running.backend_id is not None
+        assert running.backend_id.startswith(f"{conversation_id}:")
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         self.ensure_ready_calls.append(workspace_root)
@@ -106,6 +118,7 @@ class _FakeHarness:
         sandbox_policy: Optional[Any],
         input_items: Optional[list[dict[str, Any]]] = None,
     ) -> _FakeTurn:
+        self._assert_provisional_backend_id(conversation_id)
         self.start_turn_calls.append(
             {
                 "workspace_root": workspace_root,
@@ -134,6 +147,7 @@ class _FakeHarness:
         approval_mode: Optional[str],
         sandbox_policy: Optional[Any],
     ) -> _FakeTurn:
+        self._assert_provisional_backend_id(conversation_id)
         self.start_review_calls.append(
             {
                 "workspace_root": workspace_root,
@@ -907,6 +921,7 @@ async def test_send_review_preserves_request_kind_through_queue_claim_and_result
     assert client_request_id is None
     assert sandbox_policy is None
 
+    harness.provisional_backend_assert = (service, thread.thread_target_id)
     started = await service._start_execution(
         claimed_thread,
         claimed_request,
@@ -974,6 +989,28 @@ async def test_send_message_interrupts_busy_thread_when_requested(
     assert second.status == "running"
     assert second.backend_id == "backend-turn-2"
     assert service.get_queue_depth(thread.thread_target_id) == 0
+
+
+async def test_start_execution_sets_provisional_backend_turn_id_before_harness_start(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(next_turn_id="real-turn-1")
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    harness.provisional_backend_assert = (service, thread.thread_target_id)
+
+    completed = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="hello",
+        )
+    )
+
+    assert completed.status == "running"
+    assert completed.backend_id == "real-turn-1"
 
 
 async def test_interrupt_thread_uses_harness_and_marks_execution(

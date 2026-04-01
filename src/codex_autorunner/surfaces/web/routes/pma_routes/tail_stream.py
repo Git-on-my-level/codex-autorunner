@@ -1001,6 +1001,24 @@ async def _build_managed_thread_tail_snapshot(
             since_ms=since_ms,
             limit=limit,
         )
+    elif can_stream_runtime and harness is not None:
+        list_fn = getattr(harness, "list_progress_events", None)
+        if callable(list_fn):
+            raw_events = list_fn(str(backend_thread_id), str(backend_turn_id))
+            state = RuntimeThreadRunEventState()
+            event_id_start = int(resume_after or 0)
+            for raw_event in raw_events:
+                serialized_entries = await _serialize_runtime_raw_tail_events(
+                    raw_event,
+                    state,
+                    level=level,
+                    event_id_start=event_id_start,
+                )
+                for entry in serialized_entries:
+                    tail_events.append(entry)
+                    event_id_start = int(entry.get("event_id") or event_id_start)
+            if len(tail_events) > limit:
+                tail_events = tail_events[-limit:]
 
     last_event_id = int(resume_after or 0)
     last_activity_at: Optional[str] = raw_last_activity_at
@@ -1252,7 +1270,7 @@ def build_managed_thread_tail_routes(
                 return
             if not snapshot.get("stream_available"):
                 while True:
-                    await asyncio.sleep(10.0)
+                    await asyncio.sleep(5.0)
                     turn = service.get_execution(
                         managed_thread_id,
                         str(snapshot.get("managed_turn_id") or ""),
@@ -1268,6 +1286,24 @@ def build_managed_thread_tail_routes(
                             f"{json.dumps({'turn_status': status or 'unknown'}, ensure_ascii=True)}\n\n"
                         )
                         return
+
+                    refreshed_thread = service.get_thread_target(managed_thread_id)
+                    refreshed_backend_thread_id = (
+                        normalize_optional_text(
+                            getattr(refreshed_thread, "backend_thread_id", None)
+                        )
+                        if refreshed_thread is not None
+                        else None
+                    )
+                    refreshed_backend_turn_id = normalize_optional_text(
+                        turn.backend_id if turn is not None else None
+                    )
+                    if refreshed_backend_thread_id and refreshed_backend_turn_id:
+                        snapshot["stream_available"] = True
+                        snapshot["backend_thread_id"] = refreshed_backend_thread_id
+                        snapshot["backend_turn_id"] = refreshed_backend_turn_id
+                        break
+
                     now = datetime.now(timezone.utc)
                     started_dt = parse_iso_datetime(snapshot.get("started_at"))
                     elapsed = None

@@ -620,6 +620,15 @@ class OpenCodeHarness(AgentHarness):
 
         return _stream()
 
+    def list_progress_events(
+        self, conversation_id: str, turn_id: str
+    ) -> list[dict[str, Any]]:
+        """Return buffered progress events for a pending turn (snapshot-friendly)."""
+        pending = self._pending_turns.get((conversation_id, turn_id or ""))
+        if pending is None:
+            return []
+        return list(pending.progress_event_history)
+
     def __init__(self, supervisor: OpenCodeHarnessSupervisorProtocol) -> None:
         self._supervisor = supervisor
         self._pending_turns: dict[tuple[str, str], _PendingTurnConfig] = {}

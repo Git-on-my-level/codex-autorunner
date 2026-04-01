@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional, cast
@@ -933,6 +934,19 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                             conversation_id,
                             backend_runtime_instance_id=runtime_instance_id,
                         )
+                    provisional_turn_id = f"{conversation_id}:{int(time.time() * 1000)}"
+                    self.thread_store.set_execution_backend_id(
+                        execution.execution_id, provisional_turn_id
+                    )
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "orchestration.thread.provisional_backend_turn_id",
+                        thread_target_id=thread.thread_target_id,
+                        execution_id=execution.execution_id,
+                        conversation_id=conversation_id,
+                        provisional_turn_id=provisional_turn_id,
+                    )
                     if request.kind == "review":
                         if not harness.supports("review"):
                             raise RuntimeError(
