@@ -981,6 +981,26 @@ async def test_collect_output_sessionless_text_delta_is_relevant() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_sessionless_idle_does_not_end_turn() -> None:
+    """A sessionless idle must not complete the turn before session-scoped content."""
+    events = [
+        SSEEvent(event="session.idle", data="{}"),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"properties":{"delta":{"text":"Hello"},'
+            '"part":{"type":"text","text":"Hello"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_sessionless_completed_recovers_roleless_text() -> None:
     """A sessionless message.completed with no role should still produce text
     when the text differs from the prompt."""

@@ -1603,7 +1603,7 @@ async def collect_opencode_output_from_events(
                 event.event == "session.status"
                 and _status_is_idle(_extract_status_type(payload))
             ):
-                if not is_primary_session:
+                if event_session_id != session_id:
                     continue
                 if not text_parts and (pending_text or pending_no_id):
                     _flush_all_pending_text()
