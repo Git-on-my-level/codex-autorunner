@@ -2951,7 +2951,7 @@ def _paused_dispatch_resume_invalid_reason(repo_root: Path) -> Optional[str]:
         )
     return (
         "Latest dispatch is stale; ticket flow resume preflight would fail "
-        f"in {safe_relpath(repo_root)}"
+        f"in {safe_relpath(repo_root, repo_root)}"
     )
 
 
