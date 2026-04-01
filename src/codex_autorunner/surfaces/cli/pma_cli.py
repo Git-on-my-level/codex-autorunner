@@ -1328,10 +1328,19 @@ def pma_thread_list(
         None, "--resource-id", help="Filter by managed resource id"
     ),
     limit: int = typer.Option(200, "--limit", min=1, help="Maximum rows to return"),
-    output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    output_json: bool = typer.Option(False, "--json", help="Emit JSON array output"),
+    output_ndjson: bool = typer.Option(
+        False, "--ndjson", help="Emit newline-delimited JSON output"
+    ),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
     """List managed PMA threads."""
+    if output_json and output_ndjson:
+        raise typer.BadParameter(
+            "Choose only one of --json or --ndjson.",
+            param_hint="--json / --ndjson",
+        )
+
     hub_root = _resolve_hub_path(path)
     (
         normalized_resource_kind,
@@ -1368,17 +1377,24 @@ def pma_thread_list(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
+    threads = data.get("threads", []) if isinstance(data, dict) else []
+    if not isinstance(threads, list):
+        threads = []
+    normalized_threads = [thread for thread in threads if isinstance(thread, dict)]
+
     if output_json:
-        typer.echo(json.dumps(data, indent=2))
+        typer.echo(json.dumps(normalized_threads, indent=2))
         return
 
-    threads = data.get("threads", []) if isinstance(data, dict) else []
-    if not isinstance(threads, list) or not threads:
+    if output_ndjson:
+        for thread in normalized_threads:
+            typer.echo(json.dumps(thread))
+        return
+
+    if not normalized_threads:
         typer.echo("No managed threads found")
         return
-    for thread in threads:
-        if not isinstance(thread, dict):
-            continue
+    for thread in normalized_threads:
         typer.echo(
             " ".join(
                 [

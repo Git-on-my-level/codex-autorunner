@@ -555,6 +555,27 @@ def test_ticket_flow_archive_force_with_attestation_succeeds(tmp_path: Path) -> 
     assert payload["deleted_run"] is True
 
 
+def test_ticket_flow_archive_missing_repo_shows_repo_hint(tmp_path: Path) -> None:
+    with runner.isolated_filesystem(temp_dir=str(tmp_path)):
+        result = runner.invoke(
+            app,
+            [
+                "flow",
+                "ticket_flow",
+                "archive",
+                "--run-id",
+                "ffffffff-ffff-ffff-ffff-ffffffffffff",
+            ],
+            catch_exceptions=False,
+        )
+
+        assert result.exit_code == 1
+        assert (
+            "No .git directory found. Specify --repo <worktree-path> to resolve."
+            in result.output
+        )
+
+
 def test_ticket_flow_archive_alias_inherits_force_attestation(tmp_path: Path) -> None:
     repo_root = _setup_repo(tmp_path)
 

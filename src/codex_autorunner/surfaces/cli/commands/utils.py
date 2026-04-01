@@ -404,6 +404,11 @@ def require_repo_config(repo: Optional[Path], hub: Optional[Path]):
     try:
         repo_root = find_repo_root(repo or Path.cwd())
     except RepoNotFoundError as exc:
+        if repo is None:
+            raise_exit(
+                "No .git directory found. Specify --repo <worktree-path> to resolve.",
+                cause=exc,
+            )
         raise_exit("No .git directory found for repo commands.", cause=exc)
     try:
         config = load_repo_config(repo_root, hub_path=hub)

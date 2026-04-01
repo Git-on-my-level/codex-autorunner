@@ -2757,6 +2757,7 @@ def _ticket_flow_recommended_actions(
     state: str,
     record_status: FlowRunStatus,
     has_pending_dispatch: bool,
+    archive_cmd: str,
     status_cmd: str,
     resume_cmd: str,
     start_cmd: str,
@@ -2764,6 +2765,8 @@ def _ticket_flow_recommended_actions(
 ) -> list[str]:
     if state == "completed":
         return [start_cmd]
+    if record_status in {FlowRunStatus.FAILED, FlowRunStatus.STOPPED}:
+        return [archive_cmd, status_cmd]
     if state == "dead":
         return [f"{resume_cmd} --force", status_cmd, stop_cmd]
     if record_status == FlowRunStatus.PAUSED:
@@ -2916,6 +2919,7 @@ def build_ticket_flow_run_state(
 ) -> TicketFlowRunState:
     run_id = str(record.id)
     quoted_repo = shlex.quote(str(repo_root))
+    archive_cmd = f"car flow ticket_flow archive --repo {quoted_repo} --run-id {run_id}"
     status_cmd = f"car flow ticket_flow status --repo {quoted_repo} --run-id {run_id}"
     resume_cmd = f"car flow ticket_flow resume --repo {quoted_repo} --run-id {run_id}"
     start_cmd = f"car flow ticket_flow start --repo {quoted_repo}"
@@ -3037,6 +3041,7 @@ def build_ticket_flow_run_state(
         state=state,
         record_status=record.status,
         has_pending_dispatch=has_pending_dispatch,
+        archive_cmd=archive_cmd,
         status_cmd=status_cmd,
         resume_cmd=resume_cmd,
         start_cmd=start_cmd,
