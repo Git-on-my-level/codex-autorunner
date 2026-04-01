@@ -20,6 +20,10 @@ def _enable_pma(hub_root: Path) -> None:
     write_test_config(hub_root / CONFIG_FILENAME, cfg)
 
 
+def _repo_owner(hub_env) -> dict[str, str]:
+    return {"resource_kind": "repo", "resource_id": hub_env.repo_id}
+
+
 def test_managed_thread_turns_list_and_get(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)
@@ -85,7 +89,7 @@ def test_managed_thread_turns_list_and_get(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
@@ -146,7 +150,7 @@ def test_managed_thread_turn_not_found_for_existing_thread(hub_env) -> None:
     with TestClient(app) as client:
         create_resp = client.post(
             "/hub/pma/threads",
-            json={"agent": "codex", "repo_id": hub_env.repo_id},
+            json={"agent": "codex", **_repo_owner(hub_env)},
         )
         assert create_resp.status_code == 200
         managed_thread_id = create_resp.json()["thread"]["managed_thread_id"]
