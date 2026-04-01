@@ -544,6 +544,9 @@ def test_hub_messages_failed_run_appears_in_inbox(hub_env, monkeypatch) -> None:
         assert item["next_action"] == "diagnose_or_restart"
         run_state = item.get("run_state") or {}
         assert run_state.get("state") == "blocked"
+        assert run_state.get("recommended_action") == (
+            f"car flow ticket_flow archive --repo {hub_env.repo_root} --run-id {run_id}"
+        )
         assert run_state.get("attention_required") is False
         assert run_state.get("worker_status") == "exited_expected"
         assert "available_actions" in item

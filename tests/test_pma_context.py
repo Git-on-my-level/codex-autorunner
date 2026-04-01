@@ -767,6 +767,29 @@ def test_build_hub_snapshot_includes_action_queue_with_supersession(hub_env) -> 
     assert file_item["supersession"]["status"] == "non_primary"
 
 
+def test_build_hub_snapshot_failed_run_queue_item_recommends_archive_with_repo(
+    hub_env,
+) -> None:
+    run_id = "56565656-7878-9090-1212-343434343434"
+    _seed_failed_run(hub_env.repo_root, run_id)
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    queue = snapshot.get("action_queue") or []
+    failed_item = next(item for item in queue if item.get("run_id") == run_id)
+    assert failed_item["queue_source"] == "ticket_flow_inbox"
+    assert failed_item["recommended_action"] == "diagnose_or_restart"
+    assert failed_item["recommended_detail"] == (
+        f"car flow ticket_flow archive --repo {hub_env.repo_root} --run-id {run_id}"
+    )
+
+
 def test_build_hub_snapshot_prefers_status_change_time_for_thread_freshness(
     hub_env,
 ) -> None:
