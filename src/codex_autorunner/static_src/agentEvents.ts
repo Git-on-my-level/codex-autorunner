@@ -596,6 +596,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     }
 
     if (partType === "tool") {
+      if (!part) return null;
       const toolName =
         (typeof part.tool === "string" && part.tool) ||
         (typeof part.name === "string" && part.name) ||
@@ -630,6 +631,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     }
 
     if (partType === "patch") {
+      if (!part) return null;
       const files = extractFiles(part as unknown as PayloadParams);
       if (!files.length) return null;
       return {
@@ -648,6 +650,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     }
 
     if (partType === "usage") {
+      if (!part) return null;
       const totalTokens = part.totalTokens;
       const summaryText =
         typeof totalTokens === "number" ? `tokens used: ${totalTokens}` : "";

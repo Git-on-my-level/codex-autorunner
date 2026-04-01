@@ -607,6 +607,73 @@ async def test_normalize_runtime_thread_raw_event_handles_opencode_message_part_
     assert state.best_assistant_text() == "Hello world"
 
 
+async def test_normalize_runtime_thread_raw_event_handles_string_delta_in_delta_only_text_path() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.updated",
+                    "params": {
+                        "properties": {
+                            "info": {"id": "assistant-2", "role": "assistant"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "part-2",
+                                "type": "text",
+                                "messageID": "assistant-2",
+                            },
+                            "delta": {"text": "Hello"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.delta",
+                    "params": {
+                        "properties": {
+                            "partID": "part-2",
+                            "messageID": "assistant-2",
+                            "delta": " world",
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], OutputDelta)
+    assert output[0].content == " world"
+    assert state.best_assistant_text() == "Hello world"
+
+
 async def test_normalize_runtime_thread_raw_event_uses_part_type_memory_for_reasoning_deltas() -> (
     None
 ):

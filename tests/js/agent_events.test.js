@@ -246,6 +246,44 @@ test("remembers OpenCode part types for delta-only reasoning events", () => {
   assert.equal(second.mergeStrategy, "append");
 });
 
+test("ignores delta-only tool updates without part payload", () => {
+  resetOpenCodeEventState();
+  const first = parseAppServerEvent({
+    id: "tool-typed",
+    received_at: 1300,
+    message: {
+      method: "message.part.updated",
+      params: {
+        properties: {
+          part: {
+            id: "tool-1",
+            type: "tool",
+            tool: "bash",
+          },
+        },
+      },
+    },
+  });
+
+  const second = parseAppServerEvent({
+    id: "tool-delta-only",
+    received_at: 1301,
+    message: {
+      method: "message.part.delta",
+      params: {
+        properties: {
+          partID: "tool-1",
+          delta: "ignored tool delta",
+        },
+      },
+    },
+  });
+
+  assert.ok(first);
+  assert.equal(first.event.kind, "tool");
+  assert.equal(second, null);
+});
+
 test("replaces cumulative OpenCode text snapshots when delta is absent", () => {
   resetOpenCodeEventState();
 

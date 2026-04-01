@@ -516,6 +516,8 @@ export function parseAppServerEvent(payload) {
             return delta && reasoningItemId ? { event, mergeStrategy: "append" } : { event };
         }
         if (partType === "tool") {
+            if (!part)
+                return null;
             const toolName = (typeof part.tool === "string" && part.tool) ||
                 (typeof part.name === "string" && part.name) ||
                 "Tool call";
@@ -550,6 +552,8 @@ export function parseAppServerEvent(payload) {
             };
         }
         if (partType === "patch") {
+            if (!part)
+                return null;
             const files = extractFiles(part);
             if (!files.length)
                 return null;
@@ -568,6 +572,8 @@ export function parseAppServerEvent(payload) {
             };
         }
         if (partType === "usage") {
+            if (!part)
+                return null;
             const totalTokens = part.totalTokens;
             const summaryText = typeof totalTokens === "number" ? `tokens used: ${totalTokens}` : "";
             if (!summaryText)
