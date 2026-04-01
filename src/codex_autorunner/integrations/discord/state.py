@@ -492,6 +492,10 @@ class DiscordStateStore:
         )
         if agent_profile is None and isinstance(agent, str):
             agent_profile = normalize_hermes_profile(agent)
+        if agent_profile is None and isinstance(agent_profile_raw, str):
+            raw_profile = agent_profile_raw.strip().lower()
+            if raw_profile and agent == "hermes":
+                agent_profile = raw_profile
         if agent_profile is not None:
             agent = "hermes"
         return {
@@ -718,11 +722,7 @@ class DiscordStateStore:
     ) -> None:
         conn = self._connection_sync()
         with conn:
-            if (
-                agent_profile is not _UNSET
-                or model_override is not _UNSET
-                or reasoning_effort is not _UNSET
-            ):
+            if model_override is not _UNSET or reasoning_effort is not _UNSET:
                 conn.execute(
                     """
                     UPDATE channel_bindings

@@ -164,12 +164,6 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
                 "OpenCode binary not found. Install opencode or switch to /agent codex.",
             )
             return
-        if desired == current:
-            await self._answer_callback(callback, "Agent already set")
-            await self._finalize_selection(
-                key, callback, f"Agent already set to {current}."
-            )
-            return
         if (
             desired == "hermes"
             and self._hermes_profile_options()
@@ -184,6 +178,12 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
                 message_id=callback.message_id,
                 reply_to=callback.message_id,
                 requester_user_id=actor_id,
+            )
+            return
+        if desired == current:
+            await self._answer_callback(callback, "Agent already set")
+            await self._finalize_selection(
+                key, callback, f"Agent already set to {current}."
             )
             return
         note = await self._apply_agent_change(

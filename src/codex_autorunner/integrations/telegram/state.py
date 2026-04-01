@@ -310,14 +310,18 @@ class TelegramTopicRecord:
         agent = normalize_agent(raw_agent)
         if agent is None and isinstance(raw_agent, str) and raw_agent.strip():
             agent = raw_agent.strip().lower()
-        agent_profile = payload.get("agent_profile") or payload.get("agentProfile")
-        if not isinstance(agent_profile, str):
+        raw_agent_profile = payload.get("agent_profile") or payload.get("agentProfile")
+        if not isinstance(raw_agent_profile, str):
             agent_profile = None
         else:
-            agent_profile = normalize_hermes_profile(agent_profile)
+            agent_profile = normalize_hermes_profile(raw_agent_profile)
         legacy_hermes_profile = normalize_hermes_profile(agent)
         if agent_profile is None and legacy_hermes_profile is not None:
             agent_profile = legacy_hermes_profile
+        if agent_profile is None and isinstance(raw_agent_profile, str):
+            raw_stripped = raw_agent_profile.strip().lower()
+            if raw_stripped and agent == "hermes":
+                agent_profile = raw_stripped
         if agent_profile is not None:
             agent = "hermes"
         model = payload.get("model")
