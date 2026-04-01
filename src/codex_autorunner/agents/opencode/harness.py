@@ -44,6 +44,7 @@ class _PendingTurnConfig:
     approval_mode: Optional[str]
     sandbox_policy: Optional[Any]
     question_policy: str
+    prompt: Optional[str] = None
     reserved_workspace_root: Optional[Path] = None
     command_task: Optional[asyncio.Task[Any]] = None
     progress_event_subscribers: list[asyncio.Queue[Optional[dict[str, Any]]]] = field(
@@ -880,6 +881,7 @@ class OpenCodeHarness(AgentHarness):
             model_payload=model_payload,
             approval_mode=approval_mode,
             sandbox_policy=sandbox_policy,
+            prompt=prompt,
             reserved_workspace_root=reserved_workspace,
             question_policy=(
                 "reject"
@@ -948,6 +950,7 @@ class OpenCodeHarness(AgentHarness):
             model_payload=split_model_id(model),
             approval_mode=approval_mode,
             sandbox_policy=sandbox_policy,
+            prompt=prompt,
             reserved_workspace_root=reserved_workspace,
             question_policy=(
                 "reject"
@@ -1003,8 +1006,6 @@ class OpenCodeHarness(AgentHarness):
             ) and session_id == conversation_id:
                 break
             if session_id and session_id != conversation_id:
-                continue
-            if not session_id:
                 continue
             wrapped = {"message": {"method": event.event, "params": parsed}}
             yield format_sse("app-server", wrapped)
@@ -1103,10 +1104,8 @@ class OpenCodeHarness(AgentHarness):
                         and status_type.lower() == "idle"
                     )
                     if (
-                        event_session_id == conversation_id
-                        and not is_idle
-                        and event_session_id
-                    ):
+                        event_session_id == conversation_id or not event_session_id
+                    ) and not is_idle:
                         _publish_progress_event(wrapped)
                     elif not is_idle:
                         log_event(
@@ -1195,6 +1194,7 @@ class OpenCodeHarness(AgentHarness):
                 collect_opencode_output_from_events(
                     None,
                     session_id=conversation_id,
+                    prompt=(pending.prompt if pending is not None else None),
                     model_payload=(
                         pending.model_payload if pending is not None else None
                     ),
