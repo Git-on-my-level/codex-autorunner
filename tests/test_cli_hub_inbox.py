@@ -59,6 +59,53 @@ def test_hub_inbox_resolve_posts_action(hub_root_only) -> None:
     assert calls[0][3] == 10.0
 
 
+def test_hub_inbox_dismiss_posts_action(hub_root_only) -> None:
+    calls: list[tuple[str, str, Any, Any]] = []
+
+    def _mock_request(method: str, url: str, **kwargs):
+        calls.append((method, url, kwargs.get("json"), kwargs.get("timeout")))
+        if method == "POST" and url.endswith("/hub/messages/resolve"):
+            payload = kwargs.get("json") or {}
+            assert payload["repo_id"] == "repo-a"
+            assert payload["run_id"] == "11111111-1111-1111-1111-111111111111"
+            assert payload["action"] == "dismiss"
+            assert payload["seq"] == 7
+            assert payload["item_type"] == "run_dispatch"
+            assert payload["reason"] == "cleared from PMA"
+            return _json_response(method, url, {"status": "ok", "resolved": payload})
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    with patch("httpx.request", side_effect=_mock_request):
+        result = runner.invoke(
+            app,
+            [
+                "hub",
+                "inbox",
+                "dismiss",
+                "--path",
+                str(hub_root_only),
+                "--repo-id",
+                "repo-a",
+                "--run-id",
+                "11111111-1111-1111-1111-111111111111",
+                "--seq",
+                "7",
+                "--item-type",
+                "run_dispatch",
+                "--reason",
+                "cleared from PMA",
+                "--json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "ok"
+    assert payload["resolved"]["seq"] == 7
+    assert len(calls) == 1
+    assert calls[0][3] == 10.0
+
+
 def test_hub_inbox_clear_stale_dry_run_filters_items(hub_root_only) -> None:
     calls: list[tuple[str, str, Any]] = []
 

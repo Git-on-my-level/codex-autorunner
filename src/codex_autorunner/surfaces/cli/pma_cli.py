@@ -74,15 +74,17 @@ def _build_pma_url(config, path: str) -> str:
 
 
 def _resolve_hub_path(path: Optional[Path]) -> Path:
-    if path:
-        candidate = path
-        if candidate.is_dir():
-            candidate = candidate / "codex-autorunner.yml"
-            if not candidate.exists():
-                candidate = path / ".codex-autorunner" / "config.yml"
-        if candidate.exists():
-            return candidate.parent.parent.resolve()
-    return Path.cwd()
+    start = path or Path.cwd()
+    try:
+        return load_hub_config(start).root
+    except Exception:
+        candidate = start.resolve()
+        if candidate.is_file():
+            parent = candidate.parent
+            if parent.name == ".codex-autorunner":
+                return parent.parent.resolve()
+            return parent.resolve()
+        return candidate
 
 
 def _resolve_message_body(

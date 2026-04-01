@@ -1044,6 +1044,12 @@ def test_pma_cli_thread_archive_preserves_not_found_detail(
     assert "possible base-path mismatch" not in result.output
 
 
+def test_resolve_hub_path_uses_loaded_hub_root_for_worktree_path(hub_env) -> None:
+    resolved = pma_cli._resolve_hub_path(hub_env.repo_root)
+
+    assert resolved == hub_env.hub_root
+
+
 def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
     monkeypatch, tmp_path: Path
 ) -> None:
