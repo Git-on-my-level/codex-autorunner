@@ -67,7 +67,7 @@ from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
     AppServerThreadRegistry,
     pma_base_key,
-    pma_legacy_alias_key,
+    pma_legacy_migration_fallback_keys,
     pma_topic_scoped_key,
 )
 from .....integrations.chat.compaction import match_pending_compact_seed
@@ -3816,10 +3816,12 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         thread_id = None if pma_enabled else record.active_thread_id
         if pma_enabled and pma_thread_registry and pma_thread_key:
             agent, profile = self._effective_agent_state(record)
-            legacy_key = pma_legacy_alias_key(agent, profile)
-            if legacy_key:
+            legacy_keys = pma_legacy_migration_fallback_keys(
+                pma_thread_key, agent, profile
+            )
+            if legacy_keys:
                 thread_id = pma_thread_registry.get_thread_id_with_fallback(
-                    pma_thread_key, legacy_key
+                    pma_thread_key, *legacy_keys
                 )
             else:
                 thread_id = pma_thread_registry.get_thread_id(pma_thread_key)

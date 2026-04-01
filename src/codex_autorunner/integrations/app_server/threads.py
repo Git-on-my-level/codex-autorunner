@@ -103,22 +103,69 @@ def pma_base_key(agent: str, profile: Optional[str] = None) -> str:
     return _append_profile_suffix(base_key, profile)
 
 
-def pma_legacy_alias_key(agent: str, profile: Optional[str]) -> Optional[str]:
-    """Return the old alias-style PMA key, or None if no migration is needed.
+def pma_legacy_alias_keys(agent: str, profile: Optional[str]) -> tuple[str, ...]:
+    """Return possible pre-normalization PMA base keys for alias-style Hermes configs.
 
-    Before PMA key normalization, Hermes alias agents like ``hermes-m4-pma``
-    produced keys like ``pma.hermes-m4-pma`` (the alias id was used directly
-    without splitting into agent + profile).  This helper reconstructs that
-    old key so callers can do fallback lookups during migration.
+    Before PMA key normalization, the runtime alias id was used as the PMA
+    segment (for example ``pma.hermes-m4-pma`` or ``pma.hermes_m4_pma``) instead
+    of the logical shape ``pma.hermes.profile.m4-pma``.  This returns every
+    distinct legacy *base* key (no topic suffix) that might exist in old
+    registries, so callers can try fallbacks in order.
     """
-    if not profile or not agent:
-        return None
-    alias_id = f"{agent}-{profile}"
-    old_key = pma_base_key(alias_id)
-    new_key = pma_base_key(agent, profile)
-    if old_key == new_key:
-        return None
-    return old_key
+    if not isinstance(agent, str) or not isinstance(profile, str):
+        return ()
+    agent_norm = agent.strip().lower()
+    prof_norm = profile.strip().lower()
+    if not agent_norm or not prof_norm:
+        return ()
+    new_key = pma_base_key(agent_norm, prof_norm)
+    raw_aliases: set[str] = {
+        f"{agent_norm}-{prof_norm}",
+        f"{agent_norm}_{prof_norm}",
+    }
+    unders = prof_norm.replace("-", "_")
+    if unders != prof_norm:
+        raw_aliases.add(f"{agent_norm}_{unders}")
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for raw in sorted(raw_aliases):
+        candidate = pma_base_key(raw)
+        if candidate != new_key and candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return tuple(ordered)
+
+
+def pma_legacy_alias_key(agent: str, profile: Optional[str]) -> Optional[str]:
+    """Return the first legacy alias-style PMA base key, or None if none apply."""
+    keys = pma_legacy_alias_keys(agent, profile)
+    return keys[0] if keys else None
+
+
+def pma_legacy_migration_fallback_keys(
+    canonical_key: str,
+    agent: str,
+    profile: Optional[str],
+) -> tuple[str, ...]:
+    """Map a canonical PMA registry key to legacy keys to try (including topic suffix).
+
+    When ``require_topics`` is enabled, canonical keys look like
+    ``pma.hermes.profile.m4-pma.<topic>`` while legacy keys used
+    ``pma.hermes-m4-pma.<topic>`` (or underscore alias variants).  This
+    mirrors the topic segment onto each legacy base so migration lookups
+    succeed for per-topic PMA state.
+    """
+    logical_base = pma_base_key(agent, profile)
+    legacy_bases = pma_legacy_alias_keys(agent, profile)
+    if not legacy_bases:
+        return ()
+    if canonical_key == logical_base:
+        return legacy_bases
+    topic_prefix = logical_base + "."
+    if canonical_key.startswith(topic_prefix):
+        suffix = canonical_key[len(topic_prefix) :]
+        return tuple(f"{base}.{suffix}" for base in legacy_bases)
+    return ()
 
 
 def pma_prefix_for_agent(agent: Optional[str], profile: Optional[str] = None) -> str:

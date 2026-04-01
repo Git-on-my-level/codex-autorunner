@@ -24,6 +24,9 @@ FEATURE_KEYS = _threads.FEATURE_KEYS
 default_app_server_threads_path = _threads.default_app_server_threads_path
 normalize_feature_key = _threads.normalize_feature_key
 pma_base_key = _threads.pma_base_key
+pma_legacy_alias_key = _threads.pma_legacy_alias_key
+pma_legacy_alias_keys = _threads.pma_legacy_alias_keys
+pma_legacy_migration_fallback_keys = _threads.pma_legacy_migration_fallback_keys
 pma_prefix_for_agent = _threads.pma_prefix_for_agent
 pma_prefixes_for_reset = _threads.pma_prefixes_for_reset
 pma_topic_scoped_key = _threads.pma_topic_scoped_key
@@ -53,6 +56,9 @@ __all__ = [
     "file_chat_discord_key",
     "normalize_feature_key",
     "pma_base_key",
+    "pma_legacy_alias_key",
+    "pma_legacy_alias_keys",
+    "pma_legacy_migration_fallback_keys",
     "pma_prefix_for_agent",
     "pma_prefixes_for_reset",
     "pma_topic_scoped_key",
