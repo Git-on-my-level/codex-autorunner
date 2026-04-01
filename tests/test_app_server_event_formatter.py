@@ -1,6 +1,6 @@
 import pytest
 
-from codex_autorunner.core.app_server_logging import AppServerEventFormatter
+from codex_autorunner.integrations.app_server.logging import AppServerEventFormatter
 
 
 @pytest.mark.anyio

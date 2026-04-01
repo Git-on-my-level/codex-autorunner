@@ -206,7 +206,7 @@ async def test_events_log_has_lock_file_path(temp_hub_root: Path) -> None:
 @pytest.mark.asyncio
 async def test_lifecycle_router_new_clears_scoped_keys(temp_hub_root: Path) -> None:
     """Test that /new clears both global and topic-scoped PMA keys."""
-    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+    from codex_autorunner.integrations.app_server.threads import AppServerThreadRegistry
 
     registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
     registry = AppServerThreadRegistry(registry_path)
@@ -271,7 +271,7 @@ async def test_lifecycle_router_new_clears_matching_prompt_state_keys(
 @pytest.mark.asyncio
 async def test_lifecycle_router_reset_clears_scoped_keys(temp_hub_root: Path) -> None:
     """Test that /reset clears both global and topic-scoped PMA keys."""
-    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+    from codex_autorunner.integrations.app_server.threads import AppServerThreadRegistry
 
     registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
     registry = AppServerThreadRegistry(registry_path)
@@ -331,7 +331,7 @@ async def test_lifecycle_router_reset_all_clears_both_agent_scoped_keys(
     temp_hub_root: Path,
 ) -> None:
     """Test that /reset with agent='all' clears scoped keys for both agents."""
-    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+    from codex_autorunner.integrations.app_server.threads import AppServerThreadRegistry
 
     registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
     registry = AppServerThreadRegistry(registry_path)
@@ -362,7 +362,7 @@ async def test_lifecycle_router_codex_reset_preserves_opencode_scoped_keys(
     temp_hub_root: Path,
 ) -> None:
     """Codex PMA reset must not clear active opencode topic mappings."""
-    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+    from codex_autorunner.integrations.app_server.threads import AppServerThreadRegistry
 
     registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
     registry = AppServerThreadRegistry(registry_path)
@@ -393,7 +393,7 @@ async def test_lifecycle_router_codex_reset_preserves_hermes_scoped_state(
     temp_hub_root: Path,
 ) -> None:
     """Codex PMA reset must preserve non-codex nested agent families."""
-    from codex_autorunner.core.app_server_threads import AppServerThreadRegistry
+    from codex_autorunner.integrations.app_server.threads import AppServerThreadRegistry
 
     registry_path = temp_hub_root / ".codex-autorunner" / "app_server_threads.json"
     registry = AppServerThreadRegistry(registry_path)

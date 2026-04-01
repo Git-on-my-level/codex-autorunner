@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_autorunner.core.app_server_threads import (
+from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_HERMES_PREFIX,
     FILE_CHAT_OPENCODE_PREFIX,
     FILE_CHAT_PREFIX,

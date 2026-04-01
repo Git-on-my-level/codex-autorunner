@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from codex_autorunner.core.app_server_utils import (
+from codex_autorunner.integrations.app_server.env import (
     app_server_env,
     build_app_server_env,
     seed_codex_home,

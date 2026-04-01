@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from codex_autorunner.core.app_server_prompts import (
+from codex_autorunner.core.config import load_repo_config
+from codex_autorunner.integrations.app_server.prompts import (
     TRUNCATION_MARKER,
     build_autorunner_prompt,
 )
-from codex_autorunner.core.config import load_repo_config
 
 
 def _write_text(path: Path, content: str) -> None:

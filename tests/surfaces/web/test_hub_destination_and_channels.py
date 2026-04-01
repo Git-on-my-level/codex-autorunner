@@ -8,11 +8,6 @@ import pytest
 from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
-from codex_autorunner.core.app_server_threads import (
-    FILE_CHAT_PREFIX,
-    PMA_KEY,
-    PMA_OPENCODE_KEY,
-)
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
     DEFAULT_HUB_CONFIG,
@@ -33,6 +28,11 @@ from codex_autorunner.integrations.agents.backend_orchestrator import (
 from codex_autorunner.integrations.agents.wiring import (
     build_agent_backend_factory,
     build_app_server_supervisor_factory,
+)
+from codex_autorunner.integrations.app_server.threads import (
+    FILE_CHAT_PREFIX,
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
 )
 from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.integrations.telegram.state import topic_key as telegram_topic_key

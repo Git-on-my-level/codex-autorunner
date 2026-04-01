@@ -1,4 +1,8 @@
-"""Compatibility shim for app-server thread registry helpers."""
+"""Compatibility shim for app-server thread registry helpers.
+
+Uses importlib to avoid a static core -> integrations import edge (see
+scripts/check_import_boundaries.py).
+"""
 
 from importlib import import_module
 

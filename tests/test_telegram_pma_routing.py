@@ -12,11 +12,6 @@ import httpx
 import pytest
 
 from codex_autorunner.agents.registry import AgentDescriptor
-from codex_autorunner.core.app_server_threads import (
-    PMA_KEY,
-    PMA_OPENCODE_KEY,
-    AppServerThreadRegistry,
-)
 from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_INTERRUPTED_ERROR,
     RUNTIME_THREAD_TIMEOUT_ERROR,
@@ -26,6 +21,11 @@ from codex_autorunner.core.sse import format_sse
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerDisconnected,
     CodexAppServerResponseError,
+)
+from codex_autorunner.integrations.app_server.threads import (
+    PMA_KEY,
+    PMA_OPENCODE_KEY,
+    AppServerThreadRegistry,
 )
 from codex_autorunner.integrations.telegram.adapter import (
     TelegramDocument,
@@ -6059,7 +6059,7 @@ async def test_pma_targets_subcommand_uses_usage_text(tmp_path: Path) -> None:
 async def test_require_topics_uses_scoped_pma_registry_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from codex_autorunner.core.app_server_threads import pma_topic_scoped_key
+    from codex_autorunner.integrations.app_server.threads import pma_topic_scoped_key
 
     record = TelegramTopicRecord(
         pma_enabled=True,
@@ -6111,7 +6111,7 @@ def test_pma_registry_key_matches_logical_hermes_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from codex_autorunner.core.app_server_threads import pma_base_key
+    from codex_autorunner.integrations.app_server.threads import pma_base_key
 
     monkeypatch.setattr(
         "codex_autorunner.agents.registry.get_registered_agents",

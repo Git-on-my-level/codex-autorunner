@@ -17,7 +17,6 @@ from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import AgentDescriptor
 from codex_autorunner.bootstrap import pma_active_context_content, seed_hub_files
 from codex_autorunner.core import filebox
-from codex_autorunner.core.app_server_threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.orchestration import ExecutionRecord, ThreadTarget
 from codex_autorunner.core.pma_context import maybe_auto_prune_active_context
@@ -27,6 +26,7 @@ from codex_autorunner.core.pma_transcripts import PmaTranscriptStore
 from codex_autorunner.integrations.app_server.client import (
     CodexAppServerResponseError,
 )
+from codex_autorunner.integrations.app_server.threads import PMA_KEY, PMA_OPENCODE_KEY
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
 from codex_autorunner.server import create_hub_app

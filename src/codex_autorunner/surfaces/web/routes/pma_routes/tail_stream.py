@@ -14,7 +14,6 @@ from .....agents.base import (
     harness_supports_progress_event_stream,
 )
 from .....agents.codex.harness import CodexHarness
-from .....core.app_server_logging import AppServerEventFormatter
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
@@ -31,6 +30,7 @@ from .....core.ports.run_event import (
     ToolResult,
 )
 from .....core.redaction import redact_text
+from .....integrations.app_server.logging import AppServerEventFormatter
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
 from .managed_threads import (
