@@ -86,6 +86,7 @@ class RuntimeThreadRunEventState:
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
     pending_stream_no_id: str = ""
     message_roles_seen: bool = False
+    opencode_part_types: dict[str, str] = field(default_factory=dict)
     opencode_tool_status: dict[str, str] = field(default_factory=dict)
     opencode_patch_hashes: set[str] = field(default_factory=set)
 
@@ -547,7 +548,7 @@ def normalize_runtime_thread_message(
     if method == "item/agentMessage/delta":
         return _assistant_stream_events(params, state, timestamp=event_timestamp)
 
-    if method == "message.part.updated":
+    if method in {"message.part.updated", "message.part.delta"}:
         return _normalize_message_part_updated(
             params,
             state,
@@ -737,7 +738,18 @@ def _normalize_message_part_updated(
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     part = _extract_message_part(params)
-    if not part:
+    part_id = _extract_part_id(params, part=part)
+    part_type = str(part.get("type") or "").strip().lower()
+    if part_id and part_type:
+        state.opencode_part_types[part_id] = part_type
+    elif part_id and not part_type:
+        part_type = state.opencode_part_types.get(part_id, "")
+    part_for_processing = dict(part) if part else {}
+    if part_id and "id" not in part_for_processing:
+        part_for_processing["id"] = part_id
+    if part_type and "type" not in part_for_processing:
+        part_for_processing["type"] = part_type
+    if not part and part_type in {"", "text"}:
         content = _extract_output_delta(params)
         if not content:
             return []
@@ -747,10 +759,9 @@ def _normalize_message_part_updated(
             timestamp=timestamp,
         )
 
-    if bool(part.get("ignored")):
+    if part and bool(part.get("ignored")):
         return []
 
-    part_type = str(part.get("type") or "").strip().lower()
     if part_type in {"", "text"}:
         content = _extract_output_delta(params)
         if not content:
@@ -762,7 +773,7 @@ def _normalize_message_part_updated(
         )
 
     if part_type == "reasoning":
-        content = _extract_opencode_reasoning_text(params, part, state)
+        content = _extract_opencode_reasoning_text(params, part_for_processing, state)
         if not content:
             return []
         return [
@@ -774,13 +785,23 @@ def _normalize_message_part_updated(
         ]
 
     if part_type == "tool":
-        return _normalize_opencode_tool_part(part, state, timestamp=timestamp)
+        if not part_for_processing:
+            return []
+        return _normalize_opencode_tool_part(
+            part_for_processing, state, timestamp=timestamp
+        )
 
     if part_type == "patch":
-        return _normalize_opencode_patch_part(part, state, timestamp=timestamp)
+        if not part_for_processing:
+            return []
+        return _normalize_opencode_patch_part(
+            part_for_processing, state, timestamp=timestamp
+        )
 
     if part_type == "usage":
-        usage = _extract_opencode_usage_part(part)
+        if not part_for_processing:
+            return []
+        usage = _extract_opencode_usage_part(part_for_processing)
         if usage is None:
             return []
         state.token_usage = dict(usage)
@@ -913,7 +934,7 @@ def _extract_opencode_reasoning_text(
     state: RuntimeThreadRunEventState,
 ) -> str:
     key = None
-    for candidate in ("id", "partId"):
+    for candidate in ("id", "partID", "partId", "part_id"):
         value = part.get(candidate)
         if isinstance(value, str) and value:
             key = value
@@ -1277,10 +1298,25 @@ def _extract_message_role(params: dict[str, Any]) -> Optional[str]:
 def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
     properties = _coerce_dict(params.get("properties"))
     part = _coerce_dict(properties.get("part"))
-    for key in ("messageID", "messageId", "message_id"):
-        value = part.get(key)
-        if isinstance(value, str) and value:
-            return value
+    for source in (part, properties, params):
+        for key in ("messageID", "messageId", "message_id"):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _extract_part_id(
+    params: dict[str, Any], *, part: Optional[dict[str, Any]] = None
+) -> Optional[str]:
+    properties = _coerce_dict(params.get("properties"))
+    if part is None:
+        part = _coerce_dict(properties.get("part"))
+    for source in (part, properties, params):
+        for key in ("id", "partID", "partId", "part_id"):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
     return None
 
 

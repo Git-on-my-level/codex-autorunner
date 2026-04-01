@@ -464,6 +464,79 @@ async def test_run_turn_mirrors_opencode_text_parts_after_assistant_role_resolut
 
 
 @pytest.mark.asyncio
+async def test_run_turn_mirrors_opencode_text_part_deltas_with_direct_ids(
+    tmp_path: Path,
+):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="Hello world",
+                raw_events=[
+                    _message(
+                        "message.updated",
+                        {
+                            "properties": {
+                                "info": {
+                                    "id": "assistant-1",
+                                    "role": "assistant",
+                                }
+                            }
+                        },
+                    ),
+                    _message(
+                        "message.part.updated",
+                        {
+                            "properties": {
+                                "part": {
+                                    "id": "part-1",
+                                    "messageID": "assistant-1",
+                                    "type": "text",
+                                    "text": "Hello",
+                                },
+                                "delta": "Hello",
+                            }
+                        },
+                    ),
+                    _message(
+                        "message.part.delta",
+                        {
+                            "properties": {
+                                "partID": "part-1",
+                                "messageID": "assistant-1",
+                                "delta": " world",
+                            }
+                        },
+                    ),
+                ],
+            )
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
+
+    emitted = []
+
+    def _emit(event_type: FlowEventType, payload: dict):
+        emitted.append((event_type, payload))
+
+    result = await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="main prompt",
+            workspace_root=tmp_path,
+            emit_event=_emit,
+        )
+    )
+
+    assert result.text == "Hello world"
+    mirrored = [
+        payload["delta"]
+        for event_type, payload in emitted
+        if event_type == FlowEventType.AGENT_STREAM_DELTA
+    ]
+    assert mirrored == ["Hello", " world"]
+
+
+@pytest.mark.asyncio
 async def test_run_turn_preserves_whitespace_in_opencode_text_part_deltas(
     tmp_path: Path,
 ):
@@ -582,6 +655,62 @@ async def test_run_turn_does_not_mirror_opencode_user_text_parts(tmp_path: Path)
                                     "id": "user-1",
                                     "role": "user",
                                 }
+                            }
+                        },
+                    ),
+                ],
+            )
+        ]
+    )
+    pool = _make_pool(tmp_path, harness, approval_mode="yolo")
+
+    emitted = []
+
+    def _emit(event_type: FlowEventType, payload: dict):
+        emitted.append((event_type, payload))
+
+    await pool.run_turn(
+        AgentTurnRequest(
+            agent_id="opencode",
+            prompt="main prompt",
+            workspace_root=tmp_path,
+            emit_event=_emit,
+        )
+    )
+
+    assert [event_type for event_type, _ in emitted] == [
+        FlowEventType.APP_SERVER_EVENT,
+        FlowEventType.APP_SERVER_EVENT,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_turn_does_not_mirror_reasoning_part_deltas_with_missing_part_type(
+    tmp_path: Path,
+):
+    harness = _FakeHarness(
+        [
+            _HarnessScript(
+                assistant_text="",
+                raw_events=[
+                    _message(
+                        "message.part.updated",
+                        {
+                            "properties": {
+                                "part": {
+                                    "id": "reason-1",
+                                    "type": "reasoning",
+                                },
+                                "delta": "thinking",
+                            }
+                        },
+                    ),
+                    _message(
+                        "message.part.delta",
+                        {
+                            "properties": {
+                                "partID": "reason-1",
+                                "delta": " more",
                             }
                         },
                     ),

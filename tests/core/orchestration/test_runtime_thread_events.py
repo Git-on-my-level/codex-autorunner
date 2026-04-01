@@ -539,6 +539,123 @@ async def test_normalize_runtime_thread_raw_event_maps_opencode_reasoning_parts_
     assert state.best_assistant_text() == ""
 
 
+async def test_normalize_runtime_thread_raw_event_handles_opencode_message_part_deltas_with_direct_ids() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.updated",
+                    "params": {
+                        "properties": {
+                            "info": {"id": "assistant-1", "role": "assistant"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "part-1",
+                                "type": "text",
+                                "messageID": "assistant-1",
+                                "text": "Hello",
+                            },
+                            "delta": {"text": "Hello"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    output = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.delta",
+                    "params": {
+                        "properties": {
+                            "partID": "part-1",
+                            "messageID": "assistant-1",
+                            "delta": {"text": " world"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(output) == 1
+    assert isinstance(output[0], OutputDelta)
+    assert output[0].content == " world"
+    assert state.best_assistant_text() == "Hello world"
+
+
+async def test_normalize_runtime_thread_raw_event_uses_part_type_memory_for_reasoning_deltas() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    first = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {"id": "reason-1", "type": "reasoning"},
+                            "delta": {"text": "thinking"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    second = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.delta",
+                    "params": {
+                        "properties": {
+                            "partID": "reason-1",
+                            "delta": {"text": " more"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(first) == 1
+    assert isinstance(first[0], RunNotice)
+    assert first[0].message == "thinking"
+    assert len(second) == 1
+    assert isinstance(second[0], RunNotice)
+    assert second[0].message == "thinking more"
+    assert state.best_assistant_text() == ""
+
+
 async def test_normalize_runtime_thread_raw_event_maps_opencode_tool_parts_to_tool_calls() -> (
     None
 ):

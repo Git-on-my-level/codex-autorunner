@@ -80,12 +80,14 @@ interface EventMessage {
 
 const openCodeMessageRoles: Record<string, string> = {};
 const openCodePendingTextByMessage: Record<string, string> = {};
+const openCodePartTypes: Record<string, string> = {};
 let openCodePendingTextNoId = "";
 let openCodeMessageRolesSeen = false;
 
 export function resetOpenCodeEventState(): void {
   Object.keys(openCodeMessageRoles).forEach((key) => delete openCodeMessageRoles[key]);
   Object.keys(openCodePendingTextByMessage).forEach((key) => delete openCodePendingTextByMessage[key]);
+  Object.keys(openCodePartTypes).forEach((key) => delete openCodePartTypes[key]);
   openCodePendingTextNoId = "";
   openCodeMessageRolesSeen = false;
 }
@@ -121,8 +123,42 @@ function extractOpenCodeMessageId(params: PayloadParams | null | undefined): str
   const part = extractOpenCodePart(params);
   const partMessageId = part?.messageID || part?.messageId || part?.message_id;
   if (typeof partMessageId === "string" && partMessageId.trim()) return partMessageId.trim();
+  const properties = extractOpenCodeProperties(params);
+  const directMessageId =
+    properties.messageID ||
+    properties.messageId ||
+    properties.message_id ||
+    (params ? (params as Record<string, unknown>).messageID : null) ||
+    (params ? (params as Record<string, unknown>).messageId : null) ||
+    (params ? (params as Record<string, unknown>).message_id : null);
+  if (typeof directMessageId === "string" && directMessageId.trim()) return directMessageId.trim();
 
   return null;
+}
+
+function extractOpenCodePartId(params: PayloadParams | null | undefined): string | null {
+  const part = extractOpenCodePart(params);
+  const nestedPartId = part?.id || part?.partID || part?.partId || part?.part_id;
+  if (typeof nestedPartId === "string" && nestedPartId.trim()) return nestedPartId.trim();
+  const properties = extractOpenCodeProperties(params);
+  const directPartId =
+    properties.id ||
+    properties.partID ||
+    properties.partId ||
+    properties.part_id ||
+    (params ? (params as Record<string, unknown>).id : null) ||
+    (params ? (params as Record<string, unknown>).partID : null) ||
+    (params ? (params as Record<string, unknown>).partId : null) ||
+    (params ? (params as Record<string, unknown>).part_id : null);
+  if (typeof directPartId === "string" && directPartId.trim()) return directPartId.trim();
+  return null;
+}
+
+function extractOpenCodePartType(params: PayloadParams | null | undefined): string {
+  const part = extractOpenCodePart(params);
+  const partType = part?.type;
+  if (typeof partType === "string") return partType.trim().toLowerCase();
+  return "";
 }
 
 function extractOpenCodeRole(params: PayloadParams | null | undefined): string {
@@ -309,7 +345,7 @@ export function extractOutputDelta(payload: unknown): string {
     const delta = extractOpenCodeDeltaText(params);
     if (delta) return delta;
   }
-  if (method === "message.part.updated") {
+  if (method === "message.part.updated" || method === "message.part.delta") {
     return extractOpenCodeDeltaText(params) || extractOpenCodePartText(params);
   }
   return "";
@@ -481,16 +517,22 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     return { event };
   }
 
-  if (method === "message.part.updated") {
+  if (method === "message.part.updated" || method === "message.part.delta") {
     const part = extractOpenCodePart(params);
-    const partType = typeof part?.type === "string" ? part.type.trim().toLowerCase() : "";
+    const partId = extractOpenCodePartId(params);
+    let partType = extractOpenCodePartType(params);
+    if (partId && partType) {
+      openCodePartTypes[partId] = partType;
+    } else if (partId && !partType) {
+      partType = openCodePartTypes[partId] || "";
+    }
     const openCodeMessageId = extractOpenCodeMessageId(params);
     const knownRole = openCodeMessageId ? openCodeMessageRoles[openCodeMessageId] : "";
     if (knownRole === "user") {
       return null;
     }
 
-    if (!part || partType === "" || partType === "text") {
+    if (partType === "" || partType === "text") {
       const delta = extractOpenCodeDeltaText(params);
       const text = delta || extractOpenCodePartText(params);
       if (!text) return null;
@@ -509,7 +551,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
       }
       const parsedItemId =
         openCodeMessageId ||
-        (typeof part?.id === "string" && part.id) ||
+        partId ||
         itemId;
       const event: AgentEvent = {
         id: (payload as EventPayload)?.id || `${Date.now()}`,
@@ -532,7 +574,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
       const text = delta || extractOpenCodePartText(params);
       if (!text) return null;
       const reasoningItemId =
-        (typeof part.id === "string" && part.id) ||
+        partId ||
         openCodeMessageId ||
         itemId;
       const event: AgentEvent = {
@@ -576,7 +618,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
           time: receivedAt,
           itemId:
             ((typeof part.callID === "string" && part.callID) ||
-              (typeof part.id === "string" && part.id) ||
+              partId ||
               null),
           method,
         },
@@ -595,7 +637,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
           kind: "file",
           isSignificant: true,
           time: receivedAt,
-          itemId: (typeof part.id === "string" && part.id) || null,
+          itemId: partId || null,
           method,
         },
       };
@@ -615,7 +657,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
           kind: "status",
           isSignificant: false,
           time: receivedAt,
-          itemId: (typeof part.id === "string" && part.id) || null,
+          itemId: partId || null,
           method,
         },
       };

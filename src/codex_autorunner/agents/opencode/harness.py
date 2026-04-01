@@ -239,8 +239,7 @@ def _workspace_permission_decision(
 
 def _normalize_message_text(value: Any) -> Optional[str]:
     if isinstance(value, str):
-        text = value.strip()
-        return text or None
+        return value if value != "" else None
     if isinstance(value, list):
         parts: list[str] = []
         for part in value:
@@ -248,8 +247,8 @@ def _normalize_message_text(value: Any) -> Optional[str]:
                 part_text = part.get("text")
                 if isinstance(part_text, str):
                     parts.append(part_text)
-        joined = "".join(parts).strip()
-        return joined or None
+        joined = "".join(parts)
+        return joined if joined != "" else None
     if isinstance(value, dict):
         for key in ("text", "message", "content"):
             nested_text = _normalize_message_text(value.get(key))
@@ -267,6 +266,10 @@ def _extract_delta_text(params: dict[str, Any]) -> Optional[str]:
     properties = params.get("properties")
     if isinstance(properties, dict):
         delta = properties.get("delta")
+        if isinstance(delta, str):
+            text = _normalize_message_text(delta)
+            if text:
+                return text
         if isinstance(delta, dict):
             text = _normalize_message_text(delta)
             if text:
@@ -381,12 +384,57 @@ def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
     properties = params.get("properties")
     part = properties.get("part") if isinstance(properties, dict) else None
     if not isinstance(part, dict):
-        return None
-    for key in ("messageID", "messageId", "message_id"):
-        value = part.get(key)
-        if isinstance(value, str) and value:
-            return value
+        part = {}
+    for source in (
+        part,
+        properties if isinstance(properties, dict) else None,
+        params,
+    ):
+        if not isinstance(source, dict):
+            continue
+        for key in ("messageID", "messageId", "message_id"):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
     return None
+
+
+def _extract_part_id(params: dict[str, Any]) -> Optional[str]:
+    properties = params.get("properties")
+    part = properties.get("part") if isinstance(properties, dict) else None
+    if not isinstance(part, dict):
+        part = {}
+    for source in (
+        part,
+        properties if isinstance(properties, dict) else None,
+        params,
+    ):
+        if not isinstance(source, dict):
+            continue
+        for key in ("id", "partID", "partId", "part_id"):
+            value = source.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
+def _extract_part_type(
+    params: dict[str, Any], part_types: Optional[dict[str, str]] = None
+) -> Optional[str]:
+    properties = params.get("properties")
+    part = properties.get("part") if isinstance(properties, dict) else None
+    part_type_raw = part.get("type") if isinstance(part, dict) else None
+    part_type: Optional[str] = None
+    if isinstance(part_type_raw, str):
+        normalized = part_type_raw.strip().lower()
+        part_type = normalized or None
+    part_id = _extract_part_id(params)
+    if part_types is not None and isinstance(part_id, str) and part_id:
+        if isinstance(part_type, str):
+            part_types[part_id] = part_type
+        else:
+            part_type = part_types.get(part_id)
+    return part_type
 
 
 def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -413,6 +461,7 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
     pending_by_message: dict[str, str] = {}
     pending_no_id = ""
     message_roles_seen = False
+    part_types: dict[str, str] = {}
 
     def _merge_stream(current: str, incoming: str) -> str:
         if not incoming:
@@ -503,6 +552,7 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             "message.updated",
             "message.completed",
             "message.part.updated",
+            "message.part.delta",
         }:
             if method in {"message.updated", "message.completed"}:
                 _register_role(
@@ -513,7 +563,10 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             if text:
                 if method == "message.delta":
                     output_text = _merge_stream(output_text, text)
-                elif method == "message.part.updated":
+                elif method in {"message.part.updated", "message.part.delta"}:
+                    part_type = _extract_part_type(params, part_types)
+                    if part_type not in (None, "", "text"):
+                        continue
                     _append_part_text(_extract_part_message_id(params), text)
                 else:
                     role = _extract_message_role(params)
@@ -563,6 +616,18 @@ def _saw_terminal_completion(payloads: list[dict[str, Any]]) -> bool:
         method, params = _unwrap_harness_payload(payload)
         if method == "turn/completed":
             return True
+        if method == "session.idle":
+            return True
+        if method == "session.status":
+            properties = params.get("properties")
+            if isinstance(properties, dict):
+                status = properties.get("status") or {}
+            else:
+                status = params.get("status") or {}
+            if isinstance(status, dict):
+                status_type = status.get("type") or status.get("status")
+                if isinstance(status_type, str) and status_type.lower() == "idle":
+                    return True
         if method == "message.completed":
             return _extract_message_phase(params) != "commentary"
         if method == "item/completed":

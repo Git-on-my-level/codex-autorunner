@@ -975,6 +975,42 @@ async def test_opencode_harness_wait_for_turn_collects_message_part_updates() ->
 
 
 @pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_collects_message_part_deltas_with_direct_ids() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.updated",
+                        data='{"sessionID":"session-1","properties":{"info":{"id":"assistant-1","role":"assistant"}}}',
+                    ),
+                    SSEEvent(
+                        event="message.part.updated",
+                        data='{"sessionID":"session-1","properties":{"part":{"id":"part-1","messageID":"assistant-1","type":"text","text":"Hello"},"delta":"Hello"}}',
+                    ),
+                    SSEEvent(
+                        event="message.part.delta",
+                        data='{"sessionID":"session-1","properties":{"partID":"part-1","messageID":"assistant-1","delta":" world"}}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "Hello world"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
 async def test_opencode_harness_wait_for_turn_merges_cumulative_message_part_updates() -> (
     None
 ):
@@ -1003,6 +1039,38 @@ async def test_opencode_harness_wait_for_turn_merges_cumulative_message_part_upd
 
     assert result.status == "ok"
     assert result.assistant_text == "Hello world"
+    assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_does_not_treat_reasoning_part_deltas_as_output() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.part.updated",
+                        data='{"sessionID":"session-1","properties":{"part":{"id":"reason-1","type":"reasoning"},"delta":"thinking"}}',
+                    ),
+                    SSEEvent(
+                        event="message.part.delta",
+                        data='{"sessionID":"session-1","properties":{"partID":"reason-1","delta":" more"}}',
+                    ),
+                    SSEEvent(
+                        event="session.status",
+                        data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+                    ),
+                ]
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == ""
     assert result.errors == []
 
 
@@ -1044,6 +1112,34 @@ async def test_opencode_harness_wait_for_turn_ignores_user_message_part_updates(
     assert result.status == "ok"
     assert result.assistant_text == "assistant reply"
     assert result.errors == []
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_recovers_late_disconnect_after_idle() -> (
+    None
+):
+    harness = OpenCodeHarness(
+        _StubSupervisor(
+            _StubClient(
+                [
+                    SSEEvent(
+                        event="message.part.updated",
+                        data='{"sessionID":"session-1","properties":{"part":{"type":"text","text":"final reply"},"delta":"final reply"}}',
+                    ),
+                    SSEEvent(
+                        event="session.idle",
+                        data='{"sessionID":"session-1"}',
+                    ),
+                ],
+                stream_error=RuntimeError("stream dropped"),
+            )
+        )
+    )
+
+    result = await harness.wait_for_turn(Path("."), "session-1", "turn-1")
+
+    assert result.status == "ok"
+    assert result.assistant_text == "final reply"
 
 
 @pytest.mark.asyncio

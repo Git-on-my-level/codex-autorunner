@@ -123,15 +123,17 @@ def _runtime_message_part(params: dict[str, Any]) -> dict[str, Any]:
 def _runtime_message_id(params: dict[str, Any]) -> Optional[str]:
     properties = _runtime_message_properties(params)
     info = _coerce_dict(properties.get("info"))
-    for key in ("id", "messageID", "messageId", "message_id"):
-        value = info.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
     part = _runtime_message_part(params)
-    for key in ("messageID", "messageId", "message_id"):
-        value = part.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    for source, keys in (
+        (info, ("id", "messageID", "messageId", "message_id")),
+        (part, ("messageID", "messageId", "message_id")),
+        (properties, ("messageID", "messageId", "message_id")),
+        (params, ("messageID", "messageId", "message_id")),
+    ):
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     return None
 
 
@@ -146,7 +148,7 @@ def _runtime_message_role(params: dict[str, Any]) -> Optional[str]:
 
 
 def _runtime_message_delta(params: dict[str, Any]) -> Optional[str]:
-    for key in ("delta", "text", "output"):
+    for key in ("content", "delta", "text", "output"):
         value = params.get(key)
         if isinstance(value, str):
             if value != "":
@@ -169,6 +171,31 @@ def _runtime_message_delta(params: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _runtime_part_id(params: dict[str, Any]) -> Optional[str]:
+    properties = _runtime_message_properties(params)
+    part = _runtime_message_part(params)
+    for source in (part, properties, params):
+        for key in ("id", "partID", "partId", "part_id"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _runtime_part_type(
+    params: dict[str, Any], part_types: Optional[dict[str, str]] = None
+) -> str:
+    part = _runtime_message_part(params)
+    part_type = str(part.get("type") or "").strip().lower()
+    part_id = _runtime_part_id(params)
+    if part_types is not None and part_id:
+        if part_type:
+            part_types[part_id] = part_type
+        else:
+            part_type = part_types.get(part_id, "")
+    return part_type
+
+
 async def _iter_sse_lines(raw_event: str) -> AsyncIterator[str]:
     for line in raw_event.splitlines():
         yield line
@@ -185,6 +212,7 @@ class _RuntimeEventSummary:
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
     pending_stream_no_id: str = ""
     message_roles_seen: bool = False
+    opencode_part_types: dict[str, str] = field(default_factory=dict)
     timeline_state: RuntimeThreadRunEventState = field(
         default_factory=RuntimeThreadRunEventState
     )
@@ -537,9 +565,8 @@ class DefaultAgentPool:
             lowered = method.lower()
             if method in {"outputDelta", "item/agentMessage/delta", "message.delta"}:
                 delta_type = "assistant_stream"
-            elif method == "message.part.updated":
-                part = _runtime_message_part(params)
-                part_type = str(part.get("type") or "").strip().lower()
+            elif method in {"message.part.updated", "message.part.delta"}:
+                part_type = _runtime_part_type(params, summary.opencode_part_types)
                 if part_type in {"", "text"}:
                     message_id = _runtime_message_id(params)
                     role = summary.message_roles.get(message_id or "")
