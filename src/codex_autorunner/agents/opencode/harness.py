@@ -1104,8 +1104,7 @@ class OpenCodeHarness(AgentHarness):
                         and status_type.lower() == "idle"
                     )
                     if (
-                        event_session_id == conversation_id
-                        or not event_session_id
+                        event_session_id == conversation_id or not event_session_id
                     ) and not is_idle:
                         _publish_progress_event(wrapped)
                     elif not is_idle:
@@ -1195,9 +1194,7 @@ class OpenCodeHarness(AgentHarness):
                 collect_opencode_output_from_events(
                     None,
                     session_id=conversation_id,
-                    prompt=(
-                        pending.prompt if pending is not None else None
-                    ),
+                    prompt=(pending.prompt if pending is not None else None),
                     model_payload=(
                         pending.model_payload if pending is not None else None
                     ),
