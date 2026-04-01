@@ -45,6 +45,7 @@ from ...core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
 from ...core.pma_context import (
     build_hub_snapshot,
     format_pma_discoverability_preamble,
@@ -1056,19 +1057,6 @@ class _LegacyOrchestratorRuntimeHarness:
         completed_seen = False
         turn_id = f"legacy-turn-{uuid.uuid4().hex[:8]}"
 
-        def _merge_assistant_stream(current: str, incoming: str) -> str:
-            if not incoming:
-                return current
-            if not current:
-                return incoming
-            if len(incoming) > len(current) and incoming.startswith(current):
-                return incoming
-            max_overlap = min(len(current), max(len(incoming) - 1, 0))
-            for overlap in range(max_overlap, 0, -1):
-                if current[-overlap:] == incoming[:overlap]:
-                    return f"{current}{incoming[overlap:]}"
-            return f"{current}{incoming}"
-
         def _record_event(event: Any) -> None:
             nonlocal session_id
             nonlocal assistant_fallback
@@ -1087,7 +1075,7 @@ class _LegacyOrchestratorRuntimeHarness:
                     and isinstance(event.content, str)
                     and event.content
                 ):
-                    assistant_fallback = _merge_assistant_stream(
+                    assistant_fallback = merge_assistant_stream_text(
                         assistant_fallback,
                         event.content,
                     )

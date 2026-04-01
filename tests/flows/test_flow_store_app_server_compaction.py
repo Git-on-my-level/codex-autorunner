@@ -111,6 +111,42 @@ def test_create_event_preserves_properties_delta_object_for_replay(tmp_path) -> 
     assert properties["part"]["text"] == "hello there"
 
 
+def test_create_event_compacts_message_part_delta_with_direct_ids(tmp_path) -> None:
+    store = FlowStore(tmp_path / "flows.db")
+    store.initialize()
+    run_id = _create_run(store)
+
+    event = store.create_event(
+        event_id="evt-delta-direct-ids",
+        run_id=run_id,
+        event_type=FlowEventType.APP_SERVER_EVENT,
+        data={
+            "message": {
+                "method": "message.part.delta",
+                "params": {
+                    "properties": {
+                        "sessionID": "thread-delta",
+                        "messageID": "message-delta",
+                        "partID": "part-delta",
+                        "part": {"type": "text"},
+                        "delta": {"text": "hello from delta"},
+                    }
+                },
+            }
+        },
+    )
+
+    assert event.data["truncated"] is True
+    assert event.data["method"] == "message.part.delta"
+    assert event.data["thread_id"] == "thread-delta"
+    assert event.data["message_id"] == "message-delta"
+    assert event.data["part_id"] == "part-delta"
+    assert event.data["preview"] == "hello from delta"
+    properties = event.data["message"]["params"]["properties"]
+    assert properties["delta"] == {"text": "hello from delta"}
+    assert properties["part"]["type"] == "text"
+
+
 def test_create_event_preserves_args_based_tool_input_for_replay(tmp_path) -> None:
     store = FlowStore(tmp_path / "flows.db")
     store.initialize()

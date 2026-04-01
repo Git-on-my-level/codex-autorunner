@@ -42,6 +42,7 @@ from .opencode_event_fields import (
     extract_part_message_id as _event_extract_part_message_id,
 )
 from .runtime_threads import RuntimeThreadOutcome
+from .stream_text_merge import merge_assistant_stream_text
 
 _APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
@@ -79,22 +80,6 @@ def merge_runtime_thread_raw_events(
     return streamed + result
 
 
-def _merge_assistant_stream(current: str, incoming: str) -> str:
-    if not incoming:
-        return current
-    if not current:
-        return incoming
-    if incoming == current:
-        return current
-    if len(incoming) > len(current) and incoming.startswith(current):
-        return incoming
-    max_overlap = min(len(current), max(len(incoming) - 1, 0))
-    for overlap in range(max_overlap, 0, -1):
-        if current[-overlap:] == incoming[:overlap]:
-            return f"{current}{incoming[overlap:]}"
-    return f"{current}{incoming}"
-
-
 @dataclass
 class RuntimeThreadRunEventState:
     reasoning_buffers: dict[str, str] = field(default_factory=dict)
@@ -113,7 +98,7 @@ class RuntimeThreadRunEventState:
 
     def note_stream_text(self, text: str) -> None:
         if isinstance(text, str) and text:
-            self.assistant_stream_text = _merge_assistant_stream(
+            self.assistant_stream_text = merge_assistant_stream_text(
                 self.assistant_stream_text,
                 text,
             )
@@ -187,7 +172,7 @@ class RuntimeThreadRunEventState:
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                     )
                 ]
-            self.pending_stream_no_id = _merge_assistant_stream(
+            self.pending_stream_no_id = merge_assistant_stream_text(
                 self.pending_stream_no_id,
                 text,
             )
@@ -204,7 +189,7 @@ class RuntimeThreadRunEventState:
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                 )
             ]
-        self.pending_stream_by_message[message_id] = _merge_assistant_stream(
+        self.pending_stream_by_message[message_id] = merge_assistant_stream_text(
             self.pending_stream_by_message.get(message_id, ""),
             text,
         )

@@ -40,6 +40,7 @@ from ...core.orchestration.runtime_threads import (
     RuntimeThreadExecution,
     begin_next_queued_runtime_thread_execution,
 )
+from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
 from ...core.orchestration.turn_timeline import persist_turn_timeline
 from ...core.pma_thread_store import PmaThreadStore
 from ...core.ports.run_event import (
@@ -95,22 +96,6 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
         return None
     text = value.strip()
     return text or None
-
-
-def _merge_assistant_stream(current: str, incoming: str) -> str:
-    if not incoming:
-        return current
-    if not current:
-        return incoming
-    if incoming == current:
-        return current
-    if len(incoming) > len(current) and incoming.startswith(current):
-        return incoming
-    max_overlap = min(len(current), max(len(incoming) - 1, 0))
-    for overlap in range(max_overlap, 0, -1):
-        if current[-overlap:] == incoming[:overlap]:
-            return f"{current}{incoming[overlap:]}"
-    return f"{current}{incoming}"
 
 
 def _runtime_message_id(params: dict[str, Any]) -> Optional[str]:
@@ -520,7 +505,7 @@ class DefaultAgentPool:
                         delta_type = "assistant_stream"
                     elif message_id:
                         summary.pending_stream_by_message[message_id] = (
-                            _merge_assistant_stream(
+                            merge_assistant_stream_text(
                                 summary.pending_stream_by_message.get(message_id, ""),
                                 delta,
                             )
@@ -529,7 +514,7 @@ class DefaultAgentPool:
                     elif not summary.message_roles_seen:
                         delta_type = "assistant_stream"
                     else:
-                        summary.pending_stream_no_id = _merge_assistant_stream(
+                        summary.pending_stream_no_id = merge_assistant_stream_text(
                             summary.pending_stream_no_id,
                             delta,
                         )

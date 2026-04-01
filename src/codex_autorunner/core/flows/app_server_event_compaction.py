@@ -5,8 +5,9 @@ from typing import Any, Optional
 
 from .models import FlowEventType
 
+_MESSAGE_PART_METHODS = frozenset({"message.part.updated", "message.part.delta"})
 _COMPACT_APP_SERVER_METHODS = frozenset(
-    {"message.part.updated", "message.updated", "session.diff"}
+    {*_MESSAGE_PART_METHODS, "message.updated", "session.diff"}
 )
 _APP_SERVER_PREVIEW_CHARS = 2048
 _APP_SERVER_PREVIEW_MARKER = " ... "
@@ -251,7 +252,7 @@ def _compact_info_summary(info: dict[str, Any]) -> dict[str, Any]:
 def _extract_preview_from_message(method: str, params: dict[str, Any]) -> Optional[str]:
     properties = _coerce_dict(params.get("properties"))
     part = _coerce_dict(properties.get("part")) or _coerce_dict(params.get("part"))
-    if method == "message.part.updated":
+    if method in _MESSAGE_PART_METHODS:
         part_type = str(part.get("type") or "").strip().lower()
         if part_type in {"", "text", "reasoning"}:
             return (
@@ -338,7 +339,7 @@ def _build_compact_app_server_params(
             properties_summary["diff_count"] = len(diff)
         if preview:
             summary["message"] = preview
-    if method == "message.part.updated":
+    if method in _MESSAGE_PART_METHODS:
         delta_summary = _compact_delta_summary(
             params.get("delta")
             or params.get("text")
@@ -407,13 +408,28 @@ def _compact_app_server_event_data(data: dict[str, Any]) -> dict[str, Any]:
     message_id = _first_non_empty_str(
         data.get("message_id"),
         info.get("id"),
+        properties.get("messageID"),
+        properties.get("messageId"),
+        properties.get("message_id"),
+        params.get("messageID"),
+        params.get("messageId"),
+        params.get("message_id"),
         part.get("messageID"),
         part.get("messageId"),
         part.get("message_id"),
     )
     if message_id:
         compact_data["message_id"] = message_id
-    part_id = _first_non_empty_str(data.get("part_id"), part.get("id"))
+    part_id = _first_non_empty_str(
+        data.get("part_id"),
+        part.get("id"),
+        properties.get("partID"),
+        properties.get("partId"),
+        properties.get("part_id"),
+        params.get("partID"),
+        params.get("partId"),
+        params.get("part_id"),
+    )
     if part_id:
         compact_data["part_id"] = part_id
     role = _first_non_empty_str(data.get("role"), info.get("role"), params.get("role"))
