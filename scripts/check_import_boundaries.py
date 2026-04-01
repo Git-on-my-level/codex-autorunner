@@ -21,16 +21,12 @@ LAYER_RULES = {
     "core": {
         "deny": (
             "codex_autorunner.integrations",
-            "codex_autorunner.web",
-            "codex_autorunner.routes",
             "codex_autorunner.cli",
             "codex_autorunner.server",
         )
     },
     "integrations": {
         "deny": (
-            "codex_autorunner.web",
-            "codex_autorunner.routes",
             "codex_autorunner.cli",
             "codex_autorunner.server",
         )

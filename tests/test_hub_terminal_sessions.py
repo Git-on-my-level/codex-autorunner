@@ -78,7 +78,9 @@ def test_hub_terminal_sessions_stay_isolated(
     _create_repo(repo_root, "beta")
 
     app = create_hub_app(hub_root)
-    monkeypatch.setattr("codex_autorunner.routes.base.PTYSession", FakePTYSession)
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.routes.base.PTYSession", FakePTYSession
+    )
 
     with TestClient(app) as client:
         with (

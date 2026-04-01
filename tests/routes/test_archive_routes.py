@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
-from codex_autorunner.web.app import create_repo_app
+from codex_autorunner.surfaces.web.app import create_repo_app
 
 
 def _write_snapshot(

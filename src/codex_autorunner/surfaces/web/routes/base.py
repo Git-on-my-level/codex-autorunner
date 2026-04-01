@@ -33,24 +33,6 @@ from .shared import (
 ALT_SCREEN_ENTER = b"\x1b[?1049h"
 
 
-def _get_pty_session_cls() -> type:
-    """
-    Prefer legacy shim PTYSession if monkeypatched via codex_autorunner.routes.base.
-
-    The surface refactor moved PTYSession into the web package, but tests still
-    patch the old path. Look for that module at call time so the patch applies.
-    """
-    import sys
-    from typing import cast
-
-    legacy_module = sys.modules.get("codex_autorunner.routes.base")
-    if legacy_module is not None:
-        patched = getattr(legacy_module, "PTYSession", None)
-        if patched is not None:
-            return cast(type, patched)
-    return PTYSession
-
-
 def _serve_index(request: Request, static_dir: Path):
     active_static = getattr(request.app.state, "static_dir", static_dir)
     index_path = active_static / "index.html"
@@ -303,8 +285,7 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                         reasoning=reasoning,
                     )
                 try:
-                    pty_cls = _get_pty_session_cls()
-                    pty = pty_cls(cmd, cwd=str(engine.repo_root), env=session_env)
+                    pty = PTYSession(cmd, cwd=str(engine.repo_root), env=session_env)
                     active_session = ActiveSession(
                         session_id, pty, asyncio.get_running_loop()
                     )

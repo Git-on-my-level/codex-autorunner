@@ -45,7 +45,7 @@ jobs:
           ./.venv-wheel/bin/python -m pip install --upgrade pip
           ./.venv-wheel/bin/python -m pip install dist/*.whl
           ./.venv-wheel/bin/python - <<'PY'
-          from codex_autorunner.web.static_assets import missing_static_assets, resolve_static_dir
+          from codex_autorunner.surfaces.web.static_assets import missing_static_assets, resolve_static_dir
 
           static_dir, _ = resolve_static_dir()
           missing = missing_static_assets(static_dir)

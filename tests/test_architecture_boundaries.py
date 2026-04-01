@@ -252,18 +252,13 @@ def test_core_runtime_does_not_import_web_modules(monkeypatch):
     for name in list(sys.modules):
         if name.startswith("codex_autorunner.surfaces.web"):
             sys.modules.pop(name, None)
-        if name.startswith("codex_autorunner.web"):
-            sys.modules.pop(name, None)
 
     importlib.invalidate_caches()
 
     import codex_autorunner.core.runtime  # noqa: F401
 
     leaked = [
-        name
-        for name in sys.modules
-        if name.startswith("codex_autorunner.surfaces.web")
-        or name.startswith("codex_autorunner.web")
+        name for name in sys.modules if name.startswith("codex_autorunner.surfaces.web")
     ]
     assert (
         not leaked

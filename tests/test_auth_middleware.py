@@ -3,7 +3,7 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.web.middleware import AuthTokenMiddleware
+from codex_autorunner.surfaces.web.middleware import AuthTokenMiddleware
 
 
 def _scope(path: str, root_path: str = "") -> dict:

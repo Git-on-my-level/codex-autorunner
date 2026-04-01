@@ -1,6 +1,6 @@
 import anyio
 
-from codex_autorunner.web.middleware import HostOriginMiddleware
+from codex_autorunner.surfaces.web.middleware import HostOriginMiddleware
 
 
 async def _http_call(app, scope):

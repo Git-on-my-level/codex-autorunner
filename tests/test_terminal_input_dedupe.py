@@ -1,7 +1,7 @@
 import asyncio
 
-import codex_autorunner.web.pty_session as pty_session
-from codex_autorunner.web.pty_session import ActiveSession
+import codex_autorunner.surfaces.web.pty_session as pty_session
+from codex_autorunner.surfaces.web.pty_session import ActiveSession
 
 
 def test_active_session_dedupes_input_ids():

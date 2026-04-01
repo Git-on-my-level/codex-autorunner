@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import anyio
 
-from codex_autorunner.web.middleware import RequestIdMiddleware
+from codex_autorunner.surfaces.web.middleware import RequestIdMiddleware
 
 
 def _make_buffer_logger() -> tuple[logging.Logger, StringIO, logging.Handler]:

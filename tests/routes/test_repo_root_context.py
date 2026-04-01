@@ -5,7 +5,7 @@ from starlette.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files, seed_repo_files
 from codex_autorunner.core.utils import find_repo_root
-from codex_autorunner.web.app import create_repo_app
+from codex_autorunner.surfaces.web.app import create_repo_app
 
 
 def test_repo_root_context_applied_when_cwd_differs(tmp_path, monkeypatch):
