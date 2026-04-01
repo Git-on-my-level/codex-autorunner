@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from .utils import atomic_write
 
 HUB_INBOX_DISMISSALS_FILENAME = "hub_inbox_dismissals.json"
+MESSAGE_PENDING_AUTO_DISMISS_STATE = "pending_auto_dismiss"
+MESSAGE_RESOLVED_STATES = {"dismissed", "resolved"}
 
 
 def hub_inbox_dismissals_path(repo_root: Path) -> Path:
@@ -69,15 +71,14 @@ def message_resolvable_actions(item_type: str) -> list[str]:
     return ["dismiss", "reply_resume", "restart"]
 
 
-def find_message_resolution(
-    dismissals: dict[str, dict[str, Any]],
+def _message_resolution_lookup_keys(
     *,
     run_id: str,
     item_type: str,
     seq: Optional[int],
     hint_id: Optional[str] = None,
     scope_key: Optional[str] = None,
-) -> Optional[dict[str, Any]]:
+) -> list[str]:
     keys = [
         message_resolution_key(
             run_id,
@@ -103,11 +104,58 @@ def find_message_resolution(
         and seq > 0
     ):
         keys.append(message_resolution_key(run_id, item_type=item_type))
+    return keys
+
+
+def _is_resolved_entry(entry: dict[str, Any]) -> bool:
+    state = str(entry.get("resolution_state") or "").strip().lower()
+    return not state or state in MESSAGE_RESOLVED_STATES
+
+
+def find_message_resolution_entry(
+    dismissals: dict[str, dict[str, Any]],
+    *,
+    run_id: str,
+    item_type: str,
+    seq: Optional[int],
+    hint_id: Optional[str] = None,
+    scope_key: Optional[str] = None,
+    include_unresolved: bool = False,
+) -> Optional[dict[str, Any]]:
+    keys = _message_resolution_lookup_keys(
+        run_id=run_id,
+        item_type=item_type,
+        seq=seq,
+        hint_id=hint_id,
+        scope_key=scope_key,
+    )
     for key in keys:
         entry = dismissals.get(key)
-        if isinstance(entry, dict):
+        if isinstance(entry, dict) and (
+            include_unresolved or _is_resolved_entry(entry)
+        ):
             return entry
     return None
+
+
+def find_message_resolution(
+    dismissals: dict[str, dict[str, Any]],
+    *,
+    run_id: str,
+    item_type: str,
+    seq: Optional[int],
+    hint_id: Optional[str] = None,
+    scope_key: Optional[str] = None,
+) -> Optional[dict[str, Any]]:
+    return find_message_resolution_entry(
+        dismissals,
+        run_id=run_id,
+        item_type=item_type,
+        seq=seq,
+        hint_id=hint_id,
+        scope_key=scope_key,
+        include_unresolved=False,
+    )
 
 
 def load_hub_inbox_dismissals(repo_root: Path) -> dict[str, dict[str, Any]]:
@@ -138,6 +186,32 @@ def save_hub_inbox_dismissals(
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"version": 1, "items": items}
     atomic_write(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def clear_message_resolution(
+    *,
+    repo_root: Path,
+    run_id: str,
+    item_type: str,
+    seq: Optional[int],
+    hint_id: Optional[str] = None,
+    scope_key: Optional[str] = None,
+) -> bool:
+    items = load_hub_inbox_dismissals(repo_root)
+    removed = False
+    for key in _message_resolution_lookup_keys(
+        run_id=run_id,
+        item_type=item_type,
+        seq=seq,
+        hint_id=hint_id,
+        scope_key=scope_key,
+    ):
+        if key in items:
+            del items[key]
+            removed = True
+    if removed:
+        save_hub_inbox_dismissals(repo_root, items)
+    return removed
 
 
 def record_message_resolution(
@@ -173,6 +247,65 @@ def record_message_resolution(
         payload["scope_key"] = normalized_scope_key
     if actor:
         payload["resolved_by"] = actor
+    key = message_resolution_key(
+        run_id,
+        item_type=item_type,
+        seq=seq,
+        hint_id=normalized_hint_id,
+        scope_key=normalized_scope_key,
+    )
+    items[key] = payload
+    save_hub_inbox_dismissals(repo_root, items)
+    return payload
+
+
+def record_message_pending_auto_dismiss(
+    *,
+    repo_root: Path,
+    repo_id: str,
+    run_id: str,
+    item_type: str,
+    seq: Optional[int],
+    reason: Optional[str],
+    grace_seconds: int,
+    actor: Optional[str],
+    hint_id: Optional[str] = None,
+    scope_key: Optional[str] = None,
+    detected_at: Optional[str] = None,
+) -> dict[str, Any]:
+    items = load_hub_inbox_dismissals(repo_root)
+    detected = detected_at or datetime.now(timezone.utc).isoformat()
+    try:
+        detected_dt = datetime.fromisoformat(detected.replace("Z", "+00:00"))
+    except ValueError:
+        detected_dt = datetime.now(timezone.utc)
+        detected = detected_dt.isoformat()
+    if detected_dt.tzinfo is None:
+        detected_dt = detected_dt.replace(tzinfo=timezone.utc)
+    expires_at = (
+        detected_dt.astimezone(timezone.utc)
+        + timedelta(seconds=max(0, int(grace_seconds)))
+    ).isoformat()
+    payload = {
+        "repo_id": repo_id,
+        "run_id": run_id,
+        "item_type": item_type,
+        "seq": seq if isinstance(seq, int) and seq > 0 else None,
+        "action": "auto_dismiss_pending",
+        "reason": reason or None,
+        "detected_at": detected,
+        "expires_at": expires_at,
+        "grace_seconds": max(0, int(grace_seconds)),
+        "resolution_state": MESSAGE_PENDING_AUTO_DISMISS_STATE,
+    }
+    normalized_hint_id = _normalize_key_part(hint_id)
+    normalized_scope_key = _normalize_key_part(scope_key)
+    if normalized_hint_id:
+        payload["hint_id"] = normalized_hint_id
+    if normalized_scope_key:
+        payload["scope_key"] = normalized_scope_key
+    if actor:
+        payload["recorded_by"] = actor
     key = message_resolution_key(
         run_id,
         item_type=item_type,

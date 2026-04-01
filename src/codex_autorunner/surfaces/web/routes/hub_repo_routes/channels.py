@@ -1306,18 +1306,18 @@ class HubChannelService:
                 "status_label": normalized_status,
             }
             if isinstance(repo_id, str) and repo_id:
-                row["repo_id"] = repo_id
+                thread_row["repo_id"] = repo_id
             if isinstance(workspace_path, str) and workspace_path:
-                row["workspace_path"] = workspace_path
+                thread_row["workspace_path"] = workspace_path
                 run_data = self._load_workspace_run_data(
                     workspace_path,
                     repo_id if isinstance(repo_id, str) else None,
                     run_cache,
                 )
                 if isinstance(run_data.get("diff_stats"), dict):
-                    row["diff_stats"] = run_data["diff_stats"]
+                    thread_row["diff_stats"] = run_data["diff_stats"]
                 if isinstance(run_data.get("dirty"), bool):
-                    row["dirty"] = run_data["dirty"]
+                    thread_row["dirty"] = run_data["dirty"]
                 usage_session_id = managed_thread_id
                 if usage_session_id:
                     usage_by_session = usage_cache.get(workspace_path)
@@ -1326,7 +1326,7 @@ class HubChannelService:
                         usage_cache[workspace_path] = usage_by_session
                     usage_payload = usage_by_session.get(usage_session_id)
                     if isinstance(usage_payload, dict):
-                        row["token_usage"] = {
+                        thread_row["token_usage"] = {
                             "total_tokens": self._coerce_int(
                                 usage_payload.get("total_tokens")
                             ),

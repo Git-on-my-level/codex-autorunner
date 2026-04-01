@@ -554,7 +554,7 @@ def test_hub_messages_failed_run_appears_in_inbox(hub_env, monkeypatch) -> None:
         assert "dismiss" in (item.get("resolvable_actions") or [])
 
 
-def test_hub_messages_suppress_stale_failed_worker_dead_run_when_no_tickets_remain(
+def test_hub_messages_keep_failed_worker_dead_run_visible_during_auto_dismiss_grace_when_no_tickets_remain(
     hub_env, monkeypatch
 ) -> None:
     ticket_dir = hub_env.repo_root / ".codex-autorunner" / "tickets"
@@ -569,7 +569,13 @@ def test_hub_messages_suppress_stale_failed_worker_dead_run_when_no_tickets_rema
     with TestClient(app) as client:
         res = client.get("/hub/messages")
         assert res.status_code == 200
-        assert res.json()["items"] == []
+        items = res.json()["items"]
+        assert len(items) == 1
+        item = items[0]
+        assert item["run_id"] == run_id
+        assert item["item_type"] == "run_failed"
+        assert item["next_action"] == "diagnose_or_restart"
+        assert "no tickets remain" in str(item.get("reason") or "").lower()
 
 
 def test_hub_messages_keep_failed_worker_dead_run_when_tickets_remain(

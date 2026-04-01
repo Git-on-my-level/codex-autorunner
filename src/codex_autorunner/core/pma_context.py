@@ -4,13 +4,15 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, TypedDict, cast
 
 from ..bootstrap import ensure_pma_docs, pma_doc_path
-from ..tickets.files import list_ticket_paths, safe_relpath
+from ..flows.ticket_flow.runtime_helpers import ticket_flow_inbox_preflight
+from ..tickets.files import safe_relpath
 from ..tickets.models import Dispatch
 from ..tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..tickets.replies import resolve_reply_paths
@@ -39,8 +41,14 @@ from .freshness import (
 )
 from .hub import HubSupervisor
 from .hub_inbox_resolution import (
+    MESSAGE_PENDING_AUTO_DISMISS_STATE,
+    MESSAGE_RESOLVED_STATES,
+    clear_message_resolution,
     find_message_resolution,
+    find_message_resolution_entry,
     load_hub_inbox_dismissals,
+    record_message_pending_auto_dismiss,
+    record_message_resolution,
 )
 from .locks import file_lock
 from .managed_thread_status import derive_managed_thread_operator_status
@@ -49,6 +57,7 @@ from .pma_active_context import (
     get_active_context_auto_prune_meta,
     maybe_auto_prune_active_context,
 )
+from .pma_audit import PmaActionType, PmaAuditEntry, PmaAuditLog
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .state_roots import resolve_hub_templates_root
 from .ticket_flow_projection import (
@@ -821,6 +830,227 @@ def _timestamp_sort_value(value: Any) -> float:
     if parsed is None:
         return 0.0
     return parsed.timestamp()
+
+
+def _resolve_inbox_auto_dismiss_grace_seconds(supervisor: HubSupervisor) -> int:
+    raw = os.getenv("CAR_PMA_INBOX_AUTO_DISMISS_GRACE_SECONDS")
+    if raw is not None:
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            pass
+    return max(
+        0,
+        int(
+            getattr(supervisor.hub_config.pma, "inbox_auto_dismiss_grace_seconds", 3600)
+        ),
+    )
+
+
+def _record_inbox_auto_dismiss_audit(
+    *,
+    supervisor: HubSupervisor,
+    repo_id: str,
+    repo_root: Path,
+    run_id: str,
+    item_type: str,
+    seq: Optional[int],
+    reason: str,
+    grace_seconds: int,
+    reason_code: Optional[str],
+    terminal_failure_reason_code: Optional[str],
+) -> None:
+    try:
+        PmaAuditLog(supervisor.hub_config.root).append(
+            PmaAuditEntry(
+                action_type=PmaActionType.INBOX_AUTO_DISMISSED,
+                agent="pma",
+                status="ok",
+                details={
+                    "repo_id": repo_id,
+                    "repo_root": str(repo_root),
+                    "run_id": run_id,
+                    "item_type": item_type,
+                    "seq": seq,
+                    "grace_seconds": grace_seconds,
+                    "reason": reason,
+                    "reason_code": reason_code,
+                    "terminal_failure_reason_code": terminal_failure_reason_code,
+                    "action": "dismiss",
+                },
+            )
+        )
+    except Exception as exc:
+        _logger.warning(
+            "Failed to record PMA inbox auto-dismiss audit entry for repo %s run %s: %s",
+            repo_id,
+            run_id,
+            exc,
+        )
+
+
+def _maybe_auto_dismiss_terminal_inbox_item(
+    *,
+    supervisor: HubSupervisor,
+    repo_root: Path,
+    repo_id: str,
+    dismissals: dict[str, dict[str, Any]],
+    record: FlowRunRecord,
+    item_type: str,
+    seq: Optional[int],
+) -> Optional[dict[str, Any]]:
+    if item_type not in {"run_failed", "run_stopped"}:
+        return None
+
+    run_id = str(record.id)
+    terminal_failure_reason = get_terminal_failure_reason_code(record)
+    existing_entry = find_message_resolution_entry(
+        dismissals,
+        run_id=run_id,
+        item_type=item_type,
+        seq=seq,
+        include_unresolved=True,
+    )
+    preflight = ticket_flow_inbox_preflight(repo_root)
+    if preflight.is_recoverable:
+        if (
+            isinstance(existing_entry, dict)
+            and str(existing_entry.get("resolution_state") or "").strip().lower()
+            == MESSAGE_PENDING_AUTO_DISMISS_STATE
+            and clear_message_resolution(
+                repo_root=repo_root,
+                run_id=run_id,
+                item_type=item_type,
+                seq=seq,
+            )
+        ):
+            dismissals.clear()
+            dismissals.update(load_hub_inbox_dismissals(repo_root))
+        return None
+
+    grace_seconds = _resolve_inbox_auto_dismiss_grace_seconds(supervisor)
+    pending = existing_entry
+    pending_state = (
+        str(pending.get("resolution_state") or "").strip().lower()
+        if isinstance(pending, dict)
+        else ""
+    )
+    if pending_state in MESSAGE_RESOLVED_STATES:
+        return pending
+    pending_reason = (
+        str(pending.get("reason") or "").strip() if isinstance(pending, dict) else ""
+    )
+    expires_at = _parse_iso_timestamp(
+        pending.get("expires_at") if isinstance(pending, dict) else None
+    )
+    if (
+        pending_state == MESSAGE_PENDING_AUTO_DISMISS_STATE
+        and pending_reason == str(preflight.reason or "").strip()
+        and expires_at is not None
+    ):
+        now = datetime.now(timezone.utc)
+        if now >= expires_at:
+            reason = (
+                f"Auto-dismissed unrecoverable inbox item after {grace_seconds} seconds: "
+                f"{preflight.reason}"
+            )
+            resolved = record_message_resolution(
+                repo_root=repo_root,
+                repo_id=repo_id,
+                run_id=run_id,
+                item_type=item_type,
+                seq=seq,
+                action="dismiss",
+                reason=reason,
+                actor="hub_inbox_auto_dismiss",
+            )
+            dismissals.clear()
+            dismissals.update(load_hub_inbox_dismissals(repo_root))
+            _record_inbox_auto_dismiss_audit(
+                supervisor=supervisor,
+                repo_id=repo_id,
+                repo_root=repo_root,
+                run_id=run_id,
+                item_type=item_type,
+                seq=seq,
+                reason=reason,
+                grace_seconds=grace_seconds,
+                reason_code=preflight.reason_code,
+                terminal_failure_reason_code=(
+                    terminal_failure_reason.value
+                    if terminal_failure_reason is not None
+                    else None
+                ),
+            )
+            _logger.info(
+                "Auto-dismissed unrecoverable ticket_flow inbox item for repo %s run %s (%s)",
+                repo_id,
+                run_id,
+                preflight.reason,
+            )
+            return resolved
+        return None
+
+    if grace_seconds == 0:
+        reason = (
+            f"Auto-dismissed unrecoverable inbox item immediately: {preflight.reason}"
+        )
+        resolved = record_message_resolution(
+            repo_root=repo_root,
+            repo_id=repo_id,
+            run_id=run_id,
+            item_type=item_type,
+            seq=seq,
+            action="dismiss",
+            reason=reason,
+            actor="hub_inbox_auto_dismiss",
+        )
+        dismissals.clear()
+        dismissals.update(load_hub_inbox_dismissals(repo_root))
+        _record_inbox_auto_dismiss_audit(
+            supervisor=supervisor,
+            repo_id=repo_id,
+            repo_root=repo_root,
+            run_id=run_id,
+            item_type=item_type,
+            seq=seq,
+            reason=reason,
+            grace_seconds=grace_seconds,
+            reason_code=preflight.reason_code,
+            terminal_failure_reason_code=(
+                terminal_failure_reason.value
+                if terminal_failure_reason is not None
+                else None
+            ),
+        )
+        _logger.info(
+            "Auto-dismissed unrecoverable ticket_flow inbox item for repo %s run %s (%s)",
+            repo_id,
+            run_id,
+            preflight.reason,
+        )
+        return resolved
+
+    record_message_pending_auto_dismiss(
+        repo_root=repo_root,
+        repo_id=repo_id,
+        run_id=run_id,
+        item_type=item_type,
+        seq=seq,
+        reason=preflight.reason,
+        grace_seconds=grace_seconds,
+        actor="hub_inbox_auto_dismiss",
+    )
+    dismissals.clear()
+    dismissals.update(load_hub_inbox_dismissals(repo_root))
+    _logger.info(
+        "Scheduled auto-dismiss for unrecoverable ticket_flow inbox item in repo %s run %s after %s seconds (%s)",
+        repo_id,
+        run_id,
+        grace_seconds,
+        preflight.reason,
+    )
+    return None
 
 
 def _queue_precedence(source: str) -> tuple[int, str]:
@@ -2705,50 +2935,23 @@ def _dispatch_is_actionable(dispatch_payload: Any) -> bool:
 
 
 def _paused_dispatch_resume_invalid_reason(repo_root: Path) -> Optional[str]:
-    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    try:
-        ticket_paths = list_ticket_paths(ticket_dir)
-    except Exception as exc:
-        _logger.warning(
-            "Could not inspect ticket dir for paused dispatch guard: %s", exc
+    preflight = ticket_flow_inbox_preflight(repo_root)
+    if preflight.is_recoverable:
+        return None
+    if preflight.reason_code == "no_tickets":
+        return (
+            "Latest dispatch is stale; ticket flow resume preflight would fail because "
+            f"no tickets remain in {safe_relpath(repo_root / '.codex-autorunner' / 'tickets', repo_root)}"
         )
-        return None
-    if ticket_paths:
-        return None
+    # deleted_context / invalid_state — workspace or ticket dir is gone
+    if preflight.reason:
+        return (
+            "Latest dispatch is stale; ticket flow resume preflight would fail: "
+            + preflight.reason
+        )
     return (
-        "Latest dispatch is stale; ticket flow resume preflight would fail because "
-        f"no tickets remain in {safe_relpath(ticket_dir, repo_root)}"
-    )
-
-
-def _ticket_flow_has_tickets(repo_root: Path) -> Optional[bool]:
-    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    try:
-        return bool(list_ticket_paths(ticket_dir))
-    except Exception as exc:
-        _logger.warning("Could not inspect ticket dir for stale run guard: %s", exc)
-        return None
-
-
-def _terminal_ticket_flow_failure_is_worker_dead(record: FlowRunRecord) -> bool:
-    reason_code = get_terminal_failure_reason_code(record)
-    return reason_code is not None and reason_code.value == "worker_dead"
-
-
-def _stale_terminal_ticket_flow_run_reason(
-    repo_root: Path, record: FlowRunRecord
-) -> Optional[str]:
-    if record.status not in (FlowRunStatus.FAILED, FlowRunStatus.STOPPED):
-        return None
-    if not _terminal_ticket_flow_failure_is_worker_dead(record):
-        return None
-    has_tickets = _ticket_flow_has_tickets(repo_root)
-    if has_tickets is None or has_tickets:
-        return None
-    ticket_dir = repo_root / ".codex-autorunner" / "tickets"
-    return (
-        "Latest failed run is stale; worker died and no tickets remain in "
-        f"{safe_relpath(ticket_dir, repo_root)}"
+        "Latest dispatch is stale; ticket flow resume preflight would fail "
+        f"in {safe_relpath(repo_root, repo_root)}"
     )
 
 
@@ -3225,17 +3428,6 @@ def _gather_inbox(
                         and active_run_id != record_id
                     ):
                         continue
-                    stale_terminal_reason = _stale_terminal_ticket_flow_run_reason(
-                        repo_root, record
-                    )
-                    if stale_terminal_reason:
-                        _logger.info(
-                            "Suppressing stale ticket_flow inbox item for repo %s run %s: %s",
-                            snap.id,
-                            record_id,
-                            stale_terminal_reason,
-                        )
-                        continue
                     if (
                         not run_state.get("attention_required")
                         and not is_terminal_failed
@@ -3288,6 +3480,15 @@ def _gather_inbox(
                                 repo_root=repo_root, record=record
                             )
                         )
+                        _maybe_auto_dismiss_terminal_inbox_item(
+                            supervisor=supervisor,
+                            repo_root=repo_root,
+                            repo_id=snap.id,
+                            dismissals=dismissals,
+                            record=record,
+                            item_type=item_type,
+                            seq=seq if seq > 0 else None,
+                        )
                         if find_message_resolution(
                             dismissals,
                             run_id=record_id,
@@ -3295,6 +3496,26 @@ def _gather_inbox(
                             seq=seq if seq > 0 else None,
                         ):
                             continue
+                        item_resolution = find_message_resolution_entry(
+                            dismissals,
+                            run_id=record_id,
+                            item_type=item_type,
+                            seq=seq if seq > 0 else None,
+                            include_unresolved=True,
+                        )
+                        item_reason = dispatch_state_reason
+                        if (
+                            isinstance(item_resolution, dict)
+                            and str(item_resolution.get("resolution_state") or "")
+                            .strip()
+                            .lower()
+                            == MESSAGE_PENDING_AUTO_DISMISS_STATE
+                        ):
+                            pending_reason = str(
+                                item_resolution.get("reason") or ""
+                            ).strip()
+                            if pending_reason:
+                                item_reason = pending_reason
                         messages.append(
                             {
                                 **base_item,
@@ -3304,7 +3525,7 @@ def _gather_inbox(
                                 "dispatch": dispatch_payload,
                                 "dispatch_actionable": False,
                                 "files": latest_payload.get("files") or [],
-                                "reason": dispatch_state_reason,
+                                "reason": item_reason,
                                 "available_actions": run_state.get(
                                     "recommended_actions", []
                                 ),

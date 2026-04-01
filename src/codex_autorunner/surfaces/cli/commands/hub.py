@@ -15,6 +15,7 @@ from ....core.destinations import (
 from ....core.hub import HubSupervisor
 from ....core.orchestration import verify_migration
 from ....core.orchestration.sqlite import open_orchestration_sqlite
+from ....core.pma_automation_store import PmaAutomationStore
 from ....manifest import Manifest, load_manifest, save_manifest
 from ...web.app import create_hub_app
 
@@ -30,6 +31,12 @@ def register_hub_commands(
     request_json: Callable,
     normalize_base_path: Callable,
 ) -> None:
+    subscription_app = typer.Typer(
+        add_completion=False,
+        help="Inspect and manage hub PMA lifecycle subscriptions.",
+    )
+    hub_app.add_typer(subscription_app, name="subscription")
+
     destination_app = typer.Typer(
         add_completion=False, help="Inspect and set per-repo runtime destinations."
     )
@@ -59,6 +66,87 @@ def register_hub_commands(
         if repo is None:
             raise_exit(f"Repo id not found in hub manifest: {repo_id}")
         return manifest, repos_by_id, repo
+
+    def _subscription_store(config: HubConfig) -> PmaAutomationStore:
+        return PmaAutomationStore(config.root)
+
+    def _normalize_subscription_state_filter(value: str) -> str:
+        normalized = str(value or "").strip().lower() or "all"
+        if normalized not in {"active", "cancelled", "all"}:
+            raise_exit(
+                "Unsupported subscription state filter. Use active, cancelled, or all."
+            )
+        return normalized
+
+    def _truncate_table_cell(value: Any, *, width: int) -> str:
+        if isinstance(value, list):
+            text = ",".join(str(item) for item in value if item is not None) or "-"
+        else:
+            text = str(value).strip() if value is not None else "-"
+            if not text:
+                text = "-"
+        if len(text) <= width:
+            return text
+        if width <= 3:
+            return text[:width]
+        return f"{text[: width - 3]}..."
+
+    def _subscription_matches_text(subscription: dict[str, Any]) -> str:
+        match_count = subscription.get("match_count")
+        max_matches = subscription.get("max_matches")
+        count_text = str(match_count if match_count is not None else 0)
+        max_text = str(max_matches) if max_matches is not None else "-"
+        return f"{count_text}/{max_text}"
+
+    def _render_subscription_table(subscriptions: list[dict[str, Any]]) -> list[str]:
+        columns = [
+            ("ID", "subscription_id", 36),
+            ("STATE", "state", 10),
+            ("EVENTS", "event_types", 20),
+            ("THREAD", "thread_id", 18),
+            ("LANE", "lane_id", 18),
+            ("MATCHES", "__matches__", 9),
+            ("UPDATED", "updated_at", 20),
+        ]
+        rows: list[dict[str, str]] = []
+        for subscription in subscriptions:
+            rows.append(
+                {
+                    "ID": _truncate_table_cell(
+                        subscription.get("subscription_id"), width=36
+                    ),
+                    "STATE": _truncate_table_cell(subscription.get("state"), width=10),
+                    "EVENTS": _truncate_table_cell(
+                        subscription.get("event_types"),
+                        width=20,
+                    ),
+                    "THREAD": _truncate_table_cell(
+                        subscription.get("thread_id"), width=18
+                    ),
+                    "LANE": _truncate_table_cell(subscription.get("lane_id"), width=18),
+                    "MATCHES": _truncate_table_cell(
+                        _subscription_matches_text(subscription),
+                        width=9,
+                    ),
+                    "UPDATED": _truncate_table_cell(
+                        subscription.get("updated_at"), width=20
+                    ),
+                }
+            )
+        widths: dict[str, int] = {}
+        for header, _key, max_width in columns:
+            cell_lengths = [len(row[header]) for row in rows] if rows else [0]
+            widths[header] = min(max(max(cell_lengths), len(header)), max_width)
+        header_line = "  ".join(
+            header.ljust(widths[header]) for header, _, _ in columns
+        )
+        separator_line = "  ".join("-" * widths[header] for header, _, _ in columns)
+        lines = [header_line, separator_line]
+        for row in rows:
+            lines.append(
+                "  ".join(row[header].ljust(widths[header]) for header, _, _ in columns)
+            )
+        return lines
 
     def _destination_issues(
         manifest: Manifest,
@@ -194,6 +282,140 @@ def register_hub_commands(
 
     def _with_hub_path(command: str, hub_root: Path) -> str:
         return f"{command} --path {shlex.quote(str(hub_root))}"
+
+    @subscription_app.command("list", help="List hub PMA lifecycle subscriptions.")
+    def hub_subscription_list(
+        state: str = typer.Option(
+            "all",
+            "--state",
+            help="Filter subscriptions by state: active, cancelled, or all.",
+        ),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        config = require_hub_config(path)
+        store = _subscription_store(config)
+        state_filter = _normalize_subscription_state_filter(state)
+        subscriptions = store.list_subscriptions(
+            include_inactive=state_filter in {"cancelled", "all"}
+        )
+        if state_filter != "all":
+            subscriptions = [
+                entry
+                for entry in subscriptions
+                if str(entry.get("state") or "").strip().lower() == state_filter
+            ]
+        payload = {
+            "subscriptions": subscriptions,
+            "count": len(subscriptions),
+            "state": state_filter,
+            "store_path": str(store.path),
+        }
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        typer.echo(f"Subscriptions ({len(subscriptions)}) state={state_filter}")
+        if not subscriptions:
+            typer.echo("No subscriptions found.")
+            return
+        for line in _render_subscription_table(subscriptions):
+            typer.echo(line)
+
+    @subscription_app.command("cancel", help="Cancel a hub PMA lifecycle subscription.")
+    def hub_subscription_cancel(
+        subscription_id: str = typer.Option(
+            ...,
+            "--id",
+            help="Subscription id to cancel.",
+        ),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        config = require_hub_config(path)
+        store = _subscription_store(config)
+        normalized_id = str(subscription_id or "").strip()
+        if not normalized_id:
+            raise_exit("subscription id is required")
+        subscriptions = store.list_subscriptions(include_inactive=True)
+        existing = next(
+            (
+                entry
+                for entry in subscriptions
+                if str(entry.get("subscription_id") or "").strip() == normalized_id
+            ),
+            None,
+        )
+        if existing is None:
+            raise_exit(f"Subscription not found: {normalized_id}")
+        changed = store.cancel_subscription(normalized_id)
+        payload = {
+            "subscription_id": normalized_id,
+            "changed": changed,
+            "state": "cancelled",
+            "status": "cancelled" if changed else "already_cancelled",
+            "store_path": str(store.path),
+        }
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        if changed:
+            typer.echo(f"Cancelled subscription {normalized_id}")
+            return
+        typer.echo(f"Subscription {normalized_id} is already cancelled")
+
+    @subscription_app.command(
+        "purge",
+        help="Purge cancelled hub PMA lifecycle subscriptions from the store.",
+    )
+    def hub_subscription_purge(
+        state: str = typer.Option(
+            "cancelled",
+            "--state",
+            help="Subscription state to purge. Only cancelled is supported.",
+        ),
+        dry_run: bool = typer.Option(False, "--dry-run", help="Preview only"),
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+        output_json: bool = typer.Option(
+            False, "--json", help="Emit JSON payload for scripting"
+        ),
+    ) -> None:
+        config = require_hub_config(path)
+        store = _subscription_store(config)
+        state_filter = str(state or "").strip().lower() or "cancelled"
+        if state_filter != "cancelled":
+            raise_exit("Unsupported purge state. Only cancelled is supported.")
+        removed = store.purge_subscriptions(
+            state_filter=state_filter,
+            dry_run=dry_run,
+        )
+        payload = {
+            "subscriptions": removed,
+            "subscription_ids": [
+                str(entry.get("subscription_id") or "")
+                for entry in removed
+                if str(entry.get("subscription_id") or "").strip()
+            ],
+            "count": len(removed),
+            "state": state_filter,
+            "dry_run": dry_run,
+            "store_path": str(store.path),
+        }
+        if output_json:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+
+        action = "Would purge" if dry_run else "Purged"
+        typer.echo(f"{action} {len(removed)} subscription(s) with state={state_filter}")
+        if not removed:
+            typer.echo("No subscriptions matched.")
+            return
+        for line in _render_subscription_table(removed):
+            typer.echo(line)
 
     @destination_app.command("show")
     def hub_destination_show(

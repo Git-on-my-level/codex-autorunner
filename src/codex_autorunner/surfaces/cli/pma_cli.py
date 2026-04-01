@@ -18,6 +18,7 @@ from ...core.car_context import (
 )
 from ...core.config import load_hub_config
 from ...core.filebox import BOXES
+from ...core.pma_audit import PmaActionType, PmaAuditEntry, PmaAuditLog
 from ...core.pma_hygiene import (
     apply_pma_hygiene_report,
     build_pma_hygiene_report,
@@ -555,6 +556,93 @@ def _format_resource_owner_label(item: dict[str, Any]) -> str:
     if workspace_root:
         return f"workspace={workspace_root}"
     return "owner=-"
+
+
+def _normalize_thread_compact_scope(
+    *,
+    managed_thread_id: Optional[str],
+    status: Optional[str],
+    all_threads: bool,
+) -> tuple[Optional[str], bool]:
+    normalized_id = str(managed_thread_id or "").strip() or None
+    normalized_status = str(status or "").strip().lower() or None
+    scope_all = all_threads or normalized_status == "all"
+    if normalized_id is not None:
+        if normalized_status is not None or all_threads:
+            raise typer.BadParameter(
+                "Use either --id or bulk selection flags, not both.",
+                param_hint="--id",
+            )
+        return normalized_id, False
+    if normalized_status is None and not scope_all:
+        raise typer.BadParameter(
+            "Provide --id, --status, or --all.",
+            param_hint="--id / --status / --all",
+        )
+    return normalized_status, scope_all
+
+
+def _thread_compact_target_line(thread: dict[str, Any]) -> str:
+    parts = [
+        str(thread.get("managed_thread_id") or ""),
+        f"agent={thread.get('agent') or ''}",
+        f"status={thread.get('status') or ''}",
+        f"reason={thread.get('status_reason') or '-'}",
+        _format_resource_owner_label(thread),
+    ]
+    if bool(thread.get("chat_bound")):
+        parts.append("chat_bound=yes")
+    if bool(thread.get("cleanup_protected")):
+        parts.append("protected=yes")
+    return " ".join(part for part in parts if part).strip()
+
+
+def _record_thread_compact_audit(
+    *,
+    hub_root: Path,
+    summary: str,
+    managed_thread_ids: list[str],
+    mode: str,
+    reset_backend: bool,
+    status: Optional[str],
+    scope_all: bool,
+    resource_kind: Optional[str],
+    resource_id: Optional[str],
+    agent: Optional[str],
+    errors: Optional[list[dict[str, Any]]] = None,
+) -> None:
+    try:
+        PmaAuditLog(hub_root).append(
+            PmaAuditEntry(
+                action_type=PmaActionType.SESSION_COMPACT,
+                thread_id=(
+                    managed_thread_ids[0] if len(managed_thread_ids) == 1 else None
+                ),
+                agent=agent,
+                status="error" if errors else "ok",
+                error="; ".join(
+                    str(item.get("error") or "").strip()
+                    for item in (errors or [])
+                    if str(item.get("error") or "").strip()
+                )
+                or None,
+                details={
+                    "command": "managed_thread_compact",
+                    "mode": mode,
+                    "thread_count": len(managed_thread_ids),
+                    "thread_ids": managed_thread_ids,
+                    "summary_length": len(summary),
+                    "reset_backend": reset_backend,
+                    "status_filter": status,
+                    "all_threads": scope_all,
+                    "resource_kind": resource_kind,
+                    "resource_id": resource_id,
+                    "errors": errors or [],
+                },
+            )
+        )
+    except Exception as exc:
+        logger.warning("Failed to record PMA thread compact audit entry: %s", exc)
 
 
 def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
@@ -1853,37 +1941,227 @@ def pma_thread_tail(
 
 @thread_app.command("compact")
 def pma_thread_compact(
-    managed_thread_id: str = typer.Option(
-        ..., "--id", help="Managed PMA thread id", show_default=False
+    managed_thread_id: Optional[str] = typer.Option(
+        None, "--id", help="Managed PMA thread id", show_default=False
+    ),
+    status: Optional[str] = typer.Option(
+        None, "--status", help="Bulk compact threads matching a status filter"
+    ),
+    all_threads: bool = typer.Option(
+        False,
+        "--all",
+        help="Compact all non-archived managed threads matching the other filters",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Required when compacting all non-archived managed threads",
     ),
     summary: str = typer.Option(..., "--summary", help="Compaction summary"),
     no_reset_backend: bool = typer.Option(
         False, "--no-reset-backend", help="Preserve backend thread/session id"
     ),
+    agent: Optional[str] = typer.Option(None, "--agent", help="Filter by agent"),
+    repo_id: Optional[str] = typer.Option(None, "--repo", help="Filter by repo id"),
+    resource_kind: Optional[str] = typer.Option(
+        None, "--resource-kind", help="Filter by managed resource kind"
+    ),
+    resource_id: Optional[str] = typer.Option(
+        None, "--resource-id", help="Filter by managed resource id"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Preview matching threads without compacting"
+    ),
+    limit: int = typer.Option(
+        1000, "--limit", min=1, help="Maximum bulk-selected threads to inspect"
+    ),
     output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
     path: Optional[Path] = typer.Option(None, "--path", "--hub", help="Hub root path"),
 ):
-    """Store a compaction seed on a managed PMA thread."""
+    """Store a compaction seed on one or more managed PMA threads."""
     hub_root = _resolve_hub_path(path)
     try:
-        config = load_hub_config(hub_root)
-        data = _request_json(
-            "POST",
-            _build_pma_url(config, f"/threads/{managed_thread_id}/compact"),
-            {"summary": summary, "reset_backend": (not no_reset_backend)},
-            token_env=config.server_auth_token_env,
+        scope_status, scope_all = _normalize_thread_compact_scope(
+            managed_thread_id=managed_thread_id,
+            status=status,
+            all_threads=all_threads,
         )
+    except typer.BadParameter as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+    if scope_all and not force:
+        typer.echo(
+            "Error: --force is required with --all or --status all.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+    (
+        normalized_resource_kind,
+        normalized_resource_id,
+        _normalized_workspace_root,
+    ) = _normalize_resource_owner_options(
+        repo_id=repo_id,
+        resource_kind=resource_kind,
+        resource_id=resource_id,
+    )
+    try:
+        config = load_hub_config(hub_root)
+        if managed_thread_id:
+            targets = [{"managed_thread_id": managed_thread_id}]
+        else:
+            params = {
+                key: value
+                for key, value in {
+                    "agent": agent,
+                    "status": None if scope_all else scope_status,
+                    "resource_kind": normalized_resource_kind,
+                    "resource_id": normalized_resource_id,
+                    "limit": limit,
+                }.items()
+                if value is not None
+            }
+            data = _request_json(
+                "GET",
+                _build_pma_url(config, "/threads"),
+                token_env=config.server_auth_token_env,
+                params=params,
+            )
+            raw_threads = data.get("threads", []) if isinstance(data, dict) else []
+            threads = [item for item in raw_threads if isinstance(item, dict)]
+            targets = [
+                thread
+                for thread in threads
+                if str(thread.get("lifecycle_status") or "").strip().lower()
+                != "archived"
+                and str(thread.get("status") or "").strip().lower() != "archived"
+            ]
+
+        target_ids = [
+            str(item.get("managed_thread_id") or "").strip()
+            for item in targets
+            if str(item.get("managed_thread_id") or "").strip()
+        ]
+        if not target_ids:
+            empty_payload = {
+                "dry_run": dry_run,
+                "matched": 0,
+                "compacted": [],
+                "errors": [],
+            }
+            if output_json:
+                typer.echo(json.dumps(empty_payload, indent=2))
+            else:
+                typer.echo("No managed threads matched the compact selection")
+            return
+
+        preview_payload = {
+            "dry_run": dry_run,
+            "matched": len(target_ids),
+            "scope": {
+                "id": managed_thread_id,
+                "status": scope_status,
+                "all": scope_all,
+                "agent": agent,
+                "resource_kind": normalized_resource_kind,
+                "resource_id": normalized_resource_id,
+            },
+            "threads": targets,
+        }
+        if output_json and dry_run:
+            typer.echo(json.dumps(preview_payload, indent=2))
+        elif not output_json:
+            typer.echo(
+                f"Dry run summary: {len(target_ids)} thread"
+                f"{'' if len(target_ids) == 1 else 's'} would be compacted"
+            )
+            for thread in targets:
+                typer.echo(_thread_compact_target_line(thread))
+
+        _record_thread_compact_audit(
+            hub_root=hub_root,
+            summary=summary,
+            managed_thread_ids=target_ids,
+            mode="dry_run" if dry_run else "execute",
+            reset_backend=(not no_reset_backend),
+            status=scope_status,
+            scope_all=scope_all,
+            resource_kind=normalized_resource_kind,
+            resource_id=normalized_resource_id,
+            agent=agent,
+        )
+        if dry_run:
+            return
+
+        compacted: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        for target_id in target_ids:
+            try:
+                data = _request_json(
+                    "POST",
+                    _build_pma_url(config, f"/threads/{target_id}/compact"),
+                    {"summary": summary, "reset_backend": (not no_reset_backend)},
+                    token_env=config.server_auth_token_env,
+                )
+            except httpx.HTTPError as exc:
+                errors.append(
+                    {"managed_thread_id": target_id, "error": f"HTTP error: {exc}"}
+                )
+                continue
+            except Exception as exc:
+                errors.append({"managed_thread_id": target_id, "error": str(exc)})
+                continue
+            compacted.append(
+                {
+                    "managed_thread_id": target_id,
+                    "thread": data.get("thread") if isinstance(data, dict) else None,
+                }
+            )
+
+        _record_thread_compact_audit(
+            hub_root=hub_root,
+            summary=summary,
+            managed_thread_ids=target_ids,
+            mode="result",
+            reset_backend=(not no_reset_backend),
+            status=scope_status,
+            scope_all=scope_all,
+            resource_kind=normalized_resource_kind,
+            resource_id=normalized_resource_id,
+            agent=agent,
+            errors=errors,
+        )
+
+        result_payload = {
+            "dry_run": False,
+            "matched": len(target_ids),
+            "compacted": compacted,
+            "errors": errors,
+        }
+        if output_json:
+            typer.echo(json.dumps(result_payload, indent=2))
+        else:
+            for item in compacted:
+                typer.echo(f"Compacted {item['managed_thread_id']}")
+            if errors:
+                for item in errors:
+                    typer.echo(
+                        f"Failed {item['managed_thread_id']}: {item['error']}",
+                        err=True,
+                    )
+            typer.echo(
+                f"Compacted {len(compacted)} thread"
+                f"{'' if len(compacted) == 1 else 's'}"
+            )
+        if errors:
+            raise typer.Exit(code=1) from None
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
     except Exception as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-
-    if output_json:
-        typer.echo(json.dumps(data, indent=2))
-    else:
-        typer.echo(f"Compacted {managed_thread_id}")
 
 
 @thread_app.command("resume")

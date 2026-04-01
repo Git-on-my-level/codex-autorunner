@@ -800,6 +800,7 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "report_max_history_files": DEFAULT_REPORT_MAX_HISTORY_FILES,
         "report_max_total_bytes": DEFAULT_REPORT_MAX_TOTAL_BYTES,
         "app_server_workspace_max_age_days": 7,
+        "inbox_auto_dismiss_grace_seconds": 3600,
         # Worktree cleanup policies
         "cleanup_require_archive": True,
         "cleanup_auto_delete_orphans": False,
@@ -992,6 +993,7 @@ class PmaConfig:
     report_max_history_files: int = DEFAULT_REPORT_MAX_HISTORY_FILES
     report_max_total_bytes: int = DEFAULT_REPORT_MAX_TOTAL_BYTES
     app_server_workspace_max_age_days: int = 7
+    inbox_auto_dismiss_grace_seconds: int = 3600
     # Worktree cleanup policies
     cleanup_require_archive: bool = True
     cleanup_auto_delete_orphans: bool = False
@@ -2221,6 +2223,9 @@ def _parse_pma_config(
     app_server_workspace_max_age_days = _parse_nonnegative_int(
         "app_server_workspace_max_age_days", 7
     )
+    inbox_auto_dismiss_grace_seconds = _parse_nonnegative_int(
+        "inbox_auto_dismiss_grace_seconds", 3600
+    )
     worktree_archive_max_snapshots_per_repo = _parse_nonnegative_int(
         "worktree_archive_max_snapshots_per_repo", 10
     )
@@ -2260,6 +2265,7 @@ def _parse_pma_config(
         report_max_history_files=report_max_history_files,
         report_max_total_bytes=report_max_total_bytes,
         app_server_workspace_max_age_days=app_server_workspace_max_age_days,
+        inbox_auto_dismiss_grace_seconds=inbox_auto_dismiss_grace_seconds,
         cleanup_require_archive=cleanup_require_archive,
         cleanup_auto_delete_orphans=cleanup_auto_delete_orphans,
         worktree_archive_profile=worktree_archive_profile,

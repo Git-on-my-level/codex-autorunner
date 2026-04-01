@@ -14,6 +14,7 @@ from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.server import create_hub_app
+from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
 from codex_autorunner.surfaces.web.routes.pma_routes.tail_stream import (
     _refresh_active_turn_diagnostics,
 )
@@ -288,7 +289,8 @@ def test_managed_thread_tail_snapshot_marks_hermes_stream_available(
     )
     fake_service.get_queue_depth = lambda _thread_id: 0
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        tail_stream,
+        "build_managed_thread_orchestration_service",
         lambda request: fake_service,
     )
 
@@ -349,7 +351,8 @@ def test_managed_thread_tail_snapshot_marks_opencode_stream_available(
     )
     fake_service.get_queue_depth = lambda _thread_id: 0
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        tail_stream,
+        "build_managed_thread_orchestration_service",
         lambda request: fake_service,
     )
 
@@ -439,7 +442,8 @@ def test_managed_thread_tail_events_streams_hermes_runtime_events(
     )
     fake_service.get_queue_depth = lambda _thread_id: 0
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        tail_stream,
+        "build_managed_thread_orchestration_service",
         lambda request: fake_service,
     )
 
@@ -517,7 +521,8 @@ def test_managed_thread_tail_events_reuses_active_harness_state(
     )
     fake_service.get_queue_depth = lambda _thread_id: 0
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        tail_stream,
+        "build_managed_thread_orchestration_service",
         lambda request: fake_service,
     )
 
@@ -591,7 +596,8 @@ def test_managed_thread_tail_snapshot_includes_opencode_list_progress_events(
     )
     fake_service.get_queue_depth = lambda _thread_id: 0
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        tail_stream,
+        "build_managed_thread_orchestration_service",
         lambda request: fake_service,
     )
 
@@ -662,7 +668,8 @@ def test_managed_thread_tail_snapshot_stream_available_when_backend_binding_appe
     fake_service.get_execution = lambda _tid, _eid: fake_service.execution
     fake_service.get_queue_depth = lambda _thread_id: 0
     monkeypatch.setattr(
-        "codex_autorunner.surfaces.web.routes.pma_routes.tail_stream.build_managed_thread_orchestration_service",
+        tail_stream,
+        "build_managed_thread_orchestration_service",
         lambda request: fake_service,
     )
 
