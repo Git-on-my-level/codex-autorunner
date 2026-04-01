@@ -1,5 +1,6 @@
 """Tests for PMA CLI commands."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -83,6 +84,7 @@ def test_pma_cli_thread_list_help_shows_json_option():
     assert result.exit_code == 0
     output = result.stdout
     assert "--json" in output, "PMA thread list should support --json"
+    assert "--ndjson" in output, "PMA thread list should support --ndjson"
 
 
 def test_pma_cli_thread_send_help_shows_json_option():
@@ -1162,6 +1164,125 @@ def test_pma_cli_thread_spawn_defaults_agent_for_agent_workspace(
             },
         ),
     ]
+
+
+def test_pma_cli_thread_list_json_emits_array(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = payload, token_env, params
+        assert method == "GET"
+        assert url == "http://127.0.0.1:4321/hub/pma/threads"
+        return {
+            "threads": [
+                {
+                    "managed_thread_id": "thread-1",
+                    "agent": "codex",
+                    "status": "idle",
+                    "status_reason": "thread_created",
+                },
+                {
+                    "managed_thread_id": "thread-2",
+                    "agent": "opencode",
+                    "status": "running",
+                    "status_reason": "turn_active",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--json", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    parsed = json.loads(result.stdout)
+    assert isinstance(parsed, list)
+    assert [item["managed_thread_id"] for item in parsed] == ["thread-1", "thread-2"]
+    assert all(isinstance(item, dict) for item in parsed)
+
+
+def test_pma_cli_thread_list_ndjson_emits_one_object_per_line(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        pma_cli,
+        "load_hub_config",
+        lambda hub_root: SimpleNamespace(
+            server_base_path="",
+            server_host="127.0.0.1",
+            server_port=4321,
+            server_auth_token_env=None,
+        ),
+    )
+
+    def _fake_request_json(
+        method: str,
+        url: str,
+        payload=None,
+        token_env=None,
+        params=None,
+    ):
+        _ = payload, token_env, params
+        assert method == "GET"
+        assert url == "http://127.0.0.1:4321/hub/pma/threads"
+        return {
+            "threads": [
+                {
+                    "managed_thread_id": "thread-1",
+                    "agent": "codex",
+                    "status": "idle",
+                },
+                {
+                    "managed_thread_id": "thread-2",
+                    "agent": "opencode",
+                    "status": "running",
+                },
+            ]
+        }
+
+    monkeypatch.setattr(pma_cli, "_request_json", _fake_request_json)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--ndjson", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    parsed = [json.loads(line) for line in result.stdout.strip().splitlines()]
+    assert [item["managed_thread_id"] for item in parsed] == ["thread-1", "thread-2"]
+
+
+def test_pma_cli_thread_list_rejects_json_and_ndjson_together(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        ["thread", "list", "--json", "--ndjson", "--path", str(tmp_path)],
+    )
+
+    assert result.exit_code != 0
+    assert "Choose only one of --json or --ndjson." in result.output
 
 
 def test_pma_cli_thread_spawn_rejects_invalid_context_profile(
