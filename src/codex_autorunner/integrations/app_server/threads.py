@@ -103,6 +103,24 @@ def pma_base_key(agent: str, profile: Optional[str] = None) -> str:
     return _append_profile_suffix(base_key, profile)
 
 
+def pma_legacy_alias_key(agent: str, profile: Optional[str]) -> Optional[str]:
+    """Return the old alias-style PMA key, or None if no migration is needed.
+
+    Before PMA key normalization, Hermes alias agents like ``hermes-m4-pma``
+    produced keys like ``pma.hermes-m4-pma`` (the alias id was used directly
+    without splitting into agent + profile).  This helper reconstructs that
+    old key so callers can do fallback lookups during migration.
+    """
+    if not profile or not agent:
+        return None
+    alias_id = f"{agent}-{profile}"
+    old_key = pma_base_key(alias_id)
+    new_key = pma_base_key(agent, profile)
+    if old_key == new_key:
+        return None
+    return old_key
+
+
 def pma_prefix_for_agent(agent: Optional[str], profile: Optional[str] = None) -> str:
     """
     Return the PMA registry key prefix for the given agent.
@@ -292,6 +310,27 @@ class AppServerThreadRegistry:
         with file_lock(self._lock_path()):
             threads = self._load_unlocked()
             return threads.get(normalized)
+
+    def get_thread_id_with_fallback(
+        self, key: str, *fallback_keys: str, migrate: bool = True
+    ) -> Optional[str]:
+        """Look up ``key``; on miss try ``fallback_keys`` and optionally migrate."""
+        normalized = normalize_feature_key(key)
+        with file_lock(self._lock_path()):
+            threads = self._load_unlocked()
+            value = threads.get(normalized)
+            if value is not None:
+                return value
+            for fk in fallback_keys:
+                norm_fk = normalize_feature_key(fk)
+                value = threads.get(norm_fk)
+                if value is not None:
+                    if migrate:
+                        threads[normalized] = value
+                        threads.pop(norm_fk, None)
+                        self._save_unlocked(threads)
+                    return value
+        return None
 
     def set_thread_id(self, key: str, thread_id: str) -> None:
         normalized = normalize_feature_key(key)

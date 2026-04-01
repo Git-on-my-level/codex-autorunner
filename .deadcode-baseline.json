@@ -14,6 +14,7 @@
     "python:function:src/codex_autorunner/core/state_retention.py:340:adapt_filebox_prune_summary_to_result",
     "python:function:src/codex_autorunner/core/state_retention.py:392:adapt_report_prune_summary_to_result",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:21:run_turn_with_backend",
+    "python:function:src/codex_autorunner/integrations/chat/agents.py:164:validate_hermes_profile",
     "python:function:src/codex_autorunner/integrations/app_server/retention.py:358:adapt_workspace_summary_to_result",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:19:_flatten_opencode_tokens",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value",

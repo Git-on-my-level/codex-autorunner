@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from codex_autorunner.integrations.chat.agents import ChatAgentProfileOption
 from codex_autorunner.surfaces.web.routes.agents import build_agents_routes
 
 
@@ -273,6 +274,65 @@ def test_list_agents_includes_configured_profiles(monkeypatch) -> None:
     agents = {agent["id"]: agent for agent in response.json()["agents"]}
     assert agents["hermes"]["default_profile"] == "m4"
     assert agents["hermes"]["profiles"] == [{"id": "m4", "display_name": "M4 PMA"}]
+
+
+def test_list_agents_merges_alias_only_hermes_profiles(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.hermes_runtime_preflight",
+        lambda _config: type(
+            "Result",
+            (),
+            {
+                "status": "ready",
+                "version": "hermes 0.1.0",
+                "launch_mode": "binary",
+                "message": "ready",
+                "fix": None,
+            },
+        )(),
+    )
+
+    def _fake_options(_ctx):
+        return (
+            ChatAgentProfileOption(
+                agent="hermes",
+                profile="m4-pma",
+                runtime_agent="hermes-m4-pma",
+                description="Hermes M4 PMA",
+            ),
+        )
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.agents.chat_hermes_profile_options",
+        _fake_options,
+    )
+
+    app = FastAPI()
+    app.state.app_server_supervisor = MagicMock()
+    app.state.opencode_supervisor = MagicMock()
+    app.state.app_server_events = MagicMock()
+    app.state.config = SimpleNamespace(
+        agent_binary=lambda _agent_id, profile=None: "hermes",
+        agent_profiles=lambda agent_id: (
+            {"base": SimpleNamespace(display_name="Base")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_default_profile=lambda _agent_id: None,
+    )
+    app.state.engine = SimpleNamespace(repo_root="/tmp/test-repo")
+    app.include_router(build_agents_routes())
+
+    with TestClient(app) as client:
+        response = client.get("/api/agents")
+
+    assert response.status_code == 200
+    agents = {agent["id"]: agent for agent in response.json()["agents"]}
+    profs = {p["id"]: p["display_name"] for p in agents["hermes"]["profiles"]}
+    assert profs == {
+        "base": "Base",
+        "m4-pma": "Hermes M4 PMA",
+    }
 
 
 def test_models_endpoint_returns_capability_error_for_unknown_agent() -> None:

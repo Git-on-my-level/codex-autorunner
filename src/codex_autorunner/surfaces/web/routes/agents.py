@@ -122,6 +122,29 @@ def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]
                         ),
                     }
                 )
+    if agent_id == "hermes":
+        try:
+            from ....integrations.chat.agents import chat_hermes_profile_options
+
+            existing_ids = {p["id"] for p in profiles}
+            for option in chat_hermes_profile_options(request.app.state):
+                if option.profile in existing_ids:
+                    continue
+                desc = option.description
+                profiles.append(
+                    {
+                        "id": option.profile,
+                        "display_name": (
+                            desc.strip()
+                            if isinstance(desc, str) and desc.strip()
+                            else option.profile
+                        ),
+                    }
+                )
+                existing_ids.add(option.profile)
+            profiles.sort(key=lambda p: p["id"])
+        except Exception:
+            pass
     default_profile = None
     if callable(default_getter):
         try:

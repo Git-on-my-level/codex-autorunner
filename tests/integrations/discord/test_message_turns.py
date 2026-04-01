@@ -45,6 +45,7 @@ from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_PREFIX,
     PMA_KEY,
     normalize_feature_key,
+    pma_base_key,
 )
 from codex_autorunner.integrations.chat.collaboration_policy import (
     CollaborationPolicy,
@@ -6166,6 +6167,56 @@ def test_build_message_session_key_is_registry_valid(tmp_path: Path) -> None:
     assert opencode_key.startswith(f"{FILE_CHAT_OPENCODE_PREFIX}discord.channel-1.")
     assert normalize_feature_key(codex_key) == codex_key
     assert normalize_feature_key(opencode_key) == opencode_key
+
+
+def test_build_message_session_key_pma_matches_logical_agent_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PMA keys use resolve_chat_agent_and_profile (same as web PMA), not runtime alias."""
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes M4 PMA"),
+        },
+    )
+    hub_config = SimpleNamespace(
+        agent_profiles=lambda agent_id: (
+            {"m4-pma": SimpleNamespace(display_name="M4 PMA")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_binary=lambda agent_id, **kw: "hermes",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry._resolve_runtime_agent_config",
+        lambda ctx: hub_config,
+    )
+
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    expected = pma_base_key("hermes", "m4-pma")
+    alias_key = service._build_message_session_key(
+        channel_id="channel-1",
+        workspace_root=workspace,
+        pma_enabled=True,
+        agent="hermes-m4-pma",
+    )
+    split_key = service._build_message_session_key(
+        channel_id="channel-1",
+        workspace_root=workspace,
+        pma_enabled=True,
+        agent="hermes",
+        agent_profile="m4-pma",
+    )
+    assert alias_key == expected
+    assert split_key == expected
+    assert alias_key != pma_base_key("hermes-m4-pma")
 
 
 @pytest.mark.anyio

@@ -12,11 +12,13 @@ from codex_autorunner.integrations.chat.agents import (
     chat_agent_supports_effort,
     chat_hermes_profile_options,
     default_chat_model_for_agent,
+    merged_hermes_profile_ids,
     normalize_chat_agent,
     normalize_hermes_profile,
     resolve_chat_agent_and_profile,
     resolve_chat_runtime_agent,
     valid_chat_agent_values,
+    validate_hermes_profile,
 )
 
 
@@ -270,6 +272,50 @@ def test_config_profile_normalizes_and_resolves(
     agent, profile = resolve_chat_agent_and_profile("hermes", "m4-pma", context="ctx")
     assert agent == "hermes"
     assert profile == "m4-pma"
+
+
+def test_merged_hermes_profile_ids_includes_yaml_and_alias_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes Alias"),
+        },
+    )
+    config = SimpleNamespace(
+        agent_profiles=lambda agent_id: (
+            {"fast": SimpleNamespace(display_name="Fast")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_binary=lambda agent_id, **kw: "hermes",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry._resolve_runtime_agent_config",
+        lambda ctx: config,
+    )
+
+    ids = merged_hermes_profile_ids("ctx")
+    assert ids == {"m4-pma", "fast"}
+
+
+def test_validate_hermes_profile_membership(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes Alias"),
+        },
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry._resolve_runtime_agent_config",
+        lambda ctx: None,
+    )
+
+    assert validate_hermes_profile("m4-pma") is True
+    assert validate_hermes_profile("M4-PMA") is True
+    assert validate_hermes_profile("unknown-profile") is False
+    assert validate_hermes_profile("") is False
 
 
 def test_config_profiles_deferred_to_alias_profiles(

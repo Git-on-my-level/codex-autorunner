@@ -151,6 +151,24 @@ def _config_hermes_profiles(context: Any) -> dict[str, Any]:
         return {}
 
 
+def merged_hermes_profile_ids(context: Any = None) -> set[str]:
+    """Return every valid Hermes chat profile id for ``context``.
+
+    Combines the resolved config's Hermes ``agent_profiles`` entries with
+    profile ids from registered Hermes-kind agents (including ``hermes-`` /
+    ``hermes_`` prefixed aliases after stripping that prefix).
+    """
+    return {option.profile for option in chat_hermes_profile_options(context)}
+
+
+def validate_hermes_profile(profile: str, context: Any = None) -> bool:
+    """Return whether ``profile`` is a known Hermes profile for ``context``."""
+    normalized = str(profile or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized in merged_hermes_profile_ids(context)
+
+
 def chat_hermes_profile_options(
     context: Any = None,
 ) -> tuple[ChatAgentProfileOption, ...]:

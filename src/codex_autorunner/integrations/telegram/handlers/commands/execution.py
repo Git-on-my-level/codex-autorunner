@@ -67,6 +67,7 @@ from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
     AppServerThreadRegistry,
     pma_base_key,
+    pma_legacy_alias_key,
     pma_topic_scoped_key,
 )
 from .....integrations.chat.compaction import match_pending_compact_seed
@@ -3581,17 +3582,17 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         when require_topics is enabled, while keeping a single shared context
         in the common case (require_topics disabled).
         """
-        runtime_agent_resolver = getattr(self, "_effective_runtime_agent", None)
-        if callable(runtime_agent_resolver):
-            agent = runtime_agent_resolver(record)
-        else:
-            agent = self._effective_agent(record)
-        base_key = pma_base_key(agent)
+        agent, profile = self._effective_agent_state(record)
+        base_key = pma_base_key(agent, profile)
 
         require_topics = getattr(self._config, "require_topics", False)
         if require_topics and message is not None:
             return pma_topic_scoped_key(
-                agent, message.chat_id, message.thread_id, topic_key_fn=build_topic_key
+                agent,
+                message.chat_id,
+                message.thread_id,
+                topic_key_fn=build_topic_key,
+                profile=profile,
             )
         return base_key
 
@@ -3814,7 +3815,14 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         )
         thread_id = None if pma_enabled else record.active_thread_id
         if pma_enabled and pma_thread_registry and pma_thread_key:
-            thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
+            agent, profile = self._effective_agent_state(record)
+            legacy_key = pma_legacy_alias_key(agent, profile)
+            if legacy_key:
+                thread_id = pma_thread_registry.get_thread_id_with_fallback(
+                    pma_thread_key, legacy_key
+                )
+            else:
+                thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
         prompt_text = (
             text_override if text_override is not None else (message.text or "")
         )

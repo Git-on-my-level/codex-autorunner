@@ -2090,14 +2090,20 @@ class DiscordBotService:
         agent: str,
         agent_profile: Optional[str] = None,
     ) -> str:
-        session_agent = resolve_chat_runtime_agent(
+        resolved_agent, resolved_profile = resolve_chat_agent_and_profile(
             agent,
             agent_profile,
             default=self.DEFAULT_AGENT,
             context=self,
         )
         if pma_enabled:
-            return pma_base_key(session_agent)
+            return pma_base_key(resolved_agent, resolved_profile)
+        session_agent = resolve_chat_runtime_agent(
+            agent,
+            agent_profile,
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
         return file_chat_discord_key(session_agent, channel_id, str(workspace_root))
 
     def _build_runner_state(
