@@ -637,6 +637,7 @@ async def test_collect_output_ignores_completed_text_when_role_missing() -> None
     output = await collect_opencode_output_from_events(
         _iter_events(events),
         session_id="s1",
+        prompt="User prompt",
     )
     assert output.text == ""
     assert output.error is None
@@ -958,3 +959,64 @@ async def test_collect_output_bounds_stall_reconnect_loop(monkeypatch) -> None:
     assert len(statuses) >= 1
     assert any(event.get("type") == "reconnecting" for event in progress_events)
     assert any(event.get("type") == "stall_timeout" for event in progress_events)
+
+
+@pytest.mark.anyio
+async def test_collect_output_sessionless_text_delta_is_relevant() -> None:
+    """Sessionless text deltas should be treated as relevant and collected."""
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data='{"properties":{"delta":{"text":"Hello"},'
+            '"part":{"type":"text","text":"Hello"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Hello"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_sessionless_completed_recovers_roleless_text() -> None:
+    """A sessionless message.completed with no role should still produce text
+    when the text differs from the prompt."""
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"info":{"id":"m1"},'
+            '"parts":[{"type":"text","text":"Final answer"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        prompt="What is the answer?",
+    )
+    assert output.text == "Final answer"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_sessionless_completed_suppresses_echoed_prompt() -> None:
+    """A sessionless roleless message.completed whose text matches the prompt
+    should NOT produce output (would be an echo)."""
+    events = [
+        SSEEvent(
+            event="message.completed",
+            data='{"info":{"id":"m1"},'
+            '"parts":[{"type":"text","text":"What is the answer?"}]}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        prompt="What is the answer?",
+    )
+    assert output.text == ""
+    assert output.error is None

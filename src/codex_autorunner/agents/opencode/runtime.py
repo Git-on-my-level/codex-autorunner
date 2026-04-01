@@ -708,6 +708,7 @@ async def collect_opencode_output_from_events(
     events: Optional[AsyncIterator[SSEEvent]] = None,
     *,
     session_id: str,
+    prompt: Optional[str] = None,
     model_payload: Optional[dict[str, str]] = None,
     progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
@@ -1214,6 +1215,8 @@ async def collect_opencode_output_from_events(
                     is_relevant = event_session_id == session_id
                 else:
                     is_relevant = event_session_id in progress_session_ids
+            else:
+                is_relevant = True
             if not is_relevant:
                 if (
                     stall_timeout_seconds is not None
@@ -1265,7 +1268,7 @@ async def collect_opencode_output_from_events(
             last_relevant_event_at = now
             reconnect_attempts = 0
             reconnect_started_at = None
-            is_primary_session = event_session_id == session_id
+            is_primary_session = event_session_id == session_id or not event_session_id
             if event.event == "question.asked":
                 request_id, props = _extract_question_request(payload)
                 questions = props.get("questions") if isinstance(props, dict) else []
@@ -1628,10 +1631,12 @@ async def collect_opencode_output_from_events(
         resolved_role = role
         if resolved_role is None and msg_id:
             resolved_role = message_roles.get(msg_id)
-        if resolved_role == "assistant":
-            _append_text_for_message(msg_id, text)
-            if pending_text or pending_no_id:
-                _flush_all_pending_text()
+        if resolved_role == "assistant" or (
+            resolved_role is None
+            and text
+            and (prompt is None or text.strip() != prompt.strip())
+        ):
+            text_parts.append(text)
 
     return OpenCodeTurnOutput(
         text="".join(text_parts).strip(),
@@ -1645,6 +1650,7 @@ async def collect_opencode_output(
     *,
     session_id: str,
     workspace_path: str,
+    prompt: Optional[str] = None,
     model_payload: Optional[dict[str, str]] = None,
     progress_session_ids: Optional[set[str]] = None,
     permission_policy: str = PERMISSION_ALLOW,
@@ -1693,6 +1699,7 @@ async def collect_opencode_output(
     return await collect_opencode_output_from_events(
         None,
         session_id=session_id,
+        prompt=prompt,
         progress_session_ids=progress_session_ids,
         permission_policy=permission_policy,
         permission_handler=permission_handler,

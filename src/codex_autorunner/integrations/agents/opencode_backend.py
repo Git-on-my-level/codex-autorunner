@@ -350,6 +350,7 @@ class OpenCodeBackend(AgentBackend):
                     client,
                     session_id=self._session_id,
                     workspace_path=str(workspace_root),
+                    prompt=message,
                     model_payload=model_payload,
                     permission_policy=permission_policy,
                     part_handler=_part_handler,

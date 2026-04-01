@@ -649,7 +649,7 @@ async def test_opencode_harness_progress_event_stream_accepts_nested_item_sessio
 
 
 @pytest.mark.asyncio
-async def test_opencode_harness_logs_skipped_progress_events_without_session_id(
+async def test_opencode_harness_publishes_progress_events_without_session_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = Path("/tmp/workspace").resolve()
@@ -692,7 +692,7 @@ async def test_opencode_harness_logs_skipped_progress_events_without_session_id(
     result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
 
     assert result.status == "ok"
-    assert any(
+    assert not any(
         event["event"] == "opencode.progress_event.skipped"
         and event["reason"] == "missing_session_id"
         and event["method"] == "item/reasoning/summaryTextDelta"
@@ -1155,3 +1155,63 @@ async def test_opencode_harness_noninteractive_turn_rejects_questions() -> None:
 
     assert result.status == "ok"
     assert client.question_rejections == ["q-1"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_stream_events_yields_sessionless_events() -> None:
+    """stream_events() should yield events that lack a sessionID instead of
+    dropping them."""
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="item/agentMessage/delta",
+                data='{"delta":"partial content"}',
+            ),
+            SSEEvent(
+                event="session.idle",
+                data='{"sessionID":"session-1"}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+    collected: list[str] = []
+    async for chunk in harness.stream_events(workspace, "session-1", "turn-1"):
+        collected.append(chunk)
+    assert len(collected) == 1
+    assert "item/agentMessage/delta" in collected[0]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_wait_for_turn_recovers_sessionless_roleless_text() -> (
+    None
+):
+    """wait_for_turn() should recover final text from a sessionless,
+    roleless message.completed when the text differs from the prompt."""
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="message.completed",
+                data='{"info":{"id":"m1"},'
+                '"parts":[{"type":"text","text":"Agent reply"}]}',
+            ),
+            SSEEvent(
+                event="session.idle",
+                data='{"sessionID":"session-1"}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="Do something",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+    assert result.status == "ok"
+    assert result.assistant_text == "Agent reply"
