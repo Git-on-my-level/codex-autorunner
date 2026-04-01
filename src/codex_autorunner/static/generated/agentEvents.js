@@ -81,6 +81,9 @@ function extractOpenCodePartType(params) {
         return partType.trim().toLowerCase();
     return "";
 }
+function isOpenCodeMessagePartMethod(method) {
+    return method === "message.part.updated" || method === "message.part.delta";
+}
 function extractOpenCodeRole(params) {
     const info = extractOpenCodeInfo(params);
     const role = info?.role;
@@ -278,7 +281,7 @@ export function extractOutputDelta(payload) {
         if (delta)
             return delta;
     }
-    if (method === "message.part.updated" || method === "message.part.delta") {
+    if (isOpenCodeMessagePartMethod(method)) {
         return extractOpenCodeDeltaText(params) || extractOpenCodePartText(params);
     }
     return "";
@@ -441,7 +444,7 @@ export function parseAppServerEvent(payload) {
         };
         return { event };
     }
-    if (method === "message.part.updated" || method === "message.part.delta") {
+    if (isOpenCodeMessagePartMethod(method)) {
         const part = extractOpenCodePart(params);
         const partId = extractOpenCodePartId(params);
         let partType = extractOpenCodePartType(params);

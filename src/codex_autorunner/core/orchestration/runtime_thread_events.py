@@ -20,6 +20,27 @@ from ..ports.run_event import (
 )
 from ..sse import SSEEvent, parse_sse_lines
 from ..time_utils import now_iso
+from .opencode_event_fields import (
+    coerce_dict as _event_coerce_dict,
+)
+from .opencode_event_fields import (
+    extract_message_id as _event_extract_message_id,
+)
+from .opencode_event_fields import (
+    extract_message_part as _event_extract_message_part,
+)
+from .opencode_event_fields import (
+    extract_message_role as _event_extract_message_role,
+)
+from .opencode_event_fields import (
+    extract_output_delta as _event_extract_output_delta,
+)
+from .opencode_event_fields import (
+    extract_part_id as _event_extract_part_id,
+)
+from .opencode_event_fields import (
+    extract_part_message_id as _event_extract_part_message_id,
+)
 from .runtime_threads import RuntimeThreadOutcome
 
 _APPROVAL_METHODS = {
@@ -843,40 +864,15 @@ def _load_json_object(raw: str) -> dict[str, Any]:
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
+    return _event_coerce_dict(value)
 
 
 def _extract_message_part(params: dict[str, Any]) -> dict[str, Any]:
-    properties = _coerce_dict(params.get("properties"))
-    part = properties.get("part")
-    if isinstance(part, dict):
-        return part
-    part = params.get("part")
-    if isinstance(part, dict):
-        return part
-    return {}
+    return _event_extract_message_part(params)
 
 
 def _extract_output_delta(params: dict[str, Any]) -> str:
-    for key in ("content", "delta", "text", "output"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-        if isinstance(value, dict):
-            nested_text = value.get("text")
-            if isinstance(nested_text, str) and nested_text:
-                return nested_text
-    properties = _coerce_dict(params.get("properties"))
-    delta = _coerce_dict(properties.get("delta"))
-    delta_text = delta.get("text")
-    if isinstance(delta_text, str) and delta_text:
-        return delta_text
-    part = _coerce_dict(properties.get("part"))
-    if part.get("type") == "text":
-        part_text = part.get("text")
-        if isinstance(part_text, str) and part_text:
-            return part_text
-    return ""
+    return _event_extract_output_delta(params, include_part_text=True)
 
 
 def _extract_session_update(params: dict[str, Any]) -> dict[str, Any]:
@@ -912,20 +908,7 @@ def _extract_acp_final_message(params: dict[str, Any]) -> str:
 
 
 def _extract_output_delta_only(params: dict[str, Any]) -> str:
-    for key in ("content", "delta", "text", "output"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-        if isinstance(value, dict):
-            nested_text = value.get("text")
-            if isinstance(nested_text, str) and nested_text:
-                return nested_text
-    properties = _coerce_dict(params.get("properties"))
-    delta = _coerce_dict(properties.get("delta"))
-    delta_text = delta.get("text")
-    if isinstance(delta_text, str) and delta_text:
-        return delta_text
-    return ""
+    return _event_extract_output_delta(params, include_part_text=False)
 
 
 def _extract_opencode_reasoning_text(
@@ -1272,52 +1255,21 @@ def _extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_message_id(params: dict[str, Any]) -> Optional[str]:
-    info = _extract_message_info(params)
-    for key in ("id", "messageID", "messageId", "message_id"):
-        value = info.get(key)
-        if isinstance(value, str) and value:
-            return value
-    for key in ("messageID", "messageId", "message_id"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+    return _event_extract_message_id(params)
 
 
 def _extract_message_role(params: dict[str, Any]) -> Optional[str]:
-    info = _extract_message_info(params)
-    role = info.get("role")
-    if isinstance(role, str) and role:
-        return role
-    role = params.get("role")
-    if isinstance(role, str) and role:
-        return role
-    return None
+    return _event_extract_message_role(params)
 
 
 def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
-    properties = _coerce_dict(params.get("properties"))
-    part = _coerce_dict(properties.get("part"))
-    for source in (part, properties, params):
-        for key in ("messageID", "messageId", "message_id"):
-            value = source.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return None
+    return _event_extract_part_message_id(params)
 
 
 def _extract_part_id(
     params: dict[str, Any], *, part: Optional[dict[str, Any]] = None
 ) -> Optional[str]:
-    properties = _coerce_dict(params.get("properties"))
-    if part is None:
-        part = _coerce_dict(properties.get("part"))
-    for source in (part, properties, params):
-        for key in ("id", "partID", "partId", "part_id"):
-            value = source.get(key)
-            if isinstance(value, str) and value:
-                return value
-    return None
+    return _event_extract_part_id(params, part=part)
 
 
 __all__ = [

@@ -161,6 +161,10 @@ function extractOpenCodePartType(params: PayloadParams | null | undefined): stri
   return "";
 }
 
+function isOpenCodeMessagePartMethod(method: string): boolean {
+  return method === "message.part.updated" || method === "message.part.delta";
+}
+
 function extractOpenCodeRole(params: PayloadParams | null | undefined): string {
   const info = extractOpenCodeInfo(params);
   const role = info?.role;
@@ -345,7 +349,7 @@ export function extractOutputDelta(payload: unknown): string {
     const delta = extractOpenCodeDeltaText(params);
     if (delta) return delta;
   }
-  if (method === "message.part.updated" || method === "message.part.delta") {
+  if (isOpenCodeMessagePartMethod(method)) {
     return extractOpenCodeDeltaText(params) || extractOpenCodePartText(params);
   }
   return "";
@@ -517,7 +521,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     return { event };
   }
 
-  if (method === "message.part.updated" || method === "message.part.delta") {
+  if (isOpenCodeMessagePartMethod(method)) {
     const part = extractOpenCodePart(params);
     const partId = extractOpenCodePartId(params);
     let partType = extractOpenCodePartType(params);

@@ -19,6 +19,18 @@ from ...core.orchestration import (
     MessageRequest,
     build_harness_backed_orchestration_service,
 )
+from ...core.orchestration.opencode_event_fields import (
+    extract_message_id as _event_extract_message_id,
+)
+from ...core.orchestration.opencode_event_fields import (
+    extract_message_role as _event_extract_message_role,
+)
+from ...core.orchestration.opencode_event_fields import (
+    extract_output_delta as _event_extract_output_delta,
+)
+from ...core.orchestration.opencode_event_fields import (
+    extract_part_type as _event_extract_part_type,
+)
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     merge_runtime_thread_raw_events,
@@ -85,10 +97,6 @@ def _normalize_optional_text(value: Any) -> Optional[str]:
     return text or None
 
 
-def _coerce_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
 def _merge_assistant_stream(current: str, incoming: str) -> str:
     if not incoming:
         return current
@@ -105,42 +113,16 @@ def _merge_assistant_stream(current: str, incoming: str) -> str:
     return f"{current}{incoming}"
 
 
-def _runtime_message_properties(params: dict[str, Any]) -> dict[str, Any]:
-    return _coerce_dict(params.get("properties"))
-
-
-def _runtime_message_part(params: dict[str, Any]) -> dict[str, Any]:
-    properties = _runtime_message_properties(params)
-    part = properties.get("part")
-    if isinstance(part, dict):
-        return part
-    part = params.get("part")
-    if isinstance(part, dict):
-        return part
-    return {}
-
-
 def _runtime_message_id(params: dict[str, Any]) -> Optional[str]:
-    properties = _runtime_message_properties(params)
-    info = _coerce_dict(properties.get("info"))
-    part = _runtime_message_part(params)
-    for source, keys in (
-        (info, ("id", "messageID", "messageId", "message_id")),
-        (part, ("messageID", "messageId", "message_id")),
-        (properties, ("messageID", "messageId", "message_id")),
-        (params, ("messageID", "messageId", "message_id")),
-    ):
-        for key in keys:
-            value = source.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return None
+    value = _event_extract_message_id(params)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _runtime_message_role(params: dict[str, Any]) -> Optional[str]:
-    properties = _runtime_message_properties(params)
-    info = _coerce_dict(properties.get("info"))
-    role = info.get("role") or params.get("role")
+    role = _event_extract_message_role(params)
     if not isinstance(role, str):
         return None
     normalized = role.strip().lower()
@@ -148,52 +130,14 @@ def _runtime_message_role(params: dict[str, Any]) -> Optional[str]:
 
 
 def _runtime_message_delta(params: dict[str, Any]) -> Optional[str]:
-    for key in ("content", "delta", "text", "output"):
-        value = params.get(key)
-        if isinstance(value, str):
-            if value != "":
-                return value
-        if isinstance(value, dict):
-            nested = value.get("text")
-            if isinstance(nested, str):
-                if nested != "":
-                    return nested
-    properties = _runtime_message_properties(params)
-    delta_raw = properties.get("delta")
-    if isinstance(delta_raw, str):
-        if delta_raw != "":
-            return delta_raw
-    delta = _coerce_dict(delta_raw)
-    delta_text = delta.get("text")
-    if isinstance(delta_text, str):
-        if delta_text != "":
-            return delta_text
-    return None
-
-
-def _runtime_part_id(params: dict[str, Any]) -> Optional[str]:
-    properties = _runtime_message_properties(params)
-    part = _runtime_message_part(params)
-    for source in (part, properties, params):
-        for key in ("id", "partID", "partId", "part_id"):
-            value = source.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return None
+    delta = _event_extract_output_delta(params, include_part_text=False)
+    return delta or None
 
 
 def _runtime_part_type(
     params: dict[str, Any], part_types: Optional[dict[str, str]] = None
 ) -> str:
-    part = _runtime_message_part(params)
-    part_type = str(part.get("type") or "").strip().lower()
-    part_id = _runtime_part_id(params)
-    if part_types is not None and part_id:
-        if part_type:
-            part_types[part_id] = part_type
-        else:
-            part_type = part_types.get(part_id, "")
-    return part_type
+    return _event_extract_part_type(params, part_types=part_types)
 
 
 async def _iter_sse_lines(raw_event: str) -> AsyncIterator[str]:
