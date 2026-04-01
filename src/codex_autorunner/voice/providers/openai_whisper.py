@@ -150,7 +150,7 @@ class OpenAIWhisperProvider(SpeechProvider):
         request_fn: Optional[RequestFn] = None,
     ) -> None:
         self._settings = settings
-        self._env = env or os.environ
+        self._env = env if env is not None else os.environ
         self._warn_on_remote_api = warn_on_remote_api
         self._logger = logger or logging.getLogger(__name__)
         self._request_fn: RequestFn = request_fn or self._default_request

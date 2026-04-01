@@ -228,6 +228,8 @@ from ...tickets.files import (
 from ...tickets.frontmatter import parse_markdown_frontmatter
 from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
+from ...voice.provider_catalog import normalize_voice_provider
+from ...voice.service import VoiceTransientError
 from ..chat.approval_modes import (
     APPROVAL_MODE_USAGE,
     normalize_approval_mode,
@@ -1715,6 +1717,34 @@ class DiscordBotService:
             kind=kind if isinstance(kind, str) else None,
         )
 
+    def _transcription_filename_for_attachment(
+        self,
+        attachment: Any,
+        *,
+        saved_name: str,
+        mime_type: Optional[str],
+    ) -> str:
+        raw_name = getattr(attachment, "file_name", None)
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            return saved_name
+
+        candidate = Path(raw_name).name.strip()
+        if not candidate:
+            return saved_name
+        if not self._is_audio_attachment(attachment, mime_type):
+            return candidate
+
+        # Discord voice notes can arrive with generic names like ".bin". Reuse the
+        # normalized inbox filename so transcription providers get a recognizable
+        # audio extension/content type.
+        if audio_content_type_for_input(
+            mime_type=None,
+            file_name=candidate,
+            source_url=None,
+        ):
+            return candidate
+        return saved_name
+
     async def _transcribe_voice_attachment(
         self,
         *,
@@ -1765,6 +1795,16 @@ class DiscordBotService:
                 file_id=getattr(attachment, "file_id", None),
                 reason=exc.reason,
             )
+            if isinstance(exc, VoiceTransientError):
+                detail = getattr(exc, "detail", None)
+                if isinstance(detail, str) and detail.strip():
+                    return None, detail.strip()
+            user_message = getattr(exc, "user_message", None)
+            if isinstance(user_message, str) and user_message.strip():
+                return None, user_message.strip()
+            detail = getattr(exc, "detail", None)
+            if isinstance(detail, str) and detail.strip():
+                return None, detail.strip()
             return None, f"Voice transcript unavailable ({exc.reason})."
         except Exception as exc:
             log_event(
@@ -1831,12 +1871,14 @@ class DiscordBotService:
                 path = inbox / file_name
                 path.write_bytes(data)
                 original_name = getattr(attachment, "file_name", None) or path.name
-                transcription_name = str(original_name)
-                if not Path(transcription_name).suffix:
-                    transcription_name = path.name
                 mime_type = getattr(attachment, "mime_type", None)
                 is_audio = self._is_audio_attachment(
                     attachment, mime_type if isinstance(mime_type, str) else None
+                )
+                transcription_name = self._transcription_filename_for_attachment(
+                    attachment,
+                    saved_name=path.name,
+                    mime_type=mime_type if isinstance(mime_type, str) else None,
                 )
                 is_image = is_image_mime_or_path(
                     mime_type if isinstance(mime_type, str) else None,
@@ -1913,14 +1955,19 @@ class DiscordBotService:
                 details.append(f"  Transcript: {item.transcript_warning}")
 
         if any(item.transcript_text for item in saved):
-            _voice_service, voice_config = self._voice_service_for_workspace(
+            voice_service, voice_config = self._voice_service_for_workspace(
                 workspace_root
             )
-            provider_name = (
-                voice_config.provider.strip()
-                if voice_config and isinstance(voice_config.provider, str)
-                else ""
-            )
+            provider_name = ""
+            if voice_service is not None:
+                with contextlib.suppress(Exception):
+                    provider_name = voice_service.effective_provider_name()
+            if (
+                not provider_name
+                and voice_config
+                and isinstance(voice_config.provider, str)
+            ):
+                provider_name = normalize_voice_provider(voice_config.provider)
             if provider_name == "openai_whisper":
                 details.append("")
                 details.append(
@@ -1995,21 +2042,24 @@ class DiscordBotService:
                     "application/pdf": ".pdf",
                     "text/plain": ".txt",
                 }.get(mime_key, "")
-        if not suffix:
-            source_url = getattr(attachment, "source_url", None)
-            is_audio = is_audio_mime_or_path(
+        source_url = getattr(attachment, "source_url", None)
+        is_audio = is_audio_mime_or_path(
+            mime_type=getattr(attachment, "mime_type", None),
+            file_name=getattr(attachment, "file_name", None),
+            source_url=source_url if isinstance(source_url, str) else None,
+            kind=getattr(attachment, "kind", None),
+        )
+        if is_audio and not audio_content_type_for_input(
+            mime_type=None,
+            file_name=f"attachment{suffix}" if suffix else None,
+            source_url=None,
+        ):
+            suffix = audio_extension_for_input(
                 mime_type=getattr(attachment, "mime_type", None),
                 file_name=getattr(attachment, "file_name", None),
                 source_url=source_url if isinstance(source_url, str) else None,
-                kind=getattr(attachment, "kind", None),
+                default=".ogg",
             )
-            if is_audio:
-                suffix = audio_extension_for_input(
-                    mime_type=getattr(attachment, "mime_type", None),
-                    file_name=getattr(attachment, "file_name", None),
-                    source_url=source_url if isinstance(source_url, str) else None,
-                    default=".ogg",
-                )
         return f"{stem[:64]}-{uuid.uuid4().hex[:8]}{suffix}"
 
     async def _find_paused_flow_run(

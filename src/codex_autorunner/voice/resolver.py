@@ -37,7 +37,7 @@ def resolve_speech_provider(
         return build_speech_provider(
             provider_configs.get(provider_name, {}),
             warn_on_remote_api=voice_config.warn_on_remote_api,
-            env=env or os.environ,
+            env=env if env is not None else os.environ,
             logger=logger,
         )
     if provider_name == LocalWhisperProvider.name:
