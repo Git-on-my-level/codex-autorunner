@@ -31,6 +31,7 @@ class PmaActionType(str, Enum):
     FILE_BULK_DELETED = "file_bulk_deleted"
     DOC_UPDATED = "doc_updated"
     DISPATCH_PROCESSED = "dispatch_processed"
+    INBOX_AUTO_DISMISSED = "inbox_auto_dismissed"
     AGENT_ACTION = "agent_action"
     SESSION_NEW = "session_new"
     SESSION_RESET = "session_reset"
