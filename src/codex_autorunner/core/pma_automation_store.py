@@ -943,6 +943,26 @@ class PmaAutomationStore:
                 self._save_structured_unlocked(state, retained, timers, wakeups)
             return removed
 
+    def purge_subscriptions(
+        self,
+        *,
+        state_filter: Optional[str] = None,
+        dry_run: bool = False,
+    ) -> list[dict[str, Any]]:
+        target_state = _normalize_text(state_filter)
+        with file_lock(self._lock_path()):
+            state, subscriptions, timers, wakeups = self._load_structured_unlocked()
+            removed: list[PmaLifecycleSubscription] = []
+            retained: list[PmaLifecycleSubscription] = []
+            for entry in subscriptions:
+                if target_state is not None and entry.state != target_state:
+                    retained.append(entry)
+                    continue
+                removed.append(entry)
+            if removed and not dry_run:
+                self._save_structured_unlocked(state, retained, timers, wakeups)
+            return [entry.to_dict() for entry in removed]
+
     def list_subscriptions(
         self,
         *,
