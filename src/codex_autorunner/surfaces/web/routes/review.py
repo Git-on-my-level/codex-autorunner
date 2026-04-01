@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
-from ..review import ReviewBusyError, ReviewError, ReviewService
+from ....flows.review.service import ReviewBusyError, ReviewError, ReviewService
 from ..schemas import (
     ReviewControlResponse,
     ReviewStartRequest,

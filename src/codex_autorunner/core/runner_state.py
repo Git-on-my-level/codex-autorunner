@@ -103,7 +103,10 @@ class RunnerStateManager:
             if pid:
                 host = f" on {assessment.host}" if assessment.host else ""
                 return f"Autorunner is running (pid={pid}{host}); try again later."
-            return "Autorunner lock present; clear or resume before continuing."
+            return (
+                "Autorunner lock present; clear it before continuing, or use "
+                "'car flow ticket_flow/start' to resume existing flows."
+            )
 
         state = load_state(self.state_path)
         if state.status == "running":
@@ -112,7 +115,10 @@ class RunnerStateManager:
                 expected_cmd_substrings=DEFAULT_RUNNER_CMD_HINTS,
             ):
                 return f"Autorunner is currently running (pid={state.runner_pid}); try again later."
-            return "Autorunner state is stale; use 'car resume' to continue."
+            return (
+                "Autorunner state is stale; use 'car flow ticket_flow/start' to "
+                "resume existing flows."
+            )
         return None
 
     def request_stop(self) -> None:
