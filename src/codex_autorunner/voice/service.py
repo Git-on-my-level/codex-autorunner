@@ -86,10 +86,14 @@ class VoiceService:
 
     def config_payload(self) -> dict:
         """Expose safe config fields to the UI."""
+        configured_provider = self._configured_provider_name()
+        try:
+            effective_provider = self.effective_provider_name()
+        except Exception:
+            effective_provider = configured_provider
+
         # Providers that do not use remote APIs may not require any API key.
-        provider_cfg = self.config.providers.get(
-            self.config.provider or "openai_whisper", {}
-        )
+        provider_cfg = self.config.providers.get(effective_provider, {})
         api_key_env = provider_cfg.get("api_key_env")
         api_key_env_name = api_key_env.strip() if isinstance(api_key_env, str) else ""
         requires_api_key = bool(api_key_env_name)
@@ -100,6 +104,7 @@ class VoiceService:
         return {
             "enabled": self.config.enabled,
             "provider": self.config.provider,
+            "effective_provider": effective_provider,
             "latency_mode": self.config.latency_mode,
             "chunk_ms": self.config.chunk_ms,
             "sample_rate": self.config.sample_rate,
@@ -128,7 +133,10 @@ class VoiceService:
         if not audio_bytes:
             raise VoiceServiceError("empty_audio", "No audio received")
 
-        provider = self._resolve_provider()
+        try:
+            provider = self._resolve_provider()
+        except ValueError as exc:
+            raise self._provider_resolution_error(exc) from exc
         buffer = _TranscriptionBuffer()
         capture = PushToTalkCapture(
             provider=provider,
@@ -192,9 +200,7 @@ class VoiceService:
                     user_message="Voice transcription rate limited. Retrying...",
                 )
             if buffer.error_reason == "local_runtime_dependency_missing":
-                provider = normalize_voice_provider(
-                    self.config.provider or "local_whisper"
-                )
+                provider = self.effective_provider_name()
                 raise VoicePermanentError(
                     "local_runtime_dependency_missing",
                     "Local voice runtime dependencies are unavailable. Ensure ffmpeg "
@@ -205,9 +211,7 @@ class VoiceService:
                     ),
                 )
             if buffer.error_reason == "local_provider_unavailable":
-                provider = normalize_voice_provider(
-                    self.config.provider or "local_whisper"
-                )
+                provider = self.effective_provider_name()
                 provider_spec = local_voice_provider_spec(provider)
                 extra = provider_spec[2] if provider_spec is not None else "voice-local"
                 raise VoicePermanentError(
@@ -268,6 +272,52 @@ class VoiceService:
                 except TypeError:
                     self._provider = self._provider_resolver(self.config)
         return self._provider
+
+    def _configured_provider_name(self) -> str:
+        provider_name = normalize_voice_provider(self.config.provider or "")
+        return provider_name or "openai_whisper"
+
+    def effective_provider_name(self) -> str:
+        configured_provider = self._configured_provider_name()
+        provider = self._provider
+        if provider is None:
+            try:
+                provider = self._resolve_provider()
+            except ValueError:
+                return configured_provider
+        provider_name = getattr(provider, "name", None)
+        if isinstance(provider_name, str):
+            normalized_provider = normalize_voice_provider(provider_name)
+            if normalized_provider == "openai_whisper":
+                return normalized_provider
+            if local_voice_provider_spec(normalized_provider) is not None:
+                return normalized_provider
+        return configured_provider
+
+    def _provider_resolution_error(self, exc: ValueError) -> VoiceServiceError:
+        message = str(exc).strip() or "Voice provider is unavailable"
+        provider_name = self._configured_provider_name()
+        provider_cfg = self.config.providers.get(provider_name, {})
+        api_key_env_name = "OPENAI_API_KEY"
+        if isinstance(provider_cfg, Mapping):
+            raw_api_key_env = provider_cfg.get("api_key_env")
+            if isinstance(raw_api_key_env, str) and raw_api_key_env.strip():
+                api_key_env_name = raw_api_key_env.strip()
+
+        if "api key env" in message.lower():
+            return VoicePermanentError(
+                "missing_api_key",
+                message,
+                user_message=(
+                    "Voice transcription failed: missing API key. "
+                    f"Set {api_key_env_name} or install a local whisper provider."
+                ),
+            )
+        return VoicePermanentError(
+            "provider_unavailable",
+            message,
+            user_message=message,
+        )
 
     def _build_session_metadata(
         self,

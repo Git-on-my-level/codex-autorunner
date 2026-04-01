@@ -108,6 +108,13 @@ def build_voice_routes() -> APIRouter:
                 status = 413
             elif exc.reason == "rate_limited":
                 status = 429
+            elif exc.reason in (
+                "missing_api_key",
+                "provider_unavailable",
+                "local_provider_unavailable",
+                "local_runtime_dependency_missing",
+            ):
+                status = 503
             else:
                 status = (
                     400
