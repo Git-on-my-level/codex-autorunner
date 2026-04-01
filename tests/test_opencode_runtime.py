@@ -74,6 +74,64 @@ async def test_collect_output_uses_delta() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_supports_message_part_delta_with_direct_ids() -> None:
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","properties":{"info":{"id":"assistant-1","role":"assistant"}}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"Hello "},'
+            '"part":{"id":"p1","messageID":"assistant-1","type":"text","text":"Hello "}}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p1","messageID":"assistant-1",'
+            '"delta":{"text":"world"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Hello world"
+    assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_uses_part_type_memory_for_reasoning_delta_events() -> (
+    None
+):
+    seen_reasoning: list[str] = []
+
+    async def _part_handler(part_type: str, part: dict[str, str], delta_text):
+        if part_type == "reasoning" and isinstance(delta_text, str):
+            seen_reasoning.append(delta_text)
+
+    events = [
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"thinking"},"part":{"id":"r1","type":"reasoning"}}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"r1","delta":{"text":" more"}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+        part_handler=_part_handler,
+    )
+    assert output.text == ""
+    assert output.error is None
+    assert seen_reasoning == ["thinking", " more"]
+
+
+@pytest.mark.anyio
 async def test_collect_output_full_text_growth() -> None:
     events = [
         SSEEvent(

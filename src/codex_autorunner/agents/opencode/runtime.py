@@ -32,6 +32,18 @@ from .constants import (
     OPENCODE_USAGE_TOTAL_KEYS,
 )
 from .event_decoder import parse_message_response as decode_message_response
+from .event_fields import (
+    extract_message_id as extract_event_message_id,
+)
+from .event_fields import (
+    extract_message_role as extract_event_message_role,
+)
+from .event_fields import (
+    extract_part_id as extract_event_part_id,
+)
+from .event_fields import (
+    extract_part_message_id as extract_event_part_message_id,
+)
 from .events import SSEEvent
 from .usage_decoder import extract_usage, extract_usage_field
 
@@ -760,39 +772,16 @@ async def collect_opencode_output_from_events(
         _extract_model_ids(model_payload) if isinstance(model_payload, dict) else None
     )
 
-    def _message_id_from_info(info: Any) -> Optional[str]:
-        if not isinstance(info, dict):
-            return None
-        for key in ("id", "messageID", "messageId", "message_id"):
-            value = info.get(key)
-            if isinstance(value, str) and value:
-                return value
-        return None
-
-    def _message_id_from_part(part: Any) -> Optional[str]:
-        if not isinstance(part, dict):
-            return None
-        for key in ("messageID", "messageId", "message_id"):
-            value = part.get(key)
-            if isinstance(value, str) and value:
-                return value
-        return None
-
     def _register_message_role(payload: Any) -> tuple[Optional[str], Optional[str]]:
         nonlocal message_roles_seen
         if not isinstance(payload, dict):
             return None, None
-        info = payload.get("info")
-        if not isinstance(info, dict):
-            properties = payload.get("properties")
-            if isinstance(properties, dict):
-                info = properties.get("info")
-        role = info.get("role") if isinstance(info, dict) else None
-        msg_id = _message_id_from_info(info)
+        role = extract_event_message_role(payload)
+        msg_id = extract_event_message_id(payload)
         if isinstance(role, str) and msg_id:
             message_roles[msg_id] = role
             message_roles_seen = True
-        return msg_id, role if isinstance(role, str) else None
+        return msg_id, role
 
     def _flush_pending_no_id_as_assistant() -> None:
         nonlocal no_id_role
@@ -1450,7 +1439,7 @@ async def collect_opencode_output_from_events(
                 if is_primary_session:
                     msg_id, role = _register_message_role(payload)
                     _handle_role_update(msg_id, role)
-            if event.event == "message.part.updated":
+            if event.event in ("message.part.updated", "message.part.delta"):
                 properties = (
                     payload.get("properties") if isinstance(payload, dict) else None
                 )
@@ -1467,23 +1456,34 @@ async def collect_opencode_output_from_events(
                     part_with_session["sessionID"] = event_session_id
                 part_type = part_dict.get("type") if part_dict else None
                 part_ignored = bool(part_dict.get("ignored")) if part_dict else False
-                part_message_id = _message_id_from_part(part_dict)
-                part_id = None
-                if part_dict:
-                    part_id = part_dict.get("id") or part_dict.get("partId")
-                    if (
-                        isinstance(part_id, str)
-                        and part_id
-                        and isinstance(part_type, str)
-                    ):
-                        part_types[part_id] = part_type
-                    elif (
-                        isinstance(part_id, str)
-                        and part_id
-                        and not isinstance(part_type, str)
-                        and part_id in part_types
-                    ):
-                        part_type = part_types[part_id]
+                part_message_id = extract_event_part_message_id(payload)
+                part_id = extract_event_part_id(payload)
+                if (
+                    isinstance(part_id, str)
+                    and part_id
+                    and isinstance(part_type, str)
+                    and part_type
+                ):
+                    part_types[part_id] = part_type
+                elif (
+                    isinstance(part_id, str)
+                    and part_id
+                    and not isinstance(part_type, str)
+                    and part_id in part_types
+                ):
+                    part_type = part_types[part_id]
+                if part_with_session is None and (
+                    isinstance(part_id, str)
+                    or isinstance(part_message_id, str)
+                    or isinstance(part_type, str)
+                ):
+                    part_with_session = {"sessionID": event_session_id}
+                    if isinstance(part_id, str) and part_id:
+                        part_with_session["id"] = part_id
+                    if isinstance(part_message_id, str) and part_message_id:
+                        part_with_session["messageID"] = part_message_id
+                    if isinstance(part_type, str) and part_type:
+                        part_with_session["type"] = part_type
                 if isinstance(delta, dict):
                     delta_text = delta.get("text")
                 elif isinstance(delta, str):
@@ -1492,9 +1492,9 @@ async def collect_opencode_output_from_events(
                     delta_text = None
                 if isinstance(delta_text, str) and delta_text:
                     if part_type == "reasoning":
-                        if part_handler and part_dict:
+                        if part_handler and part_with_session:
                             await part_handler(
-                                "reasoning", part_with_session or part_dict, delta_text
+                                "reasoning", part_with_session, delta_text
                             )
                     elif part_type in (None, "text") and not part_ignored:
                         if not is_primary_session:
@@ -1512,14 +1512,10 @@ async def collect_opencode_output_from_events(
                                 part_lengths[part_id] = len(text)
                             elif isinstance(text, str):
                                 last_full_text = text
-                        if part_handler and part_dict:
-                            await part_handler(
-                                "text", part_with_session or part_dict, delta_text
-                            )
-                    elif part_handler and part_dict and part_type:
-                        await part_handler(
-                            part_type, part_with_session or part_dict, delta_text
-                        )
+                        if part_handler and part_with_session:
+                            await part_handler("text", part_with_session, delta_text)
+                    elif part_handler and part_with_session and part_type:
+                        await part_handler(part_type, part_with_session, delta_text)
                 elif (
                     isinstance(part_dict, dict)
                     and part_type in (None, "text")
@@ -1545,8 +1541,8 @@ async def collect_opencode_output_from_events(
                             elif text != last_full_text:
                                 _append_text_for_message(part_message_id, text)
                             last_full_text = text
-                elif part_handler and part_dict and part_type:
-                    await part_handler(part_type, part_with_session or part_dict, None)
+                elif part_handler and part_with_session and part_type:
+                    await part_handler(part_type, part_with_session, None)
                 if part_type != "usage":
                     await _emit_usage_update(
                         payload, is_primary_session=is_primary_session

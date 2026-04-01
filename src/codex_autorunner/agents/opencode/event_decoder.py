@@ -4,6 +4,12 @@ import json
 from typing import Any, Optional
 
 from ...core.sse import SSEEvent
+from .event_fields import (
+    extract_message_id as extract_event_message_id,
+)
+from .event_fields import (
+    extract_message_role as extract_event_message_role,
+)
 from .protocol_types import (
     MessageEvent,
     PermissionEvent,
@@ -56,33 +62,11 @@ def _decode_message_event(event: SSEEvent) -> Optional[MessageEvent]:
 
 
 def _extract_message_id(payload: dict[str, Any]) -> Optional[str]:
-    info = payload.get("info")
-    if isinstance(info, dict):
-        for key in ("id", "messageID", "messageId", "message_id"):
-            value = info.get(key)
-            if isinstance(value, str) and value:
-                return value
-
-    for key in ("messageID", "messageId", "message_id"):
-        value = payload.get(key)
-        if isinstance(value, str) and value:
-            return value
-
-    return None
+    return extract_event_message_id(payload)
 
 
 def _extract_role(payload: dict[str, Any]) -> Optional[str]:
-    info = payload.get("info")
-    if isinstance(info, dict):
-        role = info.get("role")
-        if isinstance(role, str):
-            return role
-
-    role = payload.get("role")
-    if isinstance(role, str):
-        return role
-
-    return None
+    return extract_event_message_role(payload)
 
 
 def _extract_delta_content(payload: dict[str, Any]) -> Optional[str]:

@@ -74,6 +74,46 @@ test("buffers OpenCode assistant text parts until role resolution", () => {
   assert.equal(continued.mergeStrategy, "append");
 });
 
+test("parses OpenCode message.part.delta events with direct ids", () => {
+  resetOpenCodeEventState();
+  parseAppServerEvent({
+    id: "role-1",
+    received_at: 1100,
+    message: {
+      method: "message.updated",
+      params: {
+        properties: {
+          info: {
+            id: "assistant-1",
+            role: "assistant",
+          },
+        },
+      },
+    },
+  });
+
+  const parsed = parseAppServerEvent({
+    id: "part-delta-1",
+    received_at: 1101,
+    message: {
+      method: "message.part.delta",
+      params: {
+        properties: {
+          partID: "part-text-1",
+          messageID: "assistant-1",
+          delta: " world",
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "output");
+  assert.equal(parsed.event.itemId, "assistant-1");
+  assert.equal(parsed.event.summary, " world");
+  assert.equal(parsed.mergeStrategy, "append");
+});
+
 test("ignores OpenCode user text parts after role resolution", () => {
   resetOpenCodeEventState();
   parseAppServerEvent({
@@ -164,6 +204,84 @@ test("parses OpenCode reasoning and tool parts", () => {
   assert.equal(tool.event.summary, "bash");
   assert.match(tool.event.detail, /pwd/);
   assert.match(tool.event.detail, /running/);
+});
+
+test("remembers OpenCode part types for delta-only reasoning events", () => {
+  resetOpenCodeEventState();
+  const first = parseAppServerEvent({
+    id: "reasoning-typed",
+    received_at: 1200,
+    message: {
+      method: "message.part.updated",
+      params: {
+        properties: {
+          part: {
+            id: "reason-1",
+            type: "reasoning",
+          },
+          delta: "thinking",
+        },
+      },
+    },
+  });
+  const second = parseAppServerEvent({
+    id: "reasoning-delta",
+    received_at: 1201,
+    message: {
+      method: "message.part.delta",
+      params: {
+        properties: {
+          partID: "reason-1",
+          delta: " more",
+        },
+      },
+    },
+  });
+
+  assert.ok(first);
+  assert.equal(first.event.kind, "thinking");
+  assert.ok(second);
+  assert.equal(second.event.kind, "thinking");
+  assert.equal(second.event.summary, " more");
+  assert.equal(second.mergeStrategy, "append");
+});
+
+test("ignores delta-only tool updates without part payload", () => {
+  resetOpenCodeEventState();
+  const first = parseAppServerEvent({
+    id: "tool-typed",
+    received_at: 1300,
+    message: {
+      method: "message.part.updated",
+      params: {
+        properties: {
+          part: {
+            id: "tool-1",
+            type: "tool",
+            tool: "bash",
+          },
+        },
+      },
+    },
+  });
+
+  const second = parseAppServerEvent({
+    id: "tool-delta-only",
+    received_at: 1301,
+    message: {
+      method: "message.part.delta",
+      params: {
+        properties: {
+          partID: "tool-1",
+          delta: "ignored tool delta",
+        },
+      },
+    },
+  });
+
+  assert.ok(first);
+  assert.equal(first.event.kind, "tool");
+  assert.equal(second, null);
 });
 
 test("replaces cumulative OpenCode text snapshots when delta is absent", () => {
@@ -341,4 +459,3 @@ test("caps raw session.diff file extraction work for large payloads", () => {
   assert.equal(parsed.event.summary, "src/0.ts, src/1.ts, src/2.ts, src/3.ts +46 more");
   assert.equal(parsed.event.detail, "50 file changes");
 });
-

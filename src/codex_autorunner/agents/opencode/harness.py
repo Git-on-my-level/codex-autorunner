@@ -13,6 +13,7 @@ import httpx
 
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
+from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
 from ...core.sse import format_sse, parse_sse_lines
 from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..base import AgentHarness
@@ -24,6 +25,18 @@ from ..types import (
     RuntimeCapability,
     TerminalTurnResult,
     TurnRef,
+)
+from .event_fields import (
+    extract_message_id as _extract_message_id,
+)
+from .event_fields import (
+    extract_message_role as _extract_message_role,
+)
+from .event_fields import (
+    extract_part_message_id as _extract_part_message_id,
+)
+from .event_fields import (
+    extract_part_type as _extract_part_type,
 )
 from .runtime import (
     collect_opencode_output_from_events,
@@ -239,8 +252,7 @@ def _workspace_permission_decision(
 
 def _normalize_message_text(value: Any) -> Optional[str]:
     if isinstance(value, str):
-        text = value.strip()
-        return text or None
+        return value if value != "" else None
     if isinstance(value, list):
         parts: list[str] = []
         for part in value:
@@ -248,8 +260,8 @@ def _normalize_message_text(value: Any) -> Optional[str]:
                 part_text = part.get("text")
                 if isinstance(part_text, str):
                     parts.append(part_text)
-        joined = "".join(parts).strip()
-        return joined or None
+        joined = "".join(parts)
+        return joined if joined != "" else None
     if isinstance(value, dict):
         for key in ("text", "message", "content"):
             nested_text = _normalize_message_text(value.get(key))
@@ -267,6 +279,10 @@ def _extract_delta_text(params: dict[str, Any]) -> Optional[str]:
     properties = params.get("properties")
     if isinstance(properties, dict):
         delta = properties.get("delta")
+        if isinstance(delta, str):
+            text = _normalize_message_text(delta)
+            if text:
+                return text
         if isinstance(delta, dict):
             text = _normalize_message_text(delta)
             if text:
@@ -318,30 +334,6 @@ def _extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _extract_message_id(params: dict[str, Any]) -> Optional[str]:
-    info = _extract_message_info(params)
-    for key in ("id", "messageID", "messageId", "message_id"):
-        value = info.get(key)
-        if isinstance(value, str) and value:
-            return value
-    for key in ("messageID", "messageId", "message_id"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _extract_message_role(params: dict[str, Any]) -> Optional[str]:
-    info = _extract_message_info(params)
-    role = info.get("role")
-    if isinstance(role, str) and role:
-        return role
-    role = params.get("role")
-    if isinstance(role, str) and role:
-        return role
-    return None
-
-
 def _normalize_message_phase(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         return None
@@ -377,18 +369,6 @@ def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
-    properties = params.get("properties")
-    part = properties.get("part") if isinstance(properties, dict) else None
-    if not isinstance(part, dict):
-        return None
-    for key in ("messageID", "messageId", "message_id"):
-        value = part.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
 def _unwrap_harness_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if isinstance(payload.get("message"), dict):
         message = payload["message"]
@@ -413,21 +393,7 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
     pending_by_message: dict[str, str] = {}
     pending_no_id = ""
     message_roles_seen = False
-
-    def _merge_stream(current: str, incoming: str) -> str:
-        if not incoming:
-            return current
-        if not current:
-            return incoming
-        if incoming == current:
-            return current
-        if len(incoming) > len(current) and incoming.startswith(current):
-            return incoming
-        max_overlap = min(len(current), max(len(incoming) - 1, 0))
-        for overlap in range(max_overlap, 0, -1):
-            if current[-overlap:] == incoming[:overlap]:
-                return f"{current}{incoming[overlap:]}"
-        return f"{current}{incoming}"
+    part_types: dict[str, str] = {}
 
     def _append_part_text(message_id: Optional[str], text: str) -> None:
         nonlocal output_text
@@ -436,17 +402,17 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             return
         if message_id is None:
             if not message_roles_seen:
-                output_text = _merge_stream(output_text, text)
+                output_text = merge_assistant_stream_text(output_text, text)
             else:
-                pending_no_id = _merge_stream(pending_no_id, text)
+                pending_no_id = merge_assistant_stream_text(pending_no_id, text)
             return
         role = message_roles.get(message_id)
         if role == "user":
             return
         if role == "assistant":
-            output_text = _merge_stream(output_text, text)
+            output_text = merge_assistant_stream_text(output_text, text)
             return
-        pending_by_message[message_id] = _merge_stream(
+        pending_by_message[message_id] = merge_assistant_stream_text(
             pending_by_message.get(message_id, ""),
             text,
         )
@@ -462,9 +428,9 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
         pending = pending_by_message.pop(message_id, "")
         if role == "assistant":
             if pending:
-                output_text = _merge_stream(output_text, pending)
+                output_text = merge_assistant_stream_text(output_text, pending)
             if pending_no_id:
-                output_text = _merge_stream(output_text, pending_no_id)
+                output_text = merge_assistant_stream_text(output_text, pending_no_id)
                 pending_no_id = ""
             return
         if role == "user":
@@ -475,10 +441,10 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
         if pending_by_message:
             for message_id, pending in list(pending_by_message.items()):
                 if message_roles.get(message_id) == "assistant":
-                    output_text = _merge_stream(output_text, pending)
+                    output_text = merge_assistant_stream_text(output_text, pending)
             pending_by_message.clear()
         if pending_no_id and not message_roles_seen:
-            output_text = _merge_stream(output_text, pending_no_id)
+            output_text = merge_assistant_stream_text(output_text, pending_no_id)
 
     def _record_completed_message(text: str, phase: Optional[str]) -> None:
         nonlocal commentary_message
@@ -503,6 +469,7 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             "message.updated",
             "message.completed",
             "message.part.updated",
+            "message.part.delta",
         }:
             if method in {"message.updated", "message.completed"}:
                 _register_role(
@@ -512,8 +479,11 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             text = _extract_delta_text(params) or _extract_completed_text(params)
             if text:
                 if method == "message.delta":
-                    output_text = _merge_stream(output_text, text)
-                elif method == "message.part.updated":
+                    output_text = merge_assistant_stream_text(output_text, text)
+                elif method in {"message.part.updated", "message.part.delta"}:
+                    part_type = _extract_part_type(params, part_types=part_types)
+                    if part_type not in (None, "", "text"):
+                        continue
                     _append_part_text(_extract_part_message_id(params), text)
                 else:
                     role = _extract_message_role(params)
@@ -524,13 +494,13 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
         if method == "item/agentMessage/delta" or method == "turn/streamDelta":
             text = _extract_delta_text(params)
             if text:
-                output_text = _merge_stream(output_text, text)
+                output_text = merge_assistant_stream_text(output_text, text)
             continue
 
         if "outputdelta" in method_lower:
             text = _extract_delta_text(params)
             if text:
-                output_text = _merge_stream(output_text, text)
+                output_text = merge_assistant_stream_text(output_text, text)
             continue
 
         if method == "item/completed":
@@ -563,6 +533,18 @@ def _saw_terminal_completion(payloads: list[dict[str, Any]]) -> bool:
         method, params = _unwrap_harness_payload(payload)
         if method == "turn/completed":
             return True
+        if method == "session.idle":
+            return True
+        if method == "session.status":
+            properties = params.get("properties")
+            if isinstance(properties, dict):
+                status = properties.get("status") or {}
+            else:
+                status = params.get("status") or {}
+            if isinstance(status, dict):
+                status_type = status.get("type") or status.get("status")
+                if isinstance(status_type, str) and status_type.lower() == "idle":
+                    return True
         if method == "message.completed":
             return _extract_message_phase(params) != "commentary"
         if method == "item/completed":

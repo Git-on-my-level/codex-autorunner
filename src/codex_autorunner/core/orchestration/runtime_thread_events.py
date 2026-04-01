@@ -20,7 +20,29 @@ from ..ports.run_event import (
 )
 from ..sse import SSEEvent, parse_sse_lines
 from ..time_utils import now_iso
+from .opencode_event_fields import (
+    coerce_dict as _event_coerce_dict,
+)
+from .opencode_event_fields import (
+    extract_message_id as _event_extract_message_id,
+)
+from .opencode_event_fields import (
+    extract_message_part as _event_extract_message_part,
+)
+from .opencode_event_fields import (
+    extract_message_role as _event_extract_message_role,
+)
+from .opencode_event_fields import (
+    extract_output_delta as _event_extract_output_delta,
+)
+from .opencode_event_fields import (
+    extract_part_id as _event_extract_part_id,
+)
+from .opencode_event_fields import (
+    extract_part_message_id as _event_extract_part_message_id,
+)
 from .runtime_threads import RuntimeThreadOutcome
+from .stream_text_merge import merge_assistant_stream_text
 
 _APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
@@ -58,22 +80,6 @@ def merge_runtime_thread_raw_events(
     return streamed + result
 
 
-def _merge_assistant_stream(current: str, incoming: str) -> str:
-    if not incoming:
-        return current
-    if not current:
-        return incoming
-    if incoming == current:
-        return current
-    if len(incoming) > len(current) and incoming.startswith(current):
-        return incoming
-    max_overlap = min(len(current), max(len(incoming) - 1, 0))
-    for overlap in range(max_overlap, 0, -1):
-        if current[-overlap:] == incoming[:overlap]:
-            return f"{current}{incoming[overlap:]}"
-    return f"{current}{incoming}"
-
-
 @dataclass
 class RuntimeThreadRunEventState:
     reasoning_buffers: dict[str, str] = field(default_factory=dict)
@@ -86,12 +92,13 @@ class RuntimeThreadRunEventState:
     pending_stream_by_message: dict[str, str] = field(default_factory=dict)
     pending_stream_no_id: str = ""
     message_roles_seen: bool = False
+    opencode_part_types: dict[str, str] = field(default_factory=dict)
     opencode_tool_status: dict[str, str] = field(default_factory=dict)
     opencode_patch_hashes: set[str] = field(default_factory=set)
 
     def note_stream_text(self, text: str) -> None:
         if isinstance(text, str) and text:
-            self.assistant_stream_text = _merge_assistant_stream(
+            self.assistant_stream_text = merge_assistant_stream_text(
                 self.assistant_stream_text,
                 text,
             )
@@ -165,7 +172,7 @@ class RuntimeThreadRunEventState:
                         delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                     )
                 ]
-            self.pending_stream_no_id = _merge_assistant_stream(
+            self.pending_stream_no_id = merge_assistant_stream_text(
                 self.pending_stream_no_id,
                 text,
             )
@@ -182,7 +189,7 @@ class RuntimeThreadRunEventState:
                     delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
                 )
             ]
-        self.pending_stream_by_message[message_id] = _merge_assistant_stream(
+        self.pending_stream_by_message[message_id] = merge_assistant_stream_text(
             self.pending_stream_by_message.get(message_id, ""),
             text,
         )
@@ -547,7 +554,7 @@ def normalize_runtime_thread_message(
     if method == "item/agentMessage/delta":
         return _assistant_stream_events(params, state, timestamp=event_timestamp)
 
-    if method == "message.part.updated":
+    if method in {"message.part.updated", "message.part.delta"}:
         return _normalize_message_part_updated(
             params,
             state,
@@ -737,7 +744,18 @@ def _normalize_message_part_updated(
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     part = _extract_message_part(params)
-    if not part:
+    part_id = _extract_part_id(params, part=part)
+    part_type = str(part.get("type") or "").strip().lower()
+    if part_id and part_type:
+        state.opencode_part_types[part_id] = part_type
+    elif part_id and not part_type:
+        part_type = state.opencode_part_types.get(part_id, "")
+    part_for_processing = dict(part) if part else {}
+    if part_id and "id" not in part_for_processing:
+        part_for_processing["id"] = part_id
+    if part_type and "type" not in part_for_processing:
+        part_for_processing["type"] = part_type
+    if not part and part_type in {"", "text"}:
         content = _extract_output_delta(params)
         if not content:
             return []
@@ -747,10 +765,9 @@ def _normalize_message_part_updated(
             timestamp=timestamp,
         )
 
-    if bool(part.get("ignored")):
+    if part and bool(part.get("ignored")):
         return []
 
-    part_type = str(part.get("type") or "").strip().lower()
     if part_type in {"", "text"}:
         content = _extract_output_delta(params)
         if not content:
@@ -762,7 +779,7 @@ def _normalize_message_part_updated(
         )
 
     if part_type == "reasoning":
-        content = _extract_opencode_reasoning_text(params, part, state)
+        content = _extract_opencode_reasoning_text(params, part_for_processing, state)
         if not content:
             return []
         return [
@@ -774,13 +791,23 @@ def _normalize_message_part_updated(
         ]
 
     if part_type == "tool":
-        return _normalize_opencode_tool_part(part, state, timestamp=timestamp)
+        if not part_for_processing:
+            return []
+        return _normalize_opencode_tool_part(
+            part_for_processing, state, timestamp=timestamp
+        )
 
     if part_type == "patch":
-        return _normalize_opencode_patch_part(part, state, timestamp=timestamp)
+        if not part_for_processing:
+            return []
+        return _normalize_opencode_patch_part(
+            part_for_processing, state, timestamp=timestamp
+        )
 
     if part_type == "usage":
-        usage = _extract_opencode_usage_part(part)
+        if not part_for_processing:
+            return []
+        usage = _extract_opencode_usage_part(part_for_processing)
         if usage is None:
             return []
         state.token_usage = dict(usage)
@@ -822,40 +849,15 @@ def _load_json_object(raw: str) -> dict[str, Any]:
 
 
 def _coerce_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
+    return _event_coerce_dict(value)
 
 
 def _extract_message_part(params: dict[str, Any]) -> dict[str, Any]:
-    properties = _coerce_dict(params.get("properties"))
-    part = properties.get("part")
-    if isinstance(part, dict):
-        return part
-    part = params.get("part")
-    if isinstance(part, dict):
-        return part
-    return {}
+    return _event_extract_message_part(params)
 
 
 def _extract_output_delta(params: dict[str, Any]) -> str:
-    for key in ("content", "delta", "text", "output"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-        if isinstance(value, dict):
-            nested_text = value.get("text")
-            if isinstance(nested_text, str) and nested_text:
-                return nested_text
-    properties = _coerce_dict(params.get("properties"))
-    delta = _coerce_dict(properties.get("delta"))
-    delta_text = delta.get("text")
-    if isinstance(delta_text, str) and delta_text:
-        return delta_text
-    part = _coerce_dict(properties.get("part"))
-    if part.get("type") == "text":
-        part_text = part.get("text")
-        if isinstance(part_text, str) and part_text:
-            return part_text
-    return ""
+    return _event_extract_output_delta(params, include_part_text=True)
 
 
 def _extract_session_update(params: dict[str, Any]) -> dict[str, Any]:
@@ -891,20 +893,7 @@ def _extract_acp_final_message(params: dict[str, Any]) -> str:
 
 
 def _extract_output_delta_only(params: dict[str, Any]) -> str:
-    for key in ("content", "delta", "text", "output"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-        if isinstance(value, dict):
-            nested_text = value.get("text")
-            if isinstance(nested_text, str) and nested_text:
-                return nested_text
-    properties = _coerce_dict(params.get("properties"))
-    delta = _coerce_dict(properties.get("delta"))
-    delta_text = delta.get("text")
-    if isinstance(delta_text, str) and delta_text:
-        return delta_text
-    return ""
+    return _event_extract_output_delta(params, include_part_text=False)
 
 
 def _extract_opencode_reasoning_text(
@@ -913,7 +902,7 @@ def _extract_opencode_reasoning_text(
     state: RuntimeThreadRunEventState,
 ) -> str:
     key = None
-    for candidate in ("id", "partId"):
+    for candidate in ("id", "partID", "partId", "part_id"):
         value = part.get(candidate)
         if isinstance(value, str) and value:
             key = value
@@ -1251,37 +1240,21 @@ def _extract_message_info(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _extract_message_id(params: dict[str, Any]) -> Optional[str]:
-    info = _extract_message_info(params)
-    for key in ("id", "messageID", "messageId", "message_id"):
-        value = info.get(key)
-        if isinstance(value, str) and value:
-            return value
-    for key in ("messageID", "messageId", "message_id"):
-        value = params.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+    return _event_extract_message_id(params)
 
 
 def _extract_message_role(params: dict[str, Any]) -> Optional[str]:
-    info = _extract_message_info(params)
-    role = info.get("role")
-    if isinstance(role, str) and role:
-        return role
-    role = params.get("role")
-    if isinstance(role, str) and role:
-        return role
-    return None
+    return _event_extract_message_role(params)
 
 
 def _extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
-    properties = _coerce_dict(params.get("properties"))
-    part = _coerce_dict(properties.get("part"))
-    for key in ("messageID", "messageId", "message_id"):
-        value = part.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+    return _event_extract_part_message_id(params)
+
+
+def _extract_part_id(
+    params: dict[str, Any], *, part: Optional[dict[str, Any]] = None
+) -> Optional[str]:
+    return _event_extract_part_id(params, part=part)
 
 
 __all__ = [
