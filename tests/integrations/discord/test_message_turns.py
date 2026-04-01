@@ -398,6 +398,14 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
         def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
             _ = kwargs
 
+        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
+            _ = binding
+            return "codex", None
+
+        def _runtime_agent_for_binding(self, binding: Any) -> str:
+            _ = binding
+            return "codex"
+
     async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
         _ = args, kwargs
         return started_execution
@@ -515,6 +523,14 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
         def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
             _ = kwargs
 
+        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
+            _ = binding
+            return "codex", None
+
+        def _runtime_agent_for_binding(self, binding: Any) -> str:
+            _ = binding
+            return "codex"
+
     async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
         _ = args, kwargs
         return started_execution
@@ -629,6 +645,14 @@ async def test_orchestrated_turn_interrupt_send_acknowledges_when_progress_messa
         def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
             _ = kwargs
 
+        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
+            _ = binding
+            return "codex", None
+
+        def _runtime_agent_for_binding(self, binding: Any) -> str:
+            _ = binding
+            return "codex"
+
     async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
         _ = args, kwargs
         return started_execution
@@ -741,6 +765,14 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
 
         def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
             _ = kwargs
+
+        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
+            _ = binding
+            return "codex", None
+
+        def _runtime_agent_for_binding(self, binding: Any) -> str:
+            _ = binding
+            return "codex"
 
     async def _fake_begin(*args: Any, **kwargs: Any) -> Any:
         _ = args, kwargs
@@ -8101,5 +8133,94 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         )
         assert archived_thread is not None
         assert archived_thread.lifecycle_status == "archived"
+    finally:
+        await store.close()
+
+
+def test_discord_harness_factory_accepts_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, Any]] = []
+
+    def _fake_make_harness(ctx: Any) -> SimpleNamespace:
+        agent_id = getattr(ctx, "_requested_agent_id", None)
+        profile = getattr(ctx, "_requested_agent_profile", None)
+        captured.append((agent_id, profile))
+        return SimpleNamespace()
+
+    descriptor = AgentDescriptor(
+        id="hermes",
+        name="Hermes",
+        capabilities=("durable_threads",),
+        make_harness=_fake_make_harness,
+        healthcheck=lambda: True,
+        runtime_kind="hermes",
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "get_registered_agents",
+        lambda context=None: {"hermes": descriptor},
+    )
+
+    store = DiscordStateStore(tmp_path / "state.sqlite3")
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=100),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._discord_thread_orchestration_service = None
+    service._discord_managed_thread_orchestration_service = None
+
+    orch = discord_message_turns_module.build_discord_thread_orchestration_service(
+        service
+    )
+    orch._harness_for_agent("hermes", "m4-pma")
+    assert len(captured) == 1
+    assert captured[0] == ("hermes", "m4-pma")
+
+
+@pytest.mark.anyio
+async def test_resolve_discord_thread_target_stores_agent_profile_in_metadata(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        _orch, thread = discord_message_turns_module.resolve_discord_thread_target(
+            service,
+            channel_id="channel-1",
+            workspace_root=workspace.resolve(),
+            agent="hermes",
+            agent_profile="m4-pma",
+            repo_id=None,
+            resource_kind=None,
+            resource_id=None,
+            mode="repo",
+            pma_enabled=False,
+        )
+        assert thread.agent_id == "hermes"
+        assert thread.agent_profile == "m4-pma"
     finally:
         await store.close()

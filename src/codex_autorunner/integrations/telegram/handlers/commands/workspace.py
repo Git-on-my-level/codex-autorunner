@@ -1174,6 +1174,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             surface_key=key,
                             workspace_root=canonicalize_path(Path(hub_root)),
                             agent=self._effective_runtime_agent(record),
+                            agent_profile=self._effective_agent_profile(record),
                             repo_id=(
                                 record.repo_id.strip()
                                 if isinstance(record.repo_id, str)
@@ -1414,6 +1415,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             surface_key=key,
                             workspace_root=canonicalize_path(Path(hub_root)),
                             agent=self._effective_runtime_agent(record),
+                            agent_profile=self._effective_agent_profile(record),
                             repo_id=(
                                 record.repo_id.strip()
                                 if isinstance(record.repo_id, str)

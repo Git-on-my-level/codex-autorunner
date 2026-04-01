@@ -2480,6 +2480,7 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
             return SimpleNamespace(
                 thread_target_id=thread_target_id,
                 agent_id="codex",
+                agent_profile=None,
                 workspace_root=str(workspace),
                 lifecycle_status="active",
                 backend_thread_id=None,
@@ -2500,6 +2501,7 @@ async def test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding
             SimpleNamespace(
                 thread_target_id="thread-1",
                 agent_id="codex",
+                agent_profile=None,
                 workspace_root=str(workspace),
                 lifecycle_status="archived",
                 backend_thread_id="legacy-backend",
@@ -4933,6 +4935,7 @@ async def test_resolve_telegram_managed_thread_rejects_rebind_when_runtime_missi
     thread = SimpleNamespace(
         thread_target_id="thread-existing",
         agent_id="opencode",
+        agent_profile=None,
         workspace_root=str(workspace),
         backend_thread_id="backend-old",
         lifecycle_status="active",
@@ -4997,6 +5000,7 @@ async def test_resolve_telegram_managed_thread_keeps_requested_backend_thread_id
     thread = SimpleNamespace(
         thread_target_id="thread-existing",
         agent_id="opencode",
+        agent_profile=None,
         workspace_root=str(other_workspace),
         backend_thread_id="backend-old",
         lifecycle_status="active",
@@ -5017,6 +5021,7 @@ async def test_resolve_telegram_managed_thread_keeps_requested_backend_thread_id
             return SimpleNamespace(
                 thread_target_id="thread-new",
                 agent_id=agent,
+                agent_profile=None,
                 workspace_root=str(workspace_root),
                 backend_thread_id=kwargs.get("backend_thread_id"),
                 lifecycle_status="active",

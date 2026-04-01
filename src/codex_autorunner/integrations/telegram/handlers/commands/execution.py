@@ -28,7 +28,7 @@ from .....agents.opencode.runtime import (
     opencode_missing_env,
     split_model_id,
 )
-from .....agents.registry import get_registered_agents
+from .....agents.registry import get_registered_agents, wrap_requested_agent_context
 from .....core.context_awareness import (
     has_file_context_signal,
     maybe_inject_car_awareness,
@@ -260,11 +260,13 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
             raise
         descriptors = get_registered_agents()
 
-    def _make_harness(agent_id: str) -> Any:
+    def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
         descriptor = descriptors.get(agent_id)
         if descriptor is None:
             raise KeyError(f"Unknown agent definition '{agent_id}'")
-        return descriptor.make_harness(handlers)
+        return descriptor.make_harness(
+            wrap_requested_agent_context(handlers, agent_id=agent_id, profile=profile)
+        )
 
     state_root = getattr(getattr(handlers, "_config", None), "root", None)
     if state_root is None:
@@ -324,6 +326,7 @@ async def _resolve_telegram_managed_thread(
     surface_key: str,
     workspace_root: Path,
     agent: str,
+    agent_profile: Optional[str] = None,
     repo_id: Optional[str],
     resource_kind: Optional[str] = None,
     resource_id: Optional[str] = None,
@@ -386,6 +389,7 @@ async def _resolve_telegram_managed_thread(
     reusable_thread = (
         thread is not None
         and thread.agent_id == agent
+        and (thread.agent_profile or None) == (agent_profile or None)
         and str(thread.workspace_root or "").strip() == canonical_workspace
     )
     effective_backend_thread_id = normalized_backend_thread_id
@@ -408,6 +412,11 @@ async def _resolve_telegram_managed_thread(
     elif not reusable_thread:
         if not allow_new_thread and not effective_backend_thread_id:
             return orchestration_service, None
+        thread_metadata: Optional[dict[str, Any]] = {}
+        if agent_profile:
+            thread_metadata["agent_profile"] = agent_profile
+        if backend_runtime_instance_id is not None:
+            thread_metadata["backend_runtime_instance_id"] = backend_runtime_instance_id
         thread = orchestration_service.create_thread_target(
             agent,
             workspace_root,
@@ -416,13 +425,7 @@ async def _resolve_telegram_managed_thread(
             resource_id=resource_id,
             display_name=f"telegram:{surface_key}",
             backend_thread_id=effective_backend_thread_id,
-            metadata=(
-                {
-                    "backend_runtime_instance_id": backend_runtime_instance_id,
-                }
-                if backend_runtime_instance_id is not None
-                else None
-            ),
+            metadata=thread_metadata or None,
         )
     orchestration_service.upsert_binding(
         surface_kind="telegram",
@@ -448,6 +451,7 @@ async def _reset_telegram_thread_binding(
     surface_key: str,
     workspace_root: Path,
     agent: str,
+    agent_profile: Optional[str] = None,
     repo_id: Optional[str],
     resource_kind: Optional[str],
     resource_id: Optional[str],
@@ -482,6 +486,7 @@ async def _reset_telegram_thread_binding(
         resource_kind=resource_kind,
         resource_id=resource_id,
         display_name=f"telegram:{surface_key}",
+        metadata={"agent_profile": agent_profile} if agent_profile else None,
     )
     orchestration_service.upsert_binding(
         surface_kind="telegram",
@@ -1057,6 +1062,7 @@ async def _run_telegram_managed_thread_turn(
     )
     workspace_root = canonicalize_path(Path(record.workspace_path or ""))
     agent = handlers._effective_agent(record)
+    agent_profile = handlers._effective_agent_profile(record)
     runtime_agent = handlers._effective_runtime_agent(record)
     repo_id = record.repo_id.strip() if isinstance(record.repo_id, str) else None
     current_backend_thread_id = (
@@ -1187,6 +1193,7 @@ async def _run_telegram_managed_thread_turn(
         surface_key=topic_key,
         workspace_root=workspace_root,
         agent=runtime_agent,
+        agent_profile=agent_profile,
         repo_id=repo_id or None,
         resource_kind=getattr(record, "resource_kind", None),
         resource_id=getattr(record, "resource_id", None),

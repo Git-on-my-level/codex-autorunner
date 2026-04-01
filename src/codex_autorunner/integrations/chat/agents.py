@@ -135,6 +135,22 @@ def valid_chat_agent_values(context: Any = None) -> tuple[str, ...]:
     return _valid_chat_agent_values(context)
 
 
+def _config_hermes_profiles(context: Any) -> dict[str, Any]:
+    try:
+        from ...agents.registry import _resolve_runtime_agent_config
+
+        config = _resolve_runtime_agent_config(context)
+        if config is None:
+            return {}
+        getter = getattr(config, "agent_profiles", None)
+        if not callable(getter):
+            return {}
+        profiles = getter("hermes")
+        return dict(profiles) if isinstance(profiles, dict) else {}
+    except Exception:
+        return {}
+
+
 def chat_hermes_profile_options(
     context: Any = None,
 ) -> tuple[ChatAgentProfileOption, ...]:
@@ -159,6 +175,22 @@ def chat_hermes_profile_options(
             )
         )
         seen_profiles.add(profile)
+    for profile_id, profile_cfg in sorted(_config_hermes_profiles(context).items()):
+        normalized_id = str(profile_id or "").strip().lower()
+        if not normalized_id or normalized_id in seen_profiles:
+            continue
+        display = getattr(profile_cfg, "display_name", None)
+        if not isinstance(display, str) or not display.strip():
+            display = normalized_id
+        options.append(
+            ChatAgentProfileOption(
+                agent="hermes",
+                profile=normalized_id,
+                runtime_agent="hermes",
+                description=display,
+            )
+        )
+        seen_profiles.add(normalized_id)
     return tuple(options)
 
 

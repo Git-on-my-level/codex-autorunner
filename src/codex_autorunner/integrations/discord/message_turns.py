@@ -16,7 +16,7 @@ from ...agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
-from ...agents.registry import get_registered_agents
+from ...agents.registry import get_registered_agents, wrap_requested_agent_context
 from ...core.context_awareness import (
     maybe_inject_car_awareness,
     maybe_inject_filebox_hint,
@@ -1213,13 +1213,15 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
             raise
         descriptors = get_registered_agents()
 
-    def _make_harness(agent_id: str) -> Any:
+    def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
         if _should_use_legacy_orchestrator_harness(service):
             return _LegacyOrchestratorRuntimeHarness(service, agent_id)
         descriptor = descriptors.get(agent_id)
         if descriptor is None:
             raise KeyError(f"Unknown agent definition '{agent_id}'")
-        return descriptor.make_harness(service)
+        return descriptor.make_harness(
+            wrap_requested_agent_context(service, agent_id=agent_id, profile=profile)
+        )
 
     created = build_harness_backed_orchestration_service(
         descriptors=cast(Any, descriptors),
@@ -1237,6 +1239,7 @@ def resolve_discord_thread_target(
     channel_id: str,
     workspace_root: Path,
     agent: str,
+    agent_profile: Optional[str] = None,
     repo_id: Optional[str],
     resource_kind: Optional[str],
     resource_id: Optional[str],
@@ -1262,6 +1265,7 @@ def resolve_discord_thread_target(
     reusable_thread = (
         thread is not None
         and thread.agent_id == agent
+        and (thread.agent_profile or None) == (agent_profile or None)
         and str(thread.workspace_root or "").strip() == canonical_workspace
     )
     owner_kind, owner_id, normalized_repo_id = service._resource_owner_for_workspace(
@@ -1276,6 +1280,9 @@ def resolve_discord_thread_target(
     ):
         thread = orchestration_service.resume_thread_target(thread.thread_target_id)
     elif not reusable_thread:
+        thread_metadata: Optional[dict[str, Any]] = (
+            {"agent_profile": agent_profile} if agent_profile else None
+        )
         thread = orchestration_service.create_thread_target(
             agent,
             workspace_root,
@@ -1283,6 +1290,7 @@ def resolve_discord_thread_target(
             resource_kind=owner_kind,
             resource_id=owner_id,
             display_name=f"discord:{channel_id}",
+            metadata=thread_metadata,
         )
     orchestration_service.upsert_binding(
         surface_kind="discord",
@@ -1736,6 +1744,7 @@ async def _run_discord_orchestrated_turn_for_message(
     )
     binding = await service._store.get_binding(channel_id=channel_id)
     runtime_agent = service._runtime_agent_for_binding(binding)
+    _agent, agent_profile = service._resolve_agent_state(binding)
     repo_id = binding.get("repo_id") if isinstance(binding, dict) else None
     resource_kind = binding.get("resource_kind") if isinstance(binding, dict) else None
     resource_id = binding.get("resource_id") if isinstance(binding, dict) else None
@@ -1744,6 +1753,7 @@ async def _run_discord_orchestrated_turn_for_message(
         channel_id=channel_id,
         workspace_root=workspace_root,
         agent=runtime_agent,
+        agent_profile=agent_profile,
         repo_id=repo_id if isinstance(repo_id, str) and repo_id.strip() else None,
         resource_kind=(
             resource_kind.strip()
