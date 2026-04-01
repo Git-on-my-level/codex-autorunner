@@ -94,6 +94,7 @@ _PAYLOAD_PARSERS: dict[str, _CallbackParser] = {
     "resume": lambda rest: _parse_tokened_data(rest, "resume", "thread_id"),
     "bind": lambda rest: _parse_tokened_data(rest, "bind", "repo_id"),
     "agent": lambda rest: _parse_tokened_data(rest, "agent", "agent"),
+    "agent_profile": lambda rest: _parse_tokened_data(rest, "agent_profile", "profile"),
     "model": lambda rest: _parse_tokened_data(rest, "model", "model_id"),
     "effort": lambda rest: _parse_tokened_data(rest, "effort", "effort"),
     "update": lambda rest: _parse_tokened_data(rest, "update", "target"),
