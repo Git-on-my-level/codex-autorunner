@@ -345,6 +345,12 @@ class OpenCodeBackend(AgentBackend):
                         )
 
             ready_event = asyncio.Event()
+            first_event_timeout_seconds = 60.0
+            if self._session_stall_timeout_seconds is not None:
+                first_event_timeout_seconds = min(
+                    self._session_stall_timeout_seconds,
+                    first_event_timeout_seconds,
+                )
             output_task = asyncio.create_task(
                 collect_opencode_output(
                     client,
@@ -356,6 +362,7 @@ class OpenCodeBackend(AgentBackend):
                     part_handler=_part_handler,
                     ready_event=ready_event,
                     stall_timeout_seconds=self._session_stall_timeout_seconds,
+                    first_event_timeout_seconds=first_event_timeout_seconds,
                 )
             )
             try:

@@ -61,10 +61,12 @@ OPENCODE_PERMISSION_ALWAYS = "always"
 OPENCODE_PERMISSION_REJECT = "reject"
 
 _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS = 60.0
+_OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS = 60.0
 _OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS = (0.5, 1.0, 2.0, 5.0, 10.0)
 _OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS = 5
 _OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS = 120.0
 _OPENCODE_STREAM_STALL_TIMEOUT_REASON = "opencode_stream_stalled_timeout"
+_OPENCODE_FIRST_EVENT_TIMEOUT_REASON = "opencode_first_event_timeout"
 _OPENCODE_POST_COMPLETION_GRACE_SECONDS = 5.0
 _OPENCODE_IDLE_STATUS_VALUES = {
     "idle",
@@ -792,6 +794,9 @@ async def collect_opencode_output_from_events(
     provider_fetcher: Optional[Callable[[], Awaitable[Any]]] = None,
     messages_fetcher: Optional[Callable[[], Awaitable[Any]]] = None,
     stall_timeout_seconds: Optional[float] = _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS,
+    first_event_timeout_seconds: Optional[
+        float
+    ] = _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
 ) -> OpenCodeTurnOutput:
     text_parts: list[str] = []
     part_lengths: dict[str, int] = {}
@@ -1062,8 +1067,10 @@ async def collect_opencode_output_from_events(
         with suppress(Exception):
             await aclose()
 
+    stream_started_at = time.monotonic()
     stream_iter = _new_stream().__aiter__()
-    last_relevant_event_at = time.monotonic()
+    last_relevant_event_at = stream_started_at
+    received_any_event = False
     last_primary_completion_at: Optional[float] = None
     post_completion_deadline: Optional[float] = None
     reconnect_attempts = 0
@@ -1071,6 +1078,36 @@ async def collect_opencode_output_from_events(
     can_reconnect = (
         event_stream_factory is not None and stall_timeout_seconds is not None
     )
+
+    async def _fail_first_event_timeout(*, now: float) -> None:
+        nonlocal error
+        timeout_seconds = first_event_timeout_seconds
+        if timeout_seconds is None:
+            return
+        idle_seconds = now - stream_started_at
+        error = (
+            f"{_OPENCODE_FIRST_EVENT_TIMEOUT_REASON}: "
+            f"no relevant events received within {timeout_seconds:.1f}s"
+        )
+        log_event(
+            logger,
+            logging.ERROR,
+            "opencode.stream.first_event_timeout",
+            session_id=session_id,
+            idle_seconds=idle_seconds,
+            timeout_seconds=timeout_seconds,
+        )
+        if part_handler is not None:
+            await part_handler(
+                "status",
+                {
+                    "type": "stall_timeout",
+                    "reason": _OPENCODE_FIRST_EVENT_TIMEOUT_REASON,
+                    "idleSeconds": idle_seconds,
+                    "firstEventTimeoutSeconds": timeout_seconds,
+                },
+                None,
+            )
 
     async def _attempt_reconnect(
         *,
@@ -1165,7 +1202,18 @@ async def collect_opencode_output_from_events(
                 break
             try:
                 wait_timeout: Optional[float] = None
-                if can_reconnect and stall_timeout_seconds is not None:
+                if first_event_timeout_seconds is not None and not received_any_event:
+                    wait_timeout = max(
+                        0.0,
+                        stream_started_at
+                        + first_event_timeout_seconds
+                        - time.monotonic(),
+                    )
+                if (
+                    can_reconnect
+                    and stall_timeout_seconds is not None
+                    and (received_any_event or first_event_timeout_seconds is None)
+                ):
                     wait_timeout = stall_timeout_seconds
                 if post_completion_deadline is not None:
                     remaining_completion_seconds = max(
@@ -1204,6 +1252,11 @@ async def collect_opencode_output_from_events(
                     if not text_parts and (pending_text or pending_no_id):
                         _flush_all_pending_text()
                     break
+                if not received_any_event and first_event_timeout_seconds is not None:
+                    if now - stream_started_at >= first_event_timeout_seconds:
+                        await _fail_first_event_timeout(now=now)
+                        break
+                    continue
                 status_type = None
                 if session_fetcher is not None:
                     try:
@@ -1263,6 +1316,11 @@ async def collect_opencode_output_from_events(
             else:
                 is_relevant = True
             if not is_relevant:
+                if not received_any_event and first_event_timeout_seconds is not None:
+                    if now - stream_started_at >= first_event_timeout_seconds:
+                        await _fail_first_event_timeout(now=now)
+                        break
+                    continue
                 if (
                     stall_timeout_seconds is not None
                     and now - last_relevant_event_at > stall_timeout_seconds
@@ -1311,6 +1369,7 @@ async def collect_opencode_output_from_events(
                         break
                 continue
             last_relevant_event_at = now
+            received_any_event = True
             reconnect_attempts = 0
             reconnect_started_at = None
             is_primary_session = event_session_id == session_id or not event_session_id
@@ -1734,6 +1793,9 @@ async def collect_opencode_output(
     ready_event: Optional[Any] = None,
     part_handler: Optional[PartHandler] = None,
     stall_timeout_seconds: Optional[float] = _OPENCODE_STREAM_STALL_TIMEOUT_SECONDS,
+    first_event_timeout_seconds: Optional[
+        float
+    ] = _OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS,
 ) -> OpenCodeTurnOutput:
     async def _respond(request_id: str, reply: str) -> None:
         await client.respond_permission(request_id=request_id, reply=reply)
@@ -1792,6 +1854,7 @@ async def collect_opencode_output(
         provider_fetcher=_fetch_providers,
         messages_fetcher=_fetch_messages,
         stall_timeout_seconds=stall_timeout_seconds,
+        first_event_timeout_seconds=first_event_timeout_seconds,
     )
 
 

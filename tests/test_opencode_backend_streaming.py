@@ -4,9 +4,15 @@ from typing import Optional
 
 import pytest
 
-from codex_autorunner.agents.opencode.runtime import extract_session_id
+from codex_autorunner.agents.opencode.runtime import (
+    OpenCodeTurnOutput,
+    extract_session_id,
+)
 from codex_autorunner.core.ports.run_event import Completed, OutputDelta, TokenUsage
 from codex_autorunner.core.sse import SSEEvent
+from codex_autorunner.integrations.agents import (
+    opencode_backend as opencode_backend_module,
+)
 from codex_autorunner.integrations.agents.opencode_backend import OpenCodeBackend
 
 
@@ -170,3 +176,49 @@ async def test_opencode_backend_emits_single_canonical_usage_and_persists(
     payload = json.loads(lines[0])
     assert payload["session_id"] == "s-usage"
     assert payload["usage"]["total_tokens"] == 17
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("session_stall_timeout_seconds", "expected_first_event_timeout"),
+    [
+        (None, 60.0),
+        (15.0, 15.0),
+        (120.0, 60.0),
+    ],
+)
+async def test_opencode_backend_passes_first_event_timeout_to_collector(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    session_stall_timeout_seconds: Optional[float],
+    expected_first_event_timeout: float,
+) -> None:
+    captured: dict[str, float] = {}
+
+    async def _fake_collect(client, **kwargs):
+        ready_event = kwargs.get("ready_event")
+        if ready_event is not None:
+            ready_event.set()
+        captured["first_event_timeout_seconds"] = kwargs["first_event_timeout_seconds"]
+        return OpenCodeTurnOutput(text="ok")
+
+    monkeypatch.setattr(
+        opencode_backend_module,
+        "collect_opencode_output",
+        _fake_collect,
+    )
+
+    backend = OpenCodeBackend(
+        workspace_root=tmp_path,
+        supervisor=None,
+        session_stall_timeout_seconds=session_stall_timeout_seconds,
+    )
+    backend._client = _FakeOpenCodeClient([])  # type: ignore
+
+    run_events = [event async for event in backend.run_turn_events("s-pass", "Ping")]
+
+    assert captured["first_event_timeout_seconds"] == expected_first_event_timeout
+    assert any(
+        isinstance(event, Completed) and event.final_message == "ok"
+        for event in run_events
+    )

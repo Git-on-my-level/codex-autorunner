@@ -899,6 +899,7 @@ async def test_collect_output_poll_treats_missing_status_as_idle() -> None:
         session_id="s1",
         workspace_path=".",
         stall_timeout_seconds=0.01,
+        first_event_timeout_seconds=None,
     )
     elapsed = time.monotonic() - start
 
@@ -969,6 +970,48 @@ async def test_collect_output_uses_session_scoped_stream_endpoint() -> None:
 
 
 @pytest.mark.anyio
+async def test_collect_output_times_out_waiting_for_first_relevant_event() -> None:
+    statuses: list[dict[str, object]] = []
+    progress_events: list[dict[str, object]] = []
+
+    async def _status_fetcher():
+        statuses.append({"status": {"type": "busy"}})
+        return {"status": {"type": "busy"}}
+
+    async def _part_handler(part_type: str, part: dict[str, object], delta_text):
+        if part_type == "status":
+            progress_events.append(part)
+        return None
+
+    async def _never_event_stream():
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="keepalive", data="{}")
+
+    start = time.monotonic()
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _never_event_stream(),
+        session_fetcher=_status_fetcher,
+        part_handler=_part_handler,
+        stall_timeout_seconds=30.0,
+        first_event_timeout_seconds=0.001,
+    )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5
+    assert output.text == ""
+    assert output.error is not None
+    assert "opencode_first_event_timeout" in output.error
+    assert statuses == []
+    assert any(
+        event.get("reason") == "opencode_first_event_timeout"
+        for event in progress_events
+    )
+
+
+@pytest.mark.anyio
 async def test_collect_output_bounds_stall_reconnect_loop(monkeypatch) -> None:
     statuses: list[dict[str, object]] = []
     progress_events: list[dict[str, object]] = []
@@ -1010,6 +1053,7 @@ async def test_collect_output_bounds_stall_reconnect_loop(monkeypatch) -> None:
         session_fetcher=_status_fetcher,
         part_handler=_part_handler,
         stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=None,
     )
 
     assert output.text == ""
@@ -1018,6 +1062,71 @@ async def test_collect_output_bounds_stall_reconnect_loop(monkeypatch) -> None:
     assert len(statuses) >= 1
     assert any(event.get("type") == "reconnecting" for event in progress_events)
     assert any(event.get("type") == "stall_timeout" for event in progress_events)
+
+
+@pytest.mark.anyio
+async def test_collect_output_uses_stall_timeout_after_first_relevant_event(
+    monkeypatch,
+) -> None:
+    statuses: list[dict[str, object]] = []
+    progress_events: list[dict[str, object]] = []
+    state = {"sent_first_event": False}
+
+    async def _status_fetcher():
+        statuses.append({"status": {"type": "busy"}})
+        return {"status": {"type": "busy"}}
+
+    async def _part_handler(part_type: str, part: dict[str, object], delta_text):
+        if part_type == "status":
+            progress_events.append(part)
+        return None
+
+    async def _event_then_hang():
+        if not state["sent_first_event"]:
+            state["sent_first_event"] = True
+            yield SSEEvent(
+                event="session.status",
+                data='{"sessionID":"s1","status":{"type":"busy"}}',
+            )
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="keepalive", data="{}")
+
+    monkeypatch.setattr(
+        opencode_runtime,
+        "_OPENCODE_STREAM_RECONNECT_BACKOFF_SECONDS",
+        (0.0, 0.0),
+    )
+    monkeypatch.setattr(
+        opencode_runtime,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_ATTEMPTS",
+        2,
+    )
+    monkeypatch.setattr(
+        opencode_runtime,
+        "_OPENCODE_STREAM_MAX_STALL_RECONNECT_SECONDS",
+        999.0,
+    )
+
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _event_then_hang(),
+        session_fetcher=_status_fetcher,
+        part_handler=_part_handler,
+        stall_timeout_seconds=0.001,
+        first_event_timeout_seconds=30.0,
+    )
+
+    assert output.text == ""
+    assert output.error is not None
+    assert "opencode_stream_stalled_timeout" in output.error
+    assert len(statuses) >= 1
+    assert any(event.get("type") == "reconnecting" for event in progress_events)
+    assert not any(
+        event.get("reason") == "opencode_first_event_timeout"
+        for event in progress_events
+    )
 
 
 @pytest.mark.anyio
