@@ -244,13 +244,31 @@ def _build_issue_comment_payload(
         if isinstance(user, Mapping)
         else None
     )
+    author_type = (
+        _normalize_optional_text(user.get("type"))
+        if isinstance(user, Mapping)
+        else None
+    )
+    issue_author = issue.get("user")
+    issue_author_login = (
+        _normalize_optional_text(issue_author.get("login"))
+        if isinstance(issue_author, Mapping)
+        else None
+    )
     normalized = {
         "action": _normalize_optional_text(payload.get("action")),
         "comment_id": _normalize_optional_text(comment.get("id")),
         "body": _normalize_optional_text(comment.get("body")),
         "html_url": _normalize_optional_text(comment.get("html_url")),
         "author_login": author_login,
+        "author_type": author_type,
+        "author_association": _normalize_optional_text(
+            comment.get("author_association")
+        ),
         "issue_number": _normalize_optional_int(issue.get("number")),
+        "issue_author_login": issue_author_login,
+        "line": _normalize_optional_int(comment.get("line")),
+        "path": _normalize_optional_text(comment.get("path")),
         "updated_at": _normalize_iso_timestamp(comment.get("updated_at")),
     }
     occurred_at = _first_timestamp(comment.get("updated_at"), comment.get("created_at"))

@@ -154,6 +154,19 @@ def _condition_fingerprint_payload(
             "review_id": _normalize_text(payload.get("review_id")),
             "review_state": _normalize_text(payload.get("review_state")),
         }
+    if intent.reaction_kind == "review_comment":
+        return {
+            "author_login": _normalize_text(payload.get("author_login")),
+            "author_type": _normalize_text(payload.get("author_type")),
+            "body": _normalize_text(payload.get("body")),
+            "comment_id": _normalize_text(payload.get("comment_id")),
+            "html_url": _normalize_text(payload.get("html_url")),
+            "issue_author_login": _normalize_text(payload.get("issue_author_login")),
+            "line": (
+                payload.get("line") if isinstance(payload.get("line"), int) else None
+            ),
+            "path": _normalize_text(payload.get("path")),
+        }
     if intent.reaction_kind == "merged":
         return {
             "head_sha": _normalize_text(payload.get("head_sha")),

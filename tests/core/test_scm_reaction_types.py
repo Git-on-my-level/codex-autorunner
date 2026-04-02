@@ -8,6 +8,7 @@ def test_scm_reaction_config_minimal_noise_profile_disables_lower_signal_reactio
 
     assert config.ci_failed is True
     assert config.changes_requested is True
+    assert config.review_comment is True
     assert config.approved_and_green is False
     assert config.merged is False
 
@@ -23,4 +24,5 @@ def test_scm_reaction_config_profile_allows_explicit_overrides() -> None:
     )
 
     assert config.approved_and_green is True
+    assert config.review_comment is True
     assert config.merged is False

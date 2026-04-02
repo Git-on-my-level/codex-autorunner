@@ -223,6 +223,88 @@ def test_route_scm_reactions_returns_threaded_changes_requested_prompt_with_next
     )
 
 
+def test_route_scm_reactions_routes_pr_comment_to_managed_thread() -> None:
+    event = _event(
+        "issue_comment",
+        event_id="github:event-comment-thread",
+        payload={
+            "action": "created",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Please guard the wake-up path with a PR-comment filter.",
+            "path": "src/codex_autorunner/core/scm_reaction_router.py",
+            "line": 164,
+        },
+    )
+
+    intents = route_scm_reactions(
+        event, binding=_binding(thread_target_id="thread-900")
+    )
+
+    assert len(intents) == 1
+    assert intents[0].reaction_kind == "review_comment"
+    assert intents[0].operation_kind == "enqueue_managed_turn"
+    assert intents[0].payload["request"]["message_text"] == (
+        "New PR comment on acme/widgets#42 from reviewer at "
+        "src/codex_autorunner/core/scm_reaction_router.py:164: "
+        "Please guard the wake-up path with a PR-comment filter. "
+        "Address the feedback and reply on the PR after updating the branch."
+    )
+
+
+def test_route_scm_reactions_routes_pr_comment_to_notify_without_thread() -> None:
+    event = _event(
+        "issue_comment",
+        event_id="github:event-comment-notify",
+        payload={
+            "action": "created",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Please add coverage for bot filtering.",
+        },
+    )
+
+    intents = route_scm_reactions(event, binding=_binding())
+
+    assert len(intents) == 1
+    assert intents[0].reaction_kind == "review_comment"
+    assert intents[0].operation_kind == "notify_chat"
+    assert (
+        intents[0].payload["message"]
+        == "New PR comment on acme/widgets#42 from reviewer: Please add coverage for bot filtering."
+    )
+
+
+def test_route_scm_reactions_skips_self_and_bot_pr_comments() -> None:
+    self_comment = _event(
+        "issue_comment",
+        event_id="github:event-self-comment",
+        payload={
+            "action": "created",
+            "author_login": "pr-author",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "I pushed a fix.",
+        },
+    )
+    bot_comment = _event(
+        "issue_comment",
+        event_id="github:event-bot-comment",
+        payload={
+            "action": "created",
+            "author_login": "github-actions[bot]",
+            "author_type": "Bot",
+            "issue_author_login": "pr-author",
+            "body": "Automated reminder.",
+        },
+    )
+
+    assert route_scm_reactions(self_comment, binding=_binding()) == []
+    assert route_scm_reactions(bot_comment, binding=_binding()) == []
+
+
 def test_route_scm_reactions_returns_no_intents_for_irrelevant_events() -> None:
     opened = _event(
         "pull_request",

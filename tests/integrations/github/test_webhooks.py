@@ -152,6 +152,59 @@ def test_normalize_issue_comment_without_pull_request_is_ignored() -> None:
     assert result.event is None
 
 
+def test_normalize_issue_comment_for_pull_request_preserves_comment_context() -> None:
+    payload = {
+        "action": "created",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "issue": {
+            "number": 42,
+            "pull_request": {
+                "url": "https://api.github.com/repos/acme/widgets/pulls/42"
+            },
+            "user": {"login": "pr-author"},
+        },
+        "comment": {
+            "id": 333,
+            "body": "Please add a bot filter before routing this event.",
+            "html_url": "https://github.com/acme/widgets/pull/42#issuecomment-333",
+            "created_at": "2026-03-24T14:00:00Z",
+            "updated_at": "2026-03-24T14:00:00Z",
+            "author_association": "MEMBER",
+            "path": "src/codex_autorunner/core/scm_reaction_router.py",
+            "line": 164,
+            "user": {"login": "reviewer", "type": "User"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    result = normalize_github_webhook(
+        headers=_headers(body, event="issue_comment"),
+        body=body,
+        config={"secret": "topsecret"},
+        received_at="2026-03-25T00:00:01Z",
+    )
+
+    assert result.status == "accepted"
+    assert result.event is not None
+    assert result.event.event_type == "issue_comment"
+    assert result.event.pr_number == 42
+    assert result.event.occurred_at == "2026-03-24T14:00:00Z"
+    assert result.event.payload == {
+        "action": "created",
+        "comment_id": "333",
+        "body": "Please add a bot filter before routing this event.",
+        "html_url": "https://github.com/acme/widgets/pull/42#issuecomment-333",
+        "author_login": "reviewer",
+        "author_type": "User",
+        "author_association": "MEMBER",
+        "issue_number": 42,
+        "issue_author_login": "pr-author",
+        "line": 164,
+        "path": "src/codex_autorunner/core/scm_reaction_router.py",
+        "updated_at": "2026-03-24T14:00:00Z",
+    }
+
+
 def test_normalize_webhook_rejects_missing_signature_by_default() -> None:
     body = b"{}"
 

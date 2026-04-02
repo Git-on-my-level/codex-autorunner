@@ -82,6 +82,16 @@ def _reviewer_login(payload: Mapping[str, Any]) -> Optional[str]:
     return _normalize_text(payload.get("author_login"))
 
 
+def _comment_location(payload: Mapping[str, Any]) -> Optional[str]:
+    path = _normalize_text(payload.get("path"))
+    line = payload.get("line")
+    if path is None:
+        return None
+    if isinstance(line, int):
+        return f"{path}:{line}"
+    return path
+
+
 def build_ci_failed_message(
     *,
     event: ScmEvent,
@@ -140,6 +150,34 @@ def build_approved_and_green_message(
     return f"{subject} is approved and ready to land."
 
 
+def build_review_comment_message(
+    *,
+    event: ScmEvent,
+    binding: Optional[PrBinding],
+    operation_kind: ReactionOperationKind,
+) -> str:
+    payload = _event_payload(event)
+    subject = _reaction_subject(event, binding)
+    commenter_login = _reviewer_login(payload)
+    comment_summary = _trimmed_summary(payload.get("body"))
+    location = _comment_location(payload)
+
+    summary = f"New PR comment on {subject}"
+    if commenter_login is not None:
+        summary = f"{summary} from {commenter_login}"
+    if location is not None:
+        summary = f"{summary} at {location}"
+    if comment_summary is not None:
+        summary = f"{summary}: {comment_summary}"
+
+    if operation_kind == "enqueue_managed_turn":
+        return _join_message(
+            summary,
+            "Address the feedback and reply on the PR after updating the branch",
+        )
+    return _ensure_sentence(summary)
+
+
 def build_merged_message(
     *,
     event: ScmEvent,
@@ -161,6 +199,7 @@ def build_reaction_message(
     builders = {
         "ci_failed": build_ci_failed_message,
         "changes_requested": build_changes_requested_message,
+        "review_comment": build_review_comment_message,
         "approved_and_green": build_approved_and_green_message,
         "merged": build_merged_message,
     }
@@ -173,5 +212,6 @@ __all__ = [
     "build_changes_requested_message",
     "build_ci_failed_message",
     "build_merged_message",
+    "build_review_comment_message",
     "build_reaction_message",
 ]

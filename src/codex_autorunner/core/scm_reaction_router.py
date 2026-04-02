@@ -165,6 +165,25 @@ def _match_reaction_kind(
             return "approved_and_green"
         return None
 
+    if event.event_type == "issue_comment":
+        action = _normalize_lower_text(payload.get("action"))
+        author_login = _normalize_lower_text(payload.get("author_login"))
+        issue_author_login = _normalize_lower_text(payload.get("issue_author_login"))
+        author_type = _normalize_lower_text(payload.get("author_type"))
+        if action != "created":
+            return None
+        if author_type == "bot" or (
+            author_login is not None and author_login.endswith("[bot]")
+        ):
+            return None
+        if (
+            author_login is not None
+            and issue_author_login is not None
+            and author_login == issue_author_login
+        ):
+            return None
+        return "review_comment"
+
     if event.event_type != "pull_request":
         return None
 

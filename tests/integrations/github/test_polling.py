@@ -131,6 +131,7 @@ def test_arm_watch_captures_baseline_and_minimal_noise_profile(
     assert len(watch.snapshot["failed_checks"]) == 1
     assert watch.reaction_config["ci_failed"] is True
     assert watch.reaction_config["changes_requested"] is True
+    assert watch.reaction_config["review_comment"] is True
     assert watch.reaction_config["approved_and_green"] is False
     assert watch.reaction_config["merged"] is False
 

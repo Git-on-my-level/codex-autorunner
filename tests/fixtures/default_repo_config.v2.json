@@ -139,6 +139,7 @@
         "delivery_failure_escalation_threshold": 3,
         "duplicate_escalation_threshold": 3,
         "enabled": true,
+        "review_comment": true,
         "merged": true
       },
       "polling": {

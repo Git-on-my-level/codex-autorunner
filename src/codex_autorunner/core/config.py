@@ -358,6 +358,7 @@ def _default_github_automation_section() -> Dict[str, Any]:
             "enabled": True,
             "ci_failed": True,
             "changes_requested": True,
+            "review_comment": True,
             "approved_and_green": True,
             "merged": True,
             "duplicate_escalation_threshold": 3,

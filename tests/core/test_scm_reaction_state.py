@@ -141,6 +141,84 @@ def test_compute_reaction_fingerprint_distinguishes_distinct_review_submissions(
     assert first_fingerprint != second_fingerprint
 
 
+def test_compute_reaction_fingerprint_distinguishes_review_comments() -> None:
+    binding = _binding()
+    first = ScmEvent(
+        event_id="github:event-comment-1",
+        provider="github",
+        event_type="issue_comment",
+        occurred_at="2026-03-26T00:00:00Z",
+        received_at="2026-03-26T00:00:01Z",
+        created_at="2026-03-26T00:00:02Z",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=42,
+        delivery_id="delivery-1",
+        payload={
+            "action": "created",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "body": "Please move this helper.",
+            "comment_id": "comment-1",
+            "issue_author_login": "pr-author",
+            "path": "src/codex_autorunner/core/scm_reaction_router.py",
+            "line": 164,
+        },
+        raw_payload=None,
+    )
+    second = ScmEvent(
+        event_id="github:event-comment-2",
+        provider="github",
+        event_type="issue_comment",
+        occurred_at="2026-03-26T00:01:00Z",
+        received_at="2026-03-26T00:01:01Z",
+        created_at="2026-03-26T00:01:02Z",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=42,
+        delivery_id="delivery-2",
+        payload={
+            "action": "created",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "body": "Please move this helper.",
+            "comment_id": "comment-2",
+            "issue_author_login": "pr-author",
+            "path": "src/codex_autorunner/core/scm_reaction_router.py",
+            "line": 164,
+        },
+        raw_payload=None,
+    )
+    store = ScmReactionStateStore(Path("/tmp/unused"))
+
+    first_fingerprint = store.compute_reaction_fingerprint(
+        first,
+        binding=binding,
+        intent=ReactionIntent(
+            reaction_kind="review_comment",
+            operation_kind="enqueue_managed_turn",
+            operation_key="scm:key-comment-1",
+            payload={"thread_target_id": "thread-123"},
+            event_id="github:event-comment-1",
+            binding_id="binding-1",
+        ),
+    )
+    second_fingerprint = store.compute_reaction_fingerprint(
+        second,
+        binding=binding,
+        intent=ReactionIntent(
+            reaction_kind="review_comment",
+            operation_kind="enqueue_managed_turn",
+            operation_key="scm:key-comment-2",
+            payload={"thread_target_id": "thread-123"},
+            event_id="github:event-comment-2",
+            binding_id="binding-1",
+        ),
+    )
+
+    assert first_fingerprint != second_fingerprint
+
+
 def test_reaction_state_store_suppresses_emitted_reactions_and_allows_new_fingerprints(
     tmp_path: Path,
 ) -> None:

@@ -8,6 +8,7 @@ from typing import Any, Literal, Mapping, Optional
 ReactionKind = Literal[
     "ci_failed",
     "changes_requested",
+    "review_comment",
     "approved_and_green",
     "merged",
 ]
@@ -54,6 +55,7 @@ def _int_from_mapping(
 class ScmReactionConfig:
     ci_failed: bool = True
     changes_requested: bool = True
+    review_comment: bool = True
     approved_and_green: bool = True
     merged: bool = True
     duplicate_escalation_threshold: int = 3
@@ -89,6 +91,15 @@ class ScmReactionConfig:
                 "changes_requested",
                 default=(
                     defaults["changes_requested"]
+                    if default_enabled is None
+                    else default_value
+                ),
+            ),
+            review_comment=_bool_from_mapping(
+                mapping,
+                "review_comment",
+                default=(
+                    defaults["review_comment"]
                     if default_enabled is None
                     else default_value
                 ),
@@ -136,6 +147,7 @@ class ScmReactionConfig:
                 "enabled": True,
                 "ci_failed": True,
                 "changes_requested": True,
+                "review_comment": True,
                 "approved_and_green": False,
                 "merged": False,
             }
@@ -143,6 +155,7 @@ class ScmReactionConfig:
             "enabled": True,
             "ci_failed": True,
             "changes_requested": True,
+            "review_comment": True,
             "approved_and_green": True,
             "merged": True,
         }
