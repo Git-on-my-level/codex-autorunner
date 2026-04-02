@@ -2,6 +2,7 @@ import json
 import shlex
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
+from urllib.parse import urlencode
 
 import typer
 import uvicorn
@@ -1087,28 +1088,173 @@ def register_hub_commands(
         base_path: Optional[str] = typer.Option(
             None, "--base-path", help="Override hub server base path (e.g. /car)"
         ),
+        section: list[str] = typer.Option(
+            None,
+            "--section",
+            help=(
+                "Return only specific snapshot sections "
+                "(repeatable: repos, agent_workspaces, inbox, pma_threads, "
+                "pma_files_detail, automation, action_queue)."
+            ),
+        ),
+        timeout_seconds: float = typer.Option(
+            15.0,
+            "--timeout",
+            min=1.0,
+            help="HTTP timeout for hub snapshot requests in seconds.",
+        ),
     ):
         """Fetch a compact hub snapshot (repos + inbox + run-state recommendations)."""
+
+        def _normalize_sections(values: list[str]) -> list[str]:
+            aliases = {"inbox_items": "inbox"}
+            allowed = {
+                "repos",
+                "agent_workspaces",
+                "inbox",
+                "pma_threads",
+                "pma_files_detail",
+                "automation",
+                "action_queue",
+            }
+            normalized: list[str] = []
+            for value in values or []:
+                candidate = (
+                    aliases.get(str(value or "").strip().lower())
+                    or str(value or "").strip().lower()
+                )
+                if not candidate:
+                    continue
+                if candidate not in allowed:
+                    allowed_text = ", ".join(sorted(allowed))
+                    raise_exit(
+                        f"Unsupported --section {value!r}. Allowed: {allowed_text}."
+                    )
+                if candidate not in normalized:
+                    normalized.append(candidate)
+            return normalized
+
+        def _append_query(url: str, params: dict[str, Any]) -> str:
+            filtered = {
+                key: value for key, value in params.items() if value not in {None, ""}
+            }
+            if not filtered:
+                return url
+            separator = "&" if "?" in url else "?"
+            return f"{url}{separator}{urlencode(filtered)}"
+
+        def _read_pma_threads_artifact(hub_root: Path) -> Optional[dict[str, Any]]:
+            artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+            if not artifact_path.exists():
+                return None
+            try:
+                payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+            return payload if isinstance(payload, dict) else None
+
+        requested_sections = _normalize_sections(section)
         config = require_hub_config(path)
         repos_url = build_server_url(config, "/hub/repos", base_path_override=base_path)
         messages_url = build_server_url(
-            config, "/hub/messages?limit=50", base_path_override=base_path
+            config, "/hub/messages", base_path_override=base_path
         )
 
-        try:
-            repos_response = request_json(
-                "GET", repos_url, token_env=config.server_auth_token_env
-            )
-            messages_response = request_json(
-                "GET", messages_url, token_env=config.server_auth_token_env
-            )
-        except Exception as exc:
+        repos_response: dict[str, Any] = {}
+        messages_response: dict[str, Any] = {}
+        fetch_errors: list[dict[str, str]] = []
+
+        repo_sections = [
+            name for name in requested_sections if name in {"repos", "agent_workspaces"}
+        ]
+        message_sections = [
+            name
+            for name in requested_sections
+            if name
+            in {
+                "inbox",
+                "pma_threads",
+                "pma_files_detail",
+                "automation",
+                "action_queue",
+            }
+        ]
+        if not requested_sections:
+            repo_sections = ["repos"]
+            message_sections = ["inbox"]
+
+        repos_request_url = _append_query(
+            repos_url,
+            {"sections": ",".join(repo_sections)} if repo_sections else {},
+        )
+        messages_request_url = _append_query(
+            messages_url,
+            (
+                {
+                    "limit": 50,
+                    "sections": ",".join(message_sections),
+                }
+                if message_sections
+                else {}
+            ),
+        )
+
+        attempted_urls: list[str] = []
+        if repo_sections:
+            attempted_urls.append(repos_request_url)
+            try:
+                repos_response = request_json(
+                    "GET",
+                    repos_request_url,
+                    token_env=config.server_auth_token_env,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:
+                fetch_errors.append(
+                    {
+                        "target": "repos",
+                        "url": repos_request_url,
+                        "error": str(exc) or exc.__class__.__name__,
+                    }
+                )
+        if message_sections:
+            attempted_urls.append(messages_request_url)
+            try:
+                messages_response = request_json(
+                    "GET",
+                    messages_request_url,
+                    token_env=config.server_auth_token_env,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:
+                artifact_fallback = (
+                    _read_pma_threads_artifact(config.root)
+                    if requested_sections == ["pma_threads"]
+                    else None
+                )
+                if artifact_fallback is not None:
+                    messages_response = {
+                        "generated_at": artifact_fallback.get("generated_at"),
+                        "pma_threads": artifact_fallback.get("threads", []),
+                    }
+                else:
+                    fetch_errors.append(
+                        {
+                            "target": "messages",
+                            "url": messages_request_url,
+                            "error": str(exc) or exc.__class__.__name__,
+                        }
+                    )
+
+        if not repos_response and not messages_response and fetch_errors:
+            attempted = "\n".join(f"- {url}" for url in attempted_urls) or "- <none>"
             raise_exit(
                 "Failed to connect to hub server. Ensure 'car hub serve' is running.\n"
-                f"Attempted:\n- {repos_url}\n- {messages_url}\n"
+                f"Timeout: {timeout_seconds:.1f}s\n"
+                f"Attempted:\n{attempted}\n"
                 "If the hub UI is served under a base path (commonly /car), either set "
                 "`server.base_path` in the hub config or pass `--base-path /car`.",
-                cause=exc,
+                cause=RuntimeError("; ".join(error["error"] for error in fetch_errors)),
             )
 
         repos_payload = repos_response if isinstance(repos_response, dict) else {}
@@ -1224,6 +1370,52 @@ def register_hub_commands(
                 "freshness": canonical.get("freshness"),
             }
 
+        if requested_sections:
+            section_snapshot: dict[str, Any] = {
+                "generated_at": repos_payload.get("generated_at")
+                or messages_payload.get("generated_at")
+            }
+            if "repos" in requested_sections:
+                section_snapshot["repos"] = [_summarize_repo(repo) for repo in repos]
+            if "agent_workspaces" in requested_sections:
+                section_snapshot["agent_workspaces"] = repos_payload.get(
+                    "agent_workspaces", []
+                )
+            if "inbox" in requested_sections:
+                section_snapshot["inbox_items"] = [
+                    _summarize_message(msg) for msg in messages_items
+                ]
+            for key in (
+                "pma_threads",
+                "pma_files_detail",
+                "automation",
+                "action_queue",
+            ):
+                if key in requested_sections:
+                    section_snapshot[key] = messages_payload.get(key)
+            if fetch_errors:
+                section_snapshot["errors"] = fetch_errors
+
+            if not output_json:
+                typer.echo(
+                    "Hub Snapshot Sections: "
+                    + ", ".join(
+                        f"{name}={len(section_snapshot.get('inbox_items', [])) if name == 'inbox' else len(section_snapshot.get(name, [])) if isinstance(section_snapshot.get(name), list) else '1'}"
+                        for name in requested_sections
+                    )
+                )
+                if section_snapshot.get("generated_at"):
+                    typer.echo(f"generated_at: {section_snapshot.get('generated_at')}")
+                for error in fetch_errors:
+                    typer.echo(
+                        f"warning: failed to fetch {error['target']} from {error['url']}: {error['error']}"
+                    )
+                return
+
+            indent = 2 if pretty else None
+            typer.echo(json.dumps(section_snapshot, indent=indent))
+            return
+
         snapshot = {
             "generated_at": repos_payload.get("generated_at")
             or messages_payload.get("generated_at"),
@@ -1247,6 +1439,8 @@ def register_hub_commands(
             "repos": [_summarize_repo(repo) for repo in repos],
             "inbox_items": [_summarize_message(msg) for msg in messages_items],
         }
+        if fetch_errors:
+            snapshot["errors"] = fetch_errors
 
         snapshot_repos = snapshot.get("repos", []) or []
         snapshot_inbox = snapshot.get("inbox_items", []) or []
@@ -1261,6 +1455,10 @@ def register_hub_commands(
             )
             if snapshot.get("generated_at"):
                 typer.echo(f"generated_at: {snapshot.get('generated_at')}")
+            for error in fetch_errors:
+                typer.echo(
+                    f"warning: failed to fetch {error['target']} from {error['url']}: {error['error']}"
+                )
             for repo in snapshot_repos:
                 if not isinstance(repo, dict):
                     continue

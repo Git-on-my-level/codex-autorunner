@@ -1,8 +1,10 @@
+import json
 from unittest.mock import patch
 
 import httpx
 from typer.testing import CliRunner
 
+from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.cli import app
 
 runner = CliRunner()
@@ -243,3 +245,122 @@ def test_hub_snapshot_truncates_long_dispatch_bodies() -> None:
 
     assert truncated_body.endswith("...")
     assert len(truncated_body) == 203  # 200 chars + "..."
+
+
+def test_hub_snapshot_section_uses_requested_timeout_and_filters(tmp_path) -> None:
+    seed_hub_files(tmp_path, force=True)
+    calls: list[dict[str, object]] = []
+
+    def _fake_request(method, url, json=None, timeout=None, headers=None, follow_redirects=True):  # type: ignore[no-untyped-def]
+        calls.append({"method": method, "url": url, "timeout": timeout})
+        request = httpx.Request(method, url)
+        if "/hub/messages" in str(url):
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "generated_at": "2026-04-02T00:00:00Z",
+                    "pma_threads": [{"managed_thread_id": "thr-1"}],
+                },
+            )
+        return httpx.Response(
+            200, request=request, json={"generated_at": "2026-04-02T00:00:00Z"}
+        )
+
+    with patch("httpx.request", side_effect=_fake_request):
+        result = runner.invoke(
+            app,
+            [
+                "hub",
+                "snapshot",
+                "--path",
+                str(tmp_path),
+                "--section",
+                "pma_threads",
+                "--timeout",
+                "22",
+                "--json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["pma_threads"][0]["managed_thread_id"] == "thr-1"
+    assert len(calls) == 1
+    assert "sections=pma_threads" in str(calls[0]["url"])
+    assert calls[0]["timeout"] == 22.0
+
+
+def test_hub_snapshot_pma_threads_falls_back_to_artifact_when_hub_unreachable(
+    tmp_path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    artifact_path = tmp_path / ".codex-autorunner" / "pma_threads.json"
+    artifact_path.write_text(
+        '{"generated_at":"2026-04-02T00:00:00Z","threads":[{"managed_thread_id":"local-thr"}]}\n',
+        encoding="utf-8",
+    )
+
+    with patch("httpx.request", side_effect=httpx.TimeoutException("timed out")):
+        result = runner.invoke(
+            app,
+            [
+                "hub",
+                "snapshot",
+                "--path",
+                str(tmp_path),
+                "--section",
+                "pma_threads",
+                "--json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["pma_threads"][0]["managed_thread_id"] == "local-thr"
+
+
+def test_hub_snapshot_returns_partial_results_when_one_endpoint_times_out(
+    tmp_path,
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+
+    def _fake_request(method, url, json=None, timeout=None, headers=None, follow_redirects=True):  # type: ignore[no-untyped-def]
+        request = httpx.Request(method, url)
+        if "/hub/messages" in str(url):
+            raise httpx.TimeoutException("messages timed out")
+        return httpx.Response(
+            200,
+            request=request,
+            json={
+                "generated_at": "2026-04-02T00:00:00Z",
+                "repos": [{"id": "demo", "display_name": "Demo"}],
+            },
+        )
+
+    with patch("httpx.request", side_effect=_fake_request):
+        result = runner.invoke(
+            app,
+            [
+                "hub",
+                "snapshot",
+                "--path",
+                str(tmp_path),
+                "--section",
+                "repos",
+                "--section",
+                "pma_threads",
+                "--json",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["repos"][0]["id"] == "demo"
+    assert payload["pma_threads"] is None
+    assert len(payload["errors"]) == 1
+    assert payload["errors"][0]["target"] == "messages"
+    assert payload["errors"][0]["error"] == "messages timed out"
+    assert payload["errors"][0]["url"].endswith(
+        "/hub/messages?limit=50&sections=pma_threads"
+    )

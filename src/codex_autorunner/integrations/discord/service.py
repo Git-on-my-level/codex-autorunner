@@ -196,6 +196,7 @@ from ...integrations.chat.picker_filter import (
     filter_picker_items,
     resolve_picker_query,
 )
+from ...integrations.chat.queue_control import ChatQueueControlStore
 from ...integrations.chat.run_mirror import ChatRunMirror
 from ...integrations.chat.status_diagnostics import (
     StatusBlockContext,
@@ -328,6 +329,7 @@ from .state import DiscordStateStore, OutboxRecord
 DISCORD_EPHEMERAL_FLAG = 64
 PAUSE_SCAN_INTERVAL_SECONDS = 5.0
 TERMINAL_SCAN_INTERVAL_SECONDS = 5.0
+CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
 FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
 MESSAGE_TURN_APPROVAL_POLICY = "never"
@@ -700,8 +702,10 @@ class DiscordBotService:
                 message_overflow=config.message_overflow,
             )
         )
+        self._chat_queue_control_store = ChatQueueControlStore(self._config.root)
         self._dispatcher = dispatcher or ChatDispatcher(
             logger=logger,
+            queue_control_store=self._chat_queue_control_store,
             allowlist_predicate=lambda event, context: self._allowlist_predicate(
                 event, context
             ),
@@ -805,6 +809,7 @@ class DiscordBotService:
             self._filebox_prune_task = asyncio.create_task(
                 self._run_filebox_prune_loop()
             )
+        chat_queue_reset_task = asyncio.create_task(self._run_chat_queue_reset_loop())
         pause_watch_task = asyncio.create_task(self._watch_ticket_flow_pauses())
         terminal_watch_task = asyncio.create_task(self._watch_ticket_flow_terminals())
         dispatcher_loop_task = asyncio.create_task(self._run_dispatcher_loop())
@@ -843,6 +848,9 @@ class DiscordBotService:
                 with contextlib.suppress(asyncio.CancelledError):
                     await self._filebox_prune_task
                 self._filebox_prune_task = None
+            chat_queue_reset_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await chat_queue_reset_task
             pause_watch_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pause_watch_task
@@ -3736,6 +3744,41 @@ class DiscordBotService:
                     exc=exc,
                 )
             await asyncio.sleep(PAUSE_SCAN_INTERVAL_SECONDS)
+
+    async def _run_chat_queue_reset_loop(self) -> None:
+        while True:
+            try:
+                await self._apply_pending_chat_queue_resets()
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "discord.chat_queue.reset_scan_failed",
+                    exc=exc,
+                )
+            await asyncio.sleep(CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS)
+
+    async def _apply_pending_chat_queue_resets(self) -> None:
+        requests = self._chat_queue_control_store.take_reset_requests(
+            platform="discord"
+        )
+        for request in requests:
+            conversation_id = str(request.get("conversation_id") or "").strip()
+            if not conversation_id:
+                continue
+            result = await self._dispatcher.force_reset(conversation_id)
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.chat_queue.reset_applied",
+                conversation_id=conversation_id,
+                chat_id=request.get("chat_id"),
+                thread_id=request.get("thread_id"),
+                requested_at=request.get("requested_at"),
+                requested_by=request.get("requested_by"),
+                cancelled_pending=result.get("cancelled_pending"),
+                cancelled_active=result.get("cancelled_active"),
+            )
 
     async def _scan_and_enqueue_pause_notifications(self) -> None:
         bindings = await self._store.list_bindings()

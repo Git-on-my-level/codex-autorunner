@@ -12,6 +12,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from typing import (
+    Any,
     Awaitable,
     Callable,
     Deque,
@@ -23,6 +24,7 @@ from typing import (
 )
 
 from ...core.logging_utils import log_event
+from ...core.time_utils import now_iso
 from .callbacks import (
     CALLBACK_APPROVAL,
     CALLBACK_QUESTION_CANCEL,
@@ -32,6 +34,7 @@ from .callbacks import (
     decode_logical_callback,
 )
 from .models import ChatEvent, ChatInteractionEvent, ChatMessageEvent
+from .queue_control import ChatQueueControlStore
 
 DEFAULT_BYPASS_INTERACTION_PREFIXES = (
     "appr:",
@@ -129,6 +132,7 @@ class ChatDispatcher:
         self,
         *,
         logger: Optional[logging.Logger] = None,
+        queue_control_store: Optional[ChatQueueControlStore] = None,
         allowlist_predicate: Optional[DispatchPredicate] = None,
         dedupe_predicate: Optional[DispatchPredicate] = None,
         bypass_predicate: Optional[DispatchPredicate] = None,
@@ -137,6 +141,7 @@ class ChatDispatcher:
         bypass_message_texts: Optional[Iterable[str]] = None,
     ) -> None:
         self._logger = logger or logging.getLogger(__name__)
+        self._queue_control_store = queue_control_store
         self._allowlist_predicate = allowlist_predicate
         self._dedupe_predicate = dedupe_predicate
         self._bypass_predicate = bypass_predicate
@@ -164,6 +169,8 @@ class ChatDispatcher:
             str, Deque[tuple[ChatEvent, DispatchContext, DispatchHandler]]
         ] = {}
         self._workers: Dict[str, asyncio.Task[None]] = {}
+        self._active_contexts: Dict[str, DispatchContext] = {}
+        self._active_started_at: Dict[str, str] = {}
         self._active_handlers = 0
         self._idle_event = asyncio.Event()
         self._idle_event.set()
@@ -274,6 +281,7 @@ class ChatDispatcher:
                 self._queues.pop(conversation_id, None)
             if not self._workers and self._active_handlers == 0:
                 self._idle_event.set()
+            self._publish_queue_state_locked(conversation_id)
             return cancelled
 
     async def cancel_pending_message(
@@ -297,6 +305,7 @@ class ChatDispatcher:
                     self._queues.pop(conversation_id, None)
                 if not self._workers and self._active_handlers == 0:
                     self._idle_event.set()
+                self._publish_queue_state_locked(conversation_id)
                 return True
             return False
 
@@ -320,14 +329,58 @@ class ChatDispatcher:
                     return True
                 del queue[index]
                 queue.appendleft((event, context, handler))
+                self._publish_queue_state_locked(conversation_id)
                 return True
             return False
+
+    async def queue_status(self, conversation_id: str) -> dict[str, Any]:
+        """Return in-memory queue status for one conversation."""
+
+        async with self._lock:
+            return self._build_queue_snapshot_locked(conversation_id)
+
+    async def force_reset(self, conversation_id: str) -> dict[str, Any]:
+        """Cancel the active worker and clear queued work for a conversation."""
+
+        cancelled_pending = 0
+        cancelled_active = False
+        worker: Optional[asyncio.Task[None]] = None
+
+        async with self._lock:
+            queue = self._queues.get(conversation_id)
+            cancelled_pending = len(queue) if queue is not None else 0
+            if queue is not None:
+                queue.clear()
+                self._queues.pop(conversation_id, None)
+            cancelled_active = conversation_id in self._active_contexts
+            worker = self._workers.get(conversation_id)
+            self._publish_queue_state_locked(conversation_id)
+
+        if worker is not None:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+
+        async with self._lock:
+            self._queues.pop(conversation_id, None)
+            self._workers.pop(conversation_id, None)
+            self._active_contexts.pop(conversation_id, None)
+            self._active_started_at.pop(conversation_id, None)
+            if self._active_handlers == 0 and not self._workers and not self._queues:
+                self._idle_event.set()
+            self._publish_queue_state_locked(conversation_id)
+
+        return {
+            "conversation_id": conversation_id,
+            "cancelled_pending": cancelled_pending,
+            "cancelled_active": cancelled_active,
+        }
 
     async def close(self) -> None:
         """Cancel worker tasks and clear queued work."""
 
         async with self._lock:
             workers = list(self._workers.values())
+            conversation_ids = set(self._queues) | set(self._workers)
             self._queues.clear()
             if not workers and self._active_handlers == 0:
                 self._idle_event.set()
@@ -340,8 +393,12 @@ class ChatDispatcher:
         async with self._lock:
             self._workers.clear()
             self._queues.clear()
+            self._active_contexts.clear()
+            self._active_started_at.clear()
             if self._active_handlers == 0:
                 self._idle_event.set()
+            for conversation_id in conversation_ids:
+                self._publish_queue_state_locked(conversation_id)
 
     async def _enqueue(
         self,
@@ -365,6 +422,7 @@ class ChatDispatcher:
                 )
             pending = len(queue)
             queued_while_busy = had_worker or had_pending
+            self._publish_queue_state_locked(conversation_id)
         log_event(
             self._logger,
             logging.INFO,
@@ -383,31 +441,43 @@ class ChatDispatcher:
                     if not queue:
                         self._queues.pop(conversation_id, None)
                         self._workers.pop(conversation_id, None)
+                        self._active_contexts.pop(conversation_id, None)
+                        self._active_started_at.pop(conversation_id, None)
                         if not self._workers and self._active_handlers == 0:
                             self._idle_event.set()
+                        self._publish_queue_state_locked(conversation_id)
                         return
                     event, context, handler = queue.popleft()
+                    self._active_contexts[conversation_id] = context
+                    self._active_started_at[conversation_id] = now_iso()
                     self._active_handlers += 1
+                    self._publish_queue_state_locked(conversation_id)
                 try:
                     await self._run_handler(event, context, handler)
                 finally:
                     async with self._lock:
                         self._active_handlers -= 1
+                        self._active_contexts.pop(conversation_id, None)
+                        self._active_started_at.pop(conversation_id, None)
                         if (
                             self._active_handlers == 0
                             and not self._workers
                             and not self._queues
                         ):
                             self._idle_event.set()
+                        self._publish_queue_state_locked(conversation_id)
         finally:
             async with self._lock:
                 self._workers.pop(conversation_id, None)
+                self._active_contexts.pop(conversation_id, None)
+                self._active_started_at.pop(conversation_id, None)
                 if (
                     self._active_handlers == 0
                     and not self._workers
                     and not self._queues
                 ):
                     self._idle_event.set()
+                self._publish_queue_state_locked(conversation_id)
 
     async def _run_handler(
         self,
@@ -440,6 +510,41 @@ class ChatDispatcher:
             conversation_id=context.conversation_id,
             update_id=context.update_id,
         )
+
+    def _build_queue_snapshot_locked(self, conversation_id: str) -> dict[str, Any]:
+        queue = self._queues.get(conversation_id)
+        active_context = self._active_contexts.get(conversation_id)
+        queued_context: Optional[DispatchContext] = None
+        if queue:
+            try:
+                queued_context = queue[0][1]
+            except Exception:
+                queued_context = None
+        context = active_context or queued_context
+        return {
+            "conversation_id": conversation_id,
+            "platform": context.platform if context is not None else None,
+            "chat_id": context.chat_id if context is not None else None,
+            "thread_id": context.thread_id if context is not None else None,
+            "pending_count": len(queue) if queue is not None else 0,
+            "active": active_context is not None,
+            "active_update_id": (
+                active_context.update_id if active_context is not None else None
+            ),
+            "active_started_at": self._active_started_at.get(conversation_id),
+            "updated_at": now_iso(),
+        }
+
+    def _publish_queue_state_locked(self, conversation_id: str) -> None:
+        if self._queue_control_store is None:
+            return
+        snapshot = self._build_queue_snapshot_locked(conversation_id)
+        if int(snapshot.get("pending_count") or 0) <= 0 and not bool(
+            snapshot.get("active")
+        ):
+            self._queue_control_store.clear_snapshot(conversation_id)
+            return
+        self._queue_control_store.record_snapshot(snapshot)
 
 
 def build_dispatch_context(event: ChatEvent) -> DispatchContext:

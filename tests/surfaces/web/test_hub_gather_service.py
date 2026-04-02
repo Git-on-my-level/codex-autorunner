@@ -66,11 +66,14 @@ def test_latest_dispatch_surfaces_unreadable_latest_dispatch(tmp_path) -> None:
     assert latest["errors"]
 
 
-def test_gather_hub_messages_returns_empty_on_supervisor_error() -> None:
+def test_gather_hub_message_snapshot_returns_empty_items_on_supervisor_error() -> None:
     context = SimpleNamespace(
         supervisor=SimpleNamespace(
             list_repos=lambda: (_ for _ in ()).throw(RuntimeError)
         )
     )
-    items = hub_gather_service.gather_hub_messages(context)  # type: ignore[arg-type]
-    assert items == []
+    snapshot = hub_gather_service.gather_hub_message_snapshot(  # type: ignore[arg-type]
+        context,
+        sections={"inbox"},
+    )
+    assert snapshot["items"] == []

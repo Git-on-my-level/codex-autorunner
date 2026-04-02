@@ -141,9 +141,19 @@ def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[
         return None
 
 
-def gather_hub_messages(
-    context: HubAppContext, *, limit: int = 100, scope_key: Optional[str] = None
-) -> list[dict]:
+def gather_hub_message_snapshot(
+    context: HubAppContext,
+    *,
+    limit: int = 100,
+    scope_key: Optional[str] = None,
+    sections: Optional[set[str]] = None,
+) -> dict[str, Any]:
+    requested = (
+        set(sections)
+        if sections is not None
+        else {"inbox", "pma_threads", "pma_files_detail", "automation", "action_queue"}
+    )
+    include_action_queue = bool(requested & {"inbox", "action_queue"})
     pma_config = getattr(getattr(context, "config", None), "pma", None)
     stale_threshold_seconds = resolve_stale_threshold_seconds(
         getattr(pma_config, "freshness_stale_threshold_seconds", None)
@@ -154,141 +164,93 @@ def gather_hub_messages(
         else PMA_MAX_TEXT
     )
     generated_at = iso_now()
-    inbox = _gather_inbox(
-        context.supervisor,
-        max_text_chars=max_text_chars,
-        stale_threshold_seconds=stale_threshold_seconds,
-    )
+    inbox = []
+    if include_action_queue:
+        inbox = _gather_inbox(
+            context.supervisor,
+            max_text_chars=max_text_chars,
+            stale_threshold_seconds=stale_threshold_seconds,
+        )
 
     hub_root = getattr(getattr(context, "config", None), "root", None)
     pma_files_detail: dict[str, list[dict[str, Any]]] = empty_listing()
     pma_threads: list[dict[str, Any]] = []
-    automation = _snapshot_pma_automation(context.supervisor)
+    automation = (
+        _snapshot_pma_automation(context.supervisor)
+        if requested & {"automation"} or include_action_queue
+        else {"items": [], "summary": {}}
+    )
     if isinstance(hub_root, Path):
-        _, pma_files_detail = _snapshot_pma_files(hub_root)
-        pma_threads = _snapshot_pma_threads(hub_root)
-        for thread in pma_threads:
-            thread["freshness"] = build_freshness_payload(
-                generated_at=generated_at,
-                stale_threshold_seconds=stale_threshold_seconds,
-                candidates=[
-                    ("thread_status_changed_at", thread.get("status_changed_at")),
-                    ("thread_updated_at", thread.get("updated_at")),
-                ],
-            )
-        for box in BOXES:
-            for index, entry in enumerate(pma_files_detail.get(box) or []):
-                entry["freshness"] = build_freshness_payload(
+        if requested & {"pma_files_detail"} or include_action_queue:
+            _, pma_files_detail = _snapshot_pma_files(hub_root)
+            for box in BOXES:
+                for index, entry in enumerate(pma_files_detail.get(box) or []):
+                    entry["freshness"] = build_freshness_payload(
+                        generated_at=generated_at,
+                        stale_threshold_seconds=stale_threshold_seconds,
+                        candidates=[("file_modified_at", entry.get("modified_at"))],
+                    )
+                    if box == "inbox":
+                        pma_files_detail[box][index] = enrich_pma_file_inbox_entry(
+                            entry
+                        )
+        if requested & {"pma_threads"} or include_action_queue:
+            pma_threads = _snapshot_pma_threads(hub_root)
+            for thread in pma_threads:
+                thread["freshness"] = build_freshness_payload(
                     generated_at=generated_at,
                     stale_threshold_seconds=stale_threshold_seconds,
-                    candidates=[("file_modified_at", entry.get("modified_at"))],
+                    candidates=[
+                        ("thread_status_changed_at", thread.get("status_changed_at")),
+                        ("thread_updated_at", thread.get("updated_at")),
+                    ],
                 )
-                if box == "inbox":
-                    pma_files_detail[box][index] = enrich_pma_file_inbox_entry(entry)
 
-    action_queue = build_pma_action_queue(
-        inbox=inbox,
-        pma_threads=pma_threads,
-        pma_files_detail=pma_files_detail,
-        automation=automation,
-        generated_at=generated_at,
-        stale_threshold_seconds=stale_threshold_seconds,
-    )
-
-    messages: list[dict] = []
-    try:
-        snapshots = context.supervisor.list_repos()
-    except Exception:
-        return []
-    repo_roots = {snap.id: snap.path for snap in snapshots}
-    hub_dismissals = load_hub_inbox_dismissals(context.config.root)
-    repo_dismissals_by_id: dict[str, dict[str, dict[str, Any]]] = {}
-    try:
-        hub_hint_items = build_hub_capability_hints(hub_config=context.config)
-    except Exception:
-        hub_hint_items = []
-    for item in hub_hint_items:
-        item_type = str(item.get("item_type") or "")
-        run_id = str(item.get("run_id") or "").strip()
-        if not item_type or not run_id:
-            continue
-        resolution = find_message_resolution(
-            hub_dismissals,
-            run_id=run_id,
-            item_type=item_type,
-            seq=None,
-            hint_id=str(item.get("hint_id") or "").strip() or None,
-            scope_key=scope_key,
+    action_queue = []
+    if include_action_queue:
+        action_queue = build_pma_action_queue(
+            inbox=inbox,
+            pma_threads=pma_threads,
+            pma_files_detail=pma_files_detail,
+            automation=automation,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
         )
-        if resolution is None:
-            for snap in snapshots:
-                repo_id = str(getattr(snap, "id", "") or "").strip()
-                repo_root = getattr(snap, "path", None)
-                if not repo_id or not isinstance(repo_root, Path):
-                    continue
-                dismissals = repo_dismissals_by_id.get(repo_id)
-                if dismissals is None:
-                    dismissals = load_hub_inbox_dismissals(repo_root)
-                    repo_dismissals_by_id[repo_id] = dismissals
-                resolution = find_message_resolution(
-                    dismissals,
-                    run_id=run_id,
-                    item_type=item_type,
-                    seq=None,
-                    hint_id=str(item.get("hint_id") or "").strip() or None,
-                    scope_key=scope_key,
-                )
-                if resolution is not None:
-                    break
-        if resolution is not None:
-            continue
-        copied = dict(item)
-        copied["resolution_state"] = message_resolution_state(item_type)
-        copied["resolvable_actions"] = message_resolvable_actions(item_type)
-        messages.append(copied)
 
-    for snap in snapshots:
-        repo_id = str(getattr(snap, "id", "") or "").strip()
-        repo_root = getattr(snap, "path", None)
-        if not repo_id or not isinstance(repo_root, Path):
-            continue
+    snapshots = []
+    repo_roots: dict[str, Path] = {}
+    hub_dismissals: dict[str, dict[str, Any]] = {}
+    repo_dismissals_by_id: dict[str, dict[str, dict[str, Any]]] = {}
+    if requested & {"inbox", "action_queue"}:
         try:
-            hint_items = build_repo_capability_hints(
-                hub_config=context.config,
-                repo_id=repo_id,
-                repo_root=repo_root,
-                repo_display_name=str(
-                    getattr(snap, "display_name", None) or getattr(snap, "id", "")
-                ).strip()
-                or repo_id,
-            )
+            snapshots = context.supervisor.list_repos()
         except Exception:
-            hint_items = []
-        dismissals = repo_dismissals_by_id.get(repo_id)
-        if dismissals is None:
-            dismissals = load_hub_inbox_dismissals(repo_root)
-            repo_dismissals_by_id[repo_id] = dismissals
-        for item in hint_items:
-            item_type = str(item.get("item_type") or "")
-            run_id = str(item.get("run_id") or "").strip()
-            if not item_type or not run_id:
-                continue
-            if find_message_resolution(
-                dismissals,
-                run_id=run_id,
-                item_type=item_type,
-                seq=None,
-                hint_id=str(item.get("hint_id") or "").strip() or None,
-                scope_key=scope_key,
-            ):
-                continue
-            copied = dict(item)
-            copied["resolution_state"] = message_resolution_state(item_type)
-            copied["resolvable_actions"] = message_resolvable_actions(item_type)
-            messages.append(copied)
+            snapshots = []
+        repo_roots = {
+            snap.id: snap.path
+            for snap in snapshots
+            if isinstance(getattr(snap, "path", None), Path)
+        }
+        config_root = getattr(getattr(context, "config", None), "root", None)
+        if isinstance(config_root, Path):
+            hub_dismissals = load_hub_inbox_dismissals(config_root)
 
+    def _repo_dismissals(
+        repo_id: str, repo_root: Optional[Path]
+    ) -> dict[str, dict[str, Any]]:
+        dismissals = repo_dismissals_by_id.get(repo_id)
+        if dismissals is not None:
+            return dismissals
+        if not repo_id or not isinstance(repo_root, Path):
+            return {}
+        dismissals = load_hub_inbox_dismissals(repo_root)
+        repo_dismissals_by_id[repo_id] = dismissals
+        return dismissals
+
+    filtered_action_queue: list[dict[str, Any]] = []
     for item in action_queue:
         if str(item.get("queue_source") or "") != "ticket_flow_inbox":
+            filtered_action_queue.append(dict(item))
             continue
         repo_id = str(item.get("repo_id") or "").strip()
         run_id = str(item.get("run_id") or "").strip()
@@ -300,10 +262,7 @@ def gather_hub_messages(
             repo_root = repo_roots.get(repo_id)
         if repo_root is None:
             continue
-        dismissals = repo_dismissals_by_id.get(repo_id)
-        if dismissals is None:
-            dismissals = load_hub_inbox_dismissals(repo_root)
-            repo_dismissals_by_id[repo_id] = dismissals
+        dismissals = _repo_dismissals(repo_id, repo_root)
         item_type = str(item.get("item_type") or "run_dispatch")
         seq_raw = item.get("seq")
         item_seq = seq_raw if isinstance(seq_raw, int) and seq_raw > 0 else None
@@ -337,9 +296,105 @@ def gather_hub_messages(
         copied = dict(item)
         copied["resolution_state"] = message_resolution_state(item_type)
         copied["resolvable_actions"] = message_resolvable_actions(item_type)
-        messages.append(copied)
+        filtered_action_queue.append(copied)
 
-    messages.sort(key=lambda m: int(m.get("queue_rank") or 0))
-    if limit and limit > 0:
-        return messages[: int(limit)]
-    return messages
+    messages: list[dict] = []
+    if "inbox" in requested:
+        try:
+            hub_hint_items = build_hub_capability_hints(hub_config=context.config)
+        except Exception:
+            hub_hint_items = []
+        for item in hub_hint_items:
+            item_type = str(item.get("item_type") or "")
+            run_id = str(item.get("run_id") or "").strip()
+            if not item_type or not run_id:
+                continue
+            resolution = find_message_resolution(
+                hub_dismissals,
+                run_id=run_id,
+                item_type=item_type,
+                seq=None,
+                hint_id=str(item.get("hint_id") or "").strip() or None,
+                scope_key=scope_key,
+            )
+            if resolution is None:
+                for snap in snapshots:
+                    repo_id = str(getattr(snap, "id", "") or "").strip()
+                    repo_root = getattr(snap, "path", None)
+                    if not repo_id or not isinstance(repo_root, Path):
+                        continue
+                    dismissals = _repo_dismissals(repo_id, repo_root)
+                    resolution = find_message_resolution(
+                        dismissals,
+                        run_id=run_id,
+                        item_type=item_type,
+                        seq=None,
+                        hint_id=str(item.get("hint_id") or "").strip() or None,
+                        scope_key=scope_key,
+                    )
+                    if resolution is not None:
+                        break
+            if resolution is not None:
+                continue
+            copied = dict(item)
+            copied["resolution_state"] = message_resolution_state(item_type)
+            copied["resolvable_actions"] = message_resolvable_actions(item_type)
+            messages.append(copied)
+        for snap in snapshots:
+            repo_id = str(getattr(snap, "id", "") or "").strip()
+            repo_root = getattr(snap, "path", None)
+            if not repo_id or not isinstance(repo_root, Path):
+                continue
+            try:
+                hint_items = build_repo_capability_hints(
+                    hub_config=context.config,
+                    repo_id=repo_id,
+                    repo_root=repo_root,
+                    repo_display_name=str(
+                        getattr(snap, "display_name", None) or getattr(snap, "id", "")
+                    ).strip()
+                    or repo_id,
+                )
+            except Exception:
+                hint_items = []
+            dismissals = _repo_dismissals(repo_id, repo_root)
+            for item in hint_items:
+                item_type = str(item.get("item_type") or "")
+                run_id = str(item.get("run_id") or "").strip()
+                if not item_type or not run_id:
+                    continue
+                if find_message_resolution(
+                    dismissals,
+                    run_id=run_id,
+                    item_type=item_type,
+                    seq=None,
+                    hint_id=str(item.get("hint_id") or "").strip() or None,
+                    scope_key=scope_key,
+                ):
+                    continue
+                copied = dict(item)
+                copied["resolution_state"] = message_resolution_state(item_type)
+                copied["resolvable_actions"] = message_resolvable_actions(item_type)
+                messages.append(copied)
+
+        for copied in filtered_action_queue:
+            if str(copied.get("queue_source") or "") != "ticket_flow_inbox":
+                continue
+            messages.append(copied)
+
+        messages.sort(key=lambda m: int(m.get("queue_rank") or 0))
+        if limit and limit > 0:
+            messages = messages[: int(limit)]
+
+    snapshot: dict[str, Any] = {"generated_at": generated_at}
+    if "inbox" in requested:
+        snapshot["items"] = messages
+    if "pma_threads" in requested:
+        snapshot["pma_threads"] = pma_threads
+    if "pma_files_detail" in requested:
+        snapshot["pma_files_detail"] = pma_files_detail
+    if "automation" in requested:
+        snapshot["automation"] = automation
+    if "action_queue" in requested:
+        snapshot["action_queue"] = filtered_action_queue
+    return snapshot

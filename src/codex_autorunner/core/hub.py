@@ -458,9 +458,22 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
 
 def save_hub_state(state_path: Path, state: HubState, hub_root: Path) -> None:
     payload = state.to_dict(hub_root)
-    import json
-
     atomic_write(state_path, json.dumps(payload, indent=2) + "\n")
+    try:
+        _save_pma_threads_artifact(hub_root)
+    except Exception as exc:
+        logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)
+
+
+def _save_pma_threads_artifact(hub_root: Path) -> None:
+    from .pma_context import _snapshot_pma_threads
+
+    payload = {
+        "generated_at": now_iso(),
+        "threads": _snapshot_pma_threads(hub_root),
+    }
+    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+    atomic_write(artifact_path, json.dumps(payload, indent=2) + "\n")
 
 
 def _normalize_pinned_parent_repo_ids(value: Any) -> List[str]:

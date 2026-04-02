@@ -213,6 +213,53 @@ def test_scan_writes_hub_state(tmp_path: Path):
     assert state_repo["status"] == snap.status.value
 
 
+def test_scan_writes_pma_threads_artifact(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+    PmaThreadStore(hub_root).create_thread(
+        "codex",
+        repo_dir,
+        repo_id="demo",
+        name="demo-thread",
+    )
+
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+    )
+    try:
+        supervisor.scan()
+    finally:
+        supervisor.shutdown()
+
+    artifact_path = hub_root / ".codex-autorunner" / "pma_threads.json"
+    payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert payload["generated_at"]
+    assert payload["threads"][0]["name"] == "demo-thread"
+
+
+def test_hub_repos_sections_filter_excludes_unrequested_fields(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        resp = client.get("/hub/repos?sections=repos")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert "repos" in payload
+    assert "agent_workspaces" not in payload
+    assert "freshness" not in payload
+
+
 def test_locked_status_reported(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
@@ -389,6 +436,33 @@ def test_hub_api_lists_agent_workspaces_as_typed_resources(tmp_path: Path):
     assert workspace["path"] == ".codex-autorunner/runtimes/zeroclaw/zc-main"
     assert workspace["resource_kind"] == "agent_workspace"
     assert workspace["effective_destination"] == {"kind": "local"}
+
+
+def test_hub_repos_sections_use_fresh_agent_workspace_listing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+
+    class _Workspace:
+        def to_dict(self, _root: Path) -> dict[str, str]:
+            return {"id": "fresh-ws", "resource_kind": "agent_workspace"}
+
+    monkeypatch.setattr(
+        HubSupervisor,
+        "list_agent_workspaces",
+        lambda self: [_Workspace()],
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/repos?sections=repos,agent_workspaces")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["repos"] == []
+    assert payload["agent_workspaces"] == [
+        {"id": "fresh-ws", "resource_kind": "agent_workspace"}
+    ]
 
 
 def test_hub_agent_workspace_crud_routes_support_remove_and_delete(

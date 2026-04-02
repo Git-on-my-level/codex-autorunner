@@ -23,6 +23,33 @@ from ..app_state import (
 )
 from ..services import hub_gather as hub_gather_service
 
+HUB_MESSAGE_SECTIONS = frozenset(
+    {
+        "inbox",
+        "pma_threads",
+        "pma_files_detail",
+        "automation",
+        "action_queue",
+        "freshness",
+    }
+)
+
+
+def _normalize_hub_message_sections(raw: Optional[str]) -> set[str]:
+    if raw is None:
+        return {"inbox", "freshness"}
+    requested = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    if not requested:
+        return {"inbox", "freshness"}
+    invalid = requested - HUB_MESSAGE_SECTIONS
+    if invalid:
+        invalid_text = ", ".join(sorted(invalid))
+        allowed_text = ", ".join(sorted(HUB_MESSAGE_SECTIONS))
+        raise ValueError(
+            f"Unsupported hub message sections: {invalid_text}. Allowed: {allowed_text}."
+        )
+    return requested
+
 
 def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
     router = APIRouter()
@@ -39,25 +66,38 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             return lock
 
     @router.get("/hub/messages")
-    async def hub_messages(limit: int = 100, scope_key: Optional[str] = None):
+    async def hub_messages(
+        limit: int = 100,
+        scope_key: Optional[str] = None,
+        sections: Optional[str] = None,
+    ):
         """Return paused ticket_flow dispatches across all repos.
 
         The hub inbox is intentionally simple: it surfaces the latest archived
         dispatch for each paused ticket_flow run.
         """
-        items = await asyncio.to_thread(
-            hub_gather_service.gather_hub_messages,
+        try:
+            requested_sections = _normalize_hub_message_sections(sections)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        snapshot = await asyncio.to_thread(
+            hub_gather_service.gather_hub_message_snapshot,
             context,
             limit=limit,
             scope_key=scope_key,
+            sections=requested_sections - {"freshness"},
         )
+        items = snapshot.get("items", []) if isinstance(snapshot, dict) else []
         generated_at = iso_now()
         stale_threshold_seconds = resolve_stale_threshold_seconds(
             getattr(context.config.pma, "freshness_stale_threshold_seconds", None)
         )
-        return {
+        payload: dict[str, Any] = {
             "generated_at": generated_at,
-            "freshness": {
+        }
+        if "freshness" in requested_sections:
+            payload["freshness"] = {
                 "schema_version": 1,
                 "generated_at": generated_at,
                 "stale_threshold_seconds": stale_threshold_seconds,
@@ -73,9 +113,13 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                         ),
                     )
                 },
-            },
-            "items": items,
-        }
+            }
+        if "inbox" in requested_sections:
+            payload["items"] = items if isinstance(items, list) else []
+        for key in ("pma_threads", "pma_files_detail", "automation", "action_queue"):
+            if key in requested_sections and isinstance(snapshot, dict):
+                payload[key] = snapshot.get(key)
+        return payload
 
     @router.post("/hub/messages/dismiss")
     async def dismiss_hub_message(payload: dict[str, Any]):

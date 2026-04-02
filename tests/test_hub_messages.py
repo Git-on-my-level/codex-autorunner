@@ -1157,3 +1157,55 @@ class TestIssue975CharacterizationHubMessageFreshness:
             assert item["recommended_action"] == "reply_and_resume"
             assert item["supersession"]["status"] == "primary"
             assert item["supersession"]["is_primary"] is True
+
+
+def test_hub_messages_sections_can_return_only_pma_threads(
+    hub_env, monkeypatch
+) -> None:
+    PmaThreadStore(hub_env.hub_root).create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="section-thread",
+    )
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages?sections=pma_threads")
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert "pma_threads" in payload
+    assert "items" not in payload
+    assert payload["pma_threads"][0]["name"] == "section-thread"
+
+
+def test_hub_messages_action_queue_sections_honor_dismissals(
+    hub_env, monkeypatch
+) -> None:
+    run_id = "51515151-5151-5151-5151-515151515151"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        before = client.get("/hub/messages?sections=action_queue")
+        assert before.status_code == 200
+        action_queue = before.json()["action_queue"]
+        assert len(action_queue) == 1
+        assert action_queue[0]["run_id"] == run_id
+
+        dismiss = client.post(
+            "/hub/messages/dismiss",
+            json={
+                "repo_id": hub_env.repo_id,
+                "run_id": run_id,
+                "seq": 1,
+                "reason": "handled outside queue section",
+            },
+        )
+        assert dismiss.status_code == 200
+
+        after = client.get("/hub/messages?sections=action_queue")
+        assert after.status_code == 200
+        assert after.json()["action_queue"] == []
