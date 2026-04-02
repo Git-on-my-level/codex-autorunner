@@ -333,10 +333,13 @@ const hubFlowFilterEl = document.getElementById(
 const hubSortOrderEl = document.getElementById(
   "hub-sort-order"
 ) as HTMLSelectElement | null;
-const hubCleanupAllThreadsBtn = document.getElementById(
-  "hub-cleanup-all-threads"
-) as HTMLButtonElement | null;
 const hubRepoPanelEl = document.getElementById("hub-repo-panel");
+
+function getHubCleanupAllThreadsBtn(): HTMLButtonElement | null {
+  return document.getElementById(
+    "hub-cleanup-all-threads"
+  ) as HTMLButtonElement | null;
+}
 const hubAgentPanelEl = document.getElementById("hub-agent-panel");
 const hubShellEl = document.getElementById("hub-shell");
 const hubRepoPanelSummaryEl = document.getElementById(
@@ -357,6 +360,8 @@ let hubUsageIndex: Record<string, HubUsageRepo> = {};
 let hubUsageUnmatched: HubUsageData["unmatched"] | null = null;
 let hubChannelEntries: HubChannelEntry[] = [];
 let hubOpenPanel: HubOpenPanel = loadHubOpenPanel();
+/** True while bulk cleanup POST is in flight; keeps the button disabled across hub re-renders. */
+let cleanupAllRepoThreadsInFlight = false;
 
 function saveSessionCache<T>(key: string, value: T): void {
   try {
@@ -725,16 +730,33 @@ async function pollHubJob(jobId: string, { timeoutMs = HUB_JOB_TIMEOUT_MS }: Pol
 }
 
 function updateCleanupAllThreadsButton(repos: HubRepo[]): void {
-  if (!hubCleanupAllThreadsBtn) return;
+  const btn = getHubCleanupAllThreadsBtn();
+  if (!btn) return;
   const cleanupRepos = baseReposWithUnboundThreads(repos);
   const totalThreads = totalUnboundManagedThreadCount(cleanupRepos);
   const dirtyRepos = dirtyBaseReposWithUnboundThreads(repos);
-  hubCleanupAllThreadsBtn.textContent =
+  const empty = totalThreads <= 0;
+  btn.textContent =
     totalThreads > 0 ? `Cleanup all (${totalThreads})` : "Cleanup all";
-  hubCleanupAllThreadsBtn.disabled = totalThreads <= 0;
+  if (cleanupAllRepoThreadsInFlight) {
+    btn.disabled = true;
+    btn.classList.remove("hub-cleanup-all--empty");
+    btn.removeAttribute("aria-disabled");
+    btn.title = "Cleaning up stale threads…";
+    return;
+  }
+  // Do not use the native `disabled` attribute when empty: it swallows clicks
+  // with no feedback; use aria + styling so the handler can flash a toast.
+  btn.disabled = false;
+  if (empty) {
+    btn.setAttribute("aria-disabled", "true");
+  } else {
+    btn.removeAttribute("aria-disabled");
+  }
+  btn.classList.toggle("hub-cleanup-all--empty", empty);
   if (totalThreads <= 0) {
-    hubCleanupAllThreadsBtn.title =
-      "No stale non-chat-bound managed threads across base repos";
+    btn.title =
+      "No stale non-chat-bound managed threads across base repos (click for confirmation)";
     return;
   }
   const dirtySummary = dirtyRepos.length
@@ -742,7 +764,7 @@ function updateCleanupAllThreadsButton(repos: HubRepo[]): void {
         dirtyRepos.length === 1 ? "" : "s"
       }.`
     : "";
-  hubCleanupAllThreadsBtn.title =
+  btn.title =
     `Archive ${totalThreads} stale non-chat-bound managed thread${
       totalThreads === 1 ? "" : "s"
     } across ${cleanupRepos.length} base repo${cleanupRepos.length === 1 ? "" : "s"}.` +
@@ -3346,7 +3368,11 @@ async function handleRepoAction(repoId: string, action: string): Promise<void> {
 }
 
 async function handleCleanupAllRepoThreads(): Promise<void> {
-  if (!hubCleanupAllThreadsBtn) return;
+  const btn = getHubCleanupAllThreadsBtn();
+  if (!btn) {
+    flash("Cleanup control is missing from the page.", "error");
+    return;
+  }
   const cleanupRepos = baseReposWithUnboundThreads(hubData.repos || []);
   const totalThreads = totalUnboundManagedThreadCount(cleanupRepos);
   if (totalThreads <= 0) {
@@ -3371,7 +3397,8 @@ async function handleCleanupAllRepoThreads(): Promise<void> {
   );
   if (!ok) return;
 
-  hubCleanupAllThreadsBtn.disabled = true;
+  cleanupAllRepoThreadsInFlight = true;
+  updateCleanupAllThreadsButton(hubData.repos || []);
   try {
     const response = (await api("/hub/repos/cleanup-threads", {
       method: "POST",
@@ -3385,6 +3412,7 @@ async function handleCleanupAllRepoThreads(): Promise<void> {
   } catch (err) {
     flash((err as Error).message || "Bulk cleanup failed", "error");
   } finally {
+    cleanupAllRepoThreadsInFlight = false;
     updateCleanupAllThreadsButton(hubData.repos || []);
   }
 }
@@ -3415,11 +3443,13 @@ function attachHubHandlers(): void {
   if (hubUsageRefresh) {
     hubUsageRefresh.addEventListener("click", () => loadHubUsage());
   }
-  if (hubCleanupAllThreadsBtn) {
-    hubCleanupAllThreadsBtn.addEventListener("click", () => {
-      void handleCleanupAllRepoThreads();
-    });
-  }
+  hubRepoPanelEl?.addEventListener("click", (e) => {
+    const target = e.target;
+    const el =
+      target instanceof Element ? target : (target as Node).parentElement;
+    if (!el?.closest("#hub-cleanup-all-threads")) return;
+    void handleCleanupAllRepoThreads();
+  });
   if (hubRepoSearchInput) {
     hubRepoSearchInput.addEventListener("input", () => {
       renderReposWithScroll(hubData.repos || []);

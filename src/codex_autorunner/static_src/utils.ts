@@ -527,6 +527,10 @@ export function confirmModal(message: string, options: ConfirmModalOptions = {})
     const cancelBtn = document.getElementById("confirm-modal-cancel") as HTMLButtonElement | null;
 
     if (!overlay || !messageEl || !okBtn || !cancelBtn) {
+      flash(
+        "Confirmation dialog is unavailable (expected #confirm-modal markup is missing).",
+        "error"
+      );
       resolve(false);
       return;
     }
