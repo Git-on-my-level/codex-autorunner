@@ -426,10 +426,37 @@ class PmaAutomationStore:
         wakeups: list[PmaAutomationWakeup],
     ) -> None:
         self._migrate_legacy_if_needed()
+        subscription_ids = {
+            entry.subscription_id
+            for entry in subscriptions
+            if entry.subscription_id.strip()
+        }
+        filtered_timers = [
+            entry
+            for entry in timers
+            if entry.subscription_id is None
+            or entry.subscription_id in subscription_ids
+        ]
+        filtered_wakeups = [
+            entry
+            for entry in wakeups
+            if entry.subscription_id is None
+            or entry.subscription_id in subscription_ids
+        ]
+        dropped_timers = len(timers) - len(filtered_timers)
+        dropped_wakeups = len(wakeups) - len(filtered_wakeups)
+        if dropped_timers or dropped_wakeups:
+            logger.info(
+                "Dropping orphaned automation rows before save",
+                extra={
+                    "dropped_timers": dropped_timers,
+                    "dropped_wakeups": dropped_wakeups,
+                },
+            )
         state["updated_at"] = _iso_now()
         state["subscriptions"] = [entry.to_dict() for entry in subscriptions]
-        state["timers"] = [entry.to_dict() for entry in timers]
-        state["wakeups"] = [entry.to_dict() for entry in wakeups]
+        state["timers"] = [entry.to_dict() for entry in filtered_timers]
+        state["wakeups"] = [entry.to_dict() for entry in filtered_wakeups]
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
             with conn:
                 conn.execute("DELETE FROM orch_automation_wakeups")
@@ -486,7 +513,7 @@ class PmaAutomationStore:
                             subscription.max_matches,
                         ),
                     )
-                for timer in timers:
+                for timer in filtered_timers:
                     conn.execute(
                         """
                         INSERT INTO orch_automation_timers (
@@ -533,7 +560,7 @@ class PmaAutomationStore:
                             timer.idle_seconds,
                         ),
                     )
-                for wakeup in wakeups:
+                for wakeup in filtered_wakeups:
                     conn.execute(
                         """
                         INSERT INTO orch_automation_wakeups (

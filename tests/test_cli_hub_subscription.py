@@ -122,6 +122,20 @@ def test_hub_subscription_purge_supports_dry_run_and_apply(hub_env) -> None:
         event_types=["failed"],
     )
     store = PmaAutomationStore(hub_env.hub_root)
+    store.create_timer(
+        {
+            "subscription_id": cancelled["subscription_id"],
+            "thread_id": "thread-purge",
+            "reason": "subscription-timer",
+        }
+    )
+    store.enqueue_wakeup(
+        source="lifecycle_subscription",
+        subscription_id=cancelled["subscription_id"],
+        thread_id="thread-purge",
+        reason="subscription-wakeup",
+        idempotency_key="purge-wakeup-1",
+    )
     assert store.cancel_subscription(cancelled["subscription_id"]) is True
 
     dry_run = runner.invoke(
@@ -171,3 +185,5 @@ def test_hub_subscription_purge_supports_dry_run_and_apply(hub_env) -> None:
     assert [entry["subscription_id"] for entry in remaining] == [
         active["subscription_id"]
     ]
+    assert store.list_timers(include_inactive=True) == []
+    assert store.list_wakeups() == []
