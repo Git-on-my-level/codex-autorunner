@@ -70,16 +70,18 @@ class HubRepoListingService:
     ) -> dict[str, Any]:
         safe_log(self._context.logger, logging.INFO, "Hub list_repos")
         requested = set(sections or REPO_LISTING_SECTIONS)
+        needs_repos = bool(requested & {"repos", "freshness"})
+        needs_agent_workspaces = bool(requested & {"agent_workspaces", "freshness"})
         snapshots = []
         repos: list[dict[str, Any]] = []
         agent_workspaces: list[dict[str, Any]] = []
 
-        if "repos" in requested:
+        if needs_repos:
             tasks = [
                 asyncio.to_thread(self._context.supervisor.list_repos),
                 asyncio.to_thread(self._active_chat_binding_counts_by_source),
             ]
-            if "agent_workspaces" in requested:
+            if needs_agent_workspaces:
                 tasks.append(
                     asyncio.to_thread(self._context.supervisor.list_agent_workspaces)
                 )
@@ -97,13 +99,13 @@ class HubRepoListingService:
                 )
                 for snap in snapshots
             ]
-            if "agent_workspaces" in requested:
+            if needs_agent_workspaces:
                 agent_workspace_snapshots = results[2]
                 agent_workspaces = [
                     workspace.to_dict(self._context.config.root)
                     for workspace in agent_workspace_snapshots
                 ]
-        elif "agent_workspaces" in requested:
+        elif needs_agent_workspaces:
             agent_workspace_snapshots = await asyncio.to_thread(
                 self._context.supervisor.list_agent_workspaces
             )

@@ -1180,6 +1180,23 @@ def test_hub_messages_sections_can_return_only_pma_threads(
     assert payload["pma_threads"][0]["name"] == "section-thread"
 
 
+def test_hub_messages_freshness_only_uses_underlying_inbox_counts(
+    hub_env, monkeypatch
+) -> None:
+    run_id = "61616161-6161-6161-6161-616161616161"
+    _seed_paused_run(hub_env.repo_root, run_id)
+    _write_dispatch_history(hub_env.repo_root, run_id, seq=1)
+
+    app = _build_hub_messages_app(hub_env.hub_root, monkeypatch)
+    with TestClient(app) as client:
+        res = client.get("/hub/messages?sections=freshness")
+
+    assert res.status_code == 200
+    payload = res.json()
+    assert "items" not in payload
+    assert payload["freshness"]["sections"]["inbox"]["entity_count"] == 1
+
+
 def test_hub_messages_action_queue_sections_honor_dismissals(
     hub_env, monkeypatch
 ) -> None:

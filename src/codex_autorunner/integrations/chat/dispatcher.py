@@ -169,6 +169,7 @@ class ChatDispatcher:
             str, Deque[tuple[ChatEvent, DispatchContext, DispatchHandler]]
         ] = {}
         self._workers: Dict[str, asyncio.Task[None]] = {}
+        self._resetting_conversations: set[str] = set()
         self._active_contexts: Dict[str, DispatchContext] = {}
         self._active_started_at: Dict[str, str] = {}
         self._active_handlers = 0
@@ -354,6 +355,7 @@ class ChatDispatcher:
                 self._queues.pop(conversation_id, None)
             cancelled_active = conversation_id in self._active_contexts
             worker = self._workers.get(conversation_id)
+            self._resetting_conversations.add(conversation_id)
             self._publish_queue_state_locked(conversation_id)
 
         if worker is not None:
@@ -361,10 +363,18 @@ class ChatDispatcher:
             await asyncio.gather(worker, return_exceptions=True)
 
         async with self._lock:
-            self._queues.pop(conversation_id, None)
-            self._workers.pop(conversation_id, None)
+            self._resetting_conversations.discard(conversation_id)
             self._active_contexts.pop(conversation_id, None)
             self._active_started_at.pop(conversation_id, None)
+            queue = self._queues.get(conversation_id)
+            if queue:
+                if conversation_id not in self._workers:
+                    self._workers[conversation_id] = asyncio.create_task(
+                        self._drain_conversation(conversation_id)
+                    )
+            else:
+                self._queues.pop(conversation_id, None)
+                self._workers.pop(conversation_id, None)
             if self._active_handlers == 0 and not self._workers and not self._queues:
                 self._idle_event.set()
             self._publish_queue_state_locked(conversation_id)
@@ -412,11 +422,12 @@ class ChatDispatcher:
             if queue is None:
                 queue = deque()
                 self._queues[conversation_id] = queue
-            had_worker = conversation_id in self._workers
+            is_resetting = conversation_id in self._resetting_conversations
+            had_worker = conversation_id in self._workers or is_resetting
             had_pending = bool(queue)
             queue.append((event, context, handler))
             self._idle_event.clear()
-            if conversation_id not in self._workers:
+            if conversation_id not in self._workers and not is_resetting:
                 self._workers[conversation_id] = asyncio.create_task(
                     self._drain_conversation(conversation_id)
                 )

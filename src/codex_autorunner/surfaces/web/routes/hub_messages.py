@@ -81,12 +81,15 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        snapshot_sections = requested_sections - {"freshness"}
+        if "freshness" in requested_sections:
+            snapshot_sections.add("inbox")
         snapshot = await asyncio.to_thread(
             hub_gather_service.gather_hub_message_snapshot,
             context,
             limit=limit,
             scope_key=scope_key,
-            sections=requested_sections - {"freshness"},
+            sections=snapshot_sections,
         )
         items = snapshot.get("items", []) if isinstance(snapshot, dict) else []
         generated_at = iso_now()

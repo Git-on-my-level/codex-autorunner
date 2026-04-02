@@ -260,6 +260,24 @@ def test_hub_repos_sections_filter_excludes_unrequested_fields(tmp_path: Path) -
     assert "freshness" not in payload
 
 
+def test_hub_repos_freshness_only_uses_underlying_repo_counts(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    app = create_hub_app(hub_root)
+    with TestClient(app) as client:
+        resp = client.get("/hub/repos?sections=freshness")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert "repos" not in payload
+    assert "agent_workspaces" not in payload
+    assert payload["freshness"]["sections"]["repos"]["entity_count"] == 1
+
+
 def test_locked_status_reported(tmp_path: Path):
     hub_root = tmp_path / "hub"
     cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
