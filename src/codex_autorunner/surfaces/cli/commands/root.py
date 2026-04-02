@@ -663,7 +663,7 @@ def register_root_commands(app: typer.Typer) -> None:
         flows, use 'car flow' commands instead.
         """
         typer.echo("The 'resume' command has been deprecated in favor of ticket_flow.")
-        typer.echo("Use 'car flow ticket_flow/start' to resume existing flows.")
+        typer.echo("Use 'car flow ticket_flow start' to resume existing flows.")
         raise typer.Exit(code=0)
 
     @app.command()

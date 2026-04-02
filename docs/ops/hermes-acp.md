@@ -155,11 +155,11 @@ car pma chat --agent hermes "Summarize the current ticket state."
 Managed PMA thread flow:
 
 ```bash
-car pma threads create --agent hermes --workspace-root /abs/path/to/repo
-car pma threads list --agent hermes
-car pma threads send --id <thread-id> --message "Investigate the failing test."
-car pma threads status --id <thread-id>
-car pma threads interrupt --id <thread-id>
+car pma thread create --agent hermes --workspace-root /abs/path/to/repo
+car pma thread list --agent hermes
+car pma thread send --id <thread-id> --message "Investigate the failing test."
+car pma thread status --id <thread-id>
+car pma thread interrupt --id <thread-id>
 ```
 
 Notes:

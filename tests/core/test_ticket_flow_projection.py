@@ -38,7 +38,7 @@ def test_build_canonical_state_v1_uses_represented_run_when_preferred_is_stale(
         "run_id": represented_run_id,
         "state": "paused",
         "flow_status": "paused",
-        "recommended_action": "car flow ticket_flow resume --run-id c222",
+        "recommended_action": "car flow ticket_flow start",
     }
     canonical = build_canonical_state_v1(
         repo_root=repo_root,

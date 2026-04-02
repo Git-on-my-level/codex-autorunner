@@ -424,7 +424,7 @@ def pma_notes_content() -> str:
   `car flow ticket_flow bootstrap --repo <path>`
 - Start/resume:
   `car flow ticket_flow start --repo <path>`
-  `car flow ticket_flow resume --repo <path> [--run-id <uuid>]`
+  `car flow ticket_flow start --repo <path>`
 - Status/stop:
   `car flow ticket_flow status --repo <path> [--run-id <uuid>]`
   `car flow ticket_flow stop --repo <path> [--run-id <uuid>]`

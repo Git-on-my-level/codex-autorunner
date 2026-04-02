@@ -233,7 +233,7 @@ Operators should migrate only when they need intentional shared-chat behavior:
   and any root-chat or default-mode warnings.
 
 ### ticket_flow resume blocked or stale
-If `car flow ticket_flow resume` fails because another run is active, inspect that active run before creating a new one.
+If `car flow ticket_flow start` fails because another run is active, inspect that active run before creating a new one.
 
 If the conflicting run is healthy (`status: running`, `worker.status: alive`), resume or stop that run instead of using `--force-new`.
 
@@ -302,9 +302,8 @@ Once basic setup is complete, suggest these next steps:
 | Command | Description |
 |---------|-------------|
 | `car flow ticket_flow bootstrap` | Seed tickets (if needed) and start a ticket flow |
-| `car flow ticket_flow start` | Start/resume the latest ticket flow (use `--force-new` when resume metadata is stale) |
+| `car flow ticket_flow start` | Start or resume the latest ticket flow (use `--force-new` when resume metadata is stale) |
 | `car flow ticket_flow status` | Show ticket flow status |
-| `car flow ticket_flow resume` | Resume a paused ticket flow |
 | `car flow ticket_flow stop` | Stop a ticket flow |
 | `car status` | Show autorunner status |
 | `car log` | Show autorunner log output |

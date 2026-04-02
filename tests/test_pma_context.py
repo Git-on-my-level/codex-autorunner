@@ -939,7 +939,7 @@ def test_build_hub_snapshot_demotes_stale_paused_dispatch_when_no_tickets_remain
     )
     run_state = item.get("run_state") or {}
     assert run_state.get("state") == "blocked"
-    assert run_state.get("recommended_action", "").endswith("--force")
+    assert run_state.get("recommended_action", "").endswith("--force-new")
 
 
 def test_build_hub_snapshot_keeps_failed_worker_dead_run_visible_during_auto_dismiss_grace_when_no_tickets_remain(
@@ -2107,9 +2107,9 @@ class TestIssue975CharacterizationMixedPmaState:
                     "run_state": {
                         "state": "paused",
                         "blocking_reason": "Waiting for operator input",
-                        "recommended_action": "car flow ticket_flow resume",
+                        "recommended_action": "car flow ticket_flow start",
                         "recommended_actions": [
-                            "car flow ticket_flow resume",
+                            "car flow ticket_flow start",
                             "car flow ticket_flow status",
                         ],
                         "attention_required": True,
@@ -2120,7 +2120,7 @@ class TestIssue975CharacterizationMixedPmaState:
                         "latest_run_id": "run-dispatch-1",
                         "latest_run_status": "paused",
                         "state": "paused",
-                        "recommended_action": "car flow ticket_flow resume",
+                        "recommended_action": "car flow ticket_flow start",
                         "recommendation_confidence": "high",
                         "freshness": {
                             "generated_at": "2026-03-16T12:00:00Z",
@@ -2146,7 +2146,7 @@ class TestIssue975CharacterizationMixedPmaState:
                     "run_state": {
                         "state": "blocked",
                         "blocking_reason": "Run failed: connection timeout",
-                        "recommended_action": "car flow ticket_flow resume --force",
+                        "recommended_action": "car flow ticket_flow start --force-new",
                         "attention_required": False,
                     },
                     "canonical_state_v1": {

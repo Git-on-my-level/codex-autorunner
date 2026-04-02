@@ -1523,7 +1523,7 @@ def _check_pma_queue(checks: list[DoctorCheck], repo_root: Path) -> None:
                     passed=False,
                     message=f"Found {len(stuck_lanes)} stuck lane(s): {', '.join(stuck_lanes)}",
                     check_id="pma.queue",
-                    fix=f"Run 'car pma stop' for stuck lanes or check logs at {queue_dir}",
+                    fix=f"Run 'car pma interrupt' for stuck lanes or check logs at {queue_dir}",
                 )
             )
         else:

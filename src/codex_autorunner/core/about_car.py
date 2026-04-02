@@ -201,7 +201,7 @@ def build_ticket_flow_quickstart_markdown(*, repo_root: Path) -> str:
         "- Check status:\n"
         "  `car flow ticket_flow status --repo <path> [--run-id <uuid>]`\n"
         "- Resume/stop:\n"
-        "  `car flow ticket_flow resume --repo <path> [--run-id <uuid>]`\n"
+        "  `car flow ticket_flow start --repo <path>`\n"
         "  `car flow ticket_flow stop --repo <path> [--run-id <uuid>]`\n\n"
         "## Recovery when resume metadata is stale\n"
         "- Use `resume` only when the target run metadata is healthy and there is no conflicting active run.\n"

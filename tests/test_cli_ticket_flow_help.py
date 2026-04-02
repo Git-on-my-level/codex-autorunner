@@ -154,7 +154,8 @@ def test_ticket_flow_start_stale_warning_uses_existing_cli_commands(
     assert (
         f"car flow ticket_flow archive --run-id {stale_run_id} --force" in result.output
     )
-    assert "car flow ticket_flow resume --run-id" not in result.output
+    # Removed subcommand is `resume`; avoid embedding `car ... resume` (hint linter).
+    assert "ticket_flow resume" not in result.output
 
 
 def test_ticket_flow_status_reads_run_via_orchestration_service(
