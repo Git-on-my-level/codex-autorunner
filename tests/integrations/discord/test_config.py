@@ -206,7 +206,7 @@ def test_discord_bot_config_media_invalid_voice_raises(tmp_path) -> None:
 
 def test_discord_bot_config_dispatch_defaults(tmp_path) -> None:
     cfg = DiscordBotConfig.from_raw(root=tmp_path, raw={"enabled": False})
-    assert cfg.dispatch.handler_timeout_seconds == 120.0
+    assert cfg.dispatch.handler_timeout_seconds is None
     assert cfg.dispatch.handler_stalled_warning_seconds == 60.0
 
 
@@ -223,6 +223,23 @@ def test_discord_bot_config_dispatch_overrides(tmp_path) -> None:
     )
     assert cfg.dispatch.handler_timeout_seconds == 45.0
     assert cfg.dispatch.handler_stalled_warning_seconds == 15.0
+
+
+def test_discord_bot_config_dispatch_explicit_null_disables_timeout_and_warning(
+    tmp_path,
+) -> None:
+    cfg = DiscordBotConfig.from_raw(
+        root=tmp_path,
+        raw={
+            "enabled": False,
+            "dispatch": {
+                "handler_timeout_seconds": None,
+                "handler_stalled_warning_seconds": None,
+            },
+        },
+    )
+    assert cfg.dispatch.handler_timeout_seconds is None
+    assert cfg.dispatch.handler_stalled_warning_seconds is None
 
 
 def test_discord_bot_config_builds_shared_collaboration_policy(

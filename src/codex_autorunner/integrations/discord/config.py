@@ -25,8 +25,8 @@ DEFAULT_COMMAND_SCOPE = "guild"
 DEFAULT_SHELL_TIMEOUT_MS = 120000
 DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
-DEFAULT_DISPATCH_HANDLER_TIMEOUT_SECONDS = 120.0
-DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS = 60.0
+DEFAULT_DISPATCH_HANDLER_TIMEOUT_SECONDS: Optional[float] = None
+DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS: Optional[float] = 60.0
 DEFAULT_INTENTS = (
     DISCORD_INTENT_GUILDS
     | DISCORD_INTENT_GUILD_MESSAGES
@@ -35,6 +35,7 @@ DEFAULT_INTENTS = (
 # Legacy value from early Discord rollout before message content was required for
 # plain-text turns in bound channels.
 LEGACY_DEFAULT_INTENTS = DISCORD_INTENT_GUILDS | DISCORD_INTENT_GUILD_MESSAGES
+_MISSING = object()
 
 
 class DiscordBotConfigError(Exception):
@@ -210,12 +211,20 @@ class DiscordBotConfig:
         dispatch_cfg = dispatch_raw if isinstance(dispatch_raw, dict) else {}
         dispatch = DiscordBotDispatchConfig(
             handler_timeout_seconds=_parse_optional_positive_float(
-                dispatch_cfg.get("handler_timeout_seconds"),
+                (
+                    dispatch_cfg["handler_timeout_seconds"]
+                    if "handler_timeout_seconds" in dispatch_cfg
+                    else _MISSING
+                ),
                 default=DEFAULT_DISPATCH_HANDLER_TIMEOUT_SECONDS,
                 key="discord_bot.dispatch.handler_timeout_seconds",
             ),
             handler_stalled_warning_seconds=_parse_optional_positive_float(
-                dispatch_cfg.get("handler_stalled_warning_seconds"),
+                (
+                    dispatch_cfg["handler_stalled_warning_seconds"]
+                    if "handler_stalled_warning_seconds" in dispatch_cfg
+                    else _MISSING
+                ),
                 default=DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS,
                 key="discord_bot.dispatch.handler_stalled_warning_seconds",
             ),
@@ -305,8 +314,10 @@ def _parse_optional_positive_float(
     default: Optional[float],
     key: str,
 ) -> Optional[float]:
-    if value is None:
+    if value is _MISSING:
         return default
+    if value is None:
+        return None
     try:
         parsed = float(value)
     except (TypeError, ValueError) as exc:

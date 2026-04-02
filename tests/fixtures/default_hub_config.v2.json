@@ -75,7 +75,7 @@
     },
     "dispatch": {
       "handler_stalled_warning_seconds": 60.0,
-      "handler_timeout_seconds": 120.0
+      "handler_timeout_seconds": null
     },
     "enabled": false,
     "intents": 33281,
