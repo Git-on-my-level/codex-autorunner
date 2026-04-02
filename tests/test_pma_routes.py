@@ -3170,6 +3170,23 @@ def test_pma_automation_timer_rejects_invalid_due_at(hub_env) -> None:
     assert fake_store.created_payloads == []
 
 
+def test_pma_automation_timer_rejects_unknown_subscription_id(hub_env) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/pma/timers",
+            json={
+                "timer_type": "one_shot",
+                "delay_seconds": 60,
+                "subscription_id": "missing-sub",
+            },
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Unknown subscription_id: missing-sub"
+
+
 def test_pma_orchestration_service_integration_for_thread_operations(
     hub_env, monkeypatch: pytest.MonkeyPatch
 ) -> None:

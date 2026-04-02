@@ -475,11 +475,14 @@ def build_automation_routes(
         request: Request, payload: PmaAutomationTimerCreateRequest
     ) -> dict[str, Any]:
         store = await get_automation_store(request, get_runtime_state())
-        created = await call_store_create_with_payload(
-            store,
-            ("create_timer", "add_timer", "upsert_timer"),
-            payload.model_dump(exclude_none=True),
-        )
+        try:
+            created = await call_store_create_with_payload(
+                store,
+                ("create_timer", "add_timer", "upsert_timer"),
+                payload.model_dump(exclude_none=True),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if isinstance(created, dict) and "timer" in created:
             return created
         return {"timer": created}

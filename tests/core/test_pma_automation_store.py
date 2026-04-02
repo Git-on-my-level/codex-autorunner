@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from codex_autorunner.core.pma_automation_store import PmaAutomationStore
@@ -177,6 +179,63 @@ def test_wakeup_queue_dedup_and_dispatch_persists(tmp_path) -> None:
     dispatched = reloaded.list_wakeups(state_filter="dispatched")
     assert len(dispatched) == 1
     assert dispatched[0]["wakeup_id"] == created.wakeup_id
+
+
+def test_timer_rejects_unknown_subscription_id(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path)
+
+    with pytest.raises(ValueError, match="Unknown subscription_id: missing-sub"):
+        store.create_timer(
+            {
+                "subscription_id": "missing-sub",
+                "thread_id": "thread-1",
+                "reason": "subscription-timer",
+            }
+        )
+
+    assert store.list_timers(include_inactive=True) == []
+
+
+def test_purge_logs_orphan_cleanup_notice(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = PmaAutomationStore(tmp_path)
+    subscription = store.create_subscription(
+        {
+            "thread_id": "thread-purge",
+            "lane_id": "pma:lane-purge",
+            "event_types": ["failed"],
+        }
+    )["subscription"]
+    store.create_timer(
+        {
+            "subscription_id": subscription["subscription_id"],
+            "thread_id": "thread-purge",
+            "reason": "subscription-timer",
+        }
+    )
+    store.enqueue_wakeup(
+        source="lifecycle_subscription",
+        subscription_id=subscription["subscription_id"],
+        thread_id="thread-purge",
+        reason="subscription-wakeup",
+        idempotency_key="purge-wakeup-log-1",
+    )
+    assert store.cancel_subscription(subscription["subscription_id"]) is True
+
+    with caplog.at_level(
+        logging.WARNING, logger="codex_autorunner.core.pma_automation_store"
+    ):
+        removed = store.purge_subscriptions(state_filter="cancelled", dry_run=False)
+
+    assert [entry["subscription_id"] for entry in removed] == [
+        subscription["subscription_id"]
+    ]
+    assert any(
+        "Dropping orphaned automation rows before save (timers=1, wakeups=1)"
+        in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_subscription_lane_id_flows_into_transition_wakeup(tmp_path) -> None:
