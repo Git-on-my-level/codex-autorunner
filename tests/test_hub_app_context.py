@@ -7,6 +7,10 @@ from fastapi.testclient import TestClient
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.app_server_command import GLOBAL_APP_SERVER_COMMAND_ENV
 from codex_autorunner.core.config import CONFIG_FILENAME
+from codex_autorunner.core.hub_diagnostics import (
+    hub_clean_shutdown_path,
+    hub_pid_path,
+)
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.integrations.app_server.threads import (
     AppServerThreadRegistry,
@@ -85,6 +89,21 @@ def test_hub_lifespan_reaper_uses_config_root(hub_env, monkeypatch) -> None:
         pass
 
     assert called_roots == [app.state.config.root]
+
+
+def test_hub_lifespan_records_pid_and_clean_shutdown(hub_env, monkeypatch) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    app = create_hub_app(hub_env.hub_root)
+    pid_path = hub_pid_path(hub_env.hub_root)
+    clean_shutdown_path = hub_clean_shutdown_path(hub_env.hub_root)
+
+    with TestClient(app):
+        assert pid_path.exists()
+        assert pid_path.read_text(encoding="utf-8").strip().isdigit()
+        assert clean_shutdown_path.exists() is False
+
+    assert clean_shutdown_path.exists()
+    assert clean_shutdown_path.read_text(encoding="utf-8").strip()
 
 
 def test_hub_opencode_prune_interval_uses_opencode_ttl(

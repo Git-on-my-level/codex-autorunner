@@ -14,6 +14,11 @@ from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
 )
+from ...core.hub_diagnostics import (
+    install_hub_exception_hooks,
+    record_hub_clean_shutdown,
+    record_hub_startup,
+)
 from ...core.logging_utils import safe_log
 from ...core.managed_processes import reap_managed_processes
 from ...housekeeping import reap_managed_docker_containers, run_housekeeping_once
@@ -128,7 +133,18 @@ def create_hub_app(
         tasks: list[asyncio.Task] = []
         registered_pma_lane_starter = False
         pma_lane_starter_register = None
+        exception_hooks = None
+        startup_completed = False
         app.state.hub_started = True
+        record_hub_startup(
+            app.state.config.root,
+            app.state.logger,
+            durable=bool(getattr(app.state.config, "durable_writes", False)),
+        )
+        exception_hooks = install_hub_exception_hooks(
+            logger=app.state.logger,
+            loop=asyncio.get_running_loop(),
+        )
         try:
             await recover_orphaned_managed_thread_executions(app)
             await restart_managed_thread_queue_workers(app)
@@ -326,6 +342,7 @@ def create_hub_app(
                         exc,
                     )
         await mount_manager.start_repo_lifespans()
+        startup_completed = True
         try:
             yield
         finally:
@@ -406,6 +423,14 @@ def create_hub_app(
                             "PMA lane worker shutdown failed",
                             exc,
                         )
+            if startup_completed:
+                record_hub_clean_shutdown(
+                    app.state.config.root,
+                    app.state.logger,
+                    durable=bool(getattr(app.state.config, "durable_writes", False)),
+                )
+            if exception_hooks is not None:
+                exception_hooks.restore()
 
     app.router.lifespan_context = lifespan
 
