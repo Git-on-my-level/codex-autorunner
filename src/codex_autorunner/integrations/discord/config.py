@@ -25,6 +25,8 @@ DEFAULT_COMMAND_SCOPE = "guild"
 DEFAULT_SHELL_TIMEOUT_MS = 120000
 DEFAULT_SHELL_MAX_OUTPUT_CHARS = 3800
 DEFAULT_MEDIA_MAX_VOICE_BYTES = 10 * 1024 * 1024
+DEFAULT_DISPATCH_HANDLER_TIMEOUT_SECONDS: Optional[float] = None
+DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS: Optional[float] = 60.0
 DEFAULT_INTENTS = (
     DISCORD_INTENT_GUILDS
     | DISCORD_INTENT_GUILD_MESSAGES
@@ -33,6 +35,7 @@ DEFAULT_INTENTS = (
 # Legacy value from early Discord rollout before message content was required for
 # plain-text turns in bound channels.
 LEGACY_DEFAULT_INTENTS = DISCORD_INTENT_GUILDS | DISCORD_INTENT_GUILD_MESSAGES
+_MISSING = object()
 
 
 class DiscordBotConfigError(Exception):
@@ -61,6 +64,14 @@ class DiscordBotMediaConfig:
 
 
 @dataclass(frozen=True)
+class DiscordBotDispatchConfig:
+    handler_timeout_seconds: Optional[float] = DEFAULT_DISPATCH_HANDLER_TIMEOUT_SECONDS
+    handler_stalled_warning_seconds: Optional[float] = (
+        DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS
+    )
+
+
+@dataclass(frozen=True)
 class DiscordBotConfig:
     root: Path
     enabled: bool
@@ -79,6 +90,7 @@ class DiscordBotConfig:
     pma_enabled: bool
     shell: DiscordBotShellConfig = field(default_factory=DiscordBotShellConfig)
     media: DiscordBotMediaConfig = field(default_factory=DiscordBotMediaConfig)
+    dispatch: DiscordBotDispatchConfig = field(default_factory=DiscordBotDispatchConfig)
     collaboration_policy: Optional[CollaborationPolicy] = None
 
     @classmethod
@@ -195,6 +207,28 @@ class DiscordBotConfig:
             voice=media_voice,
             max_voice_bytes=media_max_voice_bytes,
         )
+        dispatch_raw = cfg.get("dispatch")
+        dispatch_cfg = dispatch_raw if isinstance(dispatch_raw, dict) else {}
+        dispatch = DiscordBotDispatchConfig(
+            handler_timeout_seconds=_parse_optional_positive_float(
+                (
+                    dispatch_cfg["handler_timeout_seconds"]
+                    if "handler_timeout_seconds" in dispatch_cfg
+                    else _MISSING
+                ),
+                default=DEFAULT_DISPATCH_HANDLER_TIMEOUT_SECONDS,
+                key="discord_bot.dispatch.handler_timeout_seconds",
+            ),
+            handler_stalled_warning_seconds=_parse_optional_positive_float(
+                (
+                    dispatch_cfg["handler_stalled_warning_seconds"]
+                    if "handler_stalled_warning_seconds" in dispatch_cfg
+                    else _MISSING
+                ),
+                default=DEFAULT_DISPATCH_HANDLER_STALLED_WARNING_SECONDS,
+                key="discord_bot.dispatch.handler_stalled_warning_seconds",
+            ),
+        )
 
         if enabled:
             if not bot_token:
@@ -245,6 +279,7 @@ class DiscordBotConfig:
             pma_enabled=pma_enabled,
             shell=shell,
             media=media,
+            dispatch=dispatch,
             collaboration_policy=collaboration_policy,
         )
 
@@ -270,6 +305,25 @@ def _parse_positive_int_or_default(value: Any, *, default: int, key: str) -> int
         raise DiscordBotConfigError(f"{key} must be an integer") from exc
     if parsed <= 0:
         return default
+    return parsed
+
+
+def _parse_optional_positive_float(
+    value: Any,
+    *,
+    default: Optional[float],
+    key: str,
+) -> Optional[float]:
+    if value is _MISSING:
+        return default
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise DiscordBotConfigError(f"{key} must be a number or null") from exc
+    if parsed <= 0:
+        return None
     return parsed
 
 

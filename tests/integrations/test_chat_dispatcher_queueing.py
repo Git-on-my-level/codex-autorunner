@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Optional
 
 import pytest
@@ -308,6 +309,57 @@ def test_dispatcher_rejects_scalar_string_bypass_iterables(
 ) -> None:
     with pytest.raises(TypeError, match=expected_param):
         ChatDispatcher(**kwargs)
+
+
+@pytest.mark.anyio
+async def test_dispatcher_times_out_stalled_handler_and_releases_queue(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("test.chat_dispatcher.timeout")
+    dispatcher = ChatDispatcher(
+        logger=logger,
+        handler_timeout_seconds=0.05,
+        handler_stalled_warning_seconds=0.01,
+    )
+    release = asyncio.Event()
+    started = asyncio.Event()
+    observed: list[str] = []
+
+    async def handler(event, _context) -> None:
+        observed.append(f"start:{event.update_id}")
+        if event.update_id == "normal-1":
+            started.set()
+            await release.wait()
+        observed.append(f"end:{event.update_id}")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        await dispatcher.dispatch(_message_event("normal-1", message_id="m-1"), handler)
+        await started.wait()
+        await dispatcher.dispatch(_message_event("normal-2", message_id="m-2"), handler)
+        await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert observed == ["start:normal-1", "start:normal-2", "end:normal-2"]
+    assert '"event":"chat.dispatch.handler.stalled"' in caplog.text
+    assert '"event":"chat.dispatch.handler.timeout"' in caplog.text
+    assert '"event":"chat.dispatch.handler.done"' in caplog.text
+
+
+@pytest.mark.anyio
+async def test_dispatcher_logs_traceback_for_handler_failures(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("test.chat_dispatcher.failure")
+    dispatcher = ChatDispatcher(logger=logger)
+
+    async def handler(_event, _context) -> None:
+        raise RuntimeError("boom")
+
+    with caplog.at_level(logging.ERROR, logger=logger.name):
+        await dispatcher.dispatch(_message_event("boom", message_id="m-1"), handler)
+        await asyncio.wait_for(dispatcher.wait_idle(), timeout=1.0)
+
+    assert '"event":"chat.dispatch.handler.failed"' in caplog.text
+    assert "RuntimeError: boom" in caplog.text
 
 
 @pytest.mark.parametrize(

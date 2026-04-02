@@ -11,6 +11,7 @@ import asyncio
 import logging
 from collections import deque
 from dataclasses import dataclass
+from numbers import Real
 from typing import (
     Any,
     Awaitable,
@@ -87,6 +88,15 @@ def _normalize_casefolded_values(
     return tuple(normalized)
 
 
+def _normalize_timeout_seconds(value: Optional[float]) -> Optional[float]:
+    if value is None:
+        return None
+    if not isinstance(value, Real):
+        raise TypeError("timeout values must be numeric or None")
+    normalized = float(value)
+    return normalized if normalized > 0 else None
+
+
 @dataclass(frozen=True)
 class DispatchContext:
     """Normalized dispatch metadata derived from an inbound chat event."""
@@ -139,6 +149,8 @@ class ChatDispatcher:
         bypass_interaction_prefixes: Optional[Iterable[str]] = None,
         bypass_callback_ids: Optional[Iterable[str]] = None,
         bypass_message_texts: Optional[Iterable[str]] = None,
+        handler_timeout_seconds: Optional[float] = 120.0,
+        handler_stalled_warning_seconds: Optional[float] = 60.0,
     ) -> None:
         self._logger = logger or logging.getLogger(__name__)
         self._queue_control_store = queue_control_store
@@ -163,6 +175,12 @@ class ChatDispatcher:
                 default=DEFAULT_BYPASS_MESSAGE_TEXTS,
                 parameter_name="bypass_message_texts",
             )
+        )
+        self._handler_timeout_seconds = _normalize_timeout_seconds(
+            handler_timeout_seconds
+        )
+        self._handler_stalled_warning_seconds = _normalize_timeout_seconds(
+            handler_stalled_warning_seconds
         )
         self._lock = asyncio.Lock()
         self._queues: Dict[
@@ -496,6 +514,8 @@ class ChatDispatcher:
         context: DispatchContext,
         handler: DispatchHandler,
     ) -> None:
+        handler_task: Optional[asyncio.Future[None]] = None
+        stall_monitor_task: Optional[asyncio.Task[None]] = None
         log_event(
             self._logger,
             logging.INFO,
@@ -504,16 +524,59 @@ class ChatDispatcher:
             update_id=context.update_id,
         )
         try:
-            await handler(event, context)
+            handler_task = asyncio.ensure_future(handler(event, context))
+            if self._handler_stalled_warning_seconds is not None:
+                stall_monitor_task = asyncio.create_task(
+                    self._warn_on_stalled_handler(handler_task, context)
+                )
+            if self._handler_timeout_seconds is None:
+                await handler_task
+            else:
+                done, _ = await asyncio.wait(
+                    {handler_task},
+                    timeout=self._handler_timeout_seconds,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if handler_task not in done:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "chat.dispatch.handler.timeout",
+                        conversation_id=context.conversation_id,
+                        update_id=context.update_id,
+                        timeout_seconds=self._handler_timeout_seconds,
+                    )
+                    handler_task.cancel()
+                    handler_task.add_done_callback(
+                        lambda task: self._log_background_handler_failure(task, context)
+                    )
+                    return
+                await handler_task
+        except asyncio.CancelledError:
+            if handler_task is not None and not handler_task.done():
+                handler_task.cancel()
+                handler_task.add_done_callback(
+                    lambda task: self._log_background_handler_failure(task, context)
+                )
+            raise
         except Exception as exc:
             log_event(
                 self._logger,
-                logging.WARNING,
+                logging.ERROR,
                 "chat.dispatch.handler.failed",
                 conversation_id=context.conversation_id,
                 update_id=context.update_id,
                 exc=exc,
             )
+            self._logger.exception(
+                "chat.dispatch.handler.failed conversation_id=%s update_id=%s",
+                context.conversation_id,
+                context.update_id,
+            )
+        finally:
+            if stall_monitor_task is not None:
+                stall_monitor_task.cancel()
+                await asyncio.gather(stall_monitor_task, return_exceptions=True)
         log_event(
             self._logger,
             logging.INFO,
@@ -556,6 +619,65 @@ class ChatDispatcher:
             self._queue_control_store.clear_snapshot(conversation_id)
             return
         self._queue_control_store.record_snapshot(snapshot)
+
+    async def _warn_on_stalled_handler(
+        self,
+        handler_task: asyncio.Future[None],
+        context: DispatchContext,
+    ) -> None:
+        warning_seconds = self._handler_stalled_warning_seconds
+        if warning_seconds is None:
+            return
+        try:
+            await asyncio.sleep(warning_seconds)
+        except asyncio.CancelledError:
+            return
+        if handler_task.done():
+            return
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "chat.dispatch.handler.stalled",
+            conversation_id=context.conversation_id,
+            update_id=context.update_id,
+            warning_seconds=warning_seconds,
+        )
+
+    def _log_background_handler_failure(
+        self,
+        task: asyncio.Future[None],
+        context: DispatchContext,
+    ) -> None:
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is None:
+            return
+        if not isinstance(exc, Exception):
+            self._logger.error(
+                "chat.dispatch.handler.background_failed conversation_id=%s update_id=%s",
+                context.conversation_id,
+                context.update_id,
+                exc_info=(type(exc), exc, exc.__traceback__),
+            )
+            return
+        log_event(
+            self._logger,
+            logging.ERROR,
+            "chat.dispatch.handler.background_failed",
+            conversation_id=context.conversation_id,
+            update_id=context.update_id,
+            exc=exc,
+        )
+        self._logger.error(
+            "chat.dispatch.handler.background_failed conversation_id=%s update_id=%s",
+            context.conversation_id,
+            context.update_id,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
 
 
 def build_dispatch_context(event: ChatEvent) -> DispatchContext:

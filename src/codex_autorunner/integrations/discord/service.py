@@ -712,6 +712,10 @@ class DiscordBotService:
             bypass_predicate=lambda event, context: self._bypass_predicate(
                 event, context
             ),
+            handler_timeout_seconds=config.dispatch.handler_timeout_seconds,
+            handler_stalled_warning_seconds=(
+                config.dispatch.handler_stalled_warning_seconds
+            ),
         )
         self._app_server_supervisors: dict[str, WorkspaceAppServerSupervisor] = {}
         self._app_server_lock = asyncio.Lock()

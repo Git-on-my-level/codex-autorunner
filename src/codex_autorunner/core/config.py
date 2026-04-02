@@ -270,6 +270,10 @@ def _default_discord_bot_section() -> Dict[str, Any]:
             "voice": True,
             "max_voice_bytes": 10_000_000,
         },
+        "dispatch": {
+            "handler_timeout_seconds": None,
+            "handler_stalled_warning_seconds": 60.0,
+        },
     }
 
 
@@ -284,7 +288,7 @@ def _default_opencode_section() -> Dict[str, Any]:
     """Build the default opencode section."""
     return {
         "server_scope": "workspace",
-        "session_stall_timeout_seconds": None,
+        "session_stall_timeout_seconds": 300,
         "max_text_chars": 20000,
         "max_handles": 4,
         "idle_ttl_seconds": 900,
