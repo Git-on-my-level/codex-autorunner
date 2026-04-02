@@ -446,12 +446,11 @@ class PmaAutomationStore:
         dropped_timers = len(timers) - len(filtered_timers)
         dropped_wakeups = len(wakeups) - len(filtered_wakeups)
         if dropped_timers or dropped_wakeups:
-            logger.info(
-                "Dropping orphaned automation rows before save",
-                extra={
-                    "dropped_timers": dropped_timers,
-                    "dropped_wakeups": dropped_wakeups,
-                },
+            logger.warning(
+                "Dropping orphaned automation rows before save "
+                "(timers=%s, wakeups=%s)",
+                dropped_timers,
+                dropped_wakeups,
             )
         state["updated_at"] = _iso_now()
         state["subscriptions"] = [entry.to_dict() for entry in subscriptions]
@@ -1089,6 +1088,17 @@ class PmaAutomationStore:
             raise ValueError("due_at is required")
         with file_lock(self._lock_path()):
             state, subscriptions, timers, wakeups = self._load_structured_unlocked()
+            normalized_subscription_id = _normalize_text(subscription_id)
+            if normalized_subscription_id is not None:
+                known_subscription_ids = {
+                    entry.subscription_id
+                    for entry in subscriptions
+                    if entry.subscription_id
+                }
+                if normalized_subscription_id not in known_subscription_ids:
+                    raise ValueError(
+                        f"Unknown subscription_id: {normalized_subscription_id}"
+                    )
             if key is not None:
                 for existing in timers:
                     if existing.state != "pending":
@@ -1099,7 +1109,7 @@ class PmaAutomationStore:
                 due_at=normalized_due_at,
                 timer_type=timer_type,
                 idle_seconds=idle_seconds,
-                subscription_id=subscription_id,
+                subscription_id=normalized_subscription_id,
                 repo_id=repo_id,
                 run_id=run_id,
                 thread_id=thread_id,
