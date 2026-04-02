@@ -73,6 +73,10 @@
       "guild_ids": [],
       "scope": "guild"
     },
+    "dispatch": {
+      "handler_stalled_warning_seconds": 60.0,
+      "handler_timeout_seconds": null
+    },
     "enabled": false,
     "intents": 33281,
     "max_message_length": 2000,
@@ -194,7 +198,7 @@
     "max_handles": 4,
     "max_text_chars": 20000,
     "server_scope": "workspace",
-    "session_stall_timeout_seconds": null
+    "session_stall_timeout_seconds": 300
   },
   "pma": {
     "active_context_max_lines": 200,
@@ -331,7 +335,7 @@
       "max_handles": 4,
       "max_text_chars": 20000,
       "server_scope": "workspace",
-      "session_stall_timeout_seconds": null
+      "session_stall_timeout_seconds": 300
     },
     "prompt": {
       "prev_run_max_chars": 6000,
