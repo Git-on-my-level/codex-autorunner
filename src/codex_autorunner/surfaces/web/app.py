@@ -146,276 +146,267 @@ def create_hub_app(
             loop=asyncio.get_running_loop(),
         )
         try:
-            await recover_orphaned_managed_thread_executions(app)
-            await restart_managed_thread_queue_workers(app)
-        except Exception as exc:
-            safe_log(
-                app.state.logger,
-                logging.WARNING,
-                "Managed-thread queue worker restore failed at hub startup",
-                exc,
-            )
-        try:
-            cleanup = reap_managed_processes(context.config.root)
-            if cleanup.killed or cleanup.signaled or cleanup.removed:
-                app.state.logger.info(
-                    "Managed process cleanup: killed=%s signaled=%s removed=%s skipped=%s",
-                    cleanup.killed,
-                    cleanup.signaled,
-                    cleanup.removed,
-                    cleanup.skipped,
+            try:
+                await recover_orphaned_managed_thread_executions(app)
+                await restart_managed_thread_queue_workers(app)
+            except Exception as exc:
+                safe_log(
+                    app.state.logger,
+                    logging.WARNING,
+                    "Managed-thread queue worker restore failed at hub startup",
+                    exc,
                 )
-        except Exception as exc:
-            safe_log(
-                app.state.logger,
-                logging.WARNING,
-                "Managed process reaper failed at hub startup",
-                exc,
-            )
-        if app.state.config.housekeeping.enabled:
-            interval = max(app.state.config.housekeeping.interval_seconds, 1)
-            initial_delay = min(interval, 60)
+            try:
+                cleanup = reap_managed_processes(context.config.root)
+                if cleanup.killed or cleanup.signaled or cleanup.removed:
+                    app.state.logger.info(
+                        "Managed process cleanup: killed=%s signaled=%s removed=%s skipped=%s",
+                        cleanup.killed,
+                        cleanup.signaled,
+                        cleanup.removed,
+                        cleanup.skipped,
+                    )
+            except Exception as exc:
+                safe_log(
+                    app.state.logger,
+                    logging.WARNING,
+                    "Managed process reaper failed at hub startup",
+                    exc,
+                )
+            if app.state.config.housekeeping.enabled:
+                interval = max(app.state.config.housekeeping.interval_seconds, 1)
+                initial_delay = min(interval, 60)
 
-            async def _managed_docker_reaper_loop():
-                await asyncio.sleep(initial_delay)
-                while True:
-                    try:
-                        await asyncio.to_thread(
-                            reap_managed_docker_containers,
-                            logger=app.state.logger,
-                        )
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "Managed docker container reaper failed",
-                            exc,
-                        )
-                    await asyncio.sleep(interval)
-
-            async def _housekeeping_loop():
-                while True:
-                    try:
+                async def _managed_docker_reaper_loop():
+                    await asyncio.sleep(initial_delay)
+                    while True:
                         try:
-                            filebox_summary = await asyncio.to_thread(
-                                prune_filebox_root,
-                                app.state.config.root,
-                                policy=resolve_filebox_retention_policy(
-                                    app.state.config.pma
-                                ),
+                            await asyncio.to_thread(
+                                reap_managed_docker_containers,
+                                logger=app.state.logger,
                             )
-                            if (
-                                filebox_summary.inbox_pruned
-                                or filebox_summary.outbox_pruned
-                            ):
-                                app.state.logger.info(
-                                    "FileBox cleanup: inbox_pruned=%s outbox_pruned=%s bytes_before=%s bytes_after=%s",
-                                    filebox_summary.inbox_pruned,
-                                    filebox_summary.outbox_pruned,
-                                    filebox_summary.bytes_before,
-                                    filebox_summary.bytes_after,
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "Managed docker container reaper failed",
+                                exc,
+                            )
+                        await asyncio.sleep(interval)
+
+                async def _housekeeping_loop():
+                    while True:
+                        try:
+                            try:
+                                filebox_summary = await asyncio.to_thread(
+                                    prune_filebox_root,
+                                    app.state.config.root,
+                                    policy=resolve_filebox_retention_policy(
+                                        app.state.config.pma
+                                    ),
                                 )
+                                if (
+                                    filebox_summary.inbox_pruned
+                                    or filebox_summary.outbox_pruned
+                                ):
+                                    app.state.logger.info(
+                                        "FileBox cleanup: inbox_pruned=%s outbox_pruned=%s bytes_before=%s bytes_after=%s",
+                                        filebox_summary.inbox_pruned,
+                                        filebox_summary.outbox_pruned,
+                                        filebox_summary.bytes_before,
+                                        filebox_summary.bytes_after,
+                                    )
+                            except Exception as exc:
+                                safe_log(
+                                    app.state.logger,
+                                    logging.WARNING,
+                                    "FileBox cleanup task failed",
+                                    exc,
+                                )
+                            await asyncio.to_thread(
+                                run_housekeeping_once,
+                                app.state.config.housekeeping,
+                                app.state.config.root,
+                                logger=app.state.logger,
+                            )
                         except Exception as exc:
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
-                                "FileBox cleanup task failed",
+                                "Housekeeping task failed",
                                 exc,
                             )
-                        await asyncio.to_thread(
-                            run_housekeeping_once,
-                            app.state.config.housekeeping,
-                            app.state.config.root,
+                        await asyncio.sleep(interval)
+
+                tasks.append(asyncio.create_task(_managed_docker_reaper_loop()))
+                tasks.append(asyncio.create_task(_housekeeping_loop()))
+            app_server_supervisor = cast(
+                Optional[_IdlePrunable],
+                getattr(app.state, "app_server_supervisor", None),
+            )
+            app_server_prune_interval_raw = getattr(
+                app.state, "app_server_prune_interval", None
+            )
+            if app_server_supervisor is not None and isinstance(
+                app_server_prune_interval_raw, (int, float)
+            ):
+                app_server_prune_interval = float(app_server_prune_interval_raw)
+                tasks.append(
+                    asyncio.create_task(
+                        _run_prune_loop(
+                            interval_seconds=app_server_prune_interval,
+                            supervisor=app_server_supervisor,
                             logger=app.state.logger,
+                            failure_message="Hub app-server prune task failed",
                         )
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "Housekeeping task failed",
-                            exc,
-                        )
-                    await asyncio.sleep(interval)
-
-            tasks.append(asyncio.create_task(_managed_docker_reaper_loop()))
-            tasks.append(asyncio.create_task(_housekeeping_loop()))
-        app_server_supervisor = cast(
-            Optional[_IdlePrunable],
-            getattr(app.state, "app_server_supervisor", None),
-        )
-        app_server_prune_interval_raw = getattr(
-            app.state, "app_server_prune_interval", None
-        )
-        if app_server_supervisor is not None and isinstance(
-            app_server_prune_interval_raw, (int, float)
-        ):
-            app_server_prune_interval = float(app_server_prune_interval_raw)
-            tasks.append(
-                asyncio.create_task(
-                    _run_prune_loop(
-                        interval_seconds=app_server_prune_interval,
-                        supervisor=app_server_supervisor,
-                        logger=app.state.logger,
-                        failure_message="Hub app-server prune task failed",
                     )
                 )
+            opencode_supervisor = cast(
+                Optional[_IdlePrunable],
+                getattr(app.state, "opencode_supervisor", None),
             )
-        opencode_supervisor = cast(
-            Optional[_IdlePrunable],
-            getattr(app.state, "opencode_supervisor", None),
-        )
-        opencode_prune_interval_raw = getattr(
-            app.state, "opencode_prune_interval", None
-        )
-        if opencode_supervisor is not None and isinstance(
-            opencode_prune_interval_raw, (int, float)
-        ):
-            opencode_prune_interval = float(opencode_prune_interval_raw)
-            tasks.append(
-                asyncio.create_task(
-                    _run_prune_loop(
-                        interval_seconds=opencode_prune_interval,
-                        supervisor=opencode_supervisor,
-                        logger=app.state.logger,
-                        failure_message="Hub opencode prune task failed",
+            opencode_prune_interval_raw = getattr(
+                app.state, "opencode_prune_interval", None
+            )
+            if opencode_supervisor is not None and isinstance(
+                opencode_prune_interval_raw, (int, float)
+            ):
+                opencode_prune_interval = float(opencode_prune_interval_raw)
+                tasks.append(
+                    asyncio.create_task(
+                        _run_prune_loop(
+                            interval_seconds=opencode_prune_interval,
+                            supervisor=opencode_supervisor,
+                            logger=app.state.logger,
+                            failure_message="Hub opencode prune task failed",
+                        )
                     )
                 )
-            )
-        pma_cfg = getattr(app.state.config, "pma", None)
-        if pma_cfg is not None and pma_cfg.enabled:
-            starter = getattr(app.state, "pma_lane_worker_start", None)
-            supervisor = getattr(app.state, "hub_supervisor", None)
-            register_lane_starter = (
-                getattr(supervisor, "set_pma_lane_worker_starter", None)
-                if supervisor is not None
-                else None
-            )
-            if starter is not None and callable(register_lane_starter):
-                loop = asyncio.get_running_loop()
+            pma_cfg = getattr(app.state.config, "pma", None)
+            if pma_cfg is not None and pma_cfg.enabled:
+                starter = getattr(app.state, "pma_lane_worker_start", None)
+                supervisor = getattr(app.state, "hub_supervisor", None)
+                register_lane_starter = (
+                    getattr(supervisor, "set_pma_lane_worker_starter", None)
+                    if supervisor is not None
+                    else None
+                )
+                if starter is not None and callable(register_lane_starter):
+                    loop = asyncio.get_running_loop()
 
-                def _start_lane_worker(lane_id: str) -> None:
-                    try:
-                        fut = asyncio.run_coroutine_threadsafe(
-                            starter(app, lane_id), loop
-                        )
-                    except Exception as exc:
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "PMA lane worker startup dispatch failed",
-                            exc,
-                        )
-                        return
-
-                    def _on_done(done_fut) -> None:
+                    def _start_lane_worker(lane_id: str) -> None:
                         try:
-                            done_fut.result()
+                            fut = asyncio.run_coroutine_threadsafe(
+                                starter(app, lane_id), loop
+                            )
                         except Exception as exc:
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
-                                "PMA lane worker startup failed",
+                                "PMA lane worker startup dispatch failed",
                                 exc,
                             )
+                            return
 
-                    fut.add_done_callback(_on_done)
+                        def _on_done(done_fut) -> None:
+                            try:
+                                done_fut.result()
+                            except Exception as exc:
+                                safe_log(
+                                    app.state.logger,
+                                    logging.WARNING,
+                                    "PMA lane worker startup failed",
+                                    exc,
+                                )
 
-                try:
-                    register_lane_starter(_start_lane_worker)
-                    registered_pma_lane_starter = True
-                    pma_lane_starter_register = register_lane_starter
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "PMA lane worker registration failed",
-                        exc,
-                    )
-            if starter is not None:
-                try:
-                    await starter(app, "pma:default")
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "PMA lane worker startup failed",
-                        exc,
-                    )
-        await mount_manager.start_repo_lifespans()
-        startup_completed = True
-        try:
-            yield
-        finally:
-            for task in tasks:
-                task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            await mount_manager.stop_repo_mounts()
-            if registered_pma_lane_starter and callable(pma_lane_starter_register):
-                try:
-                    pma_lane_starter_register(None)
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "PMA lane worker deregistration failed",
-                        exc,
-                    )
-            runtime_services = getattr(app.state, "runtime_services", None)
-            if runtime_services is not None:
-                try:
-                    await runtime_services.close()
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "Hub runtime services shutdown failed",
-                        exc,
-                    )
-            else:
-                app_server_supervisor = getattr(
-                    app.state, "app_server_supervisor", None
-                )
-                if app_server_supervisor is not None:
+                        fut.add_done_callback(_on_done)
+
                     try:
-                        await app_server_supervisor.close_all()
+                        register_lane_starter(_start_lane_worker)
+                        registered_pma_lane_starter = True
+                        pma_lane_starter_register = register_lane_starter
                     except Exception as exc:
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
-                            "Hub app-server shutdown failed",
+                            "PMA lane worker registration failed",
                             exc,
                         )
-                opencode_supervisor = getattr(app.state, "opencode_supervisor", None)
-                if opencode_supervisor is not None:
+                if starter is not None:
                     try:
-                        await opencode_supervisor.close_all()
+                        await starter(app, "pma:default")
                     except Exception as exc:
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
-                            "Hub opencode shutdown failed",
+                            "PMA lane worker startup failed",
                             exc,
                         )
-            static_context = getattr(app.state, "static_assets_context", None)
-            if static_context is not None:
-                static_context.close()
-            stop_all = getattr(app.state, "pma_lane_worker_stop_all", None)
-            if stop_all is not None:
-                try:
-                    await stop_all(app)
-                except Exception as exc:
-                    safe_log(
-                        app.state.logger,
-                        logging.WARNING,
-                        "PMA lane worker shutdown failed",
-                        exc,
-                    )
-            else:
-                stopper = getattr(app.state, "pma_lane_worker_stop", None)
-                if stopper is not None:
+            await mount_manager.start_repo_lifespans()
+            startup_completed = True
+            try:
+                yield
+            finally:
+                for task in tasks:
+                    task.cancel()
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                await mount_manager.stop_repo_mounts()
+                if registered_pma_lane_starter and callable(pma_lane_starter_register):
                     try:
-                        await stopper(app, "pma:default")
+                        pma_lane_starter_register(None)
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "PMA lane worker deregistration failed",
+                            exc,
+                        )
+                runtime_services = getattr(app.state, "runtime_services", None)
+                if runtime_services is not None:
+                    try:
+                        await runtime_services.close()
+                    except Exception as exc:
+                        safe_log(
+                            app.state.logger,
+                            logging.WARNING,
+                            "Hub runtime services shutdown failed",
+                            exc,
+                        )
+                else:
+                    app_server_supervisor = getattr(
+                        app.state, "app_server_supervisor", None
+                    )
+                    if app_server_supervisor is not None:
+                        try:
+                            await app_server_supervisor.close_all()
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "Hub app-server shutdown failed",
+                                exc,
+                            )
+                    opencode_supervisor = getattr(
+                        app.state, "opencode_supervisor", None
+                    )
+                    if opencode_supervisor is not None:
+                        try:
+                            await opencode_supervisor.close_all()
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "Hub opencode shutdown failed",
+                                exc,
+                            )
+                static_context = getattr(app.state, "static_assets_context", None)
+                if static_context is not None:
+                    static_context.close()
+                stop_all = getattr(app.state, "pma_lane_worker_stop_all", None)
+                if stop_all is not None:
+                    try:
+                        await stop_all(app)
                     except Exception as exc:
                         safe_log(
                             app.state.logger,
@@ -423,12 +414,27 @@ def create_hub_app(
                             "PMA lane worker shutdown failed",
                             exc,
                         )
-            if startup_completed:
-                record_hub_clean_shutdown(
-                    app.state.config.root,
-                    app.state.logger,
-                    durable=bool(getattr(app.state.config, "durable_writes", False)),
-                )
+                else:
+                    stopper = getattr(app.state, "pma_lane_worker_stop", None)
+                    if stopper is not None:
+                        try:
+                            await stopper(app, "pma:default")
+                        except Exception as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "PMA lane worker shutdown failed",
+                                exc,
+                            )
+                if startup_completed:
+                    record_hub_clean_shutdown(
+                        app.state.config.root,
+                        app.state.logger,
+                        durable=bool(
+                            getattr(app.state.config, "durable_writes", False)
+                        ),
+                    )
+        finally:
             if exception_hooks is not None:
                 exception_hooks.restore()
 
