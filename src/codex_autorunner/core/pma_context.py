@@ -1102,6 +1102,28 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
         isinstance(freshness, Mapping) and freshness.get("is_stale") is True
     )
 
+    if status == "running":
+        if is_stale:
+            return {
+                "followup_state": "attention_required",
+                "operator_need": "urgent",
+                "recommended_action": "inspect_likely_hung_thread",
+                "why_selected": (
+                    "Managed thread has been running for an unusually long time "
+                    "and is likely hung; inspect or interrupt it"
+                ),
+                "recommended_detail_template": (
+                    "car pma thread status --id {managed_thread_id} --path <hub_root> ; "
+                    "car pma thread interrupt --id {managed_thread_id} --path <hub_root>"
+                ),
+            }
+        return {
+            "followup_state": "running_healthy",
+            "operator_need": "none",
+            "recommended_action": None,
+            "why_selected": "Managed thread is actively running",
+        }
+
     if status == "failed":
         return {
             "followup_state": "attention_required",
@@ -1491,8 +1513,15 @@ def _build_thread_queue_items(
         if not isinstance(entry, dict):
             continue
         status = str(entry.get("status") or "").strip().lower()
-        if status in {"", "running", "archived"}:
+        if status in {"", "archived"}:
             continue
+        if status == "running":
+            freshness = _extract_entry_freshness(entry)
+            is_stale = bool(
+                isinstance(freshness, Mapping) and freshness.get("is_stale") is True
+            )
+            if not is_stale:
+                continue
         repo_id = str(entry.get("repo_id") or "").strip()
         managed_thread_id = str(entry.get("managed_thread_id") or "").strip()
         freshness = _extract_entry_freshness(entry)

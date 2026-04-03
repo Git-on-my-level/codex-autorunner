@@ -23,6 +23,7 @@ from .....agents.opencode.runtime import (
     format_permission_prompt,
     map_approval_policy_to_permission,
     opencode_missing_env,
+    opencode_stream_timeouts,
     split_model_id,
 )
 from .....core.logging_utils import log_event
@@ -1214,6 +1215,9 @@ class GitHubCommands(TelegramCommandSupportMixin):
                     await self._schedule_progress_edit(turn_key)
 
                 ready_event = asyncio.Event()
+                stall_timeout, first_event_timeout = opencode_stream_timeouts(
+                    self._opencode_session_stall_timeout_seconds(),
+                )
                 output_task = asyncio.create_task(
                     collect_opencode_output(
                         setup.client,
@@ -1230,7 +1234,9 @@ class GitHubCommands(TelegramCommandSupportMixin):
                         should_stop=_should_stop,
                         part_handler=_handle_opencode_part,
                         ready_event=ready_event,
-                        stall_timeout_seconds=self._opencode_session_stall_timeout_seconds(),
+                        stall_timeout_seconds=stall_timeout,
+                        first_event_timeout_seconds=first_event_timeout,
+                        logger=self._logger,
                     )
                 )
                 with suppress(asyncio.TimeoutError):

@@ -34,7 +34,11 @@ def build_managed_thread_terminal_notify_payload(
     idempotency_key: Optional[str],
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "event_types": ["managed_thread_completed", "managed_thread_failed"],
+        "event_types": [
+            "managed_thread_completed",
+            "managed_thread_failed",
+            "managed_thread_interrupted",
+        ],
         "thread_id": managed_thread_id,
         "lane_id": lane_id,
         "notify_once": notify_once,

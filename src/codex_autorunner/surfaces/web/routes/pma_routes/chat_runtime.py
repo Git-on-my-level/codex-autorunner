@@ -1011,6 +1011,7 @@ async def _execute_opencode(
         build_turn_id,
         collect_opencode_output,
         extract_session_id,
+        opencode_stream_timeouts,
         parse_message_response,
         split_model_id,
     )
@@ -1069,6 +1070,9 @@ async def _execute_opencode(
             if asyncio.iscoroutine(maybe):
                 await maybe
 
+    stall_timeout, first_event_timeout = opencode_stream_timeouts(
+        stall_timeout_seconds,
+    )
     output_task = asyncio.create_task(
         collect_opencode_output(
             client,
@@ -1080,7 +1084,9 @@ async def _execute_opencode(
             should_stop=interrupt_event.is_set,
             ready_event=ready_event,
             part_handler=_timeline_part_handler,
-            stall_timeout_seconds=stall_timeout_seconds,
+            stall_timeout_seconds=stall_timeout,
+            first_event_timeout_seconds=first_event_timeout,
+            logger=logger,
         )
     )
     try:

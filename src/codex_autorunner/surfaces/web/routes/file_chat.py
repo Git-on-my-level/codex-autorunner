@@ -405,6 +405,7 @@ def build_file_chat_routes() -> APIRouter:
             build_turn_id,
             collect_opencode_output,
             extract_session_id,
+            opencode_stream_timeouts,
             parse_message_response,
             split_model_id,
         )
@@ -448,6 +449,9 @@ def build_file_chat_routes() -> APIRouter:
                     logger.debug("file chat usage handler failed", exc_info=True)
 
         ready_event = asyncio.Event()
+        stall_timeout, first_event_timeout = opencode_stream_timeouts(
+            stall_timeout_seconds,
+        )
         output_task = asyncio.create_task(
             collect_opencode_output(
                 client,
@@ -459,7 +463,9 @@ def build_file_chat_routes() -> APIRouter:
                 should_stop=interrupt_event.is_set,
                 ready_event=ready_event,
                 part_handler=_part_handler,
-                stall_timeout_seconds=stall_timeout_seconds,
+                stall_timeout_seconds=stall_timeout,
+                first_event_timeout_seconds=first_event_timeout,
+                logger=logger,
             )
         )
         with contextlib.suppress(asyncio.TimeoutError):

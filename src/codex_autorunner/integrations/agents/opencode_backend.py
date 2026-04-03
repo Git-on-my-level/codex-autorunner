@@ -15,6 +15,7 @@ from ...agents.opencode.runtime import (
     extract_session_id,
     map_approval_policy_to_permission,
     opencode_missing_env,
+    opencode_stream_timeouts,
     parse_message_response,
     split_model_id,
 )
@@ -345,12 +346,9 @@ class OpenCodeBackend(AgentBackend):
                         )
 
             ready_event = asyncio.Event()
-            first_event_timeout_seconds = 60.0
-            if self._session_stall_timeout_seconds is not None:
-                first_event_timeout_seconds = min(
-                    self._session_stall_timeout_seconds,
-                    first_event_timeout_seconds,
-                )
+            stall_timeout, first_event_timeout = opencode_stream_timeouts(
+                self._session_stall_timeout_seconds,
+            )
             output_task = asyncio.create_task(
                 collect_opencode_output(
                     client,
@@ -361,13 +359,21 @@ class OpenCodeBackend(AgentBackend):
                     permission_policy=permission_policy,
                     part_handler=_part_handler,
                     ready_event=ready_event,
-                    stall_timeout_seconds=self._session_stall_timeout_seconds,
-                    first_event_timeout_seconds=first_event_timeout_seconds,
+                    stall_timeout_seconds=stall_timeout,
+                    first_event_timeout_seconds=first_event_timeout,
+                    logger=self._logger,
                 )
             )
             try:
                 await asyncio.wait_for(ready_event.wait(), timeout=2.0)
             except asyncio.TimeoutError:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "opencode.stream.ready_timeout",
+                    session_id=self._session_id,
+                    timeout_seconds=2.0,
+                )
                 await event_queue.put(
                     RunNotice(
                         timestamp=now_iso(),

@@ -8,6 +8,7 @@ from codex_autorunner.agents.opencode.runtime import (
     collect_opencode_output,
     collect_opencode_output_from_events,
     extract_session_id,
+    opencode_stream_timeouts,
     parse_message_response,
     recover_last_assistant_message,
 )
@@ -40,6 +41,18 @@ def test_extract_session_id_preserves_existing_precedence_over_nested_item() -> 
         "properties": {"item": {"sessionID": "session-item"}},
     }
     assert extract_session_id(payload) == "session-top"
+
+
+def test_opencode_stream_timeouts_caps_first_event_to_stall_when_lower() -> None:
+    stall, first = opencode_stream_timeouts(30.0)
+    assert stall == 30.0
+    assert first == 30.0
+
+
+def test_opencode_stream_timeouts_default_stall_when_none() -> None:
+    stall, first = opencode_stream_timeouts(None)
+    assert stall == opencode_runtime._OPENCODE_STREAM_STALL_TIMEOUT_SECONDS
+    assert first == opencode_runtime._OPENCODE_FIRST_EVENT_TIMEOUT_SECONDS
 
 
 @pytest.mark.anyio

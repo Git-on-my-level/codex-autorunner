@@ -26,6 +26,7 @@ from .....agents.opencode.runtime import (
     format_permission_prompt,
     map_approval_policy_to_permission,
     opencode_missing_env,
+    opencode_stream_timeouts,
     split_model_id,
 )
 from .....agents.registry import get_registered_agents, wrap_requested_agent_context
@@ -2750,6 +2751,9 @@ class ExecutionCommands(TelegramCommandSupportMixin):
 
                     ready_event = asyncio.Event()
                     sse_ready_at: Optional[float] = None
+                    stall_timeout, first_event_timeout = opencode_stream_timeouts(
+                        self._opencode_session_stall_timeout_seconds(),
+                    )
                     output_task = asyncio.create_task(
                         collect_opencode_output(
                             opencode_client,
@@ -2767,7 +2771,9 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             should_stop=_should_stop,
                             part_handler=_handle_opencode_part,
                             ready_event=ready_event,
-                            stall_timeout_seconds=self._opencode_session_stall_timeout_seconds(),
+                            stall_timeout_seconds=stall_timeout,
+                            first_event_timeout_seconds=first_event_timeout,
+                            logger=self._logger,
                         )
                     )
                     sse_ready_at = time.monotonic()

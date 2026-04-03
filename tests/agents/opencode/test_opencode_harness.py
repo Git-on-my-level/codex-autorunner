@@ -459,6 +459,9 @@ async def test_opencode_harness_wait_for_turn_resolves_stall_timeout_per_workspa
 
     async def _fake_collect(*args: object, **kwargs: object) -> object:
         captured["stall_timeout_seconds"] = kwargs.get("stall_timeout_seconds")
+        captured["first_event_timeout_seconds"] = kwargs.get(
+            "first_event_timeout_seconds"
+        )
         return OpenCodeTurnOutput(text="done")
 
     monkeypatch.setattr(
@@ -486,6 +489,7 @@ async def test_opencode_harness_wait_for_turn_resolves_stall_timeout_per_workspa
     assert result.status == "ok"
     assert result.assistant_text == "done"
     assert captured["stall_timeout_seconds"] == 17.0
+    assert captured["first_event_timeout_seconds"] == 17.0
     assert supervisor.timeout_workspace_roots == [Path("/tmp/workspace").resolve()]
 
 

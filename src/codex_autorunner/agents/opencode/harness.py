@@ -43,6 +43,7 @@ from .runtime import (
     extract_session_id,
     extract_turn_id,
     map_approval_policy_to_permission,
+    opencode_stream_timeouts,
     split_model_id,
 )
 from .supervisor_protocol import OpenCodeHarnessSupervisorProtocol
@@ -1175,6 +1176,14 @@ class OpenCodeHarness(AgentHarness):
 
                 permission_handler = _permission_handler
 
+            stall_timeout_seconds_value = (
+                await self._supervisor.session_stall_timeout_seconds_for_workspace(
+                    workspace_root
+                )
+            )
+            stall_timeout, first_event_timeout = opencode_stream_timeouts(
+                stall_timeout_seconds_value,
+            )
             collect_task = asyncio.create_task(
                 collect_opencode_output_from_events(
                     None,
@@ -1195,9 +1204,8 @@ class OpenCodeHarness(AgentHarness):
                     session_fetcher=_fetch_session,
                     provider_fetcher=_fetch_providers,
                     messages_fetcher=_fetch_messages,
-                    stall_timeout_seconds=await self._supervisor.session_stall_timeout_seconds_for_workspace(
-                        workspace_root
-                    ),
+                    stall_timeout_seconds=stall_timeout,
+                    first_event_timeout_seconds=first_event_timeout,
                 )
             )
             command_task = pending.command_task if pending is not None else None
