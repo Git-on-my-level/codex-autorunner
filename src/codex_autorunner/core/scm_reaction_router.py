@@ -160,6 +160,8 @@ def _match_reaction_kind(
             return None
         if review_state == "changes_requested":
             return "changes_requested"
+        if review_state == "commented":
+            return "review_comment"
         # v1 uses an approval review as the ready-to-land signal.
         if review_state == "approved":
             return "approved_and_green"
@@ -172,14 +174,15 @@ def _match_reaction_kind(
         author_type = _normalize_lower_text(payload.get("author_type"))
         if action != "created":
             return None
-        if author_type == "bot" or (
-            author_login is not None and author_login.endswith("[bot]")
-        ):
-            return None
         if (
             author_login is not None
             and issue_author_login is not None
             and author_login == issue_author_login
+        ):
+            return None
+        if event.event_type == "issue_comment" and (
+            author_type == "bot"
+            or (author_login is not None and author_login.endswith("[bot]"))
         ):
             return None
         return "review_comment"
