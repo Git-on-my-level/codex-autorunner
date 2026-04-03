@@ -808,7 +808,8 @@ class GitHubService:
             "repository(owner:$owner,name:$repo){"
             "pullRequest(number:$number){"
             "reviewThreads(first:50){"
-            "nodes{isResolved comments(first:20){nodes{author{login} body path line createdAt}}}"
+            "nodes{id isResolved comments(first:20){nodes{id url authorAssociation "
+            "body path line createdAt updatedAt author{__typename login}}}}"
             "}"
             "}"
             "}"
@@ -852,16 +853,61 @@ class GitHubService:
                 for comment in comments_nodes:
                     if not isinstance(comment, dict):
                         continue
+                    author = comment.get("author")
+                    author_login = (
+                        _normalize_optional_text(author.get("login"))
+                        if isinstance(author, dict)
+                        else None
+                    )
+                    author_type = (
+                        _normalize_optional_text(author.get("__typename"))
+                        if isinstance(author, dict)
+                        else None
+                    )
                     comments.append(
                         {
-                            "author": comment.get("author"),
-                            "body": comment.get("body"),
-                            "path": comment.get("path"),
-                            "line": comment.get("line"),
-                            "createdAt": comment.get("createdAt"),
+                            key: value
+                            for key, value in {
+                                "comment_id": _normalize_optional_identifier_text(
+                                    comment.get("id")
+                                ),
+                                "html_url": _normalize_optional_text(
+                                    comment.get("url")
+                                ),
+                                "author": (
+                                    {"login": author_login}
+                                    if author_login is not None
+                                    else None
+                                ),
+                                "author_login": author_login,
+                                "author_type": author_type,
+                                "author_association": _normalize_optional_text(
+                                    comment.get("authorAssociation")
+                                ),
+                                "body": _normalize_optional_text(comment.get("body")),
+                                "path": _normalize_optional_text(comment.get("path")),
+                                "line": _normalize_positive_int(comment.get("line")),
+                                "createdAt": _normalize_optional_text(
+                                    comment.get("createdAt")
+                                ),
+                                "updated_at": _normalize_optional_text(
+                                    comment.get("updatedAt")
+                                ),
+                            }.items()
+                            if value is not None
                         }
                     )
-            threads.append({"isResolved": node.get("isResolved"), "comments": comments})
+            threads.append(
+                {
+                    key: value
+                    for key, value in {
+                        "thread_id": _normalize_optional_text(node.get("id")),
+                        "isResolved": bool(node.get("isResolved")),
+                        "comments": comments,
+                    }.items()
+                    if value is not None
+                }
+            )
         return threads
 
     def pr_checks(
@@ -926,30 +972,108 @@ class GitHubService:
         *,
         owner: str,
         repo: str,
+        number: Optional[int] = None,
         since: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = None,
         cwd: Optional[Path] = None,
     ) -> list[dict[str, Any]]:
-        args = [
-            "api",
-            f"repos/{owner}/{repo}/issues/comments",
-            "-F",
-            f"per_page={int(limit)}",
-        ]
-        if since:
-            args += ["-F", f"since={since}"]
-        proc = self._gh(
-            args, cwd=cwd or self.repo_root, check=False, timeout_seconds=30
+        endpoint = (
+            f"repos/{owner}/{repo}/issues/{int(number)}/comments"
+            if number is not None
+            else f"repos/{owner}/{repo}/issues/comments"
         )
-        if proc.returncode != 0:
+        issue_number = int(number) if number is not None else None
+        remaining = None if limit is None else max(int(limit), 0)
+        if remaining == 0:
             return []
-        try:
-            payload = json.loads(proc.stdout or "[]")
-        except json.JSONDecodeError:
-            return []
-        if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, dict)]
-        return []
+
+        comments: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            page_size = 100 if remaining is None else min(100, remaining)
+            args = [
+                "api",
+                endpoint,
+                "-F",
+                f"per_page={page_size}",
+                "-F",
+                f"page={page}",
+            ]
+            if since:
+                args += ["-F", f"since={since}"]
+            proc = self._gh(
+                args, cwd=cwd or self.repo_root, check=False, timeout_seconds=30
+            )
+            if proc.returncode != 0:
+                return []
+            try:
+                payload = json.loads(proc.stdout or "[]")
+            except json.JSONDecodeError:
+                return []
+            if not isinstance(payload, list):
+                return []
+            if not payload:
+                break
+
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                user = item.get("user")
+                author_login = (
+                    _normalize_optional_text(user.get("login"))
+                    if isinstance(user, dict)
+                    else None
+                )
+                author_type = (
+                    _normalize_optional_text(user.get("type"))
+                    if isinstance(user, dict)
+                    else None
+                )
+                comments.append(
+                    {
+                        key: value
+                        for key, value in {
+                            "comment_id": _normalize_optional_identifier_text(
+                                item.get("id")
+                            ),
+                            "body": _normalize_optional_text(item.get("body")),
+                            "html_url": _normalize_optional_text(item.get("html_url")),
+                            "author_login": author_login,
+                            "author_type": author_type,
+                            "author_association": _normalize_optional_text(
+                                item.get("author_association")
+                            ),
+                            "issue_number": issue_number,
+                            "path": _normalize_optional_text(item.get("path")),
+                            "line": _normalize_positive_int(item.get("line")),
+                            "pull_request_review_id": (
+                                _normalize_optional_identifier_text(
+                                    item.get("pull_request_review_id")
+                                )
+                            ),
+                            "commit_id": _normalize_optional_text(
+                                item.get("commit_id")
+                            ),
+                            "created_at": _normalize_optional_text(
+                                item.get("created_at")
+                            ),
+                            "updated_at": _normalize_optional_text(
+                                item.get("updated_at")
+                            ),
+                        }.items()
+                        if value is not None
+                    }
+                )
+
+            if remaining is not None:
+                remaining = max(0, remaining - page_size)
+                if remaining == 0:
+                    break
+            if len(payload) < page_size:
+                break
+            page += 1
+
+        return comments
 
     def create_issue_comment(
         self,
