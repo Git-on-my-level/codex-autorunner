@@ -99,6 +99,29 @@ def test_record_hub_startup_writes_endpoint_file(tmp_path: Path) -> None:
     }
 
 
+def test_record_hub_startup_removes_stale_endpoint_without_bind_metadata(
+    tmp_path: Path,
+) -> None:
+    logger, _stream, _handler = _make_buffer_logger()
+    endpoint_path = hub_endpoint_path(tmp_path)
+    endpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    endpoint_path.write_text(
+        json.dumps(
+            {
+                "url": "http://127.0.0.1:4517/car",
+                "host": "127.0.0.1",
+                "port": 4517,
+                "base_path": "/car",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    record_hub_startup(tmp_path, logger, pid=4321)
+
+    assert endpoint_path.exists() is False
+
+
 def test_read_hub_endpoint_returns_payload_when_pid_is_live(
     tmp_path: Path, monkeypatch
 ) -> None:

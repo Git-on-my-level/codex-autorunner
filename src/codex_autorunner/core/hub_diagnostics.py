@@ -158,6 +158,18 @@ def record_hub_startup(
             )
         except OSError as exc:
             safe_log(logger, logging.WARNING, "Failed to persist hub endpoint", exc=exc)
+    else:
+        try:
+            endpoint_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            safe_log(
+                logger,
+                logging.WARNING,
+                "Failed to remove stale hub endpoint",
+                exc=exc,
+            )
 
     log_event(
         logger,
