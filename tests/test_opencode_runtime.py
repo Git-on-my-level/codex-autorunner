@@ -1004,8 +1004,51 @@ async def test_collect_output_times_out_waiting_for_first_relevant_event() -> No
     assert output.text == ""
     assert output.error is not None
     assert "opencode_first_event_timeout" in output.error
-    assert statuses == []
+    assert statuses == [{"status": {"type": "busy"}}]
     assert any(
+        event.get("reason") == "opencode_first_event_timeout"
+        for event in progress_events
+    )
+
+
+@pytest.mark.anyio
+async def test_collect_output_exits_cleanly_when_first_event_deadline_hits_idle() -> (
+    None
+):
+    statuses: list[dict[str, object]] = []
+    progress_events: list[dict[str, object]] = []
+
+    async def _status_fetcher():
+        statuses.append({"status": {"type": "idle"}})
+        return {"status": {"type": "idle"}}
+
+    async def _part_handler(part_type: str, part: dict[str, object], delta_text):
+        if part_type == "status":
+            progress_events.append(part)
+        return None
+
+    async def _never_event_stream():
+        while True:
+            await asyncio.sleep(3600)
+            yield SSEEvent(event="keepalive", data="{}")
+
+    start = time.monotonic()
+    output = await collect_opencode_output_from_events(
+        None,
+        session_id="s1",
+        event_stream_factory=lambda: _never_event_stream(),
+        session_fetcher=_status_fetcher,
+        part_handler=_part_handler,
+        stall_timeout_seconds=30.0,
+        first_event_timeout_seconds=0.001,
+    )
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5
+    assert output.text == ""
+    assert output.error is None
+    assert statuses == [{"status": {"type": "idle"}}]
+    assert not any(
         event.get("reason") == "opencode_first_event_timeout"
         for event in progress_events
     )
