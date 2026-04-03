@@ -1265,6 +1265,19 @@ async def collect_opencode_output_from_events(
             status_type=status_type,
         )
         if not reconnected:
+            if status_type and not _status_is_idle(status_type):
+                error = None
+                while True:
+                    await asyncio.sleep(5.0)
+                    if session_fetcher is not None:
+                        try:
+                            fetched = await session_fetcher()
+                            status_type = _extract_status_type(fetched)
+                        except Exception:
+                            pass
+                    if _status_is_idle(status_type):
+                        break
+                return (True, False)
             return (True, False)
         return (False, True)
 
@@ -1328,8 +1341,25 @@ async def collect_opencode_output_from_events(
                     break
                 if not received_any_event and first_event_timeout_seconds is not None:
                     if now - stream_started_at >= first_event_timeout_seconds:
-                        await _fail_first_event_timeout(now=now)
-                        break
+                        status_type = None
+                        if session_fetcher is not None:
+                            try:
+                                fetched = await session_fetcher()
+                                status_type = _extract_status_type(fetched)
+                            except Exception:
+                                pass
+
+                        if status_type and not _status_is_idle(status_type):
+                            should_break, should_continue = (
+                                await _handle_stall_recovery(now=now)
+                            )
+                            if should_break:
+                                break
+                            if should_continue:
+                                continue
+                        else:
+                            await _fail_first_event_timeout(now=now)
+                            break
                     continue
                 should_break, should_continue = await _handle_stall_recovery(now=now)
                 if should_break:
@@ -1354,8 +1384,25 @@ async def collect_opencode_output_from_events(
             if not is_relevant:
                 if not received_any_event and first_event_timeout_seconds is not None:
                     if now - stream_started_at >= first_event_timeout_seconds:
-                        await _fail_first_event_timeout(now=now)
-                        break
+                        status_type = None
+                        if session_fetcher is not None:
+                            try:
+                                fetched = await session_fetcher()
+                                status_type = _extract_status_type(fetched)
+                            except Exception:
+                                pass
+
+                        if status_type and not _status_is_idle(status_type):
+                            should_break, should_continue = (
+                                await _handle_stall_recovery(now=now)
+                            )
+                            if should_break:
+                                break
+                            if should_continue:
+                                continue
+                        else:
+                            await _fail_first_event_timeout(now=now)
+                            break
                     continue
                 if (
                     stall_timeout_seconds is not None
