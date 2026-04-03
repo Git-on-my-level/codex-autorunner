@@ -123,6 +123,26 @@ def _check_key(check: Mapping[str, Any]) -> str:
     return f"{head_sha}:{name}:{conclusion}:{details_url}"
 
 
+def _comment_timestamp(comment: Mapping[str, Any]) -> Optional[str]:
+    for key in ("updated_at", "updatedAt", "created_at", "createdAt"):
+        timestamp = _normalize_text(comment.get(key))
+        if timestamp is not None:
+            return timestamp
+    return None
+
+
+def _comment_key(comment: Mapping[str, Any]) -> str:
+    comment_id = _normalize_text(comment.get("comment_id"))
+    if comment_id is not None:
+        return comment_id
+    timestamp = _comment_timestamp(comment) or "-"
+    author_login = _normalize_text(comment.get("author_login")) or "-"
+    body = _normalize_text(comment.get("body")) or "-"
+    path = _normalize_text(comment.get("path")) or "-"
+    line = comment.get("line") if isinstance(comment.get("line"), int) else "-"
+    return f"{timestamp}:{author_login}:{path}:{line}:{body}"
+
+
 def _snapshot_map(snapshot: Mapping[str, Any], key: str) -> dict[str, Any]:
     value = snapshot.get(key)
     return dict(value) if isinstance(value, Mapping) else {}
@@ -136,9 +156,25 @@ def _build_snapshot(
     pr = service.pr_view(number=binding.pr_number, repo_slug=binding.repo_slug)
     head_sha = _normalize_text(pr.get("headRefOid"))
     pr_state = _reaction_state_from_pr(pr)
+    pr_author = pr.get("author")
+    pr_author_login = (
+        _normalize_text(pr_author.get("login"))
+        if isinstance(pr_author, Mapping)
+        else None
+    )
     owner, repo = binding.repo_slug.split("/", 1)
     reviews = service.pr_reviews(owner=owner, repo=repo, number=binding.pr_number)
     checks = service.pr_checks(number=binding.pr_number)
+    issue_comments = service.issue_comments(
+        owner=owner,
+        repo=repo,
+        number=binding.pr_number,
+    )
+    review_threads = service.pr_review_threads(
+        owner=owner,
+        repo=repo,
+        number=binding.pr_number,
+    )
 
     changes_requested_reviews: dict[str, Any] = {}
     for review in reviews:
@@ -176,10 +212,72 @@ def _build_snapshot(
             key: value for key, value in payload.items() if value is not None
         }
 
+    current_issue_comments: dict[str, Any] = {}
+    for comment in issue_comments:
+        payload = {
+            "action": "created",
+            "comment_id": _normalize_text(comment.get("comment_id")),
+            "body": _normalize_text(comment.get("body")),
+            "html_url": _normalize_text(comment.get("html_url")),
+            "author_login": _normalize_text(comment.get("author_login")),
+            "author_type": _normalize_text(comment.get("author_type")),
+            "author_association": _normalize_text(comment.get("author_association")),
+            "issue_number": binding.pr_number,
+            "issue_author_login": pr_author_login,
+            "line": (
+                comment.get("line") if isinstance(comment.get("line"), int) else None
+            ),
+            "path": _normalize_text(comment.get("path")),
+            "pull_request_review_id": _normalize_text(
+                comment.get("pull_request_review_id")
+            ),
+            "commit_id": _normalize_text(comment.get("commit_id")),
+            "updated_at": _comment_timestamp(comment),
+        }
+        current_issue_comments[_comment_key(payload)] = {
+            key: value for key, value in payload.items() if value is not None
+        }
+
+    current_review_thread_comments: dict[str, Any] = {}
+    for thread in review_threads:
+        if bool(thread.get("isResolved")):
+            continue
+        comments = thread.get("comments")
+        if not isinstance(comments, list):
+            continue
+        for comment in comments:
+            if not isinstance(comment, Mapping):
+                continue
+            payload = {
+                "action": "created",
+                "comment_id": _normalize_text(comment.get("comment_id")),
+                "body": _normalize_text(comment.get("body")),
+                "html_url": _normalize_text(comment.get("html_url")),
+                "author_login": _normalize_text(comment.get("author_login")),
+                "author_type": _normalize_text(comment.get("author_type")),
+                "author_association": _normalize_text(
+                    comment.get("author_association")
+                ),
+                "issue_number": binding.pr_number,
+                "issue_author_login": pr_author_login,
+                "line": (
+                    comment.get("line")
+                    if isinstance(comment.get("line"), int)
+                    else None
+                ),
+                "path": _normalize_text(comment.get("path")),
+                "updated_at": _comment_timestamp(comment),
+            }
+            current_review_thread_comments[_comment_key(payload)] = {
+                key: value for key, value in payload.items() if value is not None
+            }
+
     snapshot: dict[str, Any] = {
         "pr_state": pr_state,
         "changes_requested_reviews": changes_requested_reviews,
         "failed_checks": failed_checks,
+        "issue_comments": current_issue_comments,
+        "review_thread_comments": current_review_thread_comments,
     }
     if head_sha is not None:
         snapshot["head_sha"] = head_sha
@@ -349,6 +447,14 @@ class GitHubScmPollingService:
         current_reviews = _snapshot_map(snapshot, "changes_requested_reviews")
         previous_checks = _snapshot_map(previous_snapshot, "failed_checks")
         current_checks = _snapshot_map(snapshot, "failed_checks")
+        previous_issue_comments = _snapshot_map(previous_snapshot, "issue_comments")
+        current_issue_comments = _snapshot_map(snapshot, "issue_comments")
+        previous_review_thread_comments = _snapshot_map(
+            previous_snapshot, "review_thread_comments"
+        )
+        current_review_thread_comments = _snapshot_map(
+            snapshot, "review_thread_comments"
+        )
 
         automation = self._build_automation_service(
             reaction_config=watch.reaction_config or self._raw_config,
@@ -380,6 +486,46 @@ class GitHubScmPollingService:
                 provider="github",
                 event_type="check_run",
                 occurred_at=now_iso(),
+                received_at=now_iso(),
+                repo_slug=watch.repo_slug,
+                repo_id=binding.repo_id or watch.repo_id,
+                pr_number=watch.pr_number,
+                correlation_id=f"scm-poll:{watch.watch_id}",
+                payload=dict(payload),
+            )
+            automation.ingest_event(event)
+            emitted += 1
+
+        for key, payload in current_issue_comments.items():
+            if key in previous_issue_comments:
+                continue
+            event = self._event_store.record_event(
+                event_id=(
+                    f"github:poll:issue-comment:{watch.watch_id}:{uuid.uuid4().hex[:12]}"
+                ),
+                provider="github",
+                event_type="issue_comment",
+                occurred_at=_comment_timestamp(payload) or now_iso(),
+                received_at=now_iso(),
+                repo_slug=watch.repo_slug,
+                repo_id=binding.repo_id or watch.repo_id,
+                pr_number=watch.pr_number,
+                correlation_id=f"scm-poll:{watch.watch_id}",
+                payload=dict(payload),
+            )
+            automation.ingest_event(event)
+            emitted += 1
+
+        for key, payload in current_review_thread_comments.items():
+            if key in previous_review_thread_comments:
+                continue
+            event = self._event_store.record_event(
+                event_id=(
+                    f"github:poll:review-comment:{watch.watch_id}:{uuid.uuid4().hex[:12]}"
+                ),
+                provider="github",
+                event_type="pull_request_review_comment",
+                occurred_at=_comment_timestamp(payload) or now_iso(),
                 received_at=now_iso(),
                 repo_slug=watch.repo_slug,
                 repo_id=binding.repo_id or watch.repo_id,
