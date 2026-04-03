@@ -974,7 +974,7 @@ class GitHubService:
         repo: str,
         number: Optional[int] = None,
         since: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = None,
         cwd: Optional[Path] = None,
     ) -> list[dict[str, Any]]:
         endpoint = (
@@ -982,25 +982,39 @@ class GitHubService:
             if number is not None
             else f"repos/{owner}/{repo}/issues/comments"
         )
-        args = [
-            "api",
-            endpoint,
-            "-F",
-            f"per_page={int(limit)}",
-        ]
-        if since:
-            args += ["-F", f"since={since}"]
-        proc = self._gh(
-            args, cwd=cwd or self.repo_root, check=False, timeout_seconds=30
-        )
-        if proc.returncode != 0:
+        issue_number = int(number) if number is not None else None
+        remaining = None if limit is None else max(int(limit), 0)
+        if remaining == 0:
             return []
-        try:
-            payload = json.loads(proc.stdout or "[]")
-        except json.JSONDecodeError:
-            return []
-        if isinstance(payload, list):
-            comments: list[dict[str, Any]] = []
+
+        comments: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            page_size = 100 if remaining is None else min(100, remaining)
+            args = [
+                "api",
+                endpoint,
+                "-F",
+                f"per_page={page_size}",
+                "-F",
+                f"page={page}",
+            ]
+            if since:
+                args += ["-F", f"since={since}"]
+            proc = self._gh(
+                args, cwd=cwd or self.repo_root, check=False, timeout_seconds=30
+            )
+            if proc.returncode != 0:
+                return []
+            try:
+                payload = json.loads(proc.stdout or "[]")
+            except json.JSONDecodeError:
+                return []
+            if not isinstance(payload, list):
+                return []
+            if not payload:
+                break
+
             for item in payload:
                 if not isinstance(item, dict):
                     continue
@@ -1029,7 +1043,7 @@ class GitHubService:
                             "author_association": _normalize_optional_text(
                                 item.get("author_association")
                             ),
-                            "issue_number": int(number) if number is not None else None,
+                            "issue_number": issue_number,
                             "path": _normalize_optional_text(item.get("path")),
                             "line": _normalize_positive_int(item.get("line")),
                             "pull_request_review_id": (
@@ -1050,8 +1064,16 @@ class GitHubService:
                         if value is not None
                     }
                 )
-            return comments
-        return []
+
+            if remaining is not None:
+                remaining = max(0, remaining - page_size)
+                if remaining == 0:
+                    break
+            if len(payload) < page_size:
+                break
+            page += 1
+
+        return comments
 
     def create_issue_comment(
         self,

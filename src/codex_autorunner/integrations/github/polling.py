@@ -240,11 +240,10 @@ def _build_snapshot(
 
     current_review_thread_comments: dict[str, Any] = {}
     for thread in review_threads:
-        if bool(thread.get("isResolved")):
-            continue
         comments = thread.get("comments")
         if not isinstance(comments, list):
             continue
+        thread_resolved = bool(thread.get("isResolved"))
         for comment in comments:
             if not isinstance(comment, Mapping):
                 continue
@@ -260,6 +259,7 @@ def _build_snapshot(
                 ),
                 "issue_number": binding.pr_number,
                 "issue_author_login": pr_author_login,
+                "thread_resolved": thread_resolved,
                 "line": (
                     comment.get("line")
                     if isinstance(comment.get("line"), int)
@@ -517,6 +517,8 @@ class GitHubScmPollingService:
             emitted += 1
 
         for key, payload in current_review_thread_comments.items():
+            if bool(payload.get("thread_resolved")):
+                continue
             if key in previous_review_thread_comments:
                 continue
             event = self._event_store.record_event(
