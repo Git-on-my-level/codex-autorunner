@@ -114,3 +114,9 @@ class HermesHarness(AgentHarness):
             turn_id,
         ):
             yield event
+
+    async def list_progress_events(
+        self, conversation_id: str, turn_id: str
+    ) -> list[dict[str, Any]]:
+        _ = conversation_id
+        return await self._supervisor.list_turn_events_snapshot(turn_id)

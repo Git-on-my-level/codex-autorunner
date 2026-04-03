@@ -20,6 +20,7 @@ class _StubSupervisor:
         self.interrupted: list[tuple[Path, str, str | None]] = []
         self.streamed: list[tuple[Path, str, str]] = []
         self.ready_workspace: Path | None = None
+        self.snapshot_turn_ids: list[str] = []
 
     async def ensure_ready(self, workspace_root: Path) -> None:
         self.ready_workspace = workspace_root
@@ -98,6 +99,21 @@ class _StubSupervisor:
                 "delta": "partial",
             },
         }
+
+    async def list_turn_events_snapshot(self, turn_id: str) -> list[dict[str, Any]]:
+        self.snapshot_turn_ids.append(turn_id)
+        return [{"method": "snapshot"}]
+
+
+@pytest.mark.asyncio
+async def test_hermes_harness_list_progress_events_delegates_to_supervisor_snapshot() -> (
+    None
+):
+    supervisor = _StubSupervisor()
+    harness = HermesHarness(supervisor)
+    got = await harness.list_progress_events("session-x", "turn-y")
+    assert got == [{"method": "snapshot"}]
+    assert supervisor.snapshot_turn_ids == ["turn-y"]
 
 
 @pytest.mark.asyncio

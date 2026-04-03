@@ -536,7 +536,7 @@ def test_managed_thread_tail_snapshot_includes_opencode_list_progress_events(
 
             return _stream()
 
-        def list_progress_events(
+        async def list_progress_events(
             self, conversation_id: str, turn_id: str
         ) -> list[dict[str, Any]]:
             _ = conversation_id, turn_id

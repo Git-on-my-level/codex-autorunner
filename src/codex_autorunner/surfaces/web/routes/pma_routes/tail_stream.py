@@ -1017,7 +1017,7 @@ async def _build_managed_thread_tail_snapshot(
     elif can_stream_runtime and harness is not None:
         list_fn = getattr(harness, "list_progress_events", None)
         if callable(list_fn):
-            raw_events = list_fn(str(backend_thread_id), str(backend_turn_id))
+            raw_events = await list_fn(str(backend_thread_id), str(backend_turn_id))
             state = RuntimeThreadRunEventState()
             event_id_start = int(resume_after or 0)
             for raw_event in raw_events:

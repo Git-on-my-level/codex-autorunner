@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -27,6 +28,27 @@ class _Supervisor:
 
     async def get_client(self, _workspace_root: Path) -> object:
         return self._client
+
+
+class _EventsBuffer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def list_events(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
+        self.calls.append((thread_id, turn_id))
+        return [{"id": 1}]
+
+
+@pytest.mark.asyncio
+async def test_codex_harness_list_progress_events_delegates_to_events_buffer() -> None:
+    events = _EventsBuffer()
+    harness = CodexHarness(
+        supervisor=_Supervisor(object()),
+        events=events,  # type: ignore[arg-type]
+    )
+    got = await harness.list_progress_events("thread-a", "turn-b")
+    assert got == [{"id": 1}]
+    assert events.calls == [("thread-a", "turn-b")]
 
 
 @pytest.mark.asyncio

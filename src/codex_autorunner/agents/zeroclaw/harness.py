@@ -111,5 +111,11 @@ class ZeroClawHarness(AgentHarness):
         ):
             yield event
 
+    async def list_progress_events(
+        self, conversation_id: str, turn_id: str
+    ) -> list[dict[str, Any]]:
+        _ = conversation_id
+        return await self._supervisor.list_turn_events_by_turn_id(turn_id)
+
 
 __all__ = ["ZEROCLAW_CAPABILITIES", "ZeroClawHarness"]

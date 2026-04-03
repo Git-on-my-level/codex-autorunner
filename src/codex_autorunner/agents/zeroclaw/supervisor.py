@@ -30,7 +30,7 @@ from ..managed_runtime import (
     zeroclaw_managed_workspace_env,
 )
 from ..types import TerminalTurnResult
-from .client import ZeroClawClient, split_zeroclaw_model
+from .client import ZeroClawClient, ZeroClawClientError, split_zeroclaw_model
 
 _RUNTIME_WORKSPACE_DIRNAME = "workspace"
 _THREADS_DIRNAME = "threads"
@@ -307,6 +307,16 @@ class ZeroClawSupervisor:
         handle.last_used_at = time.time()
         self._persist_metadata(handle)
         return handle.client.list_turn_events(turn_id)
+
+    async def list_turn_events_by_turn_id(self, turn_id: str) -> list[dict[str, Any]]:
+        async with self._lock:
+            handles = list(self._handles.values())
+        for handle in handles:
+            try:
+                return list(handle.client.list_turn_events(turn_id))
+            except ZeroClawClientError:
+                continue
+        return []
 
     async def close_all(self) -> None:
         async with self._lock:

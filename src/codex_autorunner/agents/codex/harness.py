@@ -309,6 +309,11 @@ class CodexHarness(AgentHarness):
             if entry is not None:
                 yield entry
 
+    async def list_progress_events(
+        self, conversation_id: str, turn_id: str
+    ) -> list[dict[str, Any]]:
+        return await self._events.list_events(conversation_id, turn_id)
+
     async def wait_for_turn(
         self,
         workspace_root: Path,

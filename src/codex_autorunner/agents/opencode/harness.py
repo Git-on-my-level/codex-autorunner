@@ -601,7 +601,7 @@ class OpenCodeHarness(AgentHarness):
     def allows_parallel_event_stream(self) -> bool:
         return True
 
-    def list_progress_events(
+    async def list_progress_events(
         self, conversation_id: str, turn_id: str
     ) -> list[dict[str, Any]]:
         """Return buffered progress events for a pending turn (snapshot-friendly)."""

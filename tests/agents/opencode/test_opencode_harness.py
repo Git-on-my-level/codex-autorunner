@@ -773,9 +773,10 @@ async def test_opencode_harness_progress_event_stream_is_empty_after_pending_tur
     assert streamed == []
 
 
-def test_opencode_harness_list_progress_events_empty_without_pending() -> None:
+@pytest.mark.asyncio
+async def test_opencode_harness_list_progress_events_empty_without_pending() -> None:
     harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
-    assert harness.list_progress_events("session-1", "turn-1") == []
+    assert await harness.list_progress_events("session-1", "turn-1") == []
 
 
 @pytest.mark.asyncio
@@ -794,10 +795,10 @@ async def test_opencode_harness_list_progress_events_returns_buffered_copy() -> 
     pending = harness._pending_turns[("session-1", turn.turn_id)]
     await pending.event_buffer.append({"message": {"method": "tool"}})
 
-    events = harness.list_progress_events("session-1", turn.turn_id)
+    events = await harness.list_progress_events("session-1", turn.turn_id)
     assert events == [{"message": {"method": "tool"}}]
     events.append({"other": True})
-    assert harness.list_progress_events("session-1", turn.turn_id) == [
+    assert await harness.list_progress_events("session-1", turn.turn_id) == [
         {"message": {"method": "tool"}}
     ]
 

@@ -177,6 +177,12 @@ class AgentHarness(ABC):
 
         return _unsupported()
 
+    async def list_progress_events(
+        self, conversation_id: str, turn_id: str
+    ) -> list[dict[str, Any]]:
+        _ = conversation_id, turn_id
+        return []
+
 
 def harness_allows_parallel_event_stream(harness: Any) -> bool:
     supports = getattr(harness, "supports", None)
