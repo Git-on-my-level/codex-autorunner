@@ -166,6 +166,8 @@ def _condition_fingerprint_payload(
                 payload.get("line") if isinstance(payload.get("line"), int) else None
             ),
             "path": _normalize_text(payload.get("path")),
+            "review_id": _normalize_text(payload.get("review_id")),
+            "review_state": _normalize_text(payload.get("review_state")),
         }
     if intent.reaction_kind == "merged":
         return {

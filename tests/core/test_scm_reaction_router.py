@@ -167,6 +167,32 @@ def test_route_scm_reactions_returns_notify_intent_for_approved_review_and_is_de
     )
 
 
+def test_route_scm_reactions_routes_commented_review_as_review_comment() -> None:
+    event = _event(
+        "pull_request_review",
+        event_id="github:event-commented-review",
+        payload={
+            "action": "submitted",
+            "review_state": "commented",
+            "author_login": "chatgpt-codex-connector[bot]",
+            "body": "Please extract the webhook normalization helper.",
+        },
+    )
+
+    intents = route_scm_reactions(
+        event, binding=_binding(thread_target_id="thread-commented-review")
+    )
+
+    assert len(intents) == 1
+    assert intents[0].reaction_kind == "review_comment"
+    assert intents[0].operation_kind == "enqueue_managed_turn"
+    assert intents[0].payload["request"]["message_text"] == (
+        "New PR comment on acme/widgets#42 from chatgpt-codex-connector[bot]: "
+        "Please extract the webhook normalization helper. "
+        "Address the feedback and reply on the PR after updating the branch."
+    )
+
+
 def test_route_scm_reactions_returns_notify_intent_for_merged_pr_even_with_thread() -> (
     None
 ):
@@ -277,7 +303,7 @@ def test_route_scm_reactions_routes_pr_comment_to_notify_without_thread() -> Non
     )
 
 
-def test_route_scm_reactions_skips_self_and_bot_pr_comments() -> None:
+def test_route_scm_reactions_skips_self_pr_comments() -> None:
     self_comment = _event(
         "issue_comment",
         event_id="github:event-self-comment",
@@ -289,6 +315,11 @@ def test_route_scm_reactions_skips_self_and_bot_pr_comments() -> None:
             "body": "I pushed a fix.",
         },
     )
+
+    assert route_scm_reactions(self_comment, binding=_binding()) == []
+
+
+def test_route_scm_reactions_routes_bot_pr_comments() -> None:
     bot_comment = _event(
         "issue_comment",
         event_id="github:event-bot-comment",
@@ -301,8 +332,15 @@ def test_route_scm_reactions_skips_self_and_bot_pr_comments() -> None:
         },
     )
 
-    assert route_scm_reactions(self_comment, binding=_binding()) == []
-    assert route_scm_reactions(bot_comment, binding=_binding()) == []
+    intents = route_scm_reactions(bot_comment, binding=_binding())
+
+    assert len(intents) == 1
+    assert intents[0].reaction_kind == "review_comment"
+    assert intents[0].operation_kind == "notify_chat"
+    assert (
+        intents[0].payload["message"]
+        == "New PR comment on acme/widgets#42 from github-actions[bot]: Automated reminder."
+    )
 
 
 def test_route_scm_reactions_routes_pull_request_review_comment() -> None:
