@@ -304,6 +304,12 @@ class CodexHarness(AgentHarness):
         _ = workspace_root
         stream_entries = getattr(self._events, "stream_entries", None)
         if not callable(stream_entries):
+            logger.warning(
+                "stream_events: stream_entries not callable on event buffer; "
+                "conversation_id=%r turn_id=%r",
+                conversation_id,
+                turn_id,
+            )
             return
         async for entry in stream_entries(conversation_id, turn_id):
             if entry is not None:

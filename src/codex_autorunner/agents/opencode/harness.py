@@ -608,6 +608,27 @@ class OpenCodeHarness(AgentHarness):
         _ = kwargs
         pending = self._pending_turns.get((conversation_id, turn_id or ""))
         if pending is None:
+            for key, candidate in self._pending_turns.items():
+                if key[0] == conversation_id:
+                    _logger.warning(
+                        "list_progress_events: turn_id mismatch for conversation_id=%r; "
+                        "requested=%r actual=%r — using fallback",
+                        conversation_id,
+                        turn_id,
+                        key[1],
+                    )
+                    pending = candidate
+                    break
+        if pending is None:
+            sample_keys = list(self._pending_turns.keys())[:5]
+            _logger.warning(
+                "list_progress_events: no pending turn for conversation_id=%r turn_id=%r; "
+                "known_keys_count=%d sample_keys=%r",
+                conversation_id,
+                turn_id,
+                len(self._pending_turns),
+                sample_keys,
+            )
             return []
         return pending.event_buffer.snapshot()
 
@@ -965,6 +986,27 @@ class OpenCodeHarness(AgentHarness):
         _ = workspace_root
         pending = self._pending_turns.get((conversation_id, turn_id or ""))
         if pending is None:
+            for key, candidate in self._pending_turns.items():
+                if key[0] == conversation_id:
+                    _logger.warning(
+                        "stream_events: turn_id mismatch for conversation_id=%r; "
+                        "requested=%r actual=%r — using fallback",
+                        conversation_id,
+                        turn_id,
+                        key[1],
+                    )
+                    pending = candidate
+                    break
+        if pending is None:
+            sample_keys = list(self._pending_turns.keys())[:5]
+            _logger.warning(
+                "stream_events: no pending turn for conversation_id=%r turn_id=%r; "
+                "known_keys_count=%d sample_keys=%r",
+                conversation_id,
+                turn_id,
+                len(self._pending_turns),
+                sample_keys,
+            )
             return
         async for event in pending.event_buffer.tail():
             yield event
@@ -1050,7 +1092,7 @@ class OpenCodeHarness(AgentHarness):
                     elif not is_idle:
                         log_event(
                             _logger,
-                            logging.DEBUG,
+                            logging.INFO,
                             "opencode.progress_event.skipped",
                             method=event.event,
                             conversation_id=conversation_id,

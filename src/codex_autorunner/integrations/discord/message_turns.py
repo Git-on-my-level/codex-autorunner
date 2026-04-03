@@ -97,6 +97,8 @@ from .rendering import (
     truncate_for_discord,
 )
 
+_logger = logging.getLogger(__name__)
+
 DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
 DISCORD_REPO_PUBLIC_EXECUTION_ERROR = "Discord turn failed"
 DISCORD_PMA_TIMEOUT_SECONDS = 7200
@@ -1107,6 +1109,12 @@ async def _finalize_discord_thread_execution(
     stream_backend_turn_id = str(started.execution.backend_id or "").strip()
     if not stream_backend_turn_id:
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
+        _logger.warning(
+            "Discord finalize: backend_id missing, falling back to execution_id=%s "
+            "for thread=%s",
+            stream_backend_turn_id,
+            managed_thread_id,
+        )
 
     if (
         harness_supports_progress_event_stream(started.harness)
@@ -1150,8 +1158,14 @@ async def _finalize_discord_thread_execution(
                         try:
                             await on_progress_event(run_event)
                         except Exception:
+                            _logger.debug(
+                                "Discord progress event handler failed for %s",
+                                type(run_event).__name__,
+                                exc_info=True,
+                            )
                             continue
             except Exception:
+                _logger.warning("Discord progress event pump failed", exc_info=True)
                 return
 
         stream_task = asyncio.create_task(_pump_runtime_events())
@@ -1205,10 +1219,12 @@ async def _finalize_discord_thread_execution(
         outcome = recovered_outcome
 
     if on_progress_event is not None:
-        with contextlib.suppress(Exception):
+        try:
             await on_progress_event(
                 terminal_run_event_from_outcome(outcome, event_state)
             )
+        except Exception:
+            _logger.debug("Discord terminal progress event failed", exc_info=True)
 
     resolved_assistant_text = (
         outcome.assistant_text or event_state.best_assistant_text()
@@ -1627,6 +1643,11 @@ async def _run_discord_orchestrated_turn_for_message(
                 payload=payload,
             )
         except Exception:
+            _logger.debug(
+                "Discord progress edit failed for message=%s",
+                progress_message_id,
+                exc_info=True,
+            )
             progress_last_updated = now
             return
         progress_rendered = content
@@ -1666,6 +1687,11 @@ async def _run_discord_orchestrated_turn_for_message(
                 progress_last_updated = time.monotonic()
                 progress_heartbeat_task = asyncio.create_task(_progress_heartbeat())
     except Exception:
+        service._logger.warning(
+            "Discord progress placeholder send failed for channel=%s",
+            channel_id,
+            exc_info=True,
+        )
         progress_message_id = None
 
     service._register_discord_turn_approval_context(

@@ -633,6 +633,7 @@ async def test_orchestrated_turn_interrupt_send_acknowledges_when_progress_messa
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = _FakeRest()
+            self._logger = logging.getLogger(__name__)
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]

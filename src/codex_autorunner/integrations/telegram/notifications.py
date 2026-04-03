@@ -861,6 +861,9 @@ class TelegramNotificationHandlers:
             try:
                 reply_markup = self._interrupt_keyboard()
             except Exception:
+                self._logger.debug(
+                    "Telegram interrupt keyboard build failed", exc_info=True
+                )
                 reply_markup = None
         edit_result = await self._edit_message_text(
             ctx.chat_id,

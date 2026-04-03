@@ -145,6 +145,7 @@ class TelegramMessageTransport:
                 parse_mode=parse_mode,
             )
         except Exception:
+            self._logger.debug("Telegram message edit failed", exc_info=True)
             return False
         return True
 

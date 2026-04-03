@@ -159,6 +159,81 @@ async def test_normalize_runtime_thread_raw_event_marks_only_successful_turn_com
     assert completed_state.completed_seen is True
 
 
+async def test_normalize_runtime_thread_raw_event_emits_progress_for_session_status() -> (
+    None
+):
+    working_state = RuntimeThreadRunEventState()
+    working = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session.status",
+            "params": {"status": {"type": "running"}},
+        },
+        working_state,
+    )
+    assert isinstance(working[0], RunNotice)
+    assert working[0].kind == "progress"
+    assert working[0].message == "agent running"
+    assert working_state.completed_seen is False
+
+    idle_like_state = RuntimeThreadRunEventState()
+    idle_like = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session.status",
+            "params": {"status": {"type": "idle"}},
+        },
+        idle_like_state,
+    )
+    assert idle_like == []
+    assert idle_like_state.completed_seen is True
+
+    empty_state = RuntimeThreadRunEventState()
+    empty = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session.status",
+            "params": {"status": {}},
+        },
+        empty_state,
+    )
+    assert empty == []
+    assert empty_state.completed_seen is False
+
+    properties_busy_state = RuntimeThreadRunEventState()
+    properties_busy = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session.status",
+            "params": {
+                "type": "session.status",
+                "properties": {
+                    "sessionID": "ses_abc123",
+                    "status": {"type": "busy"},
+                },
+            },
+        },
+        properties_busy_state,
+    )
+    assert isinstance(properties_busy[0], RunNotice)
+    assert properties_busy[0].kind == "progress"
+    assert properties_busy[0].message == "agent busy"
+    assert properties_busy_state.completed_seen is False
+
+    properties_idle_state = RuntimeThreadRunEventState()
+    properties_idle = await normalize_runtime_thread_raw_event(
+        {
+            "method": "session.status",
+            "params": {
+                "type": "session.status",
+                "properties": {
+                    "sessionID": "ses_abc123",
+                    "status": {"type": "idle"},
+                },
+            },
+        },
+        properties_idle_state,
+    )
+    assert properties_idle == []
+    assert properties_idle_state.completed_seen is True
+
+
 async def test_normalize_runtime_thread_raw_event_handles_acp_progress_approval_and_completion() -> (
     None
 ):

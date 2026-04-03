@@ -733,11 +733,27 @@ def normalize_runtime_thread_message(
 
     if method == "session.status":
         status = _coerce_dict(params.get("status"))
+        if not status:
+            properties = _coerce_dict(params.get("properties"))
+            status = _coerce_dict(properties.get("status")) if properties else {}
         if _status_indicates_successful_completion(
             status, assume_true_when_missing=False
         ):
             state.completed_seen = True
             return []
+        status_type = ""
+        if isinstance(status, dict):
+            status_type = (
+                str(status.get("type") or status.get("status") or "").strip().lower()
+            )
+        if status_type and status_type != "idle":
+            return [
+                RunNotice(
+                    timestamp=event_timestamp,
+                    kind="progress",
+                    message=f"agent {status_type}",
+                )
+            ]
         return []
 
     return []

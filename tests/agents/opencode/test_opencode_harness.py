@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -163,6 +164,58 @@ async def test_opencode_harness_reports_capabilities_from_contract() -> None:
     assert harness.allows_parallel_event_stream() is True
     assert harness.supports("approvals") is False
     assert report.capabilities == harness.capabilities
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_stream_events_warns_when_no_pending_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
+    with caplog.at_level(logging.WARNING, logger=harness_module._logger.name):
+        events = [e async for e in harness.stream_events(Path("."), "conv-1", "turn-1")]
+    assert events == []
+    assert any(
+        "stream_events: no pending turn" in r.getMessage() for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_stream_events_falls_back_on_turn_id_mismatch(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
+    from codex_autorunner.agents.opencode.harness import _PendingTurnConfig
+
+    config = _PendingTurnConfig(
+        model_payload=None,
+        approval_mode=None,
+        sandbox_policy=None,
+        question_policy="ignore",
+    )
+    harness._pending_turns[("conv-1", "real-turn-id")] = config
+    await config.event_buffer.append({"test": "event"})
+    await config.event_buffer.close()
+    with caplog.at_level(logging.WARNING, logger=harness_module._logger.name):
+        events = [
+            e async for e in harness.stream_events(Path("."), "conv-1", "wrong-turn-id")
+        ]
+    assert len(events) == 1
+    assert events[0]["test"] == "event"
+    assert any("turn_id mismatch" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_list_progress_events_warns_when_no_pending_turn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    harness = OpenCodeHarness(_StubSupervisor(_StubClient([])))
+    with caplog.at_level(logging.WARNING, logger=harness_module._logger.name):
+        got = await harness.list_progress_events("conv-1", "turn-1")
+    assert got == []
+    assert any(
+        "list_progress_events: no pending turn" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio

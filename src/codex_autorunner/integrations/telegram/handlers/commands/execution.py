@@ -670,6 +670,12 @@ async def _finalize_telegram_managed_thread_execution(
     stream_backend_turn_id = str(started.execution.backend_id or "").strip()
     if not stream_backend_turn_id:
         stream_backend_turn_id = str(started.execution.execution_id or "").strip()
+        handlers._logger.warning(
+            "Telegram finalize: backend_id missing, falling back to execution_id=%s "
+            "for thread=%s",
+            stream_backend_turn_id,
+            managed_thread_id,
+        )
 
     if (
         harness_supports_progress_event_stream(started.harness)
@@ -695,8 +701,16 @@ async def _finalize_telegram_managed_thread_execution(
                         try:
                             await on_progress_event(run_event)
                         except Exception:
+                            handlers._logger.debug(
+                                "Telegram progress event handler failed for %s",
+                                type(run_event).__name__,
+                                exc_info=True,
+                            )
                             continue
             except Exception:
+                handlers._logger.warning(
+                    "Telegram progress event pump failed", exc_info=True
+                )
                 return
 
         stream_task = asyncio.create_task(_pump_runtime_events())
@@ -733,9 +747,13 @@ async def _finalize_telegram_managed_thread_execution(
         outcome = recovered_outcome
 
     if on_progress_event is not None:
-        with suppress(Exception):
+        try:
             await on_progress_event(
                 terminal_run_event_from_outcome(outcome, event_state)
+            )
+        except Exception:
+            handlers._logger.debug(
+                "Telegram terminal progress event failed", exc_info=True
             )
 
     resolved_assistant_text = (
