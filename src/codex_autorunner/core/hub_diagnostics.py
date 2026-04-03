@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -14,6 +15,7 @@ from .logging_utils import log_event, safe_log
 from .utils import atomic_write
 
 HUB_PID_FILENAME = "hub.pid"
+HUB_ENDPOINT_FILENAME = "hub_endpoint.json"
 HUB_CLEAN_SHUTDOWN_FILENAME = ".hub-clean-shutdown"
 
 
@@ -23,6 +25,10 @@ def _hub_runtime_dir(hub_root: Path) -> Path:
 
 def hub_pid_path(hub_root: Path) -> Path:
     return _hub_runtime_dir(hub_root) / HUB_PID_FILENAME
+
+
+def hub_endpoint_path(hub_root: Path) -> Path:
+    return _hub_runtime_dir(hub_root) / HUB_ENDPOINT_FILENAME
 
 
 def hub_clean_shutdown_path(hub_root: Path) -> Path:
@@ -45,16 +51,65 @@ def _iso_from_mtime(path: Path) -> str | None:
         return None
 
 
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def read_hub_endpoint(hub_root: Path) -> dict[str, Any] | None:
+    endpoint_path = hub_endpoint_path(hub_root)
+    pid = _read_hub_pid(hub_pid_path(hub_root))
+    if pid is None or not _pid_is_running(pid):
+        return None
+    try:
+        payload = json.loads(endpoint_path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    url = payload.get("url")
+    host = payload.get("host")
+    port = payload.get("port")
+    base_path = payload.get("base_path")
+    if not isinstance(url, str) or not url.strip():
+        return None
+    if not isinstance(host, str) or not host.strip():
+        return None
+    if not isinstance(port, int) or port <= 0:
+        return None
+    if not isinstance(base_path, str):
+        return None
+    return {
+        "url": url,
+        "host": host,
+        "port": port,
+        "base_path": base_path,
+    }
+
+
 def record_hub_startup(
     hub_root: Path,
     logger: logging.Logger,
     *,
     pid: int | None = None,
     durable: bool = False,
+    host: str | None = None,
+    port: int | None = None,
+    base_path: str | None = None,
 ) -> None:
     runtime_dir = _hub_runtime_dir(hub_root)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     pid_path = hub_pid_path(hub_root)
+    endpoint_path = hub_endpoint_path(hub_root)
     clean_shutdown_path = hub_clean_shutdown_path(hub_root)
     effective_pid = os.getpid() if pid is None else int(pid)
     started_at = datetime.now(timezone.utc).isoformat()
@@ -88,6 +143,22 @@ def record_hub_startup(
     except OSError as exc:
         safe_log(logger, logging.WARNING, "Failed to persist hub pid", exc=exc)
 
+    if host is not None and port is not None and base_path is not None:
+        endpoint = {
+            "url": f"http://{host}:{int(port)}{base_path}",
+            "host": host,
+            "port": int(port),
+            "base_path": base_path,
+        }
+        try:
+            atomic_write(
+                endpoint_path,
+                json.dumps(endpoint) + "\n",
+                durable=durable,
+            )
+        except OSError as exc:
+            safe_log(logger, logging.WARNING, "Failed to persist hub endpoint", exc=exc)
+
     log_event(
         logger,
         logging.INFO,
@@ -104,9 +175,16 @@ def record_hub_clean_shutdown(
     pid: int | None = None,
     durable: bool = False,
 ) -> None:
+    endpoint_path = hub_endpoint_path(hub_root)
     clean_shutdown_path = hub_clean_shutdown_path(hub_root)
     shutdown_at = datetime.now(timezone.utc).isoformat()
     effective_pid = os.getpid() if pid is None else int(pid)
+    try:
+        endpoint_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        safe_log(logger, logging.WARNING, "Failed to remove hub endpoint", exc=exc)
     try:
         atomic_write(clean_shutdown_path, f"{shutdown_at}\n", durable=durable)
     except OSError as exc:

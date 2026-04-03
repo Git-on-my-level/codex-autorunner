@@ -14,6 +14,7 @@ from ....core.destinations import (
     validate_destination_write_payload,
 )
 from ....core.hub import HubSupervisor
+from ....core.hub_diagnostics import read_hub_endpoint
 from ....core.orchestration import verify_migration
 from ....core.orchestration.sqlite import open_orchestration_sqlite
 from ....core.pma_automation_store import PmaAutomationStore
@@ -1052,12 +1053,29 @@ def register_hub_commands(
             f"Serving hub on http://{bind_host}:{bind_port}{normalized_base or ''}"
         )
         uvicorn.run(
-            create_hub_app(config.root, base_path=normalized_base),
+            create_hub_app(
+                config.root,
+                base_path=normalized_base,
+                endpoint_host=bind_host,
+                endpoint_port=bind_port,
+            ),
             host=bind_host,
             port=bind_port,
             root_path="",
             access_log=config.server_access_log,
         )
+
+    @hub_app.command("endpoint")
+    def hub_endpoint(
+        path: Optional[Path] = typer.Option(None, "--path", help="Hub root path"),
+    ) -> None:
+        """Print the currently running hub API base URL."""
+        config = require_hub_config(path)
+        endpoint = read_hub_endpoint(config.root)
+        if endpoint is None:
+            raise_exit("Hub endpoint unavailable. Start `car hub serve` first.")
+            return
+        typer.echo(str(endpoint["url"]))
 
     @hub_app.command("scan")
     def hub_scan(

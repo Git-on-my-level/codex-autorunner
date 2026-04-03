@@ -12,8 +12,10 @@ from uuid import uuid4
 
 from codex_autorunner.core.hub_diagnostics import (
     hub_clean_shutdown_path,
+    hub_endpoint_path,
     hub_pid_path,
     install_hub_exception_hooks,
+    read_hub_endpoint,
     record_hub_clean_shutdown,
     record_hub_startup,
 )
@@ -76,6 +78,70 @@ def test_record_hub_startup_clears_clean_shutdown_marker(tmp_path: Path) -> None
     assert [event["event"] for event in events] == ["hub_started"]
 
 
+def test_record_hub_startup_writes_endpoint_file(tmp_path: Path) -> None:
+    logger, _stream, _handler = _make_buffer_logger()
+
+    record_hub_startup(
+        tmp_path,
+        logger,
+        pid=4321,
+        host="127.0.0.1",
+        port=4517,
+        base_path="/car",
+    )
+
+    payload = json.loads(hub_endpoint_path(tmp_path).read_text(encoding="utf-8"))
+    assert payload == {
+        "url": "http://127.0.0.1:4517/car",
+        "host": "127.0.0.1",
+        "port": 4517,
+        "base_path": "/car",
+    }
+
+
+def test_read_hub_endpoint_returns_payload_when_pid_is_live(
+    tmp_path: Path, monkeypatch
+) -> None:
+    logger, _stream, _handler = _make_buffer_logger()
+    record_hub_startup(
+        tmp_path,
+        logger,
+        pid=4321,
+        host="127.0.0.1",
+        port=4517,
+        base_path="/car",
+    )
+    monkeypatch.setattr(os, "kill", lambda pid, sig: None)
+
+    assert read_hub_endpoint(tmp_path) == {
+        "url": "http://127.0.0.1:4517/car",
+        "host": "127.0.0.1",
+        "port": 4517,
+        "base_path": "/car",
+    }
+
+
+def test_read_hub_endpoint_returns_none_when_pid_is_stale(
+    tmp_path: Path, monkeypatch
+) -> None:
+    logger, _stream, _handler = _make_buffer_logger()
+    record_hub_startup(
+        tmp_path,
+        logger,
+        pid=4321,
+        host="127.0.0.1",
+        port=4517,
+        base_path="/car",
+    )
+
+    def _raise_stale(_pid: int, _sig: int) -> None:
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "kill", _raise_stale)
+
+    assert read_hub_endpoint(tmp_path) is None
+
+
 def test_record_hub_clean_shutdown_writes_marker(tmp_path: Path) -> None:
     logger, stream, handler = _make_buffer_logger()
 
@@ -90,6 +156,17 @@ def test_record_hub_clean_shutdown_writes_marker(tmp_path: Path) -> None:
     assert events[0]["event"] == "hub_shutdown_clean"
     assert events[0]["pid"] == 4321
     assert events[0]["shutdown_at"]
+
+
+def test_record_hub_clean_shutdown_removes_endpoint_file(tmp_path: Path) -> None:
+    logger, _stream, _handler = _make_buffer_logger()
+    endpoint_path = hub_endpoint_path(tmp_path)
+    endpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    endpoint_path.write_text("{}", encoding="utf-8")
+
+    record_hub_clean_shutdown(tmp_path, logger, pid=4321)
+
+    assert endpoint_path.exists() is False
 
 
 def test_install_hub_exception_hooks_logs_uncaught_sys_exception(

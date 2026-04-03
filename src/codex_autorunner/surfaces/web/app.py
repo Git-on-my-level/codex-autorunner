@@ -75,7 +75,10 @@ async def _run_prune_loop(
 
 
 def create_hub_app(
-    hub_root: Optional[Path] = None, base_path: Optional[str] = None
+    hub_root: Optional[Path] = None,
+    base_path: Optional[str] = None,
+    endpoint_host: Optional[str] = None,
+    endpoint_port: Optional[int] = None,
 ) -> ASGIApp:
     context = build_hub_context(hub_root, base_path)
     app = FastAPI(redirect_slashes=False)
@@ -140,6 +143,9 @@ def create_hub_app(
             app.state.config.root,
             app.state.logger,
             durable=bool(getattr(app.state.config, "durable_writes", False)),
+            host=endpoint_host,
+            port=endpoint_port,
+            base_path=base_path or "",
         )
         exception_hooks = install_hub_exception_hooks(
             logger=app.state.logger,
