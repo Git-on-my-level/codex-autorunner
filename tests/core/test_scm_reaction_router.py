@@ -305,6 +305,30 @@ def test_route_scm_reactions_skips_self_and_bot_pr_comments() -> None:
     assert route_scm_reactions(bot_comment, binding=_binding()) == []
 
 
+def test_route_scm_reactions_routes_pull_request_review_comment() -> None:
+    event = _event(
+        "pull_request_review_comment",
+        event_id="github:event-inline-comment",
+        payload={
+            "action": "created",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Please cover the inline review-comment webhook path too.",
+            "path": "src/codex_autorunner/integrations/github/webhooks.py",
+            "line": 284,
+        },
+    )
+
+    intents = route_scm_reactions(
+        event, binding=_binding(thread_target_id="thread-inline")
+    )
+
+    assert len(intents) == 1
+    assert intents[0].reaction_kind == "review_comment"
+    assert intents[0].operation_kind == "enqueue_managed_turn"
+
+
 def test_route_scm_reactions_returns_no_intents_for_irrelevant_events() -> None:
     opened = _event(
         "pull_request",

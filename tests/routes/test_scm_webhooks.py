@@ -450,6 +450,64 @@ def test_scm_webhook_ignored_requests_return_non_error_without_persisting(
     assert list_events(hub_root, provider="github", limit=10) == []
 
 
+def test_scm_webhook_accepts_pull_request_review_comment_event(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    cfg = _enable_github_webhooks(_hub_config())
+    payload = {
+        "action": "created",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "sender": {"login": "reviewer", "id": 8, "type": "User"},
+        "pull_request": {
+            "number": 42,
+            "title": "Add webhook route",
+            "state": "open",
+            "user": {"login": "pr-author"},
+            "updated_at": "2026-03-24T10:01:02+00:00",
+        },
+        "comment": {
+            "id": 444,
+            "body": "Please normalize this review-comment webhook too.",
+            "html_url": "https://github.com/acme/widgets/pull/42#discussion_r444",
+            "created_at": "2026-03-24T14:05:00Z",
+            "updated_at": "2026-03-24T14:05:00Z",
+            "path": "src/codex_autorunner/integrations/github/webhooks.py",
+            "line": 284,
+            "user": {"login": "reviewer", "type": "User"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+    app = _build_route_app(hub_root, cfg=cfg)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/hub/scm/webhooks/github",
+            content=body,
+            headers=_headers(body, event="pull_request_review_comment"),
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "accepted",
+        "event_id": "github:delivery-1",
+        "provider": "github",
+        "event_type": "pull_request_review_comment",
+        "repo_slug": "acme/widgets",
+        "repo_id": "99",
+        "pr_number": 42,
+        "delivery_id": "delivery-1",
+        "correlation_id": "scm:github:delivery-1",
+        "drained_inline": False,
+    }
+    events = list_events(hub_root, provider="github", limit=10)
+    assert len(events) == 1
+    assert events[0].event_type == "pull_request_review_comment"
+    assert (
+        events[0].payload["path"]
+        == "src/codex_autorunner/integrations/github/webhooks.py"
+    )
+
+
 def test_scm_webhook_rejects_bad_signature_without_persisting(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir(parents=True, exist_ok=True)

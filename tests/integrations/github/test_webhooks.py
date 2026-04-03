@@ -205,6 +205,63 @@ def test_normalize_issue_comment_for_pull_request_preserves_comment_context() ->
     }
 
 
+def test_normalize_pull_request_review_comment_preserves_comment_context() -> None:
+    payload = {
+        "action": "created",
+        "repository": {"full_name": "acme/widgets", "id": 99},
+        "pull_request": {
+            "number": 42,
+            "title": "Add webhook normalizer",
+            "state": "open",
+            "user": {"login": "pr-author"},
+            "updated_at": "2026-03-24T12:01:00Z",
+        },
+        "comment": {
+            "id": 444,
+            "body": "Please also normalize the inline review comment webhook.",
+            "html_url": "https://github.com/acme/widgets/pull/42#discussion_r444",
+            "created_at": "2026-03-24T14:05:00Z",
+            "updated_at": "2026-03-24T14:05:00Z",
+            "author_association": "MEMBER",
+            "path": "src/codex_autorunner/integrations/github/webhooks.py",
+            "line": 284,
+            "commit_id": "deadbeef",
+            "pull_request_review_id": 222,
+            "user": {"login": "reviewer", "type": "User"},
+        },
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    result = normalize_github_webhook(
+        headers=_headers(body, event="pull_request_review_comment"),
+        body=body,
+        config={"secret": "topsecret"},
+        received_at="2026-03-25T00:00:01Z",
+    )
+
+    assert result.status == "accepted"
+    assert result.event is not None
+    assert result.event.event_type == "pull_request_review_comment"
+    assert result.event.pr_number == 42
+    assert result.event.occurred_at == "2026-03-24T14:05:00Z"
+    assert result.event.payload == {
+        "action": "created",
+        "comment_id": "444",
+        "body": "Please also normalize the inline review comment webhook.",
+        "html_url": "https://github.com/acme/widgets/pull/42#discussion_r444",
+        "author_login": "reviewer",
+        "author_type": "User",
+        "author_association": "MEMBER",
+        "issue_number": 42,
+        "issue_author_login": "pr-author",
+        "line": 284,
+        "path": "src/codex_autorunner/integrations/github/webhooks.py",
+        "pull_request_review_id": "222",
+        "commit_id": "deadbeef",
+        "updated_at": "2026-03-24T14:05:00Z",
+    }
+
+
 def test_normalize_webhook_rejects_missing_signature_by_default() -> None:
     body = b"{}"
 

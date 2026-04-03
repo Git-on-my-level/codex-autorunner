@@ -208,6 +208,48 @@ def _build_pull_request_review_payload(
     )
 
 
+def _build_pr_comment_payload(
+    *,
+    payload: Mapping[str, Any],
+    comment: Mapping[str, Any],
+    pr_number: Optional[int],
+    pr_author_login: Optional[str],
+) -> tuple[Optional[str], Optional[int], dict[str, Any]]:
+    user = comment.get("user")
+    author_login = (
+        _normalize_optional_text(user.get("login"))
+        if isinstance(user, Mapping)
+        else None
+    )
+    author_type = (
+        _normalize_optional_text(user.get("type"))
+        if isinstance(user, Mapping)
+        else None
+    )
+    normalized = {
+        "action": _normalize_optional_text(payload.get("action")),
+        "comment_id": _normalize_optional_text(comment.get("id")),
+        "body": _normalize_optional_text(comment.get("body")),
+        "html_url": _normalize_optional_text(comment.get("html_url")),
+        "author_login": author_login,
+        "author_type": author_type,
+        "author_association": _normalize_optional_text(
+            comment.get("author_association")
+        ),
+        "issue_number": pr_number,
+        "issue_author_login": pr_author_login,
+        "line": _normalize_optional_int(comment.get("line")),
+        "path": _normalize_optional_text(comment.get("path")),
+        "pull_request_review_id": _normalize_optional_text(
+            comment.get("pull_request_review_id")
+        ),
+        "commit_id": _normalize_optional_text(comment.get("commit_id")),
+        "updated_at": _normalize_iso_timestamp(comment.get("updated_at")),
+    }
+    occurred_at = _first_timestamp(comment.get("updated_at"), comment.get("created_at"))
+    return occurred_at, pr_number, _compact_payload(normalized)
+
+
 def _build_issue_comment_payload(
     payload: Mapping[str, Any],
 ) -> tuple[
@@ -238,47 +280,46 @@ def _build_issue_comment_payload(
             "not_pull_request_comment",
             "issue_comment is not attached to a pull request",
         )
-    user = comment.get("user")
-    author_login = (
-        _normalize_optional_text(user.get("login"))
-        if isinstance(user, Mapping)
-        else None
-    )
-    author_type = (
-        _normalize_optional_text(user.get("type"))
-        if isinstance(user, Mapping)
-        else None
-    )
     issue_author = issue.get("user")
     issue_author_login = (
         _normalize_optional_text(issue_author.get("login"))
         if isinstance(issue_author, Mapping)
         else None
     )
-    normalized = {
-        "action": _normalize_optional_text(payload.get("action")),
-        "comment_id": _normalize_optional_text(comment.get("id")),
-        "body": _normalize_optional_text(comment.get("body")),
-        "html_url": _normalize_optional_text(comment.get("html_url")),
-        "author_login": author_login,
-        "author_type": author_type,
-        "author_association": _normalize_optional_text(
-            comment.get("author_association")
-        ),
-        "issue_number": _normalize_optional_int(issue.get("number")),
-        "issue_author_login": issue_author_login,
-        "line": _normalize_optional_int(comment.get("line")),
-        "path": _normalize_optional_text(comment.get("path")),
-        "updated_at": _normalize_iso_timestamp(comment.get("updated_at")),
-    }
-    occurred_at = _first_timestamp(comment.get("updated_at"), comment.get("created_at"))
+    occurred_at, pr_number, normalized = _build_pr_comment_payload(
+        payload=payload,
+        comment=comment,
+        pr_number=_normalize_optional_int(issue.get("number")),
+        pr_author_login=issue_author_login,
+    )
     return (
         "accepted",
         occurred_at,
-        _normalize_optional_int(issue.get("number")),
-        _compact_payload(normalized),
+        pr_number,
+        normalized,
         None,
         None,
+    )
+
+
+def _build_pull_request_review_comment_payload(
+    payload: Mapping[str, Any],
+) -> tuple[Optional[str], Optional[int], dict[str, Any]]:
+    comment = payload.get("comment")
+    pull_request = payload.get("pull_request")
+    if not isinstance(comment, Mapping) or not isinstance(pull_request, Mapping):
+        return None, None, {}
+    pull_request_user = pull_request.get("user")
+    pr_author_login = (
+        _normalize_optional_text(pull_request_user.get("login"))
+        if isinstance(pull_request_user, Mapping)
+        else None
+    )
+    return _build_pr_comment_payload(
+        payload=payload,
+        comment=comment,
+        pr_number=_normalize_optional_int(pull_request.get("number")),
+        pr_author_login=pr_author_login,
     )
 
 
@@ -543,6 +584,25 @@ def _normalize_supported_event(
             payload=normalized_payload,
             reason=reason,
             detail=detail,
+        )
+    if event_name == "pull_request_review_comment":
+        occurred_at, pr_number, normalized_payload = (
+            _build_pull_request_review_comment_payload(payload)
+        )
+        if not normalized_payload:
+            return _NormalizedEvent(
+                status="rejected",
+                reason="invalid_payload",
+                detail=(
+                    "pull_request_review_comment event requires comment and "
+                    "pull_request objects"
+                ),
+            )
+        return _NormalizedEvent(
+            status="accepted",
+            occurred_at=occurred_at,
+            pr_number=pr_number,
+            payload=normalized_payload,
         )
     if event_name == "check_run":
         occurred_at, pr_number, normalized_payload = _build_check_run_payload(payload)

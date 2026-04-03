@@ -165,7 +165,7 @@ def _match_reaction_kind(
             return "approved_and_green"
         return None
 
-    if event.event_type == "issue_comment":
+    if event.event_type in {"issue_comment", "pull_request_review_comment"}:
         action = _normalize_lower_text(payload.get("action"))
         author_login = _normalize_lower_text(payload.get("author_login"))
         issue_author_login = _normalize_lower_text(payload.get("issue_author_login"))
