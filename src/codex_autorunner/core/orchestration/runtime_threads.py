@@ -143,9 +143,7 @@ async def stream_runtime_thread_events(
         backend_thread_id,
         backend_turn_id,
     ):
-        if isinstance(event, str):
-            yield event
-        elif isinstance(event, dict):
+        if isinstance(event, dict):
             yield format_sse("app-server", event)
         else:
             yield format_sse("app-server", {"value": event})

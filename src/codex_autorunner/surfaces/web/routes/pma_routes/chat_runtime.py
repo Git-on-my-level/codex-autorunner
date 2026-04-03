@@ -1855,9 +1855,6 @@ def build_chat_runtime_router(
             async for raw_event in harness.stream_events(
                 request.app.state.config.root, thread_id, turn_id
             ):
-                if isinstance(raw_event, str):
-                    yield raw_event
-                    continue
                 payload = (
                     raw_event if isinstance(raw_event, dict) else {"value": raw_event}
                 )

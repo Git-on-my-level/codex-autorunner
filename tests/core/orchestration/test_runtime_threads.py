@@ -22,7 +22,6 @@ from codex_autorunner.core.orchestration.runtime_threads import (
     stream_runtime_thread_events,
 )
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
-from codex_autorunner.core.sse import format_sse
 
 
 @dataclass
@@ -264,23 +263,14 @@ class _HarnessWithStream:
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ):
         _ = workspace_root, conversation_id, turn_id
-        yield format_sse(
-            "app-server",
-            {"message": {"method": "message.delta", "params": {"delta": "hello "}}},
-        )
-        yield format_sse(
-            "app-server",
-            {"message": {"method": "message.delta", "params": {"delta": "world"}}},
-        )
-        yield format_sse(
-            "app-server",
-            {
-                "message": {
-                    "method": "message.completed",
-                    "params": {"text": "hello world"},
-                }
-            },
-        )
+        yield {"message": {"method": "message.delta", "params": {"delta": "hello "}}}
+        yield {"message": {"method": "message.delta", "params": {"delta": "world"}}}
+        yield {
+            "message": {
+                "method": "message.completed",
+                "params": {"text": "hello world"},
+            }
+        }
 
 
 def _make_descriptor(

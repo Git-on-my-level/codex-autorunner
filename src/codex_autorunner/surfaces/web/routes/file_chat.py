@@ -590,9 +590,6 @@ def build_file_chat_routes() -> APIRouter:
                 async for raw_event in harness.stream_events(
                     repo_root, thread_id, turn_id
                 ):
-                    if isinstance(raw_event, str):
-                        yield raw_event
-                        continue
                     payload = (
                         raw_event
                         if isinstance(raw_event, dict)
