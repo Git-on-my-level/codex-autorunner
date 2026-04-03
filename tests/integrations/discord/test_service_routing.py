@@ -376,8 +376,10 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
 async def test_discord_notification_reply_routes_to_pma_thread_with_context(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
+    notification_workspace = tmp_path / "notification-workspace"
+    notification_workspace.mkdir()
+    rebound_workspace = tmp_path / "rebound-workspace"
+    rebound_workspace.mkdir()
     captured: dict[str, object] = {}
     bind_calls: list[dict[str, str]] = []
 
@@ -387,7 +389,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         source_kind="dispatch_paused",
         delivery_mode="bound",
         repo_id="repo-123",
-        workspace_root=str(workspace),
+        workspace_root=str(notification_workspace),
         run_id="run-123",
         managed_thread_id="managed-thread-123",
         continuation_thread_target_id=None,
@@ -420,7 +422,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
         async def get_binding(self, *, channel_id: str) -> dict[str, object] | None:
             assert channel_id == "channel-1"
             return {
-                "workspace_path": str(workspace),
+                "workspace_path": str(rebound_workspace),
                 "agent": "codex",
                 "pma_enabled": False,
                 "model_override": None,
@@ -462,6 +464,7 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
             link_source_text: str,
             allow_cross_repo: bool,
         ) -> tuple[str, bool]:
+            captured["github_workspace_root"] = _workspace_root
             captured["allow_cross_repo"] = allow_cross_repo
             captured["link_source_text"] = link_source_text
             return prompt_text, False
@@ -565,6 +568,8 @@ async def test_discord_notification_reply_routes_to_pma_thread_with_context(
     assert captured["managed_thread_surface_key"] == "notification:notif-123"
     assert captured["source_message_id"] == "msg-3"
     assert run_turn_kwargs["orchestrator_channel_key"] == "pma:channel-1"
+    assert run_turn_kwargs["workspace_root"] == notification_workspace
+    assert captured["github_workspace_root"] == notification_workspace
     assert "<notification_context>" in str(run_turn_kwargs["prompt_text"])
     assert '"dispatch_paused"' in str(run_turn_kwargs["prompt_text"])
     assert "please triage this" in str(run_turn_kwargs["prompt_text"])

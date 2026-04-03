@@ -634,8 +634,9 @@ async def handle_message_event(
         )
 
     async def _submit_thread_message(
-        _request: SurfaceThreadMessageRequest,
+        request: SurfaceThreadMessageRequest,
     ) -> DiscordMessageTurnResult:
+        request_workspace_root = request.workspace_root
         prompt_text = turn_text
         (
             prompt_text,
@@ -645,7 +646,7 @@ async def handle_message_event(
             attachment_input_items,
         ) = await service._with_attachment_context(
             prompt_text=prompt_text,
-            workspace_root=workspace_root,
+            workspace_root=request_workspace_root,
             attachments=event.attachments,
             channel_id=channel_id,
         )
@@ -709,7 +710,7 @@ async def handle_message_event(
             prompt_text, injected = _maybe_inject_discord_filebox_hint(
                 prompt_text,
                 user_text=text,
-                workspace_root=workspace_root,
+                workspace_root=request_workspace_root,
             )
             if injected:
                 log_event_fn(
@@ -757,7 +758,7 @@ async def handle_message_event(
 
         prompt_text, _github_injected = await service._maybe_inject_github_context(
             prompt_text,
-            workspace_root,
+            request_workspace_root,
             link_source_text=turn_text,
             allow_cross_repo=pma_enabled,
         )
@@ -771,7 +772,7 @@ async def handle_message_event(
                 *attachment_input_items,
             ]
         run_turn_kwargs: dict[str, Any] = {
-            "workspace_root": workspace_root,
+            "workspace_root": request_workspace_root,
             "prompt_text": prompt_text,
             "agent": agent,
             "model_override": model_override,
@@ -831,10 +832,14 @@ async def handle_message_event(
             )
 
     if notification_reply is not None:
+        notification_workspace_root = workspace_root
+        stored_workspace_root = getattr(notification_reply, "workspace_root", None)
+        if isinstance(stored_workspace_root, str) and stored_workspace_root.strip():
+            notification_workspace_root = Path(stored_workspace_root)
         turn_result = await _submit_thread_message(
             SurfaceThreadMessageRequest(
                 surface_kind="discord",
-                workspace_root=workspace_root,
+                workspace_root=notification_workspace_root,
                 prompt_text=turn_text,
                 agent_id=runtime_agent,
                 pma_enabled=True,
