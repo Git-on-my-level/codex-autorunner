@@ -44,17 +44,9 @@ def list_consumed_files(repo_root: Path) -> list[FileBoxEntry]:
 def unconsume_inbox_file(repo_root: Path, filename: str) -> FileBoxEntry:
     ensure_lifecycle_structure(repo_root)
     safe_name = sanitize_filename(filename)
-    sources = [
-        _resolve_child_path(_lifecycle_dir(repo_root, box), safe_name)
-        for box in LIFECYCLE_BOXES
-    ]
-    existing_sources = [path for path in sources if path.exists() and path.is_file()]
+    existing_sources = _find_archived_sources(repo_root, safe_name)
     if not existing_sources:
         raise FileNotFoundError(f"Inbox archive file not found: {safe_name}")
-    if len(existing_sources) > 1:
-        raise FileExistsError(
-            f"Multiple archived copies exist for {safe_name}; restore manually"
-        )
 
     target = _resolve_child_path(inbox_dir(repo_root), safe_name, create_dir=True)
     if target.exists():
@@ -73,13 +65,7 @@ def _move_from_inbox(
     if not source.exists() or not source.is_file():
         raise FileNotFoundError(f"Inbox file not found: {safe_name}")
 
-    target = _resolve_child_path(
-        _lifecycle_dir(repo_root, target_box), safe_name, create_dir=True
-    )
-    if target.exists():
-        raise FileExistsError(
-            f"{target_box.capitalize()} archive already contains {safe_name}"
-        )
+    target = _allocate_archive_target(_lifecycle_dir(repo_root, target_box), safe_name)
 
     source.rename(target)
     return _build_entry(target, box=target_box)
@@ -111,6 +97,40 @@ def _list_box_entries(folder: Path, *, box: str) -> list[FileBoxEntry]:
     return sorted(entries, key=lambda entry: entry.name)
 
 
+def _find_archived_sources(repo_root: Path, filename: str) -> list[Path]:
+    sources: list[Path] = []
+    for box in LIFECYCLE_BOXES:
+        candidate = _resolve_child_path(_lifecycle_dir(repo_root, box), filename)
+        try:
+            if candidate.exists() and candidate.is_file():
+                sources.append(candidate)
+        except OSError:
+            continue
+    return sorted(sources, key=_path_mtime, reverse=True)
+
+
+def _allocate_archive_target(root: Path, filename: str) -> Path:
+    target = _resolve_child_path(root, filename, create_dir=True)
+    if not target.exists():
+        return target
+
+    stem, suffix = _split_name(filename)
+    index = 2
+    while True:
+        candidate = _resolve_child_path(root, f"{stem}-{index}{suffix}")
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def _split_name(filename: str) -> tuple[str, str]:
+    path = Path(filename)
+    suffix = "".join(path.suffixes)
+    if suffix and filename != suffix:
+        return filename[: -len(suffix)], suffix
+    return filename, ""
+
+
 def _build_entry(path: Path, *, box: str) -> FileBoxEntry:
     stat = path.stat()
     return FileBoxEntry(
@@ -136,6 +156,13 @@ def _resolve_child_path(root: Path, filename: str, *, create_dir: bool = False) 
     if candidate.parent != resolved_root:
         raise ValueError("Invalid filename")
     return candidate
+
+
+def _path_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _format_mtime(ts: float | None) -> str | None:

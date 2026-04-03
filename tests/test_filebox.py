@@ -74,6 +74,37 @@ def test_dismiss_and_restore_file_preserve_contents(tmp_path: Path) -> None:
     assert inbox_entry.path.read_bytes() == b"skip"
 
 
+def test_consume_inbox_file_suffixes_archive_name_on_collision(tmp_path: Path) -> None:
+    repo = tmp_path
+    _write(filebox_lifecycle.consumed_dir(repo), "note.md", b"first")
+    filebox.save_file(repo, "inbox", "note.md", b"second")
+
+    archived = filebox_lifecycle.consume_inbox_file(repo, "note.md")
+
+    assert archived.box == "consumed"
+    assert archived.name == "note-2.md"
+    assert archived.path.read_bytes() == b"second"
+    assert (filebox_lifecycle.consumed_dir(repo) / "note.md").read_bytes() == b"first"
+    assert filebox.resolve_file(repo, "inbox", "note.md") is None
+
+
+def test_restore_chooses_newest_archive_when_same_name_exists_in_both_boxes(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path
+    consumed = _write(filebox_lifecycle.consumed_dir(repo), "brief.md", b"consumed")
+    dismissed = _write(filebox_lifecycle.dismissed_dir(repo), "brief.md", b"dismissed")
+    os.utime(consumed, (1, 1))
+    os.utime(dismissed, (2, 2))
+
+    restored = filebox_lifecycle.unconsume_inbox_file(repo, "brief.md")
+
+    assert restored.box == "inbox"
+    assert restored.path.read_bytes() == b"dismissed"
+    assert consumed.exists()
+    assert not dismissed.exists()
+
+
 def test_list_regular_files_sorts_newest_first(tmp_path: Path) -> None:
     folder = tmp_path / "files"
     older = _write(folder, "older.txt", b"old")
