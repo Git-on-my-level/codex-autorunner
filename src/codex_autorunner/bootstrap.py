@@ -493,6 +493,8 @@ Do NOT copy `.codex-autorunner/` between worktrees:
 ## PMA file handoff
 
 - User uploads arrive in `.codex-autorunner/filebox/inbox/`.
+- Archive reviewed uploads with `car pma file consume|dismiss <filename> --path <hub_root>`.
+- Restore archived uploads with `car pma file restore <filename> --path <hub_root>`.
 - Send user-facing files by writing to `.codex-autorunner/filebox/outbox/`.
 
 ## PMA dispatches (user attention)

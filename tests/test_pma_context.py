@@ -9,6 +9,8 @@ import yaml
 
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import load_hub_config
+from codex_autorunner.core.filebox import save_file
+from codex_autorunner.core.filebox_lifecycle import consume_inbox_file
 from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import HubSupervisor
@@ -177,6 +179,30 @@ def _write_ticket(repo_root: Path, ticket_name: str, *, done: bool) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def test_consumed_pma_files_do_not_appear_in_action_queue(tmp_path: Path) -> None:
+    from codex_autorunner.core.pma_context import (
+        _snapshot_pma_files,
+        build_pma_action_queue,
+    )
+
+    seed_hub_files(tmp_path, force=True)
+    save_file(tmp_path, "inbox", "ticket-pack.md", b"ticket body")
+    consume_inbox_file(tmp_path, "ticket-pack.md")
+
+    pma_files, pma_files_detail = _snapshot_pma_files(tmp_path)
+    queue = build_pma_action_queue(
+        inbox=[],
+        pma_threads=[],
+        pma_files_detail=pma_files_detail,
+        automation={},
+        generated_at="2026-04-03T00:00:00Z",
+        stale_threshold_seconds=3600,
+    )
+
+    assert pma_files["inbox"] == []
+    assert not any(item.get("queue_source") == "pma_file_inbox" for item in queue)
 
 
 def test_format_pma_prompt_includes_workspace_docs(tmp_path: Path) -> None:

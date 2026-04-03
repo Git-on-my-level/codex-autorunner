@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List
 @dataclass(frozen=True)
 class FileBoxEntry:
     name: str
-    box: str  # "inbox" | "outbox"
+    box: str
     size: int | None
     modified_at: str | None
     source: str

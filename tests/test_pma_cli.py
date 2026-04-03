@@ -28,6 +28,7 @@ def test_pma_cli_has_required_commands():
     assert "hygiene" in output, "PMA CLI should have 'hygiene' command"
 
     # File operations
+    assert "file" in output, "PMA CLI should have 'file' command group"
     assert "files" in output, "PMA CLI should have 'files' command"
     assert "upload" in output, "PMA CLI should have 'upload' command"
     assert "download" in output, "PMA CLI should have 'download' command"
@@ -148,6 +149,17 @@ def test_pma_files_help_shows_json_option():
     assert "--json" in output, "PMA files should support --json output mode"
 
 
+def test_pma_file_group_has_required_commands() -> None:
+    runner = CliRunner()
+    result = runner.invoke(pma_app, ["file", "--help"])
+    assert result.exit_code == 0
+    output = result.stdout
+    assert "consume" in output
+    assert "dismiss" in output
+    assert "restore" in output
+    assert "list" in output
+
+
 def test_pma_upload_help():
     """Verify PMA upload command has correct signature."""
     runner = CliRunner()
@@ -191,6 +203,47 @@ def test_pma_file_commands_help_mentions_filebox():
         assert (
             "FileBox" in result.stdout
         ), f"{cmd} help should mention FileBox as canonical"
+
+
+def test_pma_file_lifecycle_commands_round_trip_local_files(tmp_path: Path) -> None:
+    seed_hub_files(tmp_path, force=True)
+    inbox_file = tmp_path / ".codex-autorunner" / "filebox" / "inbox" / "brief.md"
+    inbox_file.parent.mkdir(parents=True, exist_ok=True)
+    inbox_file.write_text("brief", encoding="utf-8")
+
+    runner = CliRunner()
+
+    consume = runner.invoke(
+        pma_app, ["file", "consume", "brief.md", "--path", str(tmp_path)]
+    )
+    list_consumed = runner.invoke(
+        pma_app,
+        ["file", "list", "--box", "consumed", "--path", str(tmp_path)],
+    )
+    restore = runner.invoke(
+        pma_app, ["file", "restore", "brief.md", "--path", str(tmp_path)]
+    )
+    dismiss = runner.invoke(
+        pma_app, ["file", "dismiss", "brief.md", "--path", str(tmp_path)]
+    )
+    list_all = runner.invoke(
+        pma_app,
+        ["file", "list", "--box", "all", "--path", str(tmp_path), "--json"],
+    )
+
+    assert consume.exit_code == 0
+    assert "Consumed brief.md -> consumed" in consume.stdout
+    assert list_consumed.exit_code == 0
+    assert "brief.md" in list_consumed.stdout
+    assert restore.exit_code == 0
+    assert "Restored brief.md -> inbox" in restore.stdout
+    assert dismiss.exit_code == 0
+    assert "Dismissed brief.md -> dismissed" in dismiss.stdout
+    assert list_all.exit_code == 0
+    payload = json.loads(list_all.stdout)
+    assert payload["inbox"] == []
+    assert payload["consumed"] == []
+    assert [entry["name"] for entry in payload["dismissed"]] == ["brief.md"]
 
 
 def test_pma_active_help_shows_json_option():

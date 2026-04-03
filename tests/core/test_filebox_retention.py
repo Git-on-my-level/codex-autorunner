@@ -12,6 +12,7 @@ from codex_autorunner.core.filebox import (
     outbox_pending_dir,
     outbox_sent_dir,
 )
+from codex_autorunner.core.filebox_lifecycle import consumed_dir, dismissed_dir
 from codex_autorunner.core.filebox_retention import (
     FileBoxRetentionPolicy,
     prune_filebox_root,
@@ -114,6 +115,28 @@ def test_prune_filebox_root_skips_symlinks(tmp_path: Path) -> None:
     assert summary.outbox_pruned == 1
     assert not target.exists()
     assert symlink.is_symlink()
+
+
+def test_prune_filebox_root_leaves_archived_inbox_files_recoverable(
+    tmp_path: Path,
+) -> None:
+    now = datetime(2026, 3, 21, tzinfo=timezone.utc)
+    stale = now - timedelta(days=30)
+    consumed = _write(consumed_dir(tmp_path) / "done.txt", b"done")
+    dismissed = _write(dismissed_dir(tmp_path) / "skip.txt", b"skip")
+    _set_mtime(consumed, stale)
+    _set_mtime(dismissed, stale)
+
+    summary = prune_filebox_root(
+        tmp_path,
+        policy=FileBoxRetentionPolicy(inbox_max_age_days=7, outbox_max_age_days=7),
+        now=now,
+    )
+
+    assert summary.inbox_pruned == 0
+    assert summary.outbox_pruned == 0
+    assert consumed.exists()
+    assert dismissed.exists()
 
 
 def test_resolve_filebox_retention_policy_supports_mapping_and_object() -> None:

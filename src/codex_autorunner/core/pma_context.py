@@ -167,7 +167,7 @@ First-turn routine:
    - If PMA File Inbox shows next_action="review_stale_uploaded_file":
      - Treat the file as a likely leftover, not urgent new work.
      - First verify whether it was already handled by checking the user request, recent PMA history, and nearby outbox/repo activity.
-     - If it was already consumed or is no longer relevant, delete it from `.codex-autorunner/filebox/inbox/`.
+     - If it was already consumed or is no longer relevant, move it out of the active inbox with `car pma file consume <filename> --path <hub_root>` or `car pma file dismiss <filename> --path <hub_root>`.
      - Only route it like a fresh upload when evidence says it is still pending work.
    - Only ask the user "which file first?" or "which repo?" when routing is truly ambiguous.
 5) BRANCH D - Automation continuity (subscriptions + timers):
@@ -787,7 +787,8 @@ def classify_pma_file_inbox_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
             "recommended_action": PMA_FILE_NEXT_ACTION_REVIEW_STALE,
             "recommended_detail": (
                 "Check recent PMA activity before routing. If the file was already "
-                "handled, delete it from `.codex-autorunner/filebox/inbox/`."
+                "handled, move it out of the active inbox with `car pma file "
+                "consume` or `car pma file dismiss`."
             ),
             "urgency": "low",
             "likely_false_positive": True,
