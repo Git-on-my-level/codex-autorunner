@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import inspect
 import logging
 import time
 from dataclasses import dataclass, field
@@ -15,6 +16,11 @@ from ....core.orchestration import (
     PausedFlowTarget,
     SurfaceThreadMessageRequest,
     build_surface_orchestration_ingress,
+)
+from ....core.pma_notification_store import (
+    PmaNotificationStore,
+    build_notification_context_block,
+    notification_surface_key,
 )
 from ....core.utils import canonicalize_path
 from ...chat.forwarding import compose_forwarded_message_text
@@ -35,7 +41,9 @@ from ..forwarding import (
     is_forwarded_telegram_message,
     message_forward_info,
 )
+from ..state import TelegramTopicRecord
 from ..trigger_mode import should_trigger_run
+from .commands.execution import _build_telegram_thread_orchestration_service
 from .questions import handle_custom_text_input
 
 COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
@@ -681,6 +689,18 @@ async def handle_message_inner(
     paused = None
     workspace_root: Optional[Path] = None
     pma_enabled = bool(record and getattr(record, "pma_enabled", False))
+    notification_reply = None
+    notification_store_root = getattr(getattr(handlers, "_config", None), "root", None)
+    if message.reply_to_message_id is not None and isinstance(
+        notification_store_root, (str, Path)
+    ):
+        notification_reply = PmaNotificationStore(
+            Path(notification_store_root)
+        ).get_reply_target(
+            surface_kind="telegram",
+            surface_key=key,
+            delivered_message_id=message.reply_to_message_id,
+        )
     if not pma_enabled and record and record.workspace_path:
         workspace_root = canonicalize_path(Path(record.workspace_path))
         preferred_run_id = handlers._ticket_flow_pause_targets.get(
@@ -793,14 +813,64 @@ async def handle_message_inner(
     async def _submit_thread_message(
         _request: SurfaceThreadMessageRequest,
     ) -> None:
-        await handlers._handle_normal_message(
-            message,
-            runtime,
-            text_override=turn_text,
-            placeholder_id=placeholder_id,
-        )
+        normal_message_kwargs: dict[str, Any] = {
+            "text_override": turn_text,
+            "placeholder_id": placeholder_id,
+        }
+        if notification_reply is not None:
+            try:
+                handle_normal_parameters = inspect.signature(
+                    handlers._handle_normal_message
+                ).parameters
+            except (TypeError, ValueError):
+                handle_normal_parameters = {}
+            if "record" in handle_normal_parameters:
+                normal_message_kwargs["record"] = dataclasses.replace(
+                    record or TelegramTopicRecord(),
+                    pma_enabled=True,
+                    repo_id=notification_reply.repo_id
+                    or getattr(record, "repo_id", None),
+                    workspace_path=(
+                        notification_reply.workspace_root
+                        or str(getattr(handlers, "_hub_root", None) or "")
+                        or getattr(record, "workspace_path", None)
+                    ),
+                )
+            if "surface_key_override" in handle_normal_parameters:
+                normal_message_kwargs["surface_key_override"] = (
+                    notification_surface_key(notification_reply.notification_id)
+                )
+            if "pma_context_prefix" in handle_normal_parameters:
+                normal_message_kwargs["pma_context_prefix"] = (
+                    build_notification_context_block(notification_reply)
+                )
+        await handlers._handle_normal_message(message, runtime, **normal_message_kwargs)
 
     async def work() -> None:
+        if notification_reply is not None:
+            await _submit_thread_message(
+                SurfaceThreadMessageRequest(
+                    surface_kind="telegram",
+                    workspace_root=workspace_root or Path("."),
+                    prompt_text=turn_text,
+                    agent_id=getattr(record, "agent", None),
+                    pma_enabled=True,
+                )
+            )
+            orch_binding = _build_telegram_thread_orchestration_service(
+                handlers
+            ).get_binding(
+                surface_kind="telegram",
+                surface_key=notification_surface_key(
+                    notification_reply.notification_id
+                ),
+            )
+            if orch_binding is not None:
+                PmaNotificationStore(handlers._config.root).bind_continuation_thread(
+                    notification_id=notification_reply.notification_id,
+                    thread_target_id=orch_binding.thread_target_id,
+                )
+            return
         await ingress.submit_message(
             SurfaceThreadMessageRequest(
                 surface_kind="telegram",
@@ -1246,9 +1316,21 @@ async def handle_media_message(
 
     pma_enabled = bool(getattr(record, "pma_enabled", False))
     workspace_root = canonicalize_path(Path(record.workspace_path))
+    notification_reply = None
+    notification_store_root = getattr(getattr(handlers, "_config", None), "root", None)
+    if message.reply_to_message_id is not None and isinstance(
+        notification_store_root, (str, Path)
+    ):
+        notification_reply = PmaNotificationStore(
+            Path(notification_store_root)
+        ).get_reply_target(
+            surface_kind="telegram",
+            surface_key=key,
+            delivered_message_id=message.reply_to_message_id,
+        )
     turn_caption_text = format_forwarded_telegram_message_text(message, caption_text)
     paused = None
-    if not pma_enabled:
+    if not pma_enabled and notification_reply is None:
         preferred_run_id = handlers._ticket_flow_pause_targets.get(
             str(workspace_root), None
         )
@@ -1454,8 +1536,31 @@ async def handle_media_message(
                 message,
                 runtime,
                 text_override=turn_caption_text,
-                record=record,
+                record=(
+                    dataclasses.replace(
+                        record,
+                        pma_enabled=True,
+                        repo_id=notification_reply.repo_id or record.repo_id,
+                        workspace_path=(
+                            notification_reply.workspace_root
+                            or str(getattr(handlers, "_hub_root", None) or "")
+                            or record.workspace_path
+                        ),
+                    )
+                    if notification_reply is not None
+                    else record
+                ),
                 placeholder_id=placeholder_id,
+                surface_key_override=(
+                    notification_surface_key(notification_reply.notification_id)
+                    if notification_reply is not None
+                    else None
+                ),
+                pma_context_prefix=(
+                    build_notification_context_block(notification_reply)
+                    if notification_reply is not None
+                    else None
+                ),
             )
             return
         await handlers._send_message(
@@ -1465,6 +1570,28 @@ async def handle_media_message(
             reply_to=message.message_id,
         )
 
+    if notification_reply is not None:
+        await _submit_thread_message(
+            SurfaceThreadMessageRequest(
+                surface_kind="telegram",
+                workspace_root=workspace_root,
+                prompt_text=turn_caption_text,
+                agent_id=getattr(record, "agent", None),
+                pma_enabled=True,
+            )
+        )
+        orch_binding = _build_telegram_thread_orchestration_service(
+            handlers
+        ).get_binding(
+            surface_kind="telegram",
+            surface_key=notification_surface_key(notification_reply.notification_id),
+        )
+        if orch_binding is not None:
+            PmaNotificationStore(handlers._config.root).bind_continuation_thread(
+                notification_id=notification_reply.notification_id,
+                thread_target_id=orch_binding.thread_target_id,
+            )
+        return
     await ingress.submit_message(
         SurfaceThreadMessageRequest(
             surface_kind="telegram",

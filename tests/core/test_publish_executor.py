@@ -624,8 +624,9 @@ def test_process_now_runs_first_publish_operation_types(
 
     notify_result = processed_by_id[notify_operation.operation_id].response
     assert notify_result == {
-        "delivery": "bound",
+        "delivery": "auto",
         "repo_id": repo_id,
+        "route": "bound",
         "targets": 1,
         "published": 1,
     }

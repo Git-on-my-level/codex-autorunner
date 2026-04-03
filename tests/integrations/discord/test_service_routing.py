@@ -303,6 +303,7 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
         def __init__(self) -> None:
             self._store = _StoreStub()
             self._logger = logging.getLogger("test")
+            self._config = SimpleNamespace(root=tmp_path)
 
         def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
             return str(binding.get("agent") or "codex"), None
@@ -326,6 +327,11 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
         discord_message_turns,
         "build_surface_orchestration_ingress",
         lambda **_: _IngressStub(),
+    )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "PmaNotificationStore",
+        lambda _root: SimpleNamespace(get_reply_target=lambda **_kwargs: None),
     )
 
     thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
@@ -364,6 +370,216 @@ async def test_discord_message_turns_include_reply_context_in_prompt(
     assert "hello" in request.prompt_text
     assert "Replying to message from Codex [message msg-0]:" in request.prompt_text
     assert "prior bot output" in request.prompt_text
+
+
+@pytest.mark.anyio
+async def test_discord_notification_reply_routes_to_pma_thread_with_context(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    notification_workspace = tmp_path / "notification-workspace"
+    notification_workspace.mkdir()
+    rebound_workspace = tmp_path / "rebound-workspace"
+    rebound_workspace.mkdir()
+    captured: dict[str, object] = {}
+    bind_calls: list[dict[str, str]] = []
+
+    notification_reply = SimpleNamespace(
+        notification_id="notif-123",
+        correlation_id="corr-123",
+        source_kind="dispatch_paused",
+        delivery_mode="bound",
+        repo_id="repo-123",
+        workspace_root=str(notification_workspace),
+        run_id="run-123",
+        managed_thread_id="managed-thread-123",
+        continuation_thread_target_id=None,
+        context={"wake_up": {"kind": "dispatch_paused"}},
+    )
+
+    class _NotificationStoreStub:
+        def __init__(self, _root: Path) -> None:
+            return
+
+        def get_reply_target(
+            self, *, surface_kind: str, surface_key: str, delivered_message_id: object
+        ) -> object | None:
+            assert surface_kind == "discord"
+            assert surface_key == "channel-1"
+            assert delivered_message_id == "notif-msg-1"
+            return notification_reply
+
+        def bind_continuation_thread(
+            self, *, notification_id: str, thread_target_id: str
+        ) -> None:
+            bind_calls.append(
+                {
+                    "notification_id": notification_id,
+                    "thread_target_id": thread_target_id,
+                }
+            )
+
+    class _StoreStub:
+        async def get_binding(self, *, channel_id: str) -> dict[str, object] | None:
+            assert channel_id == "channel-1"
+            return {
+                "workspace_path": str(rebound_workspace),
+                "agent": "codex",
+                "pma_enabled": False,
+                "model_override": None,
+                "reasoning_effort": None,
+            }
+
+        async def clear_pending_compact_seed(self, *, channel_id: str) -> None:
+            _ = channel_id
+
+    class _ServiceStub:
+        def __init__(self) -> None:
+            self._store = _StoreStub()
+            self._logger = logging.getLogger("test")
+            self._config = SimpleNamespace(root=tmp_path)
+            self._hub_supervisor = object()
+
+        def _resolve_agent_state(self, binding: dict[str, object]) -> tuple[str, None]:
+            return str(binding.get("agent") or "codex"), None
+
+        def _runtime_agent_for_binding(self, binding: dict[str, object]) -> str:
+            return str(binding.get("agent") or "codex")
+
+        def _normalize_agent(self, value: object) -> str:
+            return str(value or "codex")
+
+        def _build_message_session_key(self, **_kwargs: object) -> str:
+            return "session-key"
+
+        async def _with_attachment_context(
+            self, *, prompt_text: str, **_kwargs: object
+        ) -> tuple[str, int, int, None, list[dict[str, object]]]:
+            return prompt_text, 0, 0, None, []
+
+        async def _maybe_inject_github_context(
+            self,
+            prompt_text: str,
+            _workspace_root: Path,
+            *,
+            link_source_text: str,
+            allow_cross_repo: bool,
+        ) -> tuple[str, bool]:
+            captured["github_workspace_root"] = _workspace_root
+            captured["allow_cross_repo"] = allow_cross_repo
+            captured["link_source_text"] = link_source_text
+            return prompt_text, False
+
+        async def _run_agent_turn_for_message(
+            self,
+            *,
+            managed_thread_surface_key: str | None = None,
+            source_message_id: str | None = None,
+            **kwargs: object,
+        ) -> object:
+            captured["managed_thread_surface_key"] = managed_thread_surface_key
+            captured["source_message_id"] = source_message_id
+            captured["run_turn_kwargs"] = kwargs
+            return DiscordMessageTurnResult(
+                final_message="handled",
+                send_final_message=False,
+            )
+
+        async def _send_channel_message_safe(
+            self, _channel_id: str, _payload: dict[str, object]
+        ) -> None:
+            return
+
+        async def _delete_channel_message_safe(
+            self, *, channel_id: str, message_id: str, record_id: str
+        ) -> None:
+            _ = (channel_id, message_id, record_id)
+
+        async def _flush_outbox_files(
+            self, *, workspace_root: Path, channel_id: str
+        ) -> None:
+            _ = (workspace_root, channel_id)
+
+    class _IngressStub:
+        async def submit_message(self, *_args: object, **_kwargs: object) -> object:
+            raise AssertionError("notification replies should bypass ingress routing")
+
+    async def _fake_build_hub_snapshot(
+        *_args: object, **_kwargs: object
+    ) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(
+        discord_message_turns,
+        "PmaNotificationStore",
+        _NotificationStoreStub,
+    )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "build_surface_orchestration_ingress",
+        lambda **_: _IngressStub(),
+    )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "build_hub_snapshot",
+        _fake_build_hub_snapshot,
+    )
+    monkeypatch.setattr(discord_message_turns, "load_pma_prompt", lambda _root: "base")
+    monkeypatch.setattr(
+        discord_message_turns,
+        "format_pma_prompt",
+        lambda _base, _snapshot, prompt_text, **_kwargs: prompt_text,
+    )
+    monkeypatch.setattr(
+        discord_message_turns,
+        "build_discord_thread_orchestration_service",
+        lambda _service: SimpleNamespace(
+            get_binding=lambda **_kwargs: SimpleNamespace(
+                thread_target_id="thread-target-123"
+            )
+        ),
+    )
+
+    thread = ChatThreadRef(platform="discord", chat_id="channel-1", thread_id=None)
+    event = ChatMessageEvent(
+        update_id="update-3",
+        thread=thread,
+        message=ChatMessageRef(thread=thread, message_id="msg-3"),
+        from_user_id="user-1",
+        text="please triage this",
+        reply_to=ChatMessageRef(thread=thread, message_id="notif-msg-1"),
+    )
+    context = build_dispatch_context(event)
+
+    await discord_message_turns.handle_message_event(
+        _ServiceStub(),
+        event,
+        context,
+        channel_id="channel-1",
+        text="please triage this",
+        has_attachments=False,
+        policy_result=None,
+        log_event_fn=lambda *args, **kwargs: None,
+        build_ticket_flow_controller_fn=lambda *_args, **_kwargs: None,
+        ensure_worker_fn=lambda *_args, **_kwargs: None,
+    )
+
+    run_turn_kwargs = captured.get("run_turn_kwargs")
+    assert isinstance(run_turn_kwargs, dict)
+    assert captured["managed_thread_surface_key"] == "notification:notif-123"
+    assert captured["source_message_id"] == "msg-3"
+    assert run_turn_kwargs["orchestrator_channel_key"] == "pma:channel-1"
+    assert run_turn_kwargs["workspace_root"] == notification_workspace
+    assert captured["github_workspace_root"] == notification_workspace
+    assert "<notification_context>" in str(run_turn_kwargs["prompt_text"])
+    assert '"dispatch_paused"' in str(run_turn_kwargs["prompt_text"])
+    assert "please triage this" in str(run_turn_kwargs["prompt_text"])
+    assert captured["allow_cross_repo"] is False
+    assert bind_calls == [
+        {
+            "notification_id": "notif-123",
+            "thread_target_id": "thread-target-123",
+        }
+    ]
 
 
 @pytest.mark.anyio

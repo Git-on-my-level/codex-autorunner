@@ -93,6 +93,7 @@ from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
 from ...core.orchestration import build_ticket_flow_orchestration_service
+from ...core.pma_notification_store import PmaNotificationStore
 from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
 from ...core.ticket_flow_summary import (
@@ -681,6 +682,7 @@ class DiscordBotService:
                 self._store,
                 send_message=self._send_channel_message,
                 delete_message=self._delete_channel_message,
+                on_delivered=self._handle_discord_outbox_delivery,
                 logger=logger,
             )
         )
@@ -3346,6 +3348,7 @@ class DiscordBotService:
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
             if orchestrator_channel_key.startswith("pma:"):
@@ -3358,6 +3361,7 @@ class DiscordBotService:
                     "reasoning_effort": reasoning_effort,
                     "session_key": session_key,
                     "orchestrator_channel_key": orchestrator_channel_key,
+                    "managed_thread_surface_key": managed_thread_surface_key,
                 }
                 try:
                     if (
@@ -4182,6 +4186,16 @@ class DiscordBotService:
                     record_id=outbox_record_id,
                     exc=enqueue_exc,
                 )
+
+    async def _handle_discord_outbox_delivery(
+        self, record: OutboxRecord, delivered_message_id: Optional[str]
+    ) -> None:
+        if not isinstance(delivered_message_id, str) or not delivered_message_id:
+            return
+        PmaNotificationStore(self._config.root).mark_delivered(
+            delivery_record_id=record.record_id,
+            delivered_message_id=delivered_message_id,
+        )
 
     async def _delete_channel_message_safe(
         self,

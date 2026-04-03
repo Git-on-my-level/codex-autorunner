@@ -27,6 +27,7 @@ from ...core.flows.pause_dispatch import format_pause_reason, latest_dispatch_se
 from ...core.hub import HubSupervisor
 from ...core.locks import FileLock, FileLockBusy
 from ...core.logging_utils import log_event
+from ...core.pma_notification_store import PmaNotificationStore
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.runtime_services import RuntimeServices
 from ...core.state import now_iso
@@ -103,6 +104,7 @@ from .notifications import TelegramNotificationHandlers
 from .outbox import TelegramOutboxManager
 from .runtime import TelegramWorkspaceAndTurnMixin
 from .state import (
+    OutboxRecord,
     TelegramStateStore,
     TopicRouter,
     parse_topic_key,
@@ -426,6 +428,7 @@ class TelegramBotService(
             send_message=self._send_message,
             edit_message_text=self._edit_message_text,
             delete_message=self._delete_message,
+            on_delivered=self._handle_telegram_outbox_delivery,
             logger=self._logger,
         )
         self._voice_manager = TelegramVoiceManager(
@@ -445,6 +448,16 @@ class TelegramBotService(
         self._command_specs = build_command_specs(self)
         self._instance_lock_path: Optional[Path] = None
         self._instance_lock: Optional[FileLock] = None
+
+    async def _handle_telegram_outbox_delivery(
+        self, record: OutboxRecord, delivered_message_id: Optional[int]
+    ) -> None:
+        if not isinstance(delivered_message_id, int):
+            return
+        PmaNotificationStore(self._config.root).mark_delivered(
+            delivery_record_id=record.record_id,
+            delivered_message_id=delivered_message_id,
+        )
 
     async def _housekeeping_roots(self) -> list[Path]:
         roots: set[Path] = set()

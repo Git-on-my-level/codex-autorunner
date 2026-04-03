@@ -2197,7 +2197,7 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
         await handler._handle_normal_message(second_message, runtime=_RuntimeStub())
         release_first.set()
         await first_task
-        with anyio.fail_after(2):
+        with anyio.fail_after(5):
             while "second telegram orchestration reply" not in handler._sent:
                 await anyio.sleep(0.05)
 

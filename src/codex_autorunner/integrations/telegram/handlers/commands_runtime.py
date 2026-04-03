@@ -353,6 +353,8 @@ class TelegramCommandHandlers(
         transcript_message_id: Optional[int] = None,
         transcript_text: Optional[str] = None,
         placeholder_id: Optional[int] = None,
+        surface_key_override: Optional[str] = None,
+        pma_context_prefix: Optional[str] = None,
     ) -> None:
         if placeholder_id is not None:
             send_placeholder = False
@@ -368,6 +370,8 @@ class TelegramCommandHandlers(
             allow_new_thread=True,
             send_failure_response=True,
             placeholder_id=placeholder_id,
+            surface_key_override=surface_key_override,
+            pma_context_prefix=pma_context_prefix,
         )
         if isinstance(outcome, _TurnRunFailure):
             return

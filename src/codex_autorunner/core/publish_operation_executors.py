@@ -8,6 +8,7 @@ from typing import Any, Callable, Coroutine, Optional
 
 from .orchestration.models import MessageRequest, MessageRequestKind
 from .pma_chat_delivery import (
+    deliver_pma_notification,
     notify_preferred_bound_chat_for_workspace,
     notify_primary_pma_chat_for_repo,
 )
@@ -38,6 +39,12 @@ def _normalize_mapping(value: Any) -> dict[str, Any]:
 
 def _normalize_request_kind(value: Any) -> MessageRequestKind:
     return "review" if _normalize_optional_text(value) == "review" else "message"
+
+
+def _coerce_int(value: Any) -> int:
+    if value is None:
+        return 0
+    return int(value)
 
 
 def _operation_digest(operation: PublishOperation, *, prefix: str) -> str:
@@ -230,7 +237,7 @@ def build_notify_chat_executor(
                 or payload.get("target")
                 or payload.get("delivery_target")
             )
-            or "bound"
+            or "auto"
         )
         correlation_id = correlation_id_for_operation(operation)
         delivery_correlation_id = correlation_id or _operation_digest(
@@ -239,7 +246,9 @@ def build_notify_chat_executor(
         )
         repo_id, workspace_root = _resolve_thread_context(store, payload=payload)
 
-        if delivery == "primary_pma":
+        if delivery == "none":
+            outcome = {"route": "none", "targets": 0, "published": 0}
+        elif delivery == "primary_pma":
             if repo_id is None:
                 raise TerminalPublishError(
                     "notify_chat primary_pma delivery requires repo_id"
@@ -252,7 +261,7 @@ def build_notify_chat_executor(
                     correlation_id=delivery_correlation_id,
                 )
             )
-        else:
+        elif delivery == "bound":
             if workspace_root is None:
                 raise TerminalPublishError(
                     "notify_chat bound delivery requires workspace_root or thread_target_id"
@@ -266,15 +275,30 @@ def build_notify_chat_executor(
                     correlation_id=delivery_correlation_id,
                 )
             )
+        else:
+            outcome = coroutine_runner(
+                deliver_pma_notification(
+                    hub_root=hub_root,
+                    workspace_root=workspace_root,
+                    repo_id=repo_id,
+                    message=message,
+                    correlation_id=delivery_correlation_id,
+                    delivery=delivery,
+                    source_kind="publish_operation",
+                )
+            )
 
-        targets = int((outcome or {}).get("targets", 0))
-        published = int((outcome or {}).get("published", 0))
+        targets = _coerce_int((outcome or {}).get("targets", 0))
+        published = _coerce_int((outcome or {}).get("published", 0))
         result = {
             "delivery": delivery,
             "repo_id": repo_id,
             "targets": targets,
             "published": published,
         }
+        route = _normalize_optional_text((outcome or {}).get("route"))
+        if route is not None:
+            result["route"] = route
         if correlation_id is not None:
             result["correlation_id"] = correlation_id
         return result
