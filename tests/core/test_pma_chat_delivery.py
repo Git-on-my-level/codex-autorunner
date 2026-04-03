@@ -9,8 +9,13 @@ import pytest
 from codex_autorunner.bootstrap import seed_hub_files
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
 from codex_autorunner.core.pma_chat_delivery import (
+    deliver_pma_notification,
     notify_preferred_bound_chat_for_workspace,
     notify_primary_pma_chat_for_repo,
+)
+from codex_autorunner.core.pma_notification_store import (
+    PmaNotificationStore,
+    build_notification_context_block,
 )
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.telegram.state import TelegramStateStore, topic_key
@@ -171,6 +176,84 @@ async def test_notify_primary_pma_chat_prefers_freshest_matching_discord_binding
     finally:
         await discord_store.close()
         await telegram_store.close()
+
+
+@pytest.mark.anyio
+async def test_deliver_pma_notification_persists_replyable_context_for_bound_delivery(
+    tmp_path: Path,
+) -> None:
+    hub_root = _hub(tmp_path)
+    workspace = (hub_root / "worktrees" / "repo-f").resolve()
+    workspace.mkdir(parents=True, exist_ok=True)
+    _write_manifest(hub_root, "repo-f", workspace)
+
+    discord_store = DiscordStateStore(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3"
+    )
+    try:
+        await discord_store.upsert_binding(
+            channel_id="repo-f-discord",
+            guild_id="guild-1",
+            workspace_path=str(workspace),
+            repo_id="repo-f",
+        )
+        _set_discord_binding_updated_at(
+            hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+            "repo-f-discord",
+            "2026-03-18T11:00:01Z",
+        )
+
+        outcome = await deliver_pma_notification(
+            hub_root=hub_root,
+            workspace_root=workspace,
+            repo_id="repo-f",
+            message="Dispatch needs review",
+            correlation_id="corr-6",
+            delivery="auto",
+            source_kind="dispatch_paused",
+            run_id="run-123",
+            managed_thread_id="thread-123",
+            context_payload={"wake_up": {"kind": "dispatch_paused"}},
+        )
+
+        assert outcome == {"route": "bound", "targets": 1, "published": 1}
+
+        outbox = await discord_store.list_outbox()
+        assert len(outbox) == 1
+        record = outbox[0]
+        assert record.channel_id == "repo-f-discord"
+        assert record.payload_json.get("content") == "Dispatch needs review"
+
+        notification_store = PmaNotificationStore(hub_root)
+        delivered = notification_store.mark_delivered(
+            delivery_record_id=record.record_id,
+            delivered_message_id="discord-msg-123",
+        )
+        assert delivered is not None
+        assert delivered.delivery_mode == "bound"
+        assert delivered.repo_id == "repo-f"
+        assert delivered.workspace_root == str(workspace)
+        assert delivered.run_id == "run-123"
+        assert delivered.managed_thread_id == "thread-123"
+        assert delivered.context == {
+            "message": "Dispatch needs review",
+            "correlation_id": "corr-6",
+            "source_kind": "dispatch_paused",
+            "wake_up": {"kind": "dispatch_paused"},
+        }
+
+        reply_target = notification_store.get_reply_target(
+            surface_kind="discord",
+            surface_key="repo-f-discord",
+            delivered_message_id="discord-msg-123",
+        )
+        assert reply_target == delivered
+        context_block = build_notification_context_block(reply_target)
+        assert "<notification_context>" in context_block
+        assert '"notification_id"' in context_block
+        assert '"dispatch_paused"' in context_block
+    finally:
+        await discord_store.close()
 
 
 @pytest.mark.anyio

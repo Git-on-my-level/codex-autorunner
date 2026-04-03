@@ -381,7 +381,7 @@ class TelegramMessageTransport:
         reply_markup: Optional[dict[str, Any]] = None,
         parse_mode: Optional[str] = None,
         overflow_mode_override: Optional[str] = None,
-    ) -> None:
+    ) -> Optional[int]:
         if _should_trace_message(text):
             text = _with_conversation_id(
                 text,
@@ -428,8 +428,9 @@ class TelegramMessageTransport:
                         render=split_renderer,
                         include_indicator=False,
                     )
+                    first_message_id: Optional[int] = None
                     for idx, chunk in enumerate(chunks):
-                        await self._bot.send_message(
+                        response = await self._bot.send_message(
                             chat_id,
                             chunk,
                             message_thread_id=thread_id,
@@ -437,7 +438,15 @@ class TelegramMessageTransport:
                             reply_markup=reply_markup if idx == 0 else None,
                             parse_mode=used_mode,
                         )
-                    return
+                        if idx == 0:
+                            message_id = (
+                                response.get("message_id")
+                                if isinstance(response, dict)
+                                else None
+                            )
+                            if isinstance(message_id, int):
+                                first_message_id = message_id
+                    return first_message_id
                 if overflow_mode == "trim":
                     if used_mode == "HTML":
                         renderer = _format_telegram_html
@@ -458,7 +467,7 @@ class TelegramMessageTransport:
                         max_len=TELEGRAM_MAX_MESSAGE_LENGTH,
                         render=renderer,
                     )
-                    await self._bot.send_message_chunks(
+                    responses = await self._bot.send_message_chunks(
                         chat_id,
                         trimmed,
                         message_thread_id=thread_id,
@@ -466,7 +475,11 @@ class TelegramMessageTransport:
                         reply_markup=reply_markup,
                         parse_mode=used_mode,
                     )
-                    return
+                    first = responses[0] if responses else None
+                    message_id = (
+                        first.get("message_id") if isinstance(first, dict) else None
+                    )
+                    return message_id if isinstance(message_id, int) else None
                 await self._send_document(
                     chat_id,
                     text.encode("utf-8"),
@@ -475,9 +488,9 @@ class TelegramMessageTransport:
                     reply_to=reply_to,
                     caption="Response too long; attached as response.md.",
                 )
-                return
+                return None
             payload_text = rendered if used_mode else text
-            await self._bot.send_message_chunks(
+            responses = await self._bot.send_message_chunks(
                 chat_id,
                 payload_text,
                 message_thread_id=thread_id,
@@ -485,14 +498,16 @@ class TelegramMessageTransport:
                 reply_markup=reply_markup,
                 parse_mode=used_mode,
             )
-            return
+            first = responses[0] if responses else None
+            message_id = first.get("message_id") if isinstance(first, dict) else None
+            return message_id if isinstance(message_id, int) else None
         payload_text, parse_mode = self._prepare_outgoing_text(
             text,
             chat_id=chat_id,
             thread_id=thread_id,
             reply_to=reply_to,
         )
-        await self._bot.send_message_chunks(
+        responses = await self._bot.send_message_chunks(
             chat_id,
             payload_text,
             message_thread_id=thread_id,
@@ -500,6 +515,9 @@ class TelegramMessageTransport:
             reply_markup=reply_markup,
             parse_mode=parse_mode,
         )
+        first = responses[0] if responses else None
+        message_id = first.get("message_id") if isinstance(first, dict) else None
+        return message_id if isinstance(message_id, int) else None
 
     async def _send_document(
         self,

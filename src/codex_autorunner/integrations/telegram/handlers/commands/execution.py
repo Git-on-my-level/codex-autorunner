@@ -3789,8 +3789,12 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         missing_thread_message: Optional[str] = None,
         send_failure_response: bool = True,
         placeholder_id: Optional[int] = None,
+        surface_key_override: Optional[str] = None,
+        pma_context_prefix: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
-        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        key = surface_key_override or await self._resolve_topic_key(
+            message.chat_id, message.thread_id
+        )
         record = record or await self._router.get_topic(key)
         pma_enabled = bool(record and getattr(record, "pma_enabled", False))
         if pma_enabled:
@@ -3882,8 +3886,12 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         )
         if pma_enabled:
             user_message_prompt = prompt_text
+            if isinstance(pma_context_prefix, str) and pma_context_prefix.strip():
+                user_message_prompt = (
+                    f"{pma_context_prefix.strip()}\n\n{user_message_prompt}"
+                )
             pma_prompt = await self._prepare_pma_prompt(
-                prompt_text,
+                user_message_prompt,
                 record=record,
                 message=message,
             )

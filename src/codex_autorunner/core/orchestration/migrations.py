@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 15
+ORCHESTRATION_SCHEMA_VERSION = 16
 
 
 @dataclass(frozen=True)
@@ -1010,6 +1010,59 @@ def _apply_v15(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v16(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_notification_conversations (
+            notification_id TEXT PRIMARY KEY,
+            correlation_id TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            delivery_mode TEXT NOT NULL,
+            surface_kind TEXT NOT NULL,
+            surface_key TEXT NOT NULL,
+            delivery_record_id TEXT NOT NULL UNIQUE,
+            delivered_message_id TEXT,
+            repo_id TEXT,
+            workspace_root TEXT,
+            run_id TEXT,
+            managed_thread_id TEXT,
+            continuation_thread_target_id TEXT,
+            context_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_notification_reply_target
+            ON orch_notification_conversations(
+                surface_kind,
+                surface_key,
+                delivered_message_id,
+                updated_at,
+                created_at
+            )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_notification_correlation
+            ON orch_notification_conversations(correlation_id, updated_at, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_orch_notification_thread
+            ON orch_notification_conversations(
+                continuation_thread_target_id,
+                updated_at,
+                created_at
+            )
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1030,6 +1083,7 @@ _MIGRATIONS = (
     _MigrationStep(13, "add_scm_event_correlation_ids", _apply_v13),
     _MigrationStep(14, "add_feedback_report_store", _apply_v14),
     _MigrationStep(15, "add_scm_polling_watch_store", _apply_v15),
+    _MigrationStep(16, "add_notification_conversation_store", _apply_v16),
 )
 
 
@@ -1113,6 +1167,11 @@ _TABLE_DEFINITIONS = (
         name="orch_scm_polling_watches",
         role="authoritative",
         description="Bounded SCM polling watches for outbound-only PR follow-up automation.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_notification_conversations",
+        role="authoritative",
+        description="Replyable PMA notification continuations keyed by delivered chat message ids.",
     ),
     OrchestrationTableDefinition(
         name="orch_transcript_mirrors",

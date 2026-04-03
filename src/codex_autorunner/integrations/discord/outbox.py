@@ -19,6 +19,7 @@ OUTBOX_IMMEDIATE_RETRY_DELAYS = (0.0, 1.0, 2.0)
 
 SendMessageFn = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 DeleteMessageFn = Callable[[str, str], Awaitable[None]]
+DeliveredCallback = Callable[[OutboxRecord, Optional[str]], Awaitable[None]]
 
 
 def _parse_next_attempt_at(next_at_str: Optional[str]) -> Optional[datetime]:
@@ -78,6 +79,7 @@ class DiscordOutboxManager:
         *,
         send_message: SendMessageFn,
         delete_message: Optional[DeleteMessageFn] = None,
+        on_delivered: Optional[DeliveredCallback] = None,
         logger: logging.Logger,
         retry_interval_seconds: float = OUTBOX_RETRY_INTERVAL_SECONDS,
         max_attempts: int = OUTBOX_MAX_ATTEMPTS,
@@ -88,6 +90,7 @@ class DiscordOutboxManager:
         self._store = store
         self._send_message = send_message
         self._delete_message = delete_message
+        self._on_delivered = on_delivered
         self._logger = logger
         self._retry_interval_seconds = max(retry_interval_seconds, 0.1)
         self._max_attempts = max(max_attempts, 1)
@@ -177,8 +180,15 @@ class DiscordOutboxManager:
         if not await self._mark_inflight(current.record_id):
             return False
         try:
+            delivered_message_id: Optional[str] = None
             if current.operation == "send":
-                await self._send_message(current.channel_id, current.payload_json)
+                response = await self._send_message(
+                    current.channel_id, current.payload_json
+                )
+                message_id = response.get("id") if isinstance(response, dict) else None
+                delivered_message_id = (
+                    message_id if isinstance(message_id, str) else None
+                )
             elif current.operation == "delete":
                 if (
                     self._delete_message is None
@@ -220,6 +230,15 @@ class DiscordOutboxManager:
         finally:
             await self._clear_inflight(current.record_id)
 
+        if self._on_delivered is not None:
+            try:
+                await self._on_delivered(current, delivered_message_id)
+            except Exception:
+                self._logger.warning(
+                    "discord.outbox.delivery_callback_failed record_id=%s",
+                    current.record_id,
+                    exc_info=True,
+                )
         await self._store.mark_outbox_delivered(current.record_id)
         self._logger.info("discord.outbox.delivered record_id=%s", current.record_id)
         return True

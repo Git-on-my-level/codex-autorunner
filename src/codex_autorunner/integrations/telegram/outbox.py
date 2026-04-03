@@ -25,9 +25,10 @@ __all__ = [
     "_outbox_key",
 ]
 
-SendMessageFn = Callable[..., Awaitable[None]]
+SendMessageFn = Callable[..., Awaitable[Any]]
 EditMessageFn = Callable[..., Awaitable[bool]]
 DeleteMessageFn = Callable[..., Awaitable[bool]]
+DeliveredCallback = Callable[[OutboxRecord, Optional[int]], Awaitable[None]]
 
 
 def _outbox_key(
@@ -74,11 +75,13 @@ class TelegramOutboxManager:
         edit_message_text: EditMessageFn,
         delete_message: DeleteMessageFn,
         logger: logging.Logger,
+        on_delivered: Optional[DeliveredCallback] = None,
     ) -> None:
         self._store = store
         self._send_message = send_message
         self._edit_message_text = edit_message_text
         self._delete_message = delete_message
+        self._on_delivered = on_delivered
         self._logger = logger
         self._inflight: set[str] = set()
         self._inflight_outbox_keys: set[str] = set()
@@ -282,8 +285,9 @@ class TelegramOutboxManager:
             pass
         with self._conversation_context(record.chat_id, record.thread_id):
             try:
+                delivered_message_id: Optional[int] = None
                 try:
-                    await self._send_message(
+                    response = await self._send_message(
                         record.chat_id,
                         record.text,
                         thread_id=record.thread_id,
@@ -293,12 +297,14 @@ class TelegramOutboxManager:
                 except TypeError as exc:
                     if "overflow_mode_override" not in str(exc):
                         raise
-                    await self._send_message(
+                    response = await self._send_message(
                         record.chat_id,
                         record.text,
                         thread_id=record.thread_id,
                         reply_to=record.reply_to_message_id,
                     )
+                if isinstance(response, int):
+                    delivered_message_id = response
             except Exception as exc:
                 retry_after = _extract_retry_after_seconds(exc)
                 record.attempts += 1
@@ -332,6 +338,18 @@ class TelegramOutboxManager:
                 await self._clear_inflight(
                     record.outbox_key if record.outbox_key else record.record_id
                 )
+            if self._on_delivered is not None:
+                try:
+                    await self._on_delivered(record, delivered_message_id)
+                except Exception:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "telegram.outbox.delivery_callback_failed",
+                        record_id=record.record_id,
+                        chat_id=record.chat_id,
+                        thread_id=record.thread_id,
+                    )
             if record.outbox_key:
                 # Only delete records up to (and including) this record's created_at to
                 # avoid dropping newer queued messages for the same key.

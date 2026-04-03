@@ -50,6 +50,11 @@ from ...core.pma_context import (
     format_pma_prompt,
     load_pma_prompt,
 )
+from ...core.pma_notification_store import (
+    PmaNotificationStore,
+    build_notification_context_block,
+    notification_surface_key,
+)
 from ...core.pma_thread_store import PmaThreadStore
 from ...core.pma_transcripts import PmaTranscriptStore
 from ...core.ports.run_event import (
@@ -456,6 +461,16 @@ async def handle_message_event(
         )
         return
 
+    notification_reply = None
+    if event.reply_to is not None:
+        notification_reply = PmaNotificationStore(
+            service._config.root
+        ).get_reply_target(
+            surface_kind="discord",
+            surface_key=channel_id,
+            delivered_message_id=event.reply_to.message_id,
+        )
+    effective_pma_enabled = pma_enabled or notification_reply is not None
     agent, agent_profile = service._resolve_agent_state(binding)
     runtime_agent = service._runtime_agent_for_binding(binding)
     model_override = binding.get("model_override")
@@ -467,7 +482,7 @@ async def handle_message_event(
     session_key = service._build_message_session_key(
         channel_id=channel_id,
         workspace_root=workspace_root,
-        pma_enabled=pma_enabled,
+        pma_enabled=effective_pma_enabled,
         agent=agent,
         agent_profile=agent_profile,
     )
@@ -666,7 +681,7 @@ async def handle_message_event(
                 send_final_message=False,
             )
 
-        if not pma_enabled:
+        if not effective_pma_enabled:
             prompt_text, injected = maybe_inject_car_awareness(
                 prompt_text,
                 declared_profile="car_ambient",
@@ -705,12 +720,17 @@ async def handle_message_event(
                     message_id=event.message.message_id,
                 )
 
-        if pma_enabled:
+        if effective_pma_enabled:
             try:
                 snapshot = await build_hub_snapshot(
                     service._hub_supervisor, hub_root=service._config.root
                 )
                 prompt_base = load_pma_prompt(service._config.root)
+                if notification_reply is not None:
+                    prompt_text = (
+                        f"{build_notification_context_block(notification_reply)}\n\n"
+                        f"{prompt_text}"
+                    )
                 prompt_text = format_pma_prompt(
                     prompt_base,
                     snapshot,
@@ -758,9 +778,19 @@ async def handle_message_event(
             "reasoning_effort": reasoning_effort,
             "session_key": session_key,
             "orchestrator_channel_key": (
-                channel_id if not pma_enabled else f"pma:{channel_id}"
+                channel_id if not effective_pma_enabled else f"pma:{channel_id}"
             ),
         }
+        if notification_reply is not None:
+            surface_key = notification_surface_key(notification_reply.notification_id)
+            try:
+                if (
+                    "managed_thread_surface_key"
+                    in inspect.signature(service._run_agent_turn_for_message).parameters
+                ):
+                    run_turn_kwargs["managed_thread_surface_key"] = surface_key
+            except (TypeError, ValueError):
+                pass
         try:
             if (
                 "source_message_id"
@@ -800,21 +830,42 @@ async def handle_message_event(
                 send_final_message=False,
             )
 
-    result = await ingress.submit_message(
-        SurfaceThreadMessageRequest(
+    if notification_reply is not None:
+        turn_result = await _submit_thread_message(
+            SurfaceThreadMessageRequest(
+                surface_kind="discord",
+                workspace_root=workspace_root,
+                prompt_text=turn_text,
+                agent_id=runtime_agent,
+                pma_enabled=True,
+            )
+        )
+        surface_key = notification_surface_key(notification_reply.notification_id)
+        orch_binding = build_discord_thread_orchestration_service(service).get_binding(
             surface_kind="discord",
-            workspace_root=workspace_root,
-            prompt_text=turn_text,
-            agent_id=runtime_agent,
-            pma_enabled=pma_enabled,
-        ),
-        resolve_paused_flow_target=_resolve_paused_flow,
-        submit_flow_reply=_submit_flow_reply,
-        submit_thread_message=_submit_thread_message,
-    )
-    if result.route == "flow":
-        return
-    turn_result = result.thread_result
+            surface_key=surface_key,
+        )
+        if orch_binding is not None:
+            PmaNotificationStore(service._config.root).bind_continuation_thread(
+                notification_id=notification_reply.notification_id,
+                thread_target_id=orch_binding.thread_target_id,
+            )
+    else:
+        result = await ingress.submit_message(
+            SurfaceThreadMessageRequest(
+                surface_kind="discord",
+                workspace_root=workspace_root,
+                prompt_text=turn_text,
+                agent_id=runtime_agent,
+                pma_enabled=pma_enabled,
+            ),
+            resolve_paused_flow_target=_resolve_paused_flow,
+            submit_flow_reply=_submit_flow_reply,
+            submit_thread_message=_submit_thread_message,
+        )
+        if result.route == "flow":
+            return
+        turn_result = result.thread_result
 
     if isinstance(turn_result, DiscordMessageTurnResult):
         response_text = turn_result.final_message
@@ -869,6 +920,7 @@ async def run_agent_turn_for_message(
     workspace_root: Path,
     prompt_text: str,
     input_items: Optional[list[dict[str, Any]]] = None,
+    managed_thread_surface_key: Optional[str] = None,
     source_message_id: Optional[str] = None,
     agent: str,
     model_override: Optional[str],
@@ -897,6 +949,7 @@ async def run_agent_turn_for_message(
         workspace_root=workspace_root,
         prompt_text=prompt_text,
         input_items=input_items,
+        managed_thread_surface_key=managed_thread_surface_key,
         source_message_id=source_message_id,
         agent=agent,
         model_override=model_override,
@@ -1000,6 +1053,7 @@ def resolve_discord_thread_target(
     service: Any,
     *,
     channel_id: str,
+    managed_thread_surface_key: Optional[str] = None,
     workspace_root: Path,
     agent: str,
     agent_profile: Optional[str] = None,
@@ -1010,9 +1064,10 @@ def resolve_discord_thread_target(
     pma_enabled: bool,
 ) -> Any:
     orchestration_service = build_discord_thread_orchestration_service(service)
+    surface_key = managed_thread_surface_key or channel_id
     binding = orchestration_service.get_binding(
         surface_kind="discord",
-        surface_key=channel_id,
+        surface_key=surface_key,
     )
     thread_target_id = (
         binding.thread_target_id
@@ -1052,12 +1107,12 @@ def resolve_discord_thread_target(
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
             resource_id=owner_id,
-            display_name=f"discord:{channel_id}",
+            display_name=f"discord:{surface_key}",
             metadata=thread_metadata,
         )
     orchestration_service.upsert_binding(
         surface_kind="discord",
-        surface_key=channel_id,
+        surface_key=surface_key,
         thread_target_id=thread.thread_target_id,
         agent_id=agent,
         repo_id=normalized_repo_id,
@@ -1524,6 +1579,7 @@ async def _run_discord_orchestrated_turn_for_message(
     reasoning_effort: Optional[str],
     session_key: str,
     orchestrator_channel_key: str,
+    managed_thread_surface_key: Optional[str],
     mode: str,
     pma_enabled: bool,
     execution_prompt: str,
@@ -1551,6 +1607,7 @@ async def _run_discord_orchestrated_turn_for_message(
     orchestration_service, thread = resolve_discord_thread_target(
         service,
         channel_id=channel_id,
+        managed_thread_surface_key=managed_thread_surface_key,
         workspace_root=workspace_root,
         agent=runtime_agent,
         agent_profile=agent_profile,
@@ -1899,6 +1956,7 @@ async def run_managed_thread_turn_for_message(
     reasoning_effort: Optional[str],
     session_key: str,
     orchestrator_channel_key: str,
+    managed_thread_surface_key: Optional[str] = None,
 ) -> DiscordMessageTurnResult:
     execution_prompt = (
         f"{format_pma_discoverability_preamble(hub_root=service._config.root)}"
@@ -1923,6 +1981,7 @@ async def run_managed_thread_turn_for_message(
         reasoning_effort=reasoning_effort,
         session_key=session_key,
         orchestrator_channel_key=orchestrator_channel_key,
+        managed_thread_surface_key=managed_thread_surface_key,
         mode="pma",
         pma_enabled=True,
         execution_prompt=execution_prompt,
