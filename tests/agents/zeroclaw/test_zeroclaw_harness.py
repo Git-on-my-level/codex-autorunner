@@ -63,7 +63,9 @@ class _StubSupervisor:
         turn_id: str,
     ):
         self.streamed.append((workspace_root, session_id, turn_id))
-        yield 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"hi"}}}\n\n'
+        yield {
+            "message": {"method": "message.delta", "params": {"text": "hi"}},
+        }
 
 
 @pytest.mark.asyncio
@@ -136,4 +138,4 @@ async def test_zeroclaw_harness_lists_conversations_and_streams_events() -> None
         "zc-session-2",
     ]
     assert len(events) == 1
-    assert "message.delta" in events[0]
+    assert events[0]["message"]["method"] == "message.delta"

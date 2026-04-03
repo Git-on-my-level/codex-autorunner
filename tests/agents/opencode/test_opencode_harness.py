@@ -727,7 +727,7 @@ async def test_opencode_harness_progress_event_stream_replays_buffer_before_live
         sandbox_policy=None,
     )
     pending = harness._pending_turns[("session-1", turn.turn_id)]
-    pending.progress_event_history.append({"message": {"method": "first"}})
+    await pending.event_buffer.append({"message": {"method": "first"}})
 
     streamed: list[Any] = []
 
@@ -739,10 +739,8 @@ async def test_opencode_harness_progress_event_stream_replays_buffer_before_live
 
     async def _inject_second_and_close() -> None:
         await asyncio.sleep(0)
-        async with pending.stream_condition:
-            pending.progress_event_history.append({"message": {"method": "second"}})
-            pending.stream_closed = True
-            pending.stream_condition.notify_all()
+        await pending.event_buffer.append({"message": {"method": "second"}})
+        await pending.event_buffer.close()
 
     stream_task = asyncio.create_task(_collect_stream())
     await asyncio.create_task(_inject_second_and_close())
@@ -790,7 +788,7 @@ async def test_opencode_harness_list_progress_events_returns_buffered_copy() -> 
         sandbox_policy=None,
     )
     pending = harness._pending_turns[("session-1", turn.turn_id)]
-    pending.progress_event_history.append({"message": {"method": "tool"}})
+    await pending.event_buffer.append({"message": {"method": "tool"}})
 
     events = harness.list_progress_events("session-1", turn.turn_id)
     assert events == [{"message": {"method": "tool"}}]

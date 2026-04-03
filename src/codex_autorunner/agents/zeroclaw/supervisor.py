@@ -10,7 +10,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Callable, Mapping, Optional, Sequence
+from typing import Any, AsyncIterator, Callable, Mapping, Optional, Sequence
 
 from ...core.config import HubConfig, RepoConfig
 from ...core.destinations import (
@@ -290,7 +290,7 @@ class ZeroClawSupervisor:
         workspace_root: Path,
         session_id: str,
         turn_id: str,
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict[str, Any]]:
         handle = await self._get_handle(workspace_root, session_id)
         handle.last_used_at = time.time()
         self._persist_metadata(handle)

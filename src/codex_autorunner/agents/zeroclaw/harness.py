@@ -103,7 +103,7 @@ class ZeroClawHarness(AgentHarness):
 
     async def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
-    ) -> AsyncIterator[str]:
+    ) -> AsyncIterator[dict[str, Any]]:
         async for event in self._supervisor.stream_turn_events(
             workspace_root,
             conversation_id,

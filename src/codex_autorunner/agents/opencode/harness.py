@@ -14,6 +14,7 @@ import httpx
 from ...core.logging_utils import log_event
 from ...core.orchestration.interfaces import FreshConversationRequiredError
 from ...core.orchestration.stream_text_merge import merge_assistant_stream_text
+from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
 from ..base import AgentHarness
 from ..types import (
@@ -60,9 +61,7 @@ class _PendingTurnConfig:
     prompt: Optional[str] = None
     reserved_workspace_root: Optional[Path] = None
     command_task: Optional[asyncio.Task[Any]] = None
-    progress_event_history: list[dict[str, Any]] = field(default_factory=list)
-    stream_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
-    stream_closed: bool = False
+    event_buffer: TurnEventBuffer = field(default_factory=TurnEventBuffer)
     pre_connected_event_queue: Optional[asyncio.Queue[Any]] = None
     pre_connected_stream_task: Optional[asyncio.Task[None]] = None
     pre_connected_queue_exhausted: bool = False
@@ -609,7 +608,7 @@ class OpenCodeHarness(AgentHarness):
         pending = self._pending_turns.get((conversation_id, turn_id or ""))
         if pending is None:
             return []
-        return list(pending.progress_event_history)
+        return pending.event_buffer.snapshot()
 
     def __init__(self, supervisor: OpenCodeHarnessSupervisorProtocol) -> None:
         self._supervisor = supervisor
@@ -966,23 +965,8 @@ class OpenCodeHarness(AgentHarness):
         pending = self._pending_turns.get((conversation_id, turn_id or ""))
         if pending is None:
             return
-        next_index = 0
-        while True:
-            async with pending.stream_condition:
-                while (
-                    next_index >= len(pending.progress_event_history)
-                    and not pending.stream_closed
-                ):
-                    await pending.stream_condition.wait()
-                batch = list(pending.progress_event_history[next_index:])
-                next_index += len(batch)
-                should_stop = pending.stream_closed and next_index >= len(
-                    pending.progress_event_history
-                )
-            for event in batch:
-                yield dict(event)
-            if should_stop:
-                break
+        async for event in pending.event_buffer.tail():
+            yield event
 
     async def wait_for_turn(
         self,
@@ -1029,14 +1013,10 @@ class OpenCodeHarness(AgentHarness):
             async def _publish_progress_event(raw_event: dict[str, Any]) -> None:
                 if not raw_event:
                     return
-                async with pending.stream_condition:
-                    pending.progress_event_history.append(raw_event)
-                    pending.stream_condition.notify_all()
+                await pending.event_buffer.append(raw_event)
 
             async def _close_progress_streams() -> None:
-                async with pending.stream_condition:
-                    pending.stream_closed = True
-                    pending.stream_condition.notify_all()
+                await pending.event_buffer.close()
 
             async def _process_stream_event(event: Any) -> None:
                 payload = event.data

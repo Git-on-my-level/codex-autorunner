@@ -79,7 +79,9 @@ class _FakeZeroClawClient:
 
     async def stream_turn_events(self, turn_id: str):
         self.streamed.append(turn_id)
-        yield 'event: zeroclaw\ndata: {"message":{"method":"message.delta","params":{"text":"hi"}}}\n\n'
+        yield {
+            "message": {"method": "message.delta", "params": {"text": "hi"}},
+        }
 
     async def close(self) -> None:
         self.closed = True

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
 
 from ...core.config import HubConfig, RepoConfig
+from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.utils import resolve_executable
 from ...workspace import canonical_workspace_root
 from ..acp import (
@@ -45,10 +46,8 @@ class _HermesTurnState:
     turn_id: str
     handle: ACPPromptHandle
     approval_mode: Optional[str] = None
-    raw_events: list[dict[str, Any]] = field(default_factory=list)
     pending_approval_task: Optional[asyncio.Future[Any]] = None
-    stream_condition: asyncio.Condition = field(default_factory=asyncio.Condition)
-    stream_closed: bool = False
+    event_buffer: TurnEventBuffer = field(default_factory=TurnEventBuffer)
 
 
 class HermesSupervisor:
@@ -196,7 +195,7 @@ class HermesSupervisor:
         state = await self._require_turn_state(workspace_root, resolved_turn_id)
         result = await state.handle.wait(timeout=timeout)
         errors = [result.error_message] if result.error_message else []
-        raw_events = list(state.raw_events)
+        raw_events = state.event_buffer.snapshot()
         return TerminalTurnResult(
             status=result.status,
             assistant_text=result.final_output,
@@ -216,20 +215,8 @@ class HermesSupervisor:
             turn_id,
         )
         state = await self._require_turn_state(workspace_root, resolved_turn_id)
-        next_index = 0
-        while True:
-            async with state.stream_condition:
-                while next_index >= len(state.raw_events) and not state.stream_closed:
-                    await state.stream_condition.wait()
-                pending = list(state.raw_events[next_index:])
-                next_index += len(pending)
-                should_stop = state.stream_closed and next_index >= len(
-                    state.raw_events
-                )
-            for event in pending:
-                yield dict(event)
-            if should_stop:
-                break
+        async for event in state.event_buffer.tail():
+            yield event
 
     async def interrupt_turn(
         self,
@@ -343,11 +330,9 @@ class HermesSupervisor:
         *,
         terminal: bool = False,
     ) -> None:
-        async with state.stream_condition:
-            state.raw_events.append(payload)
-            if terminal:
-                state.stream_closed = True
-            state.stream_condition.notify_all()
+        await state.event_buffer.append(payload)
+        if terminal:
+            await state.event_buffer.close()
 
     async def _retire_turn_state(self, state: _HermesTurnState) -> None:
         async with self._lock:
@@ -365,9 +350,7 @@ class HermesSupervisor:
                     state.turn_id,
                     exc_info=True,
                 )
-        async with state.stream_condition:
-            state.stream_closed = True
-            state.stream_condition.notify_all()
+        await state.event_buffer.close()
 
     async def _handle_acp_event(
         self,

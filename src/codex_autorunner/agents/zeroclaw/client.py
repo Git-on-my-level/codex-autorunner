@@ -5,8 +5,9 @@ import contextlib
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
+from ...core.orchestration.turn_event_buffer import TurnEventBuffer
 from ...core.sse import format_sse
 from ..managed_runtime import RuntimeLaunchSpec
 from ..types import TerminalTurnResult
@@ -60,9 +61,8 @@ class ZeroClawTurnState:
     started_at: float = field(default_factory=time.monotonic)
     raw_buffer: str = ""
     visible_length: int = 0
-    published_events: list[str] = field(default_factory=list)
     buffered_events: list[dict[str, str]] = field(default_factory=list)
-    subscribers: list[asyncio.Queue[Optional[str]]] = field(default_factory=list)
+    event_buffer: TurnEventBuffer = field(default_factory=TurnEventBuffer)
     result: asyncio.Future[TerminalTurnResult] = field(
         default_factory=lambda: asyncio.get_running_loop().create_future()
     )
@@ -169,22 +169,12 @@ class ZeroClawClient:
             return await turn.result
         return await asyncio.wait_for(turn.result, timeout=timeout)
 
-    async def stream_turn_events(self, turn_id: str) -> AsyncIterator[str]:
+    async def stream_turn_events(self, turn_id: str) -> AsyncIterator[dict[str, Any]]:
         turn = self._turns.get(turn_id)
         if turn is None:
             raise ZeroClawClientError(f"Unknown ZeroClaw turn '{turn_id}'")
-        queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
-        for event in turn.published_events:
-            queue.put_nowait(event)
-        if turn.result.done():
-            queue.put_nowait(None)
-        else:
-            turn.subscribers.append(queue)
-        while True:
-            next_event: Optional[str] = await queue.get()
-            if next_event is None:
-                break
-            yield next_event
+        async for event in turn.event_buffer.tail():
+            yield event
 
     def list_turn_events(self, turn_id: str) -> list[dict[str, str]]:
         turn = self._turns.get(turn_id)
@@ -274,40 +264,35 @@ class ZeroClawClient:
         visible, prompt_found = _strip_prompt_suffix(turn.raw_buffer)
         delta = visible[turn.visible_length :]
         if delta:
-            event = format_sse(
-                "zeroclaw",
-                {"message": {"method": "message.delta", "params": {"text": delta}}},
-            )
-            turn.published_events.append(event)
+            payload = {
+                "message": {"method": "message.delta", "params": {"text": delta}}
+            }
+            await turn.event_buffer.append(payload)
+            event_sse = format_sse("zeroclaw", payload)
             turn.buffered_events.append(
                 {
-                    "raw_event": event,
+                    "raw_event": event_sse,
                     "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
             )
-            for subscriber in list(turn.subscribers):
-                subscriber.put_nowait(event)
             turn.visible_length = len(visible)
         if prompt_found:
             terminal_text = _clean_terminal_output(visible)
-            completed_event = format_sse(
-                "zeroclaw",
-                {
-                    "message": {
-                        "method": "message.completed",
-                        "params": {"text": terminal_text},
-                    }
-                },
-            )
-            turn.published_events.append(completed_event)
+            completed_payload = {
+                "message": {
+                    "method": "message.completed",
+                    "params": {"text": terminal_text},
+                }
+            }
+            await turn.event_buffer.append(completed_payload)
+            completed_sse = format_sse("zeroclaw", completed_payload)
             turn.buffered_events.append(
                 {
-                    "raw_event": completed_event,
+                    "raw_event": completed_sse,
                     "published_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 }
             )
-            for subscriber in list(turn.subscribers):
-                subscriber.put_nowait(completed_event)
+            await turn.event_buffer.close()
             result = TerminalTurnResult(
                 status="completed",
                 assistant_text=terminal_text,
@@ -336,15 +321,13 @@ class ZeroClawClient:
             ),
         )
         turn.result.set_result(result)
+        await turn.event_buffer.close()
         self._close_turn(turn.turn_id)
 
     def _close_turn(self, turn_id: str) -> None:
         turn = self._turns.get(turn_id)
         if turn is None:
             return
-        for subscriber in list(turn.subscribers):
-            subscriber.put_nowait(None)
-        turn.subscribers.clear()
         if self._active_turn is turn:
             self._active_turn = None
 
