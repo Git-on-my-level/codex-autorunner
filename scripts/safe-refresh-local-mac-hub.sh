@@ -81,6 +81,8 @@ OPENCODE_BIN="${OPENCODE_BIN:-$HOME/.opencode/bin}"
 current_target=""
 swap_completed=false
 rollback_completed=false
+cutover_committed=false
+post_cutover_warnings=()
 
 write_status() {
   local status message
@@ -111,6 +113,12 @@ fail() {
   echo "${message}" >&2
   write_status "error" "${message}"
   exit 1
+}
+
+_warn_post_cutover() {
+  local message="$1"
+  echo "Warning: ${message}" >&2
+  post_cutover_warnings+=("${message}")
 }
 
 ensure_login_shell_path() {
@@ -1598,7 +1606,7 @@ _on_exit() {
   if [[ "${status}" -eq 0 ]]; then
     return 0
   fi
-  if [[ "${swap_completed}" != "true" || "${rollback_completed}" == "true" ]]; then
+  if [[ "${swap_completed}" != "true" || "${rollback_completed}" == "true" || "${cutover_committed}" == "true" ]]; then
     return 0
   fi
   _rollback "Update failed; rolling back to ${current_target}..."
@@ -1646,7 +1654,8 @@ if ! _check_discord_health; then
 fi
 
 if [[ "${health_ok}" == "true" ]]; then
-  echo "Health check OK; update successful."
+  echo "Health check OK; new build is live."
+  cutover_committed=true
   status_msg="Update completed successfully."
   if [[ "${should_reload_hub}" != "true" ]]; then
     status_msg+=" Hub update skipped (target: ${UPDATE_TARGET})."
@@ -1658,10 +1667,14 @@ if [[ "${health_ok}" == "true" ]]; then
     status_msg+=" ${discord_health_reason}"
   fi
   echo "Updating global car CLI..."
-  pipx install --force "${PACKAGE_INSTALL_SPEC}"
-  _ensure_playwright_chromium "${PIPX_VENV}/bin/python"
+  if ! pipx install --force "${PACKAGE_INSTALL_SPEC}"; then
+    _warn_post_cutover \
+      "Global pipx install failed after cutover; keeping the healthy staged venv active and skipping rollback."
+  elif ! _ensure_playwright_chromium "${PIPX_VENV}/bin/python"; then
+    _warn_post_cutover \
+      "Playwright Chromium install for the global pipx venv failed after cutover; the staged service venv remains active."
+  fi
   ensure_login_shell_path "${LOCAL_BIN}"
-  write_status "ok" "${status_msg}"
 else
   _rollback "Health check failed; rolling back to ${current_target}..."
   rollback_hub_ok=true
@@ -1729,7 +1742,18 @@ printf '%s\n' "${to_delete[@]:-}" | while read -r old; do
   if [[ -n "${old_real}" && ( "${old_real}" == "${current_real}" || "${old_real}" == "${prev_real}" ) ]]; then
     continue
   fi
-  rm -rf "${old}"
+  if ! rm -rf "${old}"; then
+    _warn_post_cutover \
+      "Failed to prune old staged venv ${old}; the active staged venv is still live."
+  fi
 done
+
+if (( ${#post_cutover_warnings[@]} > 0 )); then
+  for warning in "${post_cutover_warnings[@]}"; do
+    status_msg+=" ${warning}"
+  done
+fi
+
+write_status "ok" "${status_msg}"
 
 echo "Done."

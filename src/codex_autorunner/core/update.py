@@ -452,6 +452,10 @@ def _write_update_status(status: str, message: str, **extra) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _refresh_script_committed_ok_status(status: object) -> bool:
+    return isinstance(status, dict) and status.get("status") == "ok"
+
+
 def _is_valid_git_repo(path: Path) -> bool:
     try:
         result = subprocess.run(
@@ -902,6 +906,12 @@ def _system_update_worker(
             env=env,
             logger=logger,
         )
+        existing = _read_update_status()
+        if returncode != 0 and _refresh_script_committed_ok_status(existing):
+            logger.info(
+                "Refresh script exited non-zero after committing ok status; preserving committed update result."
+            )
+            return
         if (
             returncode != 0
             and _refresh_failure_is_retryable(output_tail)
@@ -913,8 +923,13 @@ def _system_update_worker(
                 env=env,
                 logger=logger,
             )
-        if returncode != 0:
             existing = _read_update_status()
+            if returncode != 0 and _refresh_script_committed_ok_status(existing):
+                logger.info(
+                    "Refresh script exited non-zero after retry but had already committed ok status; preserving committed update result."
+                )
+                return
+        if returncode != 0:
             if not existing or existing.get("status") not in ("rollback", "error"):
                 _write_update_status(
                     "rollback",

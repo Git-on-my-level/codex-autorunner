@@ -573,6 +573,76 @@ def test_system_update_worker_retries_refresh_after_packaging_failure(
     assert not (update_dir / "build").exists()
 
 
+def test_system_update_worker_preserves_committed_ok_status_on_nonzero_exit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    update_dir = tmp_path / "update"
+    (update_dir / ".git").mkdir(parents=True)
+    refresh_script = update_dir / "scripts" / "safe-refresh-local-linux-hub.sh"
+    refresh_script.parent.mkdir(parents=True, exist_ok=True)
+    refresh_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+
+    monkeypatch.setattr(system.shutil, "which", lambda cmd: f"/usr/bin/{cmd}")
+    monkeypatch.setattr(system.update_core, "_is_valid_git_repo", lambda _path: True)
+
+    monkeypatch.setattr(system.update_core, "_run_cmd", lambda *_args, **_kwargs: None)
+
+    committed_message = (
+        "Update completed successfully. Global pipx install failed after cutover."
+    )
+    status_path = system._update_status_path()
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.stdout = [
+                "error: subprocess-exited-with-error\n",
+                "Failed building wheel for codex-autorunner\n",
+                "error: [Errno 2] No such file or directory: 'build/bdist...'\n",
+            ]
+            self.returncode = 1
+
+        def wait(self) -> int:
+            status_path.parent.mkdir(parents=True, exist_ok=True)
+            status_path.write_text(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "message": committed_message,
+                        "at": time.time(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return self.returncode
+
+    popen_calls = 0
+
+    def fake_popen(cmd, cwd, env, stdout, stderr, text):  # type: ignore[no-untyped-def]
+        nonlocal popen_calls
+        popen_calls += 1
+        return _Proc()
+
+    monkeypatch.setattr(system.subprocess, "Popen", fake_popen)
+    logger = logging.getLogger("test")
+
+    system._system_update_worker(
+        repo_url="https://example.com/repo.git",
+        repo_ref="main",
+        update_dir=update_dir,
+        logger=logger,
+        update_target="web",
+        update_backend="systemd-user",
+        skip_checks=True,
+    )
+
+    payload = json.loads(system._update_status_path().read_text(encoding="utf-8"))
+    assert payload["status"] == "ok"
+    assert payload["message"] == committed_message
+    assert popen_calls == 1
+
+
 def test_system_update_worker_does_not_retry_non_packaging_refresh_failure(
     tmp_path: Path, monkeypatch
 ) -> None:
