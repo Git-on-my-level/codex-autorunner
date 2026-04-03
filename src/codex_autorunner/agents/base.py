@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Optional, cast
+from typing import Any, AsyncIterator, Optional, cast
 
 from .types import (
     AgentId,
@@ -62,23 +62,6 @@ class AgentHarness(ABC):
 
     def allows_parallel_event_stream(self) -> bool:
         return self.supports("event_streaming")
-
-    def progress_event_stream(
-        self, workspace_root: Path, conversation_id: str, turn_id: str
-    ) -> AsyncIterator[Any]:
-        if not self.allows_parallel_event_stream():
-            _ = workspace_root, conversation_id, turn_id
-
-            async def _unsupported() -> AsyncIterator[Any]:
-                raise UnsupportedAgentCapabilityError(
-                    "event_streaming",
-                    agent_id=str(self.agent_id),
-                )
-                if False:
-                    yield None
-
-            return _unsupported()
-        return self.stream_events(workspace_root, conversation_id, turn_id)
 
     async def model_catalog(self, workspace_root: Path) -> ModelCatalog:
         _ = workspace_root
@@ -206,14 +189,6 @@ def harness_allows_parallel_event_stream(harness: Any) -> bool:
 
 
 def harness_supports_progress_event_stream(harness: Any) -> bool:
-    progress_stream = getattr(harness, "progress_event_stream", None)
-    if callable(progress_stream):
-        progress_func = getattr(progress_stream, "__func__", None)
-        if (
-            progress_func is None
-            or progress_func is not AgentHarness.progress_event_stream
-        ):
-            return True
     return harness_allows_parallel_event_stream(harness)
 
 
@@ -223,27 +198,11 @@ def harness_progress_event_stream(
     conversation_id: str,
     turn_id: str,
 ) -> AsyncIterator[Any]:
-    progress_stream = cast(
-        Optional[Callable[[Path, str, str], AsyncIterator[Any]]],
-        getattr(harness, "progress_event_stream", None),
-    )
-    if callable(progress_stream):
-        progress_func = getattr(progress_stream, "__func__", None)
-        if (
-            progress_func is None
-            or progress_func is not AgentHarness.progress_event_stream
-        ):
-            return cast(
-                AsyncIterator[Any],
-                progress_stream(workspace_root, conversation_id, turn_id),
-            )
-    stream_events = cast(
-        Optional[Callable[[Path, str, str], AsyncIterator[Any]]],
-        getattr(harness, "stream_events", None),
-    )
+    stream_events = getattr(harness, "stream_events", None)
     if callable(stream_events) and harness_allows_parallel_event_stream(harness):
         return cast(
-            AsyncIterator[Any], stream_events(workspace_root, conversation_id, turn_id)
+            AsyncIterator[Any],
+            stream_events(workspace_root, conversation_id, turn_id),
         )
 
     async def _unsupported() -> AsyncIterator[Any]:

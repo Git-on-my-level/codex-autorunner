@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 import pytest
 
+from codex_autorunner.agents.base import harness_progress_event_stream
 from codex_autorunner.agents.opencode import harness as harness_module
 from codex_autorunner.agents.opencode.harness import OpenCodeHarness
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
@@ -589,8 +590,8 @@ async def test_opencode_harness_progress_event_stream_reuses_pending_turn_collec
     streamed: list[Any] = []
 
     async def _collect_stream() -> None:
-        async for raw_event in harness.progress_event_stream(
-            workspace, "session-1", turn.turn_id
+        async for raw_event in harness_progress_event_stream(
+            harness, workspace, "session-1", turn.turn_id
         ):
             streamed.append(raw_event)
 
@@ -643,8 +644,8 @@ async def test_opencode_harness_progress_event_stream_accepts_nested_item_sessio
     streamed: list[Any] = []
 
     async def _collect_stream() -> None:
-        async for raw_event in harness.progress_event_stream(
-            workspace, "session-1", turn.turn_id
+        async for raw_event in harness_progress_event_stream(
+            harness, workspace, "session-1", turn.turn_id
         ):
             streamed.append(raw_event)
 
@@ -732,8 +733,8 @@ async def test_opencode_harness_progress_event_stream_replays_buffer_before_live
     streamed: list[Any] = []
 
     async def _collect_stream() -> None:
-        async for raw_event in harness.progress_event_stream(
-            workspace, "session-1", turn.turn_id
+        async for raw_event in harness_progress_event_stream(
+            harness, workspace, "session-1", turn.turn_id
         ):
             streamed.append(raw_event)
 
@@ -761,8 +762,11 @@ async def test_opencode_harness_progress_event_stream_is_empty_after_pending_tur
 
     streamed = [
         raw_event
-        async for raw_event in harness.progress_event_stream(
-            Path("/tmp/workspace").resolve(), "session-1", "turn-1"
+        async for raw_event in harness_progress_event_stream(
+            harness,
+            Path("/tmp/workspace").resolve(),
+            "session-1",
+            "turn-1",
         )
     ]
 

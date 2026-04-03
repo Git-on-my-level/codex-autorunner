@@ -145,39 +145,3 @@ async def test_progress_event_stream_support_stays_disabled_for_base_helper() ->
             harness, Path("."), "conv-1", "turn-1"
         ):
             pass
-
-
-@pytest.mark.asyncio
-async def test_progress_event_stream_support_detects_custom_override() -> None:
-    class _CustomProgressHarness(_MinimalHarness):
-        capabilities = frozenset(
-            [
-                RuntimeCapability("durable_threads"),
-                RuntimeCapability("message_turns"),
-                RuntimeCapability("event_streaming"),
-            ]
-        )
-
-        def allows_parallel_event_stream(self) -> bool:
-            return False
-
-        def progress_event_stream(
-            self, workspace_root: Path, conversation_id: str, turn_id: str
-        ):
-            _ = workspace_root, conversation_id, turn_id
-
-            async def _events():
-                yield "custom-progress"
-
-            return _events()
-
-    harness = _CustomProgressHarness()
-
-    assert harness_supports_progress_event_stream(harness) is True
-    streamed = [
-        event
-        async for event in harness_progress_event_stream(
-            harness, Path("."), "conv-1", "turn-1"
-        )
-    ]
-    assert streamed == ["custom-progress"]

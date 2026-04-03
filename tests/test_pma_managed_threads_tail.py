@@ -314,7 +314,13 @@ def test_managed_thread_tail_snapshot_marks_opencode_stream_available(
     _enable_pma(hub_env.hub_root)
 
     class _OpenCodeHarnessEmptyStream:
-        def progress_event_stream(
+        def supports(self, capability: str) -> bool:
+            return capability == "event_streaming"
+
+        def allows_parallel_event_stream(self) -> bool:
+            return True
+
+        def stream_events(
             self,
             workspace_root: Path,
             conversation_id: str,
@@ -436,7 +442,13 @@ def test_managed_thread_tail_events_reuses_active_harness_state(
         def __init__(self, events: list[dict[str, Any]]) -> None:
             self._events = list(events)
 
-        def progress_event_stream(
+        def supports(self, capability: str) -> bool:
+            return capability == "event_streaming"
+
+        def allows_parallel_event_stream(self) -> bool:
+            return True
+
+        def stream_events(
             self,
             workspace_root: Path,
             conversation_id: str,
@@ -504,7 +516,13 @@ def test_managed_thread_tail_snapshot_includes_opencode_list_progress_events(
         def __init__(self, events: list[dict[str, Any]]) -> None:
             self._events = list(events)
 
-        def progress_event_stream(
+        def supports(self, capability: str) -> bool:
+            return capability == "event_streaming"
+
+        def allows_parallel_event_stream(self) -> bool:
+            return True
+
+        def stream_events(
             self,
             workspace_root: Path,
             conversation_id: str,
@@ -558,7 +576,13 @@ def test_managed_thread_tail_snapshot_stream_available_when_backend_binding_appe
     _enable_pma(hub_env.hub_root)
 
     class _OpenCodeHarnessEmptyStream:
-        def progress_event_stream(
+        def supports(self, capability: str) -> bool:
+            return capability == "event_streaming"
+
+        def allows_parallel_event_stream(self) -> bool:
+            return True
+
+        def stream_events(
             self,
             workspace_root: Path,
             conversation_id: str,
