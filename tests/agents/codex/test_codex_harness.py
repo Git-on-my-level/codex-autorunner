@@ -32,10 +32,17 @@ class _Supervisor:
 
 class _EventsBuffer:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[Any, ...]] = []
 
-    async def list_events(self, thread_id: str, turn_id: str) -> list[dict[str, Any]]:
-        self.calls.append((thread_id, turn_id))
+    async def list_events(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        after_id: int = 0,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        self.calls.append((thread_id, turn_id, after_id, limit))
         return [{"id": 1}]
 
 
@@ -48,7 +55,7 @@ async def test_codex_harness_list_progress_events_delegates_to_events_buffer() -
     )
     got = await harness.list_progress_events("thread-a", "turn-b")
     assert got == [{"id": 1}]
-    assert events.calls == [("thread-a", "turn-b")]
+    assert events.calls == [("thread-a", "turn-b", 0, None)]
 
 
 @pytest.mark.asyncio

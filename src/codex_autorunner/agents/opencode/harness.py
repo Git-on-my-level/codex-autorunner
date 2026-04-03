@@ -602,9 +602,10 @@ class OpenCodeHarness(AgentHarness):
         return True
 
     async def list_progress_events(
-        self, conversation_id: str, turn_id: str
+        self, conversation_id: str, turn_id: str, **kwargs: Any
     ) -> list[dict[str, Any]]:
         """Return buffered progress events for a pending turn (snapshot-friendly)."""
+        _ = kwargs
         pending = self._pending_turns.get((conversation_id, turn_id or ""))
         if pending is None:
             return []

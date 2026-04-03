@@ -178,9 +178,9 @@ class AgentHarness(ABC):
         return _unsupported()
 
     async def list_progress_events(
-        self, conversation_id: str, turn_id: str
+        self, conversation_id: str, turn_id: str, **kwargs: Any
     ) -> list[dict[str, Any]]:
-        _ = conversation_id, turn_id
+        _ = conversation_id, turn_id, kwargs
         return []
 
 

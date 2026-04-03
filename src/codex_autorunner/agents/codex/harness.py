@@ -310,9 +310,18 @@ class CodexHarness(AgentHarness):
                 yield entry
 
     async def list_progress_events(
-        self, conversation_id: str, turn_id: str
+        self,
+        conversation_id: str,
+        turn_id: str,
+        *,
+        after_id: int = 0,
+        limit: Optional[int] = None,
+        **kwargs: Any,
     ) -> list[dict[str, Any]]:
-        return await self._events.list_events(conversation_id, turn_id)
+        _ = kwargs
+        return await self._events.list_events(
+            conversation_id, turn_id, after_id=after_id, limit=limit
+        )
 
     async def wait_for_turn(
         self,

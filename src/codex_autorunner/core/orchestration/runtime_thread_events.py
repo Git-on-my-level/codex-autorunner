@@ -203,15 +203,25 @@ async def normalize_runtime_thread_raw_event(
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     if isinstance(raw_event, dict):
+        raw_sse = raw_event.get("raw_event")
+        if isinstance(raw_sse, str) and raw_sse.strip():
+            events: list[RunEvent] = []
+            async for sse_event in _parse_runtime_thread_sse(raw_sse):
+                events.extend(
+                    _normalize_sse_event(sse_event, state, timestamp=timestamp)
+                )
+            return events
         return normalize_runtime_thread_message_payload(
             raw_event,
             state,
             timestamp=timestamp,
         )
-    events: list[RunEvent] = []
+    str_raw_events: list[RunEvent] = []
     async for sse_event in _parse_runtime_thread_sse(raw_event):
-        events.extend(_normalize_sse_event(sse_event, state, timestamp=timestamp))
-    return events
+        str_raw_events.extend(
+            _normalize_sse_event(sse_event, state, timestamp=timestamp)
+        )
+    return str_raw_events
 
 
 def normalize_runtime_thread_message_payload(
@@ -326,7 +336,7 @@ def _normalize_sse_event(
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
     payload = _load_json_object(sse_event.data)
-    if sse_event.event in {"app-server", "event"}:
+    if sse_event.event in {"app-server", "event", "zeroclaw"}:
         message = payload.get("message")
         if isinstance(message, dict):
             return normalize_runtime_thread_message(
@@ -542,6 +552,21 @@ def normalize_runtime_thread_message(
             ]
         tool_name, tool_input = _normalize_tool_name(params, item=item)
         if tool_name:
+            item_type_lower = str(item_type or "").strip().lower()
+            if item_type_lower in {"commandexecution", "filechange", "tool"}:
+                exit_code = item.get("exitCode")
+                failed = isinstance(exit_code, int) and exit_code != 0
+                return [
+                    ToolResult(
+                        timestamp=event_timestamp,
+                        tool_name=tool_name,
+                        status="error" if failed else "completed",
+                        result=item.get("result"),
+                        error=(
+                            str(exit_code) if failed and exit_code is not None else None
+                        ),
+                    )
+                ]
             return [
                 ToolCall(
                     timestamp=event_timestamp,
@@ -1194,6 +1219,9 @@ def _request_id_for_event(method: str, params: dict[str, Any]) -> str:
 def _approval_summary(method: str, params: dict[str, Any]) -> str:
     if method == "item/commandExecution/requestApproval":
         command = params.get("command")
+        if not command:
+            item = _coerce_dict(params.get("item"))
+            command = item.get("command")
         if isinstance(command, list):
             command = " ".join(str(part) for part in command).strip()
         if isinstance(command, str) and command.strip():
