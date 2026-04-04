@@ -1104,8 +1104,88 @@ class DestinationConfigSection(TypedDict, total=False):
     env: dict[str, str]
 
 
+def _parse_optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    return int(value)
+
+
+class AgentConfigMixin:
+    agents: Dict[str, AgentConfig]
+
+    def resolved_agent_config(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> AgentConfig:
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            raise ConfigError(f"agents.{agent_id}.binary is required")
+        normalized_profile = str(profile or "").strip().lower()
+        if not normalized_profile:
+            return agent
+        profile_config = (agent.profiles or {}).get(normalized_profile)
+        if profile_config is None:
+            raise ConfigError(
+                f"agents.{agent_id}.profiles.{normalized_profile} is not configured"
+            )
+        return AgentConfig(
+            backend=profile_config.backend or agent.backend,
+            binary=profile_config.binary or agent.binary,
+            serve_command=(
+                list(profile_config.serve_command)
+                if profile_config.serve_command
+                else (list(agent.serve_command) if agent.serve_command else None)
+            ),
+            base_url=profile_config.base_url or agent.base_url,
+            subagent_models=(
+                dict(profile_config.subagent_models)
+                if profile_config.subagent_models
+                else (
+                    dict(agent.subagent_models)
+                    if agent.subagent_models is not None
+                    else None
+                )
+            ),
+            default_profile=agent.default_profile,
+            profiles=agent.profiles,
+        )
+
+    def agent_binary(self, agent_id: str, *, profile: Optional[str] = None) -> str:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
+        if agent and agent.binary:
+            return agent.binary
+        raise ConfigError(f"agents.{agent_id}.binary is required")
+
+    def agent_backend(self, agent_id: str, *, profile: Optional[str] = None) -> str:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
+        backend = getattr(agent, "backend", None) if agent is not None else None
+        if isinstance(backend, str) and backend.strip():
+            return backend.strip().lower()
+        return str(agent_id or "").strip().lower()
+
+    def agent_serve_command(
+        self, agent_id: str, *, profile: Optional[str] = None
+    ) -> Optional[List[str]]:
+        agent = self.resolved_agent_config(agent_id, profile=profile)
+        if agent:
+            return list(agent.serve_command) if agent.serve_command else None
+        return None
+
+    def agent_profiles(self, agent_id: str) -> Dict[str, AgentProfileConfig]:
+        agent = self.agents.get(agent_id)
+        if agent is None or not isinstance(agent.profiles, dict):
+            return {}
+        return dict(agent.profiles)
+
+    def agent_default_profile(self, agent_id: str) -> Optional[str]:
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return None
+        value = str(agent.default_profile or "").strip().lower()
+        return value or None
+
+
 @dataclasses.dataclass
-class RepoConfig:
+class RepoConfig(AgentConfigMixin):
     raw: Dict[str, Any]
     root: Path
     version: int
@@ -1160,79 +1240,9 @@ class RepoConfig:
     def doc_path(self, key: str) -> Path:
         return self.root / self.docs[key]
 
-    def resolved_agent_config(
-        self, agent_id: str, *, profile: Optional[str] = None
-    ) -> AgentConfig:
-        agent = self.agents.get(agent_id)
-        if agent is None:
-            raise ConfigError(f"agents.{agent_id}.binary is required")
-        normalized_profile = str(profile or "").strip().lower()
-        if not normalized_profile:
-            return agent
-        profile_config = (agent.profiles or {}).get(normalized_profile)
-        if profile_config is None:
-            raise ConfigError(
-                f"agents.{agent_id}.profiles.{normalized_profile} is not configured"
-            )
-        return AgentConfig(
-            backend=profile_config.backend or agent.backend,
-            binary=profile_config.binary or agent.binary,
-            serve_command=(
-                list(profile_config.serve_command)
-                if profile_config.serve_command
-                else (list(agent.serve_command) if agent.serve_command else None)
-            ),
-            base_url=profile_config.base_url or agent.base_url,
-            subagent_models=(
-                dict(profile_config.subagent_models)
-                if profile_config.subagent_models
-                else (
-                    dict(agent.subagent_models)
-                    if agent.subagent_models is not None
-                    else None
-                )
-            ),
-            default_profile=agent.default_profile,
-            profiles=agent.profiles,
-        )
-
-    def agent_binary(self, agent_id: str, *, profile: Optional[str] = None) -> str:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        if agent and agent.binary:
-            return agent.binary
-        raise ConfigError(f"agents.{agent_id}.binary is required")
-
-    def agent_backend(self, agent_id: str, *, profile: Optional[str] = None) -> str:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        backend = getattr(agent, "backend", None) if agent is not None else None
-        if isinstance(backend, str) and backend.strip():
-            return backend.strip().lower()
-        return str(agent_id or "").strip().lower()
-
-    def agent_serve_command(
-        self, agent_id: str, *, profile: Optional[str] = None
-    ) -> Optional[List[str]]:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        if agent:
-            return list(agent.serve_command) if agent.serve_command else None
-        return None
-
-    def agent_profiles(self, agent_id: str) -> Dict[str, AgentProfileConfig]:
-        agent = self.agents.get(agent_id)
-        if agent is None or not isinstance(agent.profiles, dict):
-            return {}
-        return dict(agent.profiles)
-
-    def agent_default_profile(self, agent_id: str) -> Optional[str]:
-        agent = self.agents.get(agent_id)
-        if agent is None:
-            return None
-        value = str(agent.default_profile or "").strip().lower()
-        return value or None
-
 
 @dataclasses.dataclass
-class HubConfig:
+class HubConfig(AgentConfigMixin):
     raw: Dict[str, Any]
     root: Path
     version: int
@@ -1268,76 +1278,6 @@ class HubConfig:
     static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
     durable_writes: bool
-
-    def resolved_agent_config(
-        self, agent_id: str, *, profile: Optional[str] = None
-    ) -> AgentConfig:
-        agent = self.agents.get(agent_id)
-        if agent is None:
-            raise ConfigError(f"agents.{agent_id}.binary is required")
-        normalized_profile = str(profile or "").strip().lower()
-        if not normalized_profile:
-            return agent
-        profile_config = (agent.profiles or {}).get(normalized_profile)
-        if profile_config is None:
-            raise ConfigError(
-                f"agents.{agent_id}.profiles.{normalized_profile} is not configured"
-            )
-        return AgentConfig(
-            backend=profile_config.backend or agent.backend,
-            binary=profile_config.binary or agent.binary,
-            serve_command=(
-                list(profile_config.serve_command)
-                if profile_config.serve_command
-                else (list(agent.serve_command) if agent.serve_command else None)
-            ),
-            base_url=profile_config.base_url or agent.base_url,
-            subagent_models=(
-                dict(profile_config.subagent_models)
-                if profile_config.subagent_models
-                else (
-                    dict(agent.subagent_models)
-                    if agent.subagent_models is not None
-                    else None
-                )
-            ),
-            default_profile=agent.default_profile,
-            profiles=agent.profiles,
-        )
-
-    def agent_binary(self, agent_id: str, *, profile: Optional[str] = None) -> str:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        if agent and agent.binary:
-            return agent.binary
-        raise ConfigError(f"agents.{agent_id}.binary is required")
-
-    def agent_backend(self, agent_id: str, *, profile: Optional[str] = None) -> str:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        backend = getattr(agent, "backend", None) if agent is not None else None
-        if isinstance(backend, str) and backend.strip():
-            return backend.strip().lower()
-        return str(agent_id or "").strip().lower()
-
-    def agent_serve_command(
-        self, agent_id: str, *, profile: Optional[str] = None
-    ) -> Optional[List[str]]:
-        agent = self.resolved_agent_config(agent_id, profile=profile)
-        if agent:
-            return list(agent.serve_command) if agent.serve_command else None
-        return None
-
-    def agent_profiles(self, agent_id: str) -> Dict[str, AgentProfileConfig]:
-        agent = self.agents.get(agent_id)
-        if agent is None or not isinstance(agent.profiles, dict):
-            return {}
-        return dict(agent.profiles)
-
-    def agent_default_profile(self, agent_id: str) -> Optional[str]:
-        agent = self.agents.get(agent_id)
-        if agent is None:
-            return None
-        value = str(agent.default_profile or "").strip().lower()
-        return value or None
 
 
 # Alias used by existing code paths that only support repo mode
@@ -1925,11 +1865,11 @@ def _parse_app_server_config(
     else:
         auto_restart = bool(auto_restart_raw)
     max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
-    max_handles = int(max_handles_raw) if max_handles_raw is not None else None
+    max_handles = _parse_optional_int(max_handles_raw)
     if max_handles is not None and max_handles <= 0:
         max_handles = None
     idle_ttl_raw = cfg.get("idle_ttl_seconds", defaults.get("idle_ttl_seconds"))
-    idle_ttl_seconds = int(idle_ttl_raw) if idle_ttl_raw is not None else None
+    idle_ttl_seconds = _parse_optional_int(idle_ttl_raw)
     if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
         idle_ttl_seconds = None
     turn_timeout_raw = cfg.get(
@@ -1980,9 +1920,7 @@ def _parse_app_server_config(
         "turn_stall_max_recovery_attempts",
         defaults.get("turn_stall_max_recovery_attempts"),
     )
-    turn_stall_max_recovery_attempts = (
-        int(stall_max_attempts_raw) if stall_max_attempts_raw is not None else None
-    )
+    turn_stall_max_recovery_attempts = _parse_optional_int(stall_max_attempts_raw)
     if (
         turn_stall_max_recovery_attempts is not None
         and turn_stall_max_recovery_attempts <= 0
@@ -2076,11 +2014,11 @@ def _parse_opencode_config(
         else None
     )
     max_handles_raw = cfg.get("max_handles", defaults.get("max_handles"))
-    max_handles = int(max_handles_raw) if max_handles_raw is not None else None
+    max_handles = _parse_optional_int(max_handles_raw)
     if max_handles is not None and max_handles <= 0:
         max_handles = None
     idle_ttl_raw = cfg.get("idle_ttl_seconds", defaults.get("idle_ttl_seconds"))
-    idle_ttl_seconds = int(idle_ttl_raw) if idle_ttl_raw is not None else None
+    idle_ttl_seconds = _parse_optional_int(idle_ttl_raw)
     if idle_ttl_seconds is not None and idle_ttl_seconds <= 0:
         idle_ttl_seconds = None
     return OpenCodeConfig(
@@ -2463,9 +2401,7 @@ def _parse_static_assets_config(
     max_cache_age_days_raw = cfg.get(
         "max_cache_age_days", defaults.get("max_cache_age_days")
     )
-    max_cache_age_days = (
-        int(max_cache_age_days_raw) if max_cache_age_days_raw is not None else None
-    )
+    max_cache_age_days = _parse_optional_int(max_cache_age_days_raw)
     return StaticAssetsConfig(
         cache_root=cache_root,
         max_cache_entries=max_cache_entries,
