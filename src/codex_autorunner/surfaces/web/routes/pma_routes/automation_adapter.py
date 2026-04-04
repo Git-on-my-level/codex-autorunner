@@ -230,13 +230,7 @@ async def notify_hub_automation_transition(
 
     method = first_callable(
         store,
-        (
-            "notify_transition",
-            "record_transition",
-            "handle_transition",
-            "on_transition",
-            "process_transition",
-        ),
+        ("notify_transition",),
     )
     if method is None:
         return

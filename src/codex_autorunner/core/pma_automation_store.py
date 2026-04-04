@@ -916,11 +916,6 @@ class PmaAutomationStore:
         )
         return {"subscription": created.to_dict(), "deduped": deduped}
 
-    def add_subscription(
-        self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
-    ) -> dict[str, Any]:
-        return self.create_subscription(payload=payload, **kwargs)
-
     def cancel_subscription(self, subscription_id: str) -> bool:
         target_id = _normalize_text(subscription_id)
         if target_id is None:
@@ -940,12 +935,6 @@ class PmaAutomationStore:
             if changed:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
             return changed
-
-    def delete_subscription(self, subscription_id: str, **_: Any) -> bool:
-        return self.cancel_subscription(subscription_id)
-
-    def remove_subscription(self, subscription_id: str, **_: Any) -> bool:
-        return self.cancel_subscription(subscription_id)
 
     def purge_subscription(
         self, subscription_id: str, *, require_inactive: bool = True
@@ -1165,11 +1154,6 @@ class PmaAutomationStore:
         )
         return {"timer": created.to_dict(), "deduped": deduped}
 
-    def add_timer(
-        self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
-    ) -> dict[str, Any]:
-        return self.create_timer(payload=payload, **kwargs)
-
     def cancel_timer(self, timer_id: str) -> bool:
         target_id = _normalize_text(timer_id)
         if target_id is None:
@@ -1189,12 +1173,6 @@ class PmaAutomationStore:
             if changed:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
             return changed
-
-    def delete_timer(self, timer_id: str, **_: Any) -> bool:
-        return self.cancel_timer(timer_id)
-
-    def remove_timer(self, timer_id: str, **_: Any) -> bool:
-        return self.cancel_timer(timer_id)
 
     def purge_timer(self, timer_id: str, *, require_inactive: bool = True) -> bool:
         target_id = _normalize_text(timer_id)
@@ -1586,26 +1564,6 @@ class PmaAutomationStore:
             "timestamp": timestamp,
         }
 
-    def record_transition(
-        self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
-    ) -> dict[str, Any]:
-        return self.notify_transition(payload=payload, **kwargs)
-
-    def handle_transition(
-        self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
-    ) -> dict[str, Any]:
-        return self.notify_transition(payload=payload, **kwargs)
-
-    def on_transition(
-        self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
-    ) -> dict[str, Any]:
-        return self.notify_transition(payload=payload, **kwargs)
-
-    def process_transition(
-        self, payload: Optional[dict[str, Any]] = None, **kwargs: Any
-    ) -> dict[str, Any]:
-        return self.notify_transition(payload=payload, **kwargs)
-
     def mark_wakeup_dispatched(
         self, wakeup_id: str, *, dispatched_at: Optional[str] = None
     ) -> bool:
@@ -1629,11 +1587,6 @@ class PmaAutomationStore:
             if changed:
                 self._save_structured_unlocked(state, subscriptions, timers, wakeups)
             return changed
-
-    def mark_event_dispatched(
-        self, wakeup_id: str, *, dispatched_at: Optional[str] = None
-    ) -> bool:
-        return self.mark_wakeup_dispatched(wakeup_id, dispatched_at=dispatched_at)
 
     def purge_wakeup(self, wakeup_id: str, *, require_inactive: bool = True) -> bool:
         target_id = _normalize_text(wakeup_id)

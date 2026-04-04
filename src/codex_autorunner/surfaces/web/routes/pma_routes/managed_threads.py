@@ -398,7 +398,6 @@ def build_automation_routes(
             store,
             (
                 "create_subscription",
-                "add_subscription",
                 "upsert_subscription",
             ),
             payload.model_dump(exclude_none=True),
@@ -450,11 +449,7 @@ def build_automation_routes(
         store = await get_automation_store(request, get_runtime_state())
         deleted = await call_store_action_with_id(
             store,
-            (
-                "delete_subscription",
-                "remove_subscription",
-                "cancel_subscription",
-            ),
+            ("cancel_subscription",),
             normalized_id,
             payload={},
             id_aliases=("subscription_id", "id"),
@@ -479,7 +474,7 @@ def build_automation_routes(
         try:
             created = await call_store_create_with_payload(
                 store,
-                ("create_timer", "add_timer", "upsert_timer"),
+                ("create_timer", "upsert_timer"),
                 payload.model_dump(exclude_none=True),
             )
         except ValueError as exc:
@@ -564,7 +559,7 @@ def build_automation_routes(
         store = await get_automation_store(request, get_runtime_state())
         cancelled = await call_store_action_with_id(
             store,
-            ("cancel_timer", "delete_timer", "remove_timer"),
+            ("cancel_timer",),
             normalized_id,
             payload=payload.model_dump(exclude_none=True) if payload else {},
             id_aliases=("timer_id", "id"),

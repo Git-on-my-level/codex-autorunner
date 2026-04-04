@@ -60,8 +60,7 @@ def resolve_managed_thread_followup_policy(
         raise HTTPException(
             status_code=400,
             detail=(
-                "terminal_followup=false cannot be combined with "
-                "notify_on='terminal'"
+                "terminal_followup=false cannot be combined with notify_on='terminal'"
             ),
         )
 
@@ -115,7 +114,6 @@ class ManagedThreadAutomationClient:
                 store,
                 (
                     "create_subscription",
-                    "add_subscription",
                     "upsert_subscription",
                 ),
                 build_managed_thread_terminal_notify_payload(
