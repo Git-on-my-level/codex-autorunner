@@ -683,8 +683,19 @@ _TELEGRAM_COMMAND_METADATA: dict[str, TelegramCommandMetadata] = {
 def command_contract_entry_for_path(
     path: tuple[str, ...],
 ) -> Optional[CommandContractEntry]:
+    """Resolve a contract entry for Discord dispatch or parity checks.
+
+    ``entry.path`` is the logical (often Telegram-shaped) tuple. Discord may
+    register the same command under a different tuple (for example
+    ``("car", "session", "resume")`` vs ``("car", "resume")``); those aliases
+    live in ``entry.discord_paths`` and must match here so early ACK/defer
+    logic sees the same policy as the command manifest.
+    """
     for entry in COMMAND_CONTRACT:
         if entry.path == path:
+            return entry
+    for entry in COMMAND_CONTRACT:
+        if path in entry.discord_paths:
             return entry
     return None
 

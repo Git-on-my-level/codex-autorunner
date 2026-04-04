@@ -17,6 +17,10 @@ from .errors import DiscordAPIError, DiscordPermanentError, DiscordTransientErro
 
 logger = logging.getLogger(__name__)
 _DISCORD_ATTACHMENT_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.net"})
+# Initial interaction callback must reach Discord before the ~3s interaction
+# deadline. A 2s read timeout caused avoidable "application did not respond"
+# when the API or network was slightly slow; stay under 3s but allow headroom.
+DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS = 2.85
 
 
 class DiscordRestClient:
@@ -303,7 +307,7 @@ class DiscordRestClient:
             payload=payload,
             expect_json=False,
             max_retries_override=0,
-            timeout_seconds_override=2.0,
+            timeout_seconds_override=DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS,
         )
 
     async def create_followup_message(
