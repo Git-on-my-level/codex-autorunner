@@ -3,6 +3,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional, Protocol, cast
 
 from fastapi import FastAPI, HTTPException
@@ -128,7 +129,18 @@ def create_hub_app(
         ),
     )
 
-    initial_snapshots = context.supervisor.scan()
+    # Mount lightweight placeholders immediately so repo URLs remain routable
+    # without paying the cost of constructing every repo app up front.
+    _, records = context.supervisor._manifest_records(manifest_only=True)
+    initial_snapshots = [
+        SimpleNamespace(
+            id=record.repo.id,
+            path=record.absolute_path,
+            initialized=record.initialized,
+            exists_on_disk=record.exists_on_disk,
+        )
+        for record in records
+    ]
     mount_manager.mount_initial(initial_snapshots)
 
     @asynccontextmanager
@@ -152,6 +164,22 @@ def create_hub_app(
             loop=asyncio.get_running_loop(),
         )
         try:
+
+            async def _refresh_mounts_from_manifest() -> None:
+                try:
+                    snapshots = await asyncio.to_thread(
+                        context.supervisor.list_repos, use_cache=False
+                    )
+                    await mount_manager.refresh_mounts(snapshots)
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "Hub repo mount refresh failed",
+                        exc,
+                    )
+
+            tasks.append(asyncio.create_task(_refresh_mounts_from_manifest()))
             try:
                 await recover_orphaned_managed_thread_executions(app)
                 await restart_managed_thread_queue_workers(app)

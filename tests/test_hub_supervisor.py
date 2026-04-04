@@ -1478,7 +1478,11 @@ def test_hub_mount_enters_repo_lifespan(tmp_path: Path):
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
     app = create_hub_app(hub_root)
-    with TestClient(app):
+    with TestClient(app) as client:
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
+        version_resp = client.get("/repos/demo/api/version")
+        assert version_resp.status_code == 200
         sub_app = _get_mounted_app(app, "/repos/demo")
         assert sub_app is not None
         fastapi_app = _unwrap_fastapi_app(sub_app)
@@ -1503,6 +1507,8 @@ def test_hub_scan_starts_repo_lifespan(tmp_path: Path):
         entry = next(r for r in payload["repos"] if r["display_name"] == "demo#scan")
         assert entry["id"] == sanitize_repo_id("demo#scan")
         assert entry["mounted"] is True
+        version_resp = client.get(f"/repos/{entry['id']}/api/version")
+        assert version_resp.status_code == 200
 
         sub_app = _get_mounted_app(app, f"/repos/{entry['id']}")
         assert sub_app is not None
@@ -1521,6 +1527,10 @@ def test_hub_scan_unmounts_repo_and_exits_lifespan(tmp_path: Path):
 
     app = create_hub_app(hub_root)
     with TestClient(app) as client:
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
+        version_resp = client.get("/repos/demo/api/version")
+        assert version_resp.status_code == 200
         sub_app = _get_mounted_app(app, "/repos/demo")
         assert sub_app is not None
         fastapi_app = _unwrap_fastapi_app(sub_app)
@@ -1547,6 +1557,8 @@ def test_hub_create_repo_keeps_existing_mounts(tmp_path: Path):
 
     app = create_hub_app(hub_root)
     with TestClient(app) as client:
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
         assert _get_mounted_app(app, "/repos/alpha") is not None
 
         resp = client.post("/hub/repos", json={"id": "beta"})

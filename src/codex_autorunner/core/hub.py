@@ -646,6 +646,10 @@ class HubSupervisor:
             if use_cache and self._list_cache and self._list_cache_at is not None:
                 if time.monotonic() - self._list_cache_at < 2.0:
                     return self._list_cache
+            if use_cache and self.state.repos:
+                self._list_cache = list(self.state.repos)
+                self._list_cache_at = time.monotonic()
+                return self._list_cache
             manifest, records = self._manifest_records(manifest_only=True)
             snapshots = self._build_snapshots(records)
             agent_workspaces = self._build_agent_workspace_snapshots(
