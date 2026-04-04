@@ -276,7 +276,38 @@ async def test_rate_limit_exhaustion_does_not_open_shared_breaker() -> None:
 
 
 @pytest.mark.anyio
-async def test_repeated_5xx_opens_shared_breaker() -> None:
+async def test_repeated_5xx_fail_fast_callbacks_do_not_open_shared_breaker() -> None:
+    attempts = {"count": 0}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        return httpx.Response(500, json={"message": "server exploded"})
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        for _ in range(6):
+            with pytest.raises(DiscordTransientError, match="server error"):
+                await client.create_interaction_response(
+                    interaction_id="123",
+                    interaction_token="token",
+                    payload={"type": 5},
+                )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 6
+    breaker = client._circuit_breakers["interactions"]
+    assert breaker._state.failure_count == 0
+    assert breaker._state.state.value == "closed"
+
+
+@pytest.mark.anyio
+async def test_repeated_5xx_non_callback_interactions_open_shared_breaker() -> None:
     attempts = {"count": 0}
 
     def handler(_request: httpx.Request) -> httpx.Response:
@@ -292,17 +323,9 @@ async def test_repeated_5xx_opens_shared_breaker() -> None:
     try:
         for _ in range(5):
             with pytest.raises(DiscordTransientError, match="server error"):
-                await client.create_interaction_response(
-                    interaction_id="123",
-                    interaction_token="token",
-                    payload={"type": 5},
-                )
+                await client._request("GET", "/interactions/123")
         with pytest.raises(CircuitOpenError):
-            await client.create_interaction_response(
-                interaction_id="123",
-                interaction_token="token",
-                payload={"type": 5},
-            )
+            await client._request("GET", "/interactions/123")
     finally:
         await client.close()
 

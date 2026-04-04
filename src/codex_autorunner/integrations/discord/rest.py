@@ -97,6 +97,22 @@ class DiscordRestClient:
             return self._is_retryable_error(cause)
         return self._is_retryable_error(exc)
 
+    def _is_fail_fast_interaction_callback_request(
+        self, *, path: str, max_retries: int
+    ) -> bool:
+        return (
+            max_retries == 0
+            and path.startswith("/interactions/")
+            and path.endswith("/callback")
+        )
+
+    def _should_record_breaker_failure_for_fail_fast_callback(
+        self, exc: Exception
+    ) -> bool:
+        if isinstance(exc, DiscordTransientError):
+            return False
+        return self._should_record_breaker_failure(exc)
+
     async def _request(
         self,
         method: str,
@@ -114,10 +130,17 @@ class DiscordRestClient:
             if max_retries_override is None
             else max(0, int(max_retries_override))
         )
+        should_record_breaker_failure = self._should_record_breaker_failure
+        if self._is_fail_fast_interaction_callback_request(
+            path=path, max_retries=max_retries
+        ):
+            should_record_breaker_failure = (
+                self._should_record_breaker_failure_for_fail_fast_callback
+            )
 
         async with self._resilience_guard(
             path,
-            should_record_failure=self._should_record_breaker_failure,
+            should_record_failure=should_record_breaker_failure,
         ):
             while True:
                 try:
