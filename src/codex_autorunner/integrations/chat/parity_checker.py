@@ -1124,6 +1124,9 @@ def _extract_subcommand_compares(
         literal = _extract_name_eq_string(compare, "subcommand")
         if literal is not None:
             values.add(literal)
+        tuple_values = _extract_name_in_string_tuple(compare, "subcommand")
+        if tuple_values is not None:
+            values.update(tuple_values)
     return values
 
 
@@ -1565,6 +1568,18 @@ def _extract_name_eq_string(compare: ast.Compare, name: str) -> str | None:
         return _string_constant_value(right)
     if _is_name(right, name):
         return _string_constant_value(compare.left)
+    return None
+
+
+def _extract_name_in_string_tuple(
+    compare: ast.Compare, name: str
+) -> tuple[str, ...] | None:
+    if len(compare.ops) != 1 or not isinstance(compare.ops[0], (ast.In, ast.NotIn)):
+        return None
+    if _is_name(compare.left, name):
+        return _string_tuple(compare.comparators[0])
+    if _is_name(compare.comparators[0], name):
+        return _string_tuple(compare.left)
     return None
 
 

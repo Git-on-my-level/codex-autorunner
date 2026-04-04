@@ -96,7 +96,6 @@ from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
 from ...core.orchestration import build_ticket_flow_orchestration_service
 from ...core.pma_notification_store import PmaNotificationStore
-from ...core.state import RunnerState
 from ...core.state_roots import resolve_global_state_root
 from ...core.ticket_flow_summary import (
     build_ticket_flow_display,
@@ -207,7 +206,6 @@ from ...integrations.chat.status_diagnostics import (
     build_status_block_lines,
     extract_rate_limits,
 )
-from ...integrations.chat.text_sanitization import collapse_local_markdown_links
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
@@ -336,8 +334,6 @@ TERMINAL_SCAN_INTERVAL_SECONDS = 5.0
 CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
 FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
-MESSAGE_TURN_APPROVAL_POLICY = "never"
-MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
@@ -891,15 +887,6 @@ class DiscordBotService:
             event, _handle_dispatched_event
         )
         await self._maybe_send_queued_notice(event, dispatch_result)
-
-    @staticmethod
-    def _is_explicit_message_command(event: ChatMessageEvent) -> bool:
-        text = (event.text or "").strip()
-        if not text:
-            return False
-        if text.startswith("/"):
-            return True
-        return text.startswith("!")
 
     def _evaluate_message_collaboration_policy(
         self,
@@ -2149,26 +2136,6 @@ class DiscordBotService:
             context=self,
         )
         return file_chat_discord_key(session_agent, channel_id, str(workspace_root))
-
-    def _build_runner_state(
-        self,
-        *,
-        agent: str,
-        model_override: Optional[str],
-        reasoning_effort: Optional[str],
-    ) -> RunnerState:
-        return RunnerState(
-            last_run_id=None,
-            status="idle",
-            last_exit_code=None,
-            last_run_started_at=None,
-            last_run_finished_at=None,
-            autorunner_agent_override=agent,
-            autorunner_model_override=model_override,
-            autorunner_effort_override=reasoning_effort,
-            autorunner_approval_policy=MESSAGE_TURN_APPROVAL_POLICY,
-            autorunner_sandbox_mode=MESSAGE_TURN_SANDBOX_POLICY,
-        )
 
     def _discord_thread_service(self) -> Any:
         return build_discord_thread_orchestration_service(self)
@@ -3644,13 +3611,7 @@ class DiscordBotService:
         options: dict[str, Any],
     ) -> None:
         subcommand = command_path[1] if len(command_path) > 1 else "status"
-        if subcommand == "on":
-            pass
-        elif subcommand == "off":
-            pass
-        elif subcommand == "status":
-            pass
-        else:
+        if subcommand not in ("on", "off", "status"):
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -4131,14 +4092,6 @@ class DiscordBotService:
         return await self._rest.create_channel_message(
             channel_id=channel_id, payload=payload
         )
-
-    @staticmethod
-    def _sanitize_outgoing_channel_payload(payload: dict[str, Any]) -> dict[str, Any]:
-        sanitized = dict(payload)
-        content = sanitized.get("content")
-        if isinstance(content, str):
-            sanitized["content"] = collapse_local_markdown_links(content)
-        return sanitized
 
     async def _delete_channel_message(self, channel_id: str, message_id: str) -> None:
         await self._rest.delete_channel_message(
@@ -6070,22 +6023,6 @@ class DiscordBotService:
             interaction_token,
             f"Saved {safe_relpath(candidate, workspace_root)}.",
         )
-
-    @staticmethod
-    def _extract_modal_single_select(
-        values: dict[str, Any], custom_id: str
-    ) -> Optional[str]:
-        raw = values.get(custom_id)
-        if isinstance(raw, str):
-            normalized = raw.strip()
-            return normalized or None
-        if isinstance(raw, list):
-            for value in raw:
-                if isinstance(value, (str, int, float)):
-                    normalized = str(value).strip()
-                    if normalized:
-                        return normalized
-        return None
 
     async def _handle_ticket_filter_component(
         self,
@@ -8269,13 +8206,6 @@ class DiscordBotService:
         )
         store.initialize()
         return store
-
-    def _delete_flow_run_record(self, workspace_root: Path, run_id: str) -> bool:
-        store = self._open_flow_store(workspace_root)
-        try:
-            return bool(store.delete_flow_run(run_id))
-        finally:
-            store.close()
 
     def _resolve_flow_run_by_id(
         self,
