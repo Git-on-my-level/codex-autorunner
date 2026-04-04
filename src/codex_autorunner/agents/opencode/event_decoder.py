@@ -225,6 +225,9 @@ def parse_message_response(payload: Any) -> dict[str, Any]:
             text_parts = []
             for part in content:
                 if isinstance(part, dict):
+                    part_type = part.get("type")
+                    if isinstance(part_type, str) and part_type != "text":
+                        continue
                     part_text = part.get("text")
                     if isinstance(part_text, str):
                         text_parts.append(part_text)

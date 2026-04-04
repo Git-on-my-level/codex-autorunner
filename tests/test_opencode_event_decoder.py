@@ -269,6 +269,18 @@ class TestParseMessageResponse:
         result = parse_message_response(payload)
         assert result["text"] == "Part 1 Part 2"
 
+    def test_skips_reasoning_parts_in_content_list(self) -> None:
+        payload = {
+            "content": [
+                {"type": "reasoning", "text": "internal thoughts"},
+                {"type": "tool", "text": "tool output"},
+                {"type": "patch", "text": "diff hunks"},
+                {"type": "text", "text": "Visible"},
+            ]
+        }
+        result = parse_message_response(payload)
+        assert result["text"] == "Visible"
+
     def test_extracts_from_content_string(self) -> None:
         payload = {"content": "Direct content"}
         result = parse_message_response(payload)

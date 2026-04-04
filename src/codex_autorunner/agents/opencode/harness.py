@@ -735,6 +735,13 @@ def _collect_terminal_text(payloads: list[dict[str, Any]]) -> tuple[str, list[st
             text = _extract_delta_text(params) or _extract_completed_text(params)
             if text:
                 if method == "message.delta":
+                    # When ``properties.part.type`` is present, drop non-text deltas (same
+                    # policy as ``message.part.*``). Typical ``message.delta`` payloads only
+                    # carry ``delta.text`` without a typed part; in that case type is
+                    # unknown and we keep prior behavior (merge all delta text).
+                    part_type = _extract_part_type(params, part_types=part_types)
+                    if part_type not in (None, "", "text"):
+                        continue
                     output_text = merge_assistant_stream_text(output_text, text)
                 elif method in {"message.part.updated", "message.part.delta"}:
                     part_type = _extract_part_type(params, part_types=part_types)

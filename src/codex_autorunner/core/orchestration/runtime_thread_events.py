@@ -1254,13 +1254,29 @@ def _approval_summary(method: str, params: dict[str, Any]) -> str:
 
 
 def _extract_message_text(params: dict[str, Any]) -> str:
-    for key in ("text", "message", "content"):
+    for key in ("text", "message"):
         value = params.get(key)
         if isinstance(value, str) and value.strip():
             return value
+    content = params.get("content")
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if isinstance(part_type, str) and part_type != "text":
+                continue
+            part_text = part.get("text")
+            if isinstance(part_text, str) and part_text:
+                text_parts.append(part_text)
+        if text_parts:
+            return "".join(text_parts)
+    elif isinstance(content, str) and content.strip():
+        return content
     parts = params.get("parts")
     if isinstance(parts, list):
-        text_parts: list[str] = []
+        text_parts_from_parts: list[str] = []
         for part in parts:
             if not isinstance(part, dict):
                 continue
@@ -1268,9 +1284,9 @@ def _extract_message_text(params: dict[str, Any]) -> str:
                 continue
             text = part.get("text")
             if isinstance(text, str) and text:
-                text_parts.append(text)
-        if text_parts:
-            return "".join(text_parts)
+                text_parts_from_parts.append(text)
+        if text_parts_from_parts:
+            return "".join(text_parts_from_parts)
     return ""
 
 

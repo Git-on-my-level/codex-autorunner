@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 
 import pytest
@@ -85,6 +86,39 @@ async def test_collect_output_uses_delta() -> None:
     assert output.text == "Hello world"
     assert seen_deltas == ["Hello ", "world"]
     assert output.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_fallback_message_excludes_reasoning_content() -> None:
+    """When streaming yields no text and message.completed carries reasoning+text in content, only text should appear."""
+    events = [
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"delta":{"text":"thinking hard"},"part":{"id":"r1","type":"reasoning","text":"thinking hard"}}}',
+        ),
+        SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "info": {"id": "m1", "role": "assistant"},
+                    },
+                    "content": [
+                        {"type": "reasoning", "text": "thinking hard"},
+                        {"type": "text", "text": "the answer"},
+                    ],
+                }
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "the answer"
+    assert "thinking" not in output.text.lower()
 
 
 @pytest.mark.anyio
@@ -868,6 +902,18 @@ def test_parse_message_response() -> None:
     result = parse_message_response(payload)
     assert result.text == "Hello"
     assert result.error == "bad auth"
+
+
+def test_parse_message_response_skips_reasoning_in_content_list() -> None:
+    payload = {
+        "content": [
+            {"type": "reasoning", "text": "chain of thought"},
+            {"type": "text", "text": "User-facing"},
+        ],
+    }
+    result = parse_message_response(payload)
+    assert result.text == "User-facing"
+    assert result.error is None
 
 
 @pytest.mark.anyio
