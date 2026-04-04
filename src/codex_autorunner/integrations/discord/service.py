@@ -48,6 +48,7 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
+from ...core.exceptions import CircuitOpenError
 from ...core.filebox import (
     delete_regular_files,
     inbox_dir,
@@ -6268,7 +6269,7 @@ class DiscordBotService:
                 interaction_token=interaction_token,
                 payload=payload,
             )
-        except DiscordAPIError as exc:
+        except (DiscordAPIError, CircuitOpenError) as exc:
             self._logger.error(
                 "Failed to send modal response: %s (interaction_id=%s)",
                 exc,
@@ -10293,7 +10294,7 @@ class DiscordBotService:
                     },
                 },
             )
-        except DiscordAPIError as exc:
+        except (DiscordAPIError, CircuitOpenError) as exc:
             sent_followup = await self._send_followup_ephemeral(
                 interaction_token=interaction_token,
                 content=content,
@@ -10324,7 +10325,7 @@ class DiscordBotService:
                     },
                 },
             )
-        except DiscordAPIError as exc:
+        except (DiscordAPIError, CircuitOpenError) as exc:
             self._logger.warning(
                 "Failed to defer ephemeral response: %s (interaction_id=%s)",
                 exc,
@@ -10351,7 +10352,7 @@ class DiscordBotService:
                 interaction_token=interaction_token,
                 payload={"type": 6},
             )
-        except DiscordAPIError as exc:
+        except (DiscordAPIError, CircuitOpenError) as exc:
             self._logger.warning(
                 "Failed to defer component update: %s (interaction_id=%s)",
                 exc,
@@ -10519,7 +10520,7 @@ class DiscordBotService:
                 interaction_token=interaction_token,
                 payload={"type": 8, "data": {"choices": sanitized_choices}},
             )
-        except DiscordAPIError as exc:
+        except (DiscordAPIError, CircuitOpenError) as exc:
             self._logger.error(
                 "Failed to send autocomplete response: %s (interaction_id=%s)",
                 exc,
@@ -10668,7 +10669,7 @@ class DiscordBotService:
                     },
                 },
             )
-        except DiscordAPIError as exc:
+        except (DiscordAPIError, CircuitOpenError) as exc:
             sent_followup = await self._send_followup_public(
                 interaction_token=interaction_token,
                 content=content,
@@ -10694,7 +10695,7 @@ class DiscordBotService:
                 interaction_token=interaction_token,
                 payload={"type": 5},
             )
-        except DiscordAPIError as exc:
+        except (DiscordAPIError, CircuitOpenError) as exc:
             self._logger.warning(
                 "Failed to defer public response: %s (interaction_id=%s)",
                 exc,

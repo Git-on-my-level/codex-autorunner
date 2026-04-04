@@ -97,6 +97,22 @@ class DiscordRestClient:
             return self._is_retryable_error(cause)
         return self._is_retryable_error(exc)
 
+    def _is_fail_fast_interaction_callback_request(
+        self, *, path: str, max_retries: int
+    ) -> bool:
+        return (
+            max_retries == 0
+            and path.startswith("/interactions/")
+            and path.endswith("/callback")
+        )
+
+    def _should_record_breaker_failure_for_fail_fast_callback(
+        self, exc: Exception
+    ) -> bool:
+        if isinstance(exc, DiscordTransientError):
+            return False
+        return self._should_record_breaker_failure(exc)
+
     async def _request(
         self,
         method: str,
@@ -104,21 +120,40 @@ class DiscordRestClient:
         *,
         payload: dict[str, Any] | list[dict[str, Any]] | None = None,
         expect_json: bool = True,
+        max_retries_override: Optional[int] = None,
+        timeout_seconds_override: Optional[float] = None,
     ) -> Any:
         rate_limit_retries = 0
         retry_attempt = 0
+        max_retries = (
+            self._max_retries
+            if max_retries_override is None
+            else max(0, int(max_retries_override))
+        )
+        should_record_breaker_failure = self._should_record_breaker_failure
+        if self._is_fail_fast_interaction_callback_request(
+            path=path, max_retries=max_retries
+        ):
+            should_record_breaker_failure = (
+                self._should_record_breaker_failure_for_fail_fast_callback
+            )
 
         async with self._resilience_guard(
             path,
-            should_record_failure=self._should_record_breaker_failure,
+            should_record_failure=should_record_breaker_failure,
         ):
             while True:
                 try:
+                    request_kwargs: dict[str, Any] = {
+                        "json": payload,
+                        "headers": {"Authorization": self._authorization_header},
+                    }
+                    if timeout_seconds_override is not None:
+                        request_kwargs["timeout"] = timeout_seconds_override
                     response = await self._client.request(
                         method,
                         path,
-                        json=payload,
-                        headers={"Authorization": self._authorization_header},
+                        **request_kwargs,
                     )
                     response.raise_for_status()
                 except httpx.HTTPStatusError as exc:
@@ -126,7 +161,7 @@ class DiscordRestClient:
                         retry_after_raw = exc.response.headers.get("Retry-After")
                         if (
                             retry_after_raw is not None
-                            and rate_limit_retries < self._max_retries
+                            and rate_limit_retries < max_retries
                         ):
                             rate_limit_retries += 1
                             try:
@@ -154,7 +189,7 @@ class DiscordRestClient:
                     if 200 <= status_code < 300:
                         response = exc.response
                     elif 500 <= status_code < 600:
-                        if retry_attempt < self._max_retries:
+                        if retry_attempt < max_retries:
                             retry_attempt += 1
                             delay = self._calculate_retry_delay(retry_attempt)
                             logger.warning(
@@ -164,7 +199,7 @@ class DiscordRestClient:
                                 path,
                                 delay,
                                 retry_attempt,
-                                self._max_retries,
+                                max_retries,
                             )
                             await asyncio.sleep(delay)
                             continue
@@ -183,10 +218,7 @@ class DiscordRestClient:
                             f"status={status_code} body={body_preview!r}"
                         ) from exc
                 except httpx.HTTPError as exc:
-                    if (
-                        self._is_retryable_error(exc)
-                        and retry_attempt < self._max_retries
-                    ):
+                    if self._is_retryable_error(exc) and retry_attempt < max_retries:
                         retry_attempt += 1
                         delay = self._calculate_retry_delay(retry_attempt)
                         logger.warning(
@@ -196,7 +228,7 @@ class DiscordRestClient:
                             type(exc).__name__,
                             delay,
                             retry_attempt,
-                            self._max_retries,
+                            max_retries,
                         )
                         await asyncio.sleep(delay)
                         continue
@@ -270,6 +302,8 @@ class DiscordRestClient:
             f"/interactions/{interaction_id}/{interaction_token}/callback",
             payload=payload,
             expect_json=False,
+            max_retries_override=0,
+            timeout_seconds_override=2.0,
         )
 
     async def create_followup_message(
