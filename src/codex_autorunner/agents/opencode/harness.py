@@ -7,7 +7,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Awaitable, Callable, Optional
 
 import httpx
 
@@ -64,6 +64,10 @@ class _PendingTurnConfig:
     approval_mode: Optional[str]
     sandbox_policy: Optional[Any]
     question_policy: str
+    permission_handler: Optional[Callable[[str, dict[str, Any]], Awaitable[str]]] = None
+    question_handler: Optional[
+        Callable[[str, dict[str, Any]], Awaitable[list[list[str]] | None]]
+    ] = None
     prompt: Optional[str] = None
     reserved_workspace_root: Optional[Path] = None
     command_task: Optional[asyncio.Task[Any]] = None
@@ -1240,6 +1244,24 @@ class OpenCodeHarness(AgentHarness):
             )
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
+    def configure_turn_handlers(
+        self,
+        conversation_id: str,
+        turn_id: str,
+        *,
+        permission_handler: Optional[
+            Callable[[str, dict[str, Any]], Awaitable[str]]
+        ] = None,
+        question_handler: Optional[
+            Callable[[str, dict[str, Any]], Awaitable[list[list[str]] | None]]
+        ] = None,
+    ) -> None:
+        pending = self._pending_turns.get((conversation_id, turn_id or ""))
+        if pending is None:
+            return
+        pending.permission_handler = permission_handler
+        pending.question_handler = question_handler
+
     async def interrupt(
         self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
     ) -> None:
@@ -1489,16 +1511,20 @@ class OpenCodeHarness(AgentHarness):
             )
             permission_handler = None
             if permission_policy == "ask":
+                if pending is not None and pending.permission_handler is not None:
+                    permission_handler = pending.permission_handler
 
-                async def _permission_handler(
-                    _request_id: str, props: dict[str, Any]
-                ) -> str:
-                    return _workspace_permission_decision(
-                        props,
-                        workspace_root=workspace_root,
-                    )
+                else:
 
-                permission_handler = _permission_handler
+                    async def _permission_handler(
+                        _request_id: str, props: dict[str, Any]
+                    ) -> str:
+                        return _workspace_permission_decision(
+                            props,
+                            workspace_root=workspace_root,
+                        )
+
+                    permission_handler = _permission_handler
 
             stall_timeout_seconds_value = (
                 await self._supervisor.session_stall_timeout_seconds_for_workspace(
@@ -1520,6 +1546,9 @@ class OpenCodeHarness(AgentHarness):
                     permission_handler=permission_handler,
                     question_policy=(
                         pending.question_policy if pending is not None else "ignore"
+                    ),
+                    question_handler=(
+                        pending.question_handler if pending is not None else None
                     ),
                     respond_permission=_respond_permission,
                     reply_question=_reply_question,

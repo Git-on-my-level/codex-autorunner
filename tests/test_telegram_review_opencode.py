@@ -2,12 +2,16 @@ import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 
 import codex_autorunner.integrations.telegram.handlers.commands.github as github_commands
-from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
+from codex_autorunner.core.sse import SSEEvent
+from codex_autorunner.integrations.chat.managed_thread_progress import (
+    ProgressRuntimeState,
+    apply_run_event_to_progress_tracker,
+)
 from codex_autorunner.integrations.telegram.adapter import TelegramMessage
 from codex_autorunner.integrations.telegram.handlers.commands_runtime import (
     TelegramCommandHandlers,
@@ -25,6 +29,13 @@ class _OpenCodeClientStub:
             tuple[str, str, str, Optional[str], Optional[str]]
         ] = []
         self.abort_calls: list[str] = []
+        self.list_messages_calls: list[str] = []
+        self.permission_replies: list[tuple[str, str]] = []
+        self.question_replies: list[tuple[str, list[list[str]]]] = []
+        self.question_rejections: list[str] = []
+        self.messages_response: Any = []
+        self.send_command_result: dict[str, Any] = {}
+        self.stream_events_payloads: list[SSEEvent] = []
 
     async def create_session(
         self, *, directory: Optional[str] = None
@@ -45,9 +56,49 @@ class _OpenCodeClientStub:
         self.send_command_calls.append(
             (session_id, command, arguments or "", model, agent)
         )
+        return self.send_command_result
 
     async def abort(self, session_id: str) -> None:
         self.abort_calls.append(session_id)
+
+    async def stream_events(
+        self,
+        *,
+        directory: Optional[str] = None,
+        ready_event: object = None,
+        session_id: Optional[str] = None,
+        paths: object = None,
+    ):
+        _ = (directory, session_id, paths)
+        if ready_event is not None:
+            ready_event.set()
+        for event in self.stream_events_payloads:
+            yield event
+
+    async def list_messages(self, session_id: str, **_kwargs: Any) -> Any:
+        self.list_messages_calls.append(session_id)
+        return self.messages_response
+
+    async def session_status(
+        self, *, directory: Optional[str] = None
+    ) -> dict[str, object]:
+        _ = directory
+        return {}
+
+    async def providers(self, *, directory: Optional[str] = None) -> dict[str, object]:
+        _ = directory
+        return {}
+
+    async def respond_permission(self, *, request_id: str, reply: str) -> None:
+        self.permission_replies.append((request_id, reply))
+
+    async def reply_question(
+        self, request_id: str, *, answers: list[list[str]]
+    ) -> None:
+        self.question_replies.append((request_id, answers))
+
+    async def reject_question(self, request_id: str) -> None:
+        self.question_rejections.append(request_id)
 
 
 class _SupervisorStub:
@@ -64,6 +115,11 @@ class _SupervisorStub:
 
     async def mark_turn_finished(self, root: Path) -> None:
         self.finished.append(str(root))
+
+    async def session_stall_timeout_seconds_for_workspace(
+        self, _root: Path
+    ) -> Optional[float]:
+        return None
 
 
 class _RouterStub:
@@ -276,6 +332,18 @@ class _ReviewHandlerStub(TelegramCommandHandlers):
     async def _schedule_progress_edit(self, _turn_key: tuple[str, str]) -> None:
         return None
 
+    async def _apply_run_event_to_progress(
+        self, turn_key: tuple[str, str], run_event: object
+    ) -> None:
+        tracker = self._turn_progress_trackers.get(turn_key)
+        if not isinstance(tracker, TurnProgressTracker):
+            return
+        apply_run_event_to_progress_tracker(
+            tracker,
+            run_event,
+            runtime_state=ProgressRuntimeState(),
+        )
+
 
 def _message() -> TelegramMessage:
     return TelegramMessage(
@@ -318,27 +386,18 @@ async def test_telegram_review_opencode_sends_command(
     supervisor = _SupervisorStub(client)
     handler = _ReviewHandlerStub(record=record, supervisor=supervisor)
     runtime = _RuntimeStub()
-    calls: dict[str, str] = {}
-
-    async def _fake_collect_opencode_output(
-        _client: object,
-        *,
-        session_id: str,
-        workspace_path: str,
-        **_kwargs: object,
-    ) -> OpenCodeTurnOutput:
-        calls["session_id"] = session_id
-        calls["workspace_path"] = workspace_path
-        return OpenCodeTurnOutput(text="Review output", error=None)
+    client.messages_response = [
+        {
+            "info": {"id": "assistant-1", "role": "assistant"},
+            "parts": [{"type": "text", "text": "Review output"}],
+        }
+    ]
 
     async def _fake_opencode_missing_env(
         *_args: object, **_kwargs: object
     ) -> list[str]:
         return []
 
-    monkeypatch.setattr(
-        github_commands, "collect_opencode_output", _fake_collect_opencode_output
-    )
     monkeypatch.setattr(
         github_commands, "opencode_missing_env", _fake_opencode_missing_env
     )
@@ -349,8 +408,7 @@ async def test_telegram_review_opencode_sends_command(
     session_id, command, _args, _model, _agent = client.send_command_calls[0]
     assert session_id == "session-123"
     assert command == "review"
-    assert calls["session_id"] == "session-123"
-    assert calls["workspace_path"] == str(tmp_path.resolve())
+    assert client.list_messages_calls == ["session-123"]
     assert handler._delivered
     assert handler._delivered[-1]
     assert handler._delivery_delete_flags[-1] is True
@@ -372,29 +430,18 @@ async def test_telegram_review_opencode_forwards_progress_summary(
     supervisor = _SupervisorStub(client)
     handler = _ReviewHandlerStub(record=record, supervisor=supervisor)
     runtime = _RuntimeStub()
-
-    async def _fake_collect_opencode_output(
-        _client: object,
-        *,
-        session_id: str,
-        workspace_path: str,
-        ready_event: Optional[asyncio.Event] = None,
-        **_kwargs: object,
-    ) -> OpenCodeTurnOutput:
-        _ = (session_id, workspace_path)
-        if ready_event is not None:
-            ready_event.set()
-        await asyncio.sleep(0)
-        return OpenCodeTurnOutput(text="Review output", error=None)
+    client.messages_response = [
+        {
+            "info": {"id": "assistant-1", "role": "assistant"},
+            "parts": [{"type": "text", "text": "Review output"}],
+        }
+    ]
 
     async def _fake_opencode_missing_env(
         *_args: object, **_kwargs: object
     ) -> list[str]:
         return []
 
-    monkeypatch.setattr(
-        github_commands, "collect_opencode_output", _fake_collect_opencode_output
-    )
     monkeypatch.setattr(
         github_commands, "opencode_missing_env", _fake_opencode_missing_env
     )
@@ -417,7 +464,7 @@ async def test_telegram_review_opencode_forwards_progress_summary(
 
 @pytest.mark.integration
 @pytest.mark.anyio
-async def test_telegram_review_opencode_tracks_text_parts_in_progress(
+async def test_telegram_review_opencode_tracks_thinking_and_tool_progress_via_harness(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     record = TelegramTopicRecord(
@@ -430,21 +477,7 @@ async def test_telegram_review_opencode_tracks_text_parts_in_progress(
     supervisor = _SupervisorStub(client)
     handler = _ReviewHandlerStub(record=record, supervisor=supervisor)
     runtime = _RuntimeStub()
-
-    async def _fake_collect_opencode_output(
-        _client: object,
-        *,
-        part_handler=None,
-        session_id: str,
-        **_kwargs: object,
-    ) -> OpenCodeTurnOutput:
-        if part_handler is not None:
-            await part_handler(
-                "text",
-                {"sessionID": session_id, "text": "full output"},
-                "delta output",
-            )
-        return OpenCodeTurnOutput(text="Review output", error=None)
+    stream_finished = asyncio.Event()
 
     async def _fake_opencode_missing_env(
         *_args: object, **_kwargs: object
@@ -472,22 +505,129 @@ async def test_telegram_review_opencode_tracks_text_parts_in_progress(
     handler._start_turn_progress = _start_turn_progress
 
     monkeypatch.setattr(
-        github_commands, "collect_opencode_output", _fake_collect_opencode_output
-    )
-    monkeypatch.setattr(
         github_commands, "opencode_missing_env", _fake_opencode_missing_env
     )
+
+    class _FakeHarness:
+        def __init__(self, _supervisor: object) -> None:
+            self.capabilities = frozenset({"event_streaming"})
+
+        async def start_review(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[object],
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+            )
+            return SimpleNamespace(turn_id="turn-1")
+
+        def configure_turn_handlers(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        def allows_parallel_event_stream(self) -> bool:
+            return True
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = (workspace_root, conversation_id, turn_id)
+            yield {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "sessionID": "session-123",
+                        "messageID": "assistant-1",
+                        "properties": {
+                            "messageID": "assistant-1",
+                            "info": {"id": "assistant-1", "role": "assistant"},
+                            "part": {
+                                "id": "reason-1",
+                                "type": "reasoning",
+                                "messageID": "assistant-1",
+                                "sessionID": "session-123",
+                                "text": "checking review progress",
+                            },
+                        },
+                    },
+                }
+            }
+            yield {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "sessionID": "session-123",
+                        "messageID": "assistant-1",
+                        "properties": {
+                            "messageID": "assistant-1",
+                            "info": {"id": "assistant-1", "role": "assistant"},
+                            "part": {
+                                "id": "tool-1",
+                                "type": "tool",
+                                "messageID": "assistant-1",
+                                "sessionID": "session-123",
+                                "tool": "shell",
+                                "input": "git diff",
+                                "state": {"status": "running"},
+                            },
+                        },
+                    },
+                }
+            }
+            stream_finished.set()
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ) -> SimpleNamespace:
+            _ = (workspace_root, conversation_id, turn_id)
+            await stream_finished.wait()
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="Review output",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ) -> None:
+            _ = (workspace_root, conversation_id, turn_id)
+
+    monkeypatch.setattr(github_commands, "OpenCodeHarness", _FakeHarness)
 
     await handler._handle_review(_message(), "", runtime)
 
     assert handler._turn_progress_trackers
-    output_buffers = [
-        tracker.output_buffer
+    progress_traces = [
+        (
+            tracker.last_thinking_trace.text if tracker.last_thinking_trace else "",
+            tracker.last_tool_trace.text if tracker.last_tool_trace else "",
+        )
         for tracker in handler._turn_progress_trackers.values()
         if isinstance(tracker, TurnProgressTracker)
     ]
-    assert output_buffers
-    assert any("delta output" in buffer for buffer in output_buffers)
+    assert progress_traces
+    assert any(
+        "checking review progress" in thinking for thinking, _tool in progress_traces
+    )
+    assert any("shell" in tool for _thinking, tool in progress_traces)
 
 
 @pytest.mark.anyio

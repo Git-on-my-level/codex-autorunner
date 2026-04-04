@@ -14,21 +14,21 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
+from .....agents.base import harness_progress_event_stream
+from .....agents.opencode.harness import OpenCodeHarness
 from .....agents.opencode.runtime import (
-    PERMISSION_ALLOW,
-    PERMISSION_ASK,
-    build_turn_id,
-    collect_opencode_output,
     extract_session_id,
     format_permission_prompt,
-    map_approval_policy_to_permission,
     opencode_missing_env,
-    opencode_stream_timeouts,
     split_model_id,
 )
 from .....core.logging_utils import log_event
+from .....core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_raw_event,
+)
+from .....core.ports.run_event import TokenUsage
 from .....core.state import now_iso
-from .....core.text_delta_coalescer import TextDeltaCoalescer
 from ....app_server.client import (
     CodexAppServerDisconnected,
 )
@@ -49,7 +49,6 @@ from ...constants import (
     TurnKey,
 )
 from ...helpers import (
-    _compact_preview,
     _compose_agent_response,
     _compose_interrupt_response,
     _consume_raw_token,
@@ -64,7 +63,6 @@ from ...helpers import (
 )
 from ...payload_utils import extract_opencode_error_detail
 from ...types import ReviewCommitSelectionState, TurnContext
-from ..utils import _build_opencode_token_usage
 
 if TYPE_CHECKING:
     from ...state import TelegramTopicRecord
@@ -125,7 +123,8 @@ class OpencodeReviewSetup:
     client: Any
     workspace_root: Path
     review_session_id: str
-    permission_policy: str
+    approval_mode: Optional[str]
+    sandbox_policy: Optional[Any]
     review_args: str
 
 
@@ -722,17 +721,15 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 )
 
             await self._router.update_topic(message.chat_id, message.thread_id, apply)
-        approval_policy, _sandbox_policy = self._effective_policies(record)
-        permission_policy = map_approval_policy_to_permission(
-            approval_policy, default=PERMISSION_ALLOW
-        )
+        approval_mode, sandbox_policy = self._effective_policies(record)
         review_args = _opencode_review_arguments(target)
         return OpencodeReviewSetup(
             supervisor=supervisor,
             client=opencode_client,
             workspace_root=workspace_root,
             review_session_id=review_session_id,
-            permission_policy=permission_policy,
+            approval_mode=approval_mode,
+            sandbox_policy=sandbox_policy,
             review_args=review_args,
         )
 
@@ -872,8 +869,18 @@ class GitHubCommands(TelegramCommandSupportMixin):
                         await self._delete_message(message.chat_id, placeholder_id)
                     return turn_context, None
                 turn_started_at = time.monotonic()
-                turn_id = build_turn_id(setup.review_session_id)
                 self._token_usage_by_thread.pop(setup.review_session_id, None)
+                harness = OpenCodeHarness(setup.supervisor)
+                turn_ref = await harness.start_review(
+                    setup.workspace_root,
+                    setup.review_session_id,
+                    prompt=setup.review_args,
+                    model=record.model,
+                    reasoning=None,
+                    approval_mode=setup.approval_mode,
+                    sandbox_policy=setup.sandbox_policy,
+                )
+                turn_id = turn_ref.turn_id
                 runtime.current_turn_id = turn_id
                 runtime.current_turn_key = (setup.review_session_id, turn_id)
                 topic_key = await self._resolve_topic_key(
@@ -891,6 +898,19 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 if turn_key is None or not self._register_turn_context(
                     turn_key, turn_id, ctx
                 ):
+                    with suppress(Exception):
+                        await harness.interrupt(
+                            setup.workspace_root,
+                            setup.review_session_id,
+                            turn_id,
+                        )
+                    with suppress(Exception):
+                        await harness.wait_for_turn(
+                            setup.workspace_root,
+                            setup.review_session_id,
+                            turn_id,
+                            timeout=5.0,
+                        )
                     runtime.current_turn_id = None
                     runtime.current_turn_key = None
                     runtime.interrupt_requested = False
@@ -917,8 +937,6 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 async def _permission_handler(
                     request_id: str, props: dict[str, Any]
                 ) -> str:
-                    if setup.permission_policy != PERMISSION_ASK:
-                        return "reject"
                     prompt = format_permission_prompt(props)
                     decision = await self._handle_approval_request(
                         {
@@ -933,373 +951,181 @@ class GitHubCommands(TelegramCommandSupportMixin):
                     )
                     return decision
 
-                abort_requested = False
+                harness.configure_turn_handlers(
+                    setup.review_session_id,
+                    turn_id,
+                    permission_handler=_permission_handler,
+                )
 
-                async def _abort_opencode() -> None:
-                    try:
-                        await asyncio.wait_for(
-                            setup.client.abort(setup.review_session_id), timeout=10
-                        )
-                    except Exception:
-                        pass
-
-                def _should_stop() -> bool:
-                    nonlocal abort_requested
-                    if runtime.interrupt_requested and not abort_requested:
-                        abort_requested = True
-                        asyncio.create_task(_abort_opencode())
-                    return runtime.interrupt_requested
-
-                reasoning_buffers: dict[str, TextDeltaCoalescer] = {}
-                watched_session_ids = {setup.review_session_id}
-                subagent_labels: dict[str, str] = {}
                 opencode_context_window: Optional[int] = None
                 context_window_resolved = False
 
-                async def _handle_opencode_part(
-                    part_type: str,
-                    part: dict[str, Any],
-                    delta_text: Optional[str],
-                ) -> None:
+                async def _cache_run_event_usage(run_event: Any) -> None:
                     nonlocal opencode_context_window
                     nonlocal context_window_resolved
-                    if turn_key is None:
+                    if not isinstance(run_event, TokenUsage):
                         return
-                    tracker = self._turn_progress_trackers.get(turn_key)
-                    if tracker is None:
+                    token_usage = run_event.usage
+                    if not isinstance(token_usage, dict):
                         return
-                    session_id = None
-                    for key in ("sessionID", "sessionId", "session_id"):
-                        value = part.get(key)
-                        if isinstance(value, str) and value:
-                            session_id = value
-                            break
-                    if not session_id:
-                        session_id = setup.review_session_id
-                    is_primary_session = session_id == setup.review_session_id
-                    subagent_label = subagent_labels.get(session_id)
-                    if part_type == "reasoning":
-                        part_id = part.get("id") or part.get("partId") or "reasoning"
-                        buffer_key = f"{session_id}:{part_id}"
-                        if buffer_key not in reasoning_buffers:
-                            reasoning_buffers[buffer_key] = TextDeltaCoalescer()
-                        coalescer = reasoning_buffers[buffer_key]
-                        if delta_text:
-                            coalescer.add(delta_text)
-                        else:
-                            raw_text = part.get("text")
-                            if isinstance(raw_text, str) and raw_text:
-                                coalescer.add(raw_text)
-                        buffer = coalescer.get_buffer()
-                        if buffer:
-                            preview = _compact_preview(buffer, limit=240)
-                            if is_primary_session:
-                                tracker.note_thinking(preview)
-                            else:
-                                if not subagent_label:
-                                    subagent_label = "@subagent"
-                                    subagent_labels.setdefault(
-                                        session_id, subagent_label
-                                    )
-                                if not tracker.update_action_by_item_id(
-                                    buffer_key,
-                                    preview,
-                                    "update",
-                                    label="thinking",
-                                    subagent_label=subagent_label,
-                                ):
-                                    tracker.add_action(
-                                        "thinking",
-                                        preview,
-                                        "update",
-                                        item_id=buffer_key,
-                                        subagent_label=subagent_label,
-                                    )
-                    elif part_type == "text":
-                        if delta_text:
-                            tracker.note_output(delta_text)
-                        else:
-                            raw_text = part.get("text")
-                            if isinstance(raw_text, str) and raw_text:
-                                tracker.note_output(raw_text)
-                    elif part_type == "tool":
-                        tool_id = part.get("callID") or part.get("id")
-                        tool_name = part.get("tool") or part.get("name") or "tool"
-                        status = None
-                        state = part.get("state")
-                        if isinstance(state, dict):
-                            status = state.get("status")
-                        label = (
-                            f"{tool_name} ({status})"
-                            if isinstance(status, str) and status
-                            else str(tool_name)
+                    token_usage = dict(token_usage)
+                    last_usage = token_usage.get("last")
+                    if isinstance(last_usage, dict):
+                        token_usage["total"] = dict(last_usage)
+                    if (
+                        "modelContextWindow" not in token_usage
+                        and not context_window_resolved
+                    ):
+                        opencode_context_window = (
+                            await self._resolve_opencode_model_context_window(
+                                setup.client,
+                                setup.workspace_root,
+                                model_payload,
+                            )
                         )
-                        if (
-                            is_primary_session
-                            and isinstance(tool_name, str)
-                            and tool_name == "task"
-                            and isinstance(state, dict)
-                        ):
-                            metadata = state.get("metadata")
-                            if isinstance(metadata, dict):
-                                child_session_id = metadata.get(
-                                    "sessionId"
-                                ) or metadata.get("sessionID")
-                                if (
-                                    isinstance(child_session_id, str)
-                                    and child_session_id
-                                ):
-                                    watched_session_ids.add(child_session_id)
-                                    child_label = None
-                                    input_payload = state.get("input")
-                                    if isinstance(input_payload, dict):
-                                        child_label = input_payload.get(
-                                            "subagent_type"
-                                        ) or input_payload.get("subagentType")
-                                    if (
-                                        isinstance(child_label, str)
-                                        and child_label.strip()
-                                    ):
-                                        child_label = child_label.strip()
-                                        if not child_label.startswith("@"):
-                                            child_label = f"@{child_label}"
-                                        subagent_labels.setdefault(
-                                            child_session_id, child_label
-                                        )
-                                    else:
-                                        subagent_labels.setdefault(
-                                            child_session_id, "@subagent"
-                                        )
-                            detail_parts: list[str] = []
-                            title = state.get("title")
-                            if isinstance(title, str) and title.strip():
-                                detail_parts.append(title.strip())
-                            input_payload = state.get("input")
-                            if isinstance(input_payload, dict):
-                                description = input_payload.get("description")
-                                if isinstance(description, str) and description.strip():
-                                    detail_parts.append(description.strip())
-                            summary = None
-                            if isinstance(metadata, dict):
-                                summary = metadata.get("summary")
-                            if isinstance(summary, str) and summary.strip():
-                                detail_parts.append(summary.strip())
-                            if detail_parts:
-                                seen: set[str] = set()
-                                unique_parts = [
-                                    part_text
-                                    for part_text in detail_parts
-                                    if part_text not in seen and not seen.add(part_text)
-                                ]
-                                detail_text = " / ".join(unique_parts)
-                                label = f"{label} - {_compact_preview(detail_text, limit=160)}"
-                        mapped_status = "update"
-                        if isinstance(status, str):
-                            status_lower = status.lower()
-                            if status_lower in ("completed", "done", "success"):
-                                mapped_status = "done"
-                            elif status_lower in ("error", "failed", "fail"):
-                                mapped_status = "fail"
-                            elif status_lower in ("pending", "running"):
-                                mapped_status = "running"
-                        scoped_tool_id = (
-                            f"{session_id}:{tool_id}"
-                            if isinstance(tool_id, str) and tool_id
-                            else None
-                        )
-                        if is_primary_session:
-                            if not tracker.update_action_by_item_id(
-                                scoped_tool_id,
-                                label,
-                                mapped_status,
-                                label="tool",
-                            ):
-                                tracker.add_action(
-                                    "tool",
-                                    label,
-                                    mapped_status,
-                                    item_id=scoped_tool_id,
-                                )
-                        else:
-                            if not subagent_label:
-                                subagent_label = "@subagent"
-                                subagent_labels.setdefault(session_id, subagent_label)
-                            if not tracker.update_action_by_item_id(
-                                scoped_tool_id,
-                                label,
-                                mapped_status,
-                                label=subagent_label,
-                            ):
-                                tracker.add_action(
-                                    subagent_label,
-                                    label,
-                                    mapped_status,
-                                    item_id=scoped_tool_id,
-                                )
-                    elif part_type == "patch":
-                        patch_id = part.get("id") or part.get("hash")
-                        files = part.get("files")
-                        scoped_patch_id = (
-                            f"{session_id}:{patch_id}"
-                            if isinstance(patch_id, str) and patch_id
-                            else None
-                        )
-                        if isinstance(files, list) and files:
-                            summary = ", ".join(str(file) for file in files)
-                            if not tracker.update_action_by_item_id(
-                                scoped_patch_id, summary, "done", label="files"
-                            ):
-                                tracker.add_action(
-                                    "files",
-                                    summary,
-                                    "done",
-                                    item_id=scoped_patch_id,
-                                )
-                        else:
-                            if not tracker.update_action_by_item_id(
-                                scoped_patch_id, "Patch", "done", label="files"
-                            ):
-                                tracker.add_action(
-                                    "files",
-                                    "Patch",
-                                    "done",
-                                    item_id=scoped_patch_id,
-                                )
-                    elif part_type == "agent":
-                        agent_name = part.get("name") or "agent"
-                        tracker.add_action("agent", str(agent_name), "done")
-                    elif part_type == "step-start":
-                        tracker.add_action("step", "started", "update")
-                    elif part_type == "step-finish":
-                        reason = part.get("reason") or "finished"
-                        tracker.add_action("step", str(reason), "done")
-                    elif part_type == "usage":
-                        token_usage = (
-                            _build_opencode_token_usage(part)
-                            if isinstance(part, dict)
-                            else None
-                        )
-                        if token_usage:
-                            if is_primary_session:
-                                last_usage = token_usage.get("last")
-                                if isinstance(last_usage, dict):
-                                    token_usage["total"] = dict(last_usage)
-                                if (
-                                    "modelContextWindow" not in token_usage
-                                    and not context_window_resolved
-                                ):
-                                    opencode_context_window = await self._resolve_opencode_model_context_window(
-                                        setup.client,
-                                        setup.workspace_root,
-                                        model_payload,
-                                    )
-                                    context_window_resolved = True
-                                if (
-                                    "modelContextWindow" not in token_usage
-                                    and isinstance(opencode_context_window, int)
-                                    and opencode_context_window > 0
-                                ):
-                                    token_usage["modelContextWindow"] = (
-                                        opencode_context_window
-                                    )
-                                self._cache_token_usage(
-                                    token_usage,
-                                    turn_id=turn_id,
-                                    thread_id=setup.review_session_id,
-                                )
-                                await self._note_progress_context_usage(
-                                    token_usage,
-                                    turn_id=turn_id,
-                                    thread_id=setup.review_session_id,
-                                )
-                    await self._schedule_progress_edit(turn_key)
-
-                ready_event = asyncio.Event()
-                stall_timeout, first_event_timeout = opencode_stream_timeouts(
-                    self._opencode_session_stall_timeout_seconds(),
-                )
-                output_task = asyncio.create_task(
-                    collect_opencode_output(
-                        setup.client,
-                        session_id=setup.review_session_id,
-                        workspace_path=str(setup.workspace_root),
-                        model_payload=model_payload,
-                        progress_session_ids=watched_session_ids,
-                        permission_policy=setup.permission_policy,
-                        permission_handler=(
-                            _permission_handler
-                            if setup.permission_policy == PERMISSION_ASK
-                            else None
-                        ),
-                        should_stop=_should_stop,
-                        part_handler=_handle_opencode_part,
-                        ready_event=ready_event,
-                        stall_timeout_seconds=stall_timeout,
-                        first_event_timeout_seconds=first_event_timeout,
-                        logger=self._logger,
+                        context_window_resolved = True
+                    if (
+                        "modelContextWindow" not in token_usage
+                        and isinstance(opencode_context_window, int)
+                        and opencode_context_window > 0
+                    ):
+                        token_usage["modelContextWindow"] = opencode_context_window
+                    self._cache_token_usage(
+                        token_usage,
+                        turn_id=turn_id,
+                        thread_id=setup.review_session_id,
                     )
-                )
-                with suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(ready_event.wait(), timeout=2.0)
+                    await self._note_progress_context_usage(
+                        token_usage,
+                        turn_id=turn_id,
+                        thread_id=setup.review_session_id,
+                    )
+
+                async def _pump_progress() -> None:
+                    event_state = RuntimeThreadRunEventState()
+                    try:
+                        async for raw_event in harness_progress_event_stream(
+                            harness,
+                            setup.workspace_root,
+                            setup.review_session_id,
+                            turn_id,
+                        ):
+                            run_events = await normalize_runtime_thread_raw_event(
+                                raw_event,
+                                event_state,
+                            )
+                            for run_event in run_events:
+                                await _cache_run_event_usage(run_event)
+                                if turn_key is not None:
+                                    await self._apply_run_event_to_progress(
+                                        turn_key,
+                                        run_event,
+                                    )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self._logger.warning(
+                            "Telegram OpenCode review progress pump failed",
+                            exc_info=True,
+                        )
+
+                async def _wait_for_interrupt_request() -> None:
+                    while not runtime.interrupt_requested:
+                        await asyncio.sleep(0.1)
+
                 timeout_seconds = self._config.agent_turn_timeout_seconds.get(
                     "opencode"
                 )
-                timeout_task: Optional[asyncio.Task] = None
-                if timeout_seconds is not None and timeout_seconds > 0:
-                    timeout_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
-                command_task = asyncio.create_task(
-                    setup.client.send_command(
+                wait_task = asyncio.create_task(
+                    harness.wait_for_turn(
+                        setup.workspace_root,
                         setup.review_session_id,
-                        command="review",
-                        arguments=setup.review_args,
-                        model=record.model,
+                        turn_id,
                     )
                 )
+                progress_task = asyncio.create_task(_pump_progress())
+                interrupt_task: Optional[asyncio.Task[None]] = asyncio.create_task(
+                    _wait_for_interrupt_request()
+                )
+                timeout_task: Optional[asyncio.Task[None]] = None
+                if timeout_seconds is not None and timeout_seconds > 0:
+                    timeout_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
                 try:
-                    await command_task
-                except Exception as exc:
+                    while True:
+                        pending_tasks: set[asyncio.Task[Any]] = {wait_task}
+                        if interrupt_task is not None:
+                            pending_tasks.add(interrupt_task)
+                        if timeout_task is not None:
+                            pending_tasks.add(timeout_task)
+                        done, _pending = await asyncio.wait(
+                            pending_tasks,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                        if wait_task in done:
+                            terminal_result = await wait_task
+                            output_result = type(
+                                "OpenCodeReviewResult",
+                                (),
+                                {
+                                    "text": terminal_result.assistant_text,
+                                    "error": (
+                                        terminal_result.errors[0]
+                                        if terminal_result.errors
+                                        else None
+                                    ),
+                                },
+                            )()
+                            break
+                        if timeout_task is not None and timeout_task in done:
+                            runtime.interrupt_requested = True
+                            await harness.interrupt(
+                                setup.workspace_root,
+                                setup.review_session_id,
+                                turn_id,
+                            )
+                            wait_task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await wait_task
+                            turn_context.turn_elapsed_seconds = (
+                                time.monotonic() - turn_started_at
+                                if turn_started_at is not None
+                                else None
+                            )
+                            failure_message = "OpenCode review timed out."
+                            response_sent = await self._deliver_turn_response(
+                                chat_id=message.chat_id,
+                                thread_id=message.thread_id,
+                                reply_to=message.message_id,
+                                placeholder_id=placeholder_id,
+                                response=failure_message,
+                            )
+                            if response_sent:
+                                await self._delete_message(
+                                    message.chat_id, placeholder_id
+                                )
+                            return turn_context, None
+                        if interrupt_task is not None and interrupt_task in done:
+                            await harness.interrupt(
+                                setup.workspace_root,
+                                setup.review_session_id,
+                                turn_id,
+                            )
+                            interrupt_task.cancel()
+                            with suppress(asyncio.CancelledError):
+                                await interrupt_task
+                            interrupt_task = None
+                finally:
+                    if interrupt_task is not None:
+                        interrupt_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await interrupt_task
                     if timeout_task is not None:
                         timeout_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await timeout_task
-                    output_task.cancel()
+                    progress_task.cancel()
                     with suppress(asyncio.CancelledError):
-                        await output_task
-                    raise exc
-                if timeout_task is not None:
-                    done, _pending = await asyncio.wait(
-                        {output_task, timeout_task},
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if timeout_task in done:
-                        runtime.interrupt_requested = True
-                        await _abort_opencode()
-                        output_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await output_task
-                        timeout_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await timeout_task
-                        turn_context.turn_elapsed_seconds = (
-                            time.monotonic() - turn_started_at
-                            if turn_started_at is not None
-                            else None
-                        )
-                        failure_message = "OpenCode review timed out."
-                        response_sent = await self._deliver_turn_response(
-                            chat_id=message.chat_id,
-                            thread_id=message.thread_id,
-                            reply_to=message.message_id,
-                            placeholder_id=placeholder_id,
-                            response=failure_message,
-                        )
-                        if response_sent:
-                            await self._delete_message(message.chat_id, placeholder_id)
-                        return turn_context, None
-                    timeout_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await timeout_task
-                output_result = await output_task
+                        await progress_task
                 elapsed = (
                     time.monotonic() - turn_started_at
                     if turn_started_at is not None
