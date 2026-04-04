@@ -1107,3 +1107,186 @@ async def test_normalize_runtime_thread_raw_event_reads_top_level_info_for_role_
     assert isinstance(resolved[0], OutputDelta)
     assert resolved[0].content == "hello"
     assert state.best_assistant_text() == "hello"
+
+
+async def test_message_delta_with_reasoning_part_type_is_dropped() -> None:
+    """message.delta carrying reasoning part type must not become OutputDelta."""
+    state = RuntimeThreadRunEventState()
+
+    events = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.delta",
+                    "params": {
+                        "properties": {
+                            "delta": {"text": "thinking about the problem"},
+                            "part": {"id": "r1", "type": "reasoning"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert events == []
+    assert state.assistant_stream_text == ""
+    assert state.best_assistant_text() == ""
+
+
+async def test_message_delta_with_text_part_type_is_kept() -> None:
+    """message.delta carrying text part type should produce OutputDelta."""
+    state = RuntimeThreadRunEventState()
+
+    events = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.delta",
+                    "params": {
+                        "properties": {
+                            "delta": {"text": "the answer"},
+                            "part": {"id": "t1", "type": "text"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(events) == 1
+    assert isinstance(events[0], OutputDelta)
+    assert events[0].content == "the answer"
+    assert state.best_assistant_text() == "the answer"
+
+
+async def test_message_delta_without_part_type_is_kept() -> None:
+    """message.delta without part metadata should still work (legacy)."""
+    state = RuntimeThreadRunEventState()
+
+    events = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.delta",
+                    "params": {
+                        "properties": {
+                            "delta": {"text": "hello world"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert len(events) == 1
+    assert isinstance(events[0], OutputDelta)
+    assert events[0].content == "hello world"
+    assert state.best_assistant_text() == "hello world"
+
+
+async def test_message_delta_reasoning_does_not_pollute_stream_when_paired_with_part_events() -> (
+    None
+):
+    """Regression: reasoning arriving as both message.delta and message.part.delta
+    should produce exactly one RunNotice(thinking) and not contaminate assistant_stream_text.
+    """
+    state = RuntimeThreadRunEventState()
+
+    delta_events = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.delta",
+                    "params": {
+                        "properties": {
+                            "delta": {"text": "Let me think"},
+                            "part": {"id": "r1", "type": "reasoning"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    part_events = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.delta",
+                    "params": {
+                        "properties": {
+                            "part": {
+                                "id": "r1",
+                                "type": "reasoning",
+                                "text": "Let me think",
+                            },
+                            "delta": {"text": "Let me think"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert delta_events == []
+    assert len(part_events) == 1
+    assert isinstance(part_events[0], RunNotice)
+    assert part_events[0].kind == "thinking"
+    assert state.assistant_stream_text == ""
+    assert state.best_assistant_text() == ""
+
+
+async def test_message_delta_uses_cached_part_type_for_reasoning() -> None:
+    """message.delta referencing a known reasoning part ID (without inline type)
+    should still be dropped."""
+    state = RuntimeThreadRunEventState()
+
+    await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "properties": {
+                            "part": {"id": "r1", "type": "reasoning"},
+                            "delta": {"text": "initial"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    events = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "message.delta",
+                    "params": {
+                        "properties": {
+                            "delta": {"text": "more thinking"},
+                            "part": {"id": "r1"},
+                        }
+                    },
+                }
+            },
+        ),
+        state,
+    )
+
+    assert events == []
+    assert state.assistant_stream_text == ""

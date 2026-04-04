@@ -41,6 +41,9 @@ from .opencode_event_fields import (
 from .opencode_event_fields import (
     extract_part_message_id as _event_extract_part_message_id,
 )
+from .opencode_event_fields import (
+    extract_part_type as _event_extract_part_type,
+)
 from .runtime_threads import RuntimeThreadOutcome
 from .stream_text_merge import merge_assistant_stream_text
 
@@ -676,6 +679,11 @@ def normalize_runtime_thread_message(
         ]
 
     if method == "message.delta":
+        part_type = _event_extract_part_type(
+            params, part_types=state.opencode_part_types
+        )
+        if part_type and part_type != "text":
+            return []
         return _assistant_stream_events(params, state, timestamp=event_timestamp)
 
     if method == "turn/streamDelta" or "outputdelta" in method_lower:
