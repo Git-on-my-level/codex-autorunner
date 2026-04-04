@@ -224,6 +224,37 @@ def _progress_event_shape_hint(payload: Any) -> Optional[str]:
     return " ".join(hints) or None
 
 
+def _extract_parent_session_id(payload: Any) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+
+    containers: list[Any] = [payload]
+    properties = payload.get("properties")
+    if isinstance(properties, dict):
+        containers.append(properties)
+        properties_info = properties.get("info")
+        if isinstance(properties_info, dict):
+            containers.append(properties_info)
+    info = payload.get("info")
+    if isinstance(info, dict):
+        containers.append(info)
+    session = payload.get("session")
+    if isinstance(session, dict):
+        containers.append(session)
+    item = payload.get("item")
+    if isinstance(item, dict):
+        containers.append(item)
+
+    for container in containers:
+        if not isinstance(container, dict):
+            continue
+        for key in ("parentID", "parentId", "parent_id"):
+            value = container.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return None
+
+
 def _wrap_runtime_raw_event(method: str, params: dict[str, Any]) -> dict[str, Any]:
     return {"message": {"method": method, "params": params}}
 
@@ -1425,6 +1456,93 @@ class OpenCodeHarness(AgentHarness):
                 )
 
             raw_events: list[dict[str, Any]] = []
+            watched_session_ids: set[str] = {conversation_id}
+            session_parent_cache: dict[str, Optional[str]] = {
+                conversation_id: None,
+            }
+            non_descendant_session_ids: set[str] = set()
+
+            async def _session_belongs_to_turn(session_id: Optional[str]) -> bool:
+                if not isinstance(session_id, str) or not session_id:
+                    return False
+                if session_id in watched_session_ids:
+                    return True
+                if session_id in non_descendant_session_ids:
+                    return False
+
+                current: Optional[str] = session_id
+                visited: list[str] = []
+                visited_set: set[str] = set()
+
+                while current:
+                    if current in watched_session_ids:
+                        lineage_parent = current
+                        for descendant in reversed(visited):
+                            watched_session_ids.add(descendant)
+                            session_parent_cache[descendant] = lineage_parent
+                            lineage_parent = descendant
+                        return True
+                    if current in non_descendant_session_ids or current in visited_set:
+                        break
+                    visited.append(current)
+                    visited_set.add(current)
+
+                    parent_session_id = session_parent_cache.get(current)
+                    if (
+                        parent_session_id is None
+                        and current not in session_parent_cache
+                    ):
+                        try:
+                            session_payload = await client.get_session(current)
+                        except Exception:
+                            return False
+                        parent_session_id = _extract_parent_session_id(session_payload)
+                        session_parent_cache[current] = parent_session_id
+                    current = parent_session_id
+
+                non_descendant_session_ids.update(visited)
+                return False
+
+            async def _maybe_track_descendant_session(payload: dict[str, Any]) -> None:
+                event_session_id = extract_session_id(payload)
+                if not isinstance(event_session_id, str) or not event_session_id:
+                    return
+                if event_session_id in watched_session_ids:
+                    parent_session_id = _extract_parent_session_id(payload)
+                    if parent_session_id is not None:
+                        session_parent_cache[event_session_id] = parent_session_id
+                    return
+
+                parent_session_id = _extract_parent_session_id(payload)
+                if isinstance(parent_session_id, str) and parent_session_id:
+                    session_parent_cache[event_session_id] = parent_session_id
+                    if (
+                        parent_session_id in watched_session_ids
+                        or await _session_belongs_to_turn(parent_session_id)
+                    ):
+                        watched_session_ids.add(event_session_id)
+                        non_descendant_session_ids.discard(event_session_id)
+                        log_event(
+                            _logger,
+                            logging.INFO,
+                            "opencode.progress_session.tracked",
+                            conversation_id=conversation_id,
+                            session_id=event_session_id,
+                            parent_session_id=parent_session_id,
+                            source="event_parent",
+                        )
+                    return
+
+                if await _session_belongs_to_turn(event_session_id):
+                    log_event(
+                        _logger,
+                        logging.INFO,
+                        "opencode.progress_session.tracked",
+                        conversation_id=conversation_id,
+                        session_id=event_session_id,
+                        parent_session_id=session_parent_cache.get(event_session_id),
+                        source="session_lookup",
+                    )
 
             async def _publish_progress_event(raw_event: dict[str, Any]) -> None:
                 if not raw_event:
@@ -1441,6 +1559,7 @@ class OpenCodeHarness(AgentHarness):
                 except json.JSONDecodeError:
                     parsed = {"raw": payload}
                 if isinstance(parsed, dict):
+                    await _maybe_track_descendant_session(parsed)
                     wrapped = {"message": {"method": event.event, "params": parsed}}
                     raw_events.append(wrapped)
                     event_session_id = extract_session_id(parsed)
@@ -1460,7 +1579,9 @@ class OpenCodeHarness(AgentHarness):
                     )
                     if is_idle:
                         pending.progress_events_idle += 1
-                    elif event_session_id == conversation_id or not event_session_id:
+                    elif (
+                        event_session_id in watched_session_ids or not event_session_id
+                    ):
                         # Session-less item/* deltas are valid OpenCode progress; skipping
                         # them drops reasoning/tool visibility (see harness tests).
                         pending.progress_events_published += 1
@@ -1570,6 +1691,7 @@ class OpenCodeHarness(AgentHarness):
                     model_payload=(
                         pending.model_payload if pending is not None else None
                     ),
+                    progress_session_ids=watched_session_ids,
                     permission_policy=permission_policy,
                     permission_handler=permission_handler,
                     question_policy=(

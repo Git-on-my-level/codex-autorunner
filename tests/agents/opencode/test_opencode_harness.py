@@ -34,6 +34,7 @@ class _StubClient:
         self.question_rejections: list[str] = []
         self.prompt_calls: list[dict[str, object]] = []
         self.get_session_calls: list[str] = []
+        self.session_responses: dict[str, Any] = {}
         self.list_messages_calls: list[str] = []
         self.messages_response: Any = []
         self.get_session_error: Exception | None = None
@@ -74,6 +75,9 @@ class _StubClient:
         self.get_session_calls.append(session_id)
         if self.get_session_error is not None:
             raise self.get_session_error
+        response = self.session_responses.get(session_id)
+        if isinstance(response, dict):
+            return response
         return {"id": session_id}
 
     async def list_messages(self, session_id: str, **_kwargs: Any) -> Any:
@@ -1637,6 +1641,92 @@ async def test_opencode_harness_noninteractive_turn_rejects_questions() -> None:
 
     assert result.status == "ok"
     assert client.question_rejections == ["q-1"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_managed_turn_auto_approves_child_session_permission() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="permission.asked",
+                data=(
+                    '{"sessionID":"child-1","properties":{"id":"perm-1",'
+                    '"permission":"external_directory","patterns":["/tmp/tests_diff.txt"],'
+                    '"metadata":{"filepath":"/tmp/tests_diff.txt"}}}'
+                ),
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    client.session_responses["child-1"] = {
+        "id": "child-1",
+        "parentID": "session-1",
+    }
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode="never",
+        sandbox_policy="dangerFullAccess",
+    )
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+
+    assert result.status == "ok"
+    assert client.permission_replies == [("perm-1", "once")]
+    assert client.get_session_calls == ["child-1"]
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_managed_turn_tracks_child_session_from_parent_event() -> (
+    None
+):
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient(
+        [
+            SSEEvent(
+                event="session.created",
+                data='{"sessionID":"child-1","info":{"id":"child-1","parentID":"session-1"}}',
+            ),
+            SSEEvent(
+                event="permission.asked",
+                data=(
+                    '{"sessionID":"child-1","properties":{"id":"perm-1",'
+                    '"permission":"external_directory","patterns":["/tmp/tests_diff.txt"],'
+                    '"metadata":{"filepath":"/tmp/tests_diff.txt"}}}'
+                ),
+            ),
+            SSEEvent(
+                event="session.status",
+                data='{"sessionID":"session-1","properties":{"status":{"type":"idle"}}}',
+            ),
+        ]
+    )
+    harness = OpenCodeHarness(_StubSupervisor(client))
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode="never",
+        sandbox_policy="dangerFullAccess",
+    )
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+
+    assert result.status == "ok"
+    assert client.permission_replies == [("perm-1", "once")]
+    assert client.get_session_calls == []
 
 
 @pytest.mark.asyncio
