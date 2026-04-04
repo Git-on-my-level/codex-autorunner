@@ -31,6 +31,9 @@ _UPDATE_LOCK_STARTUP_GRACE_SECONDS = 10.0
 _UPDATE_LOCK_CMD_HINTS = ("codex_autorunner.core.update_runner",)
 _UPDATE_BUILD_ARTIFACT_DIRS = ("build", "dist", ".eggs")
 _UPDATE_BUILD_ARTIFACT_GLOBS = ("*.egg-info", "src/*.egg-info")
+_UPDATE_CMD_TIMEOUT_SECONDS = 300
+_SERVICE_STATUS_CHECK_TIMEOUT_SECONDS = 2
+_GIT_FETCH_UPDATE_TIMEOUT_SECONDS = 60
 
 
 def _run_cmd(cmd: list[str], cwd: Path) -> None:
@@ -42,7 +45,7 @@ def _run_cmd(cmd: list[str], cwd: Path) -> None:
             check=True,
             capture_output=True,
             text=True,
-            timeout=300,  # 5 mins should be enough for clone/install
+            timeout=_UPDATE_CMD_TIMEOUT_SECONDS,
         )
     except subprocess.CalledProcessError as e:
         # Include stdout/stderr in the error message for debugging
@@ -198,7 +201,7 @@ def _is_systemd_user_service_active(service_name: str) -> bool:
             check=False,
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=_SERVICE_STATUS_CHECK_TIMEOUT_SECONDS,
         )
     except Exception:
         return False
@@ -220,7 +223,7 @@ def _is_launchd_label_active(label: str) -> bool:
             check=False,
             capture_output=True,
             text=True,
-            timeout=2,
+            timeout=_SERVICE_STATUS_CHECK_TIMEOUT_SECONDS,
         )
     except Exception:
         return False
@@ -684,7 +687,7 @@ def _system_update_check(
         run_git(
             ["fetch", "--quiet", repo_url, repo_ref],
             repo_root,
-            timeout_seconds=60,
+            timeout_seconds=_GIT_FETCH_UPDATE_TIMEOUT_SECONDS,
             check=True,
         )
         remote_sha = run_git(

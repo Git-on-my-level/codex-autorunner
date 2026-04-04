@@ -32,6 +32,7 @@ from .app_server_command import (
     resolve_app_server_command,
 )
 from .config_contract import CONFIG_VERSION, ConfigError
+from .constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from .destinations import default_local_destination, resolve_effective_repo_destination
 from .path_utils import ConfigPathError, resolve_config_path
 from .report_retention import (
@@ -845,8 +846,8 @@ DEFAULT_HUB_CONFIG: Dict[str, Any] = {
         "include_root_repo": False,
         "repo_server_inherit": True,
         # Where to pull system updates from (defaults to main upstream)
-        "update_repo_url": "https://github.com/Git-on-my-level/codex-autorunner.git",
-        "update_repo_ref": "main",
+        "update_repo_url": DEFAULT_UPDATE_REPO_URL,
+        "update_repo_ref": DEFAULT_UPDATE_REPO_REF,
         "log": {
             "path": ".codex-autorunner/codex-autorunner-hub.log",
             "max_bytes": 10_000_000,

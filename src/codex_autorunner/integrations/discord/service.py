@@ -48,6 +48,7 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
+from ...core.constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from ...core.exceptions import CircuitOpenError
 from ...core.filebox import (
     delete_regular_files,
@@ -337,8 +338,6 @@ FLOW_RUNS_DEFAULT_LIMIT = 5
 FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
 MESSAGE_TURN_APPROVAL_POLICY = "never"
 MESSAGE_TURN_SANDBOX_POLICY = "dangerFullAccess"
-DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
-DEFAULT_UPDATE_REPO_REF = "main"
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12

@@ -20,6 +20,8 @@ from ..provider import (
 
 RequestFn = Callable[[bytes, Mapping[str, Any]], Dict[str, Any]]
 
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com"
+
 _EXT_TO_CONTENT_TYPE: dict[str, str] = {
     # Keep these aligned with OpenAI's documented accepted formats for /audio/transcriptions.
     "webm": "audio/webm",
@@ -303,7 +305,7 @@ class _OpenAIWhisperStream(TranscriptionStream):
             self._logger.info("OpenAI Whisper stream aborted: %s", reason)
 
     def _build_payload(self) -> Dict[str, Any]:
-        base_url = self._settings.base_url or "https://api.openai.com"
+        base_url = self._settings.base_url or DEFAULT_OPENAI_BASE_URL
         payload = {
             "api_key": self._api_key,
             "base_url": base_url,

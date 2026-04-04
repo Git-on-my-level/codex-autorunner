@@ -38,7 +38,11 @@ from .api_schemas import (
     parse_update_payload,
 )
 from .command_parsing import parse_command_payload
-from .constants import TELEGRAM_CALLBACK_DATA_LIMIT, TELEGRAM_MAX_MESSAGE_LENGTH
+from .constants import (
+    TELEGRAM_API_BASE_URL,
+    TELEGRAM_CALLBACK_DATA_LIMIT,
+    TELEGRAM_MAX_MESSAGE_LENGTH,
+)
 from .rendering import sanitize_telegram_outbound_text
 from .retry import _extract_retry_after_seconds
 
@@ -1130,8 +1134,8 @@ class TelegramBotClient:
         client: Optional[httpx.AsyncClient] = None,
     ) -> None:
         self._bot_token = bot_token
-        self._base_url = "https://api.telegram.org"
-        self._file_base_url = f"https://api.telegram.org/file/bot{bot_token}"
+        self._base_url = TELEGRAM_API_BASE_URL
+        self._file_base_url = f"{TELEGRAM_API_BASE_URL}/file/bot{bot_token}"
         self._logger = logger or logging.getLogger(__name__)
         if client is None:
             self._client = httpx.AsyncClient(timeout=timeout_seconds)

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from ...core.constants import (
+    DEFAULT_UPDATE_REPO_REF as DEFAULT_UPDATE_REPO_REF,
+)
+from ...core.constants import (
+    DEFAULT_UPDATE_REPO_URL as DEFAULT_UPDATE_REPO_URL,
+)
 from ...core.update_targets import update_target_label_pairs
 from ..chat.agents import (
     DEFAULT_CHAT_AGENT,
@@ -13,6 +19,7 @@ from ..chat.model_selection import (
 )
 
 DEFAULT_PAGE_SIZE = 10
+TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 TELEGRAM_CALLBACK_DATA_LIMIT = 64
 THREAD_LIST_PAGE_LIMIT = 100
@@ -65,8 +72,6 @@ WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
     "cannot infer the intention please clarify before proceeding."
 )
-DEFAULT_UPDATE_REPO_URL = "https://github.com/Git-on-my-level/codex-autorunner.git"
-DEFAULT_UPDATE_REPO_REF = "main"
 RESUME_PICKER_PROMPT = (
     "Select a thread to resume (buttons below or reply with number/id)."
 )

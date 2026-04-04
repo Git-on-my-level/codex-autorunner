@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from ....core import update as update_core
 from ....core.config import HubConfig
+from ....core.constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from ....core.self_describe import collect_describe_data
 from ....core.text_utils import _pid_is_running
 from ....core.update import (
@@ -134,8 +135,8 @@ def build_system_routes() -> APIRouter:
         except AttributeError:
             config = None
 
-        repo_url = "https://github.com/Git-on-my-level/codex-autorunner.git"
-        repo_ref = "main"
+        repo_url = DEFAULT_UPDATE_REPO_URL
+        repo_ref = DEFAULT_UPDATE_REPO_REF
         if config and isinstance(config, HubConfig):
             configured_url = getattr(config, "update_repo_url", None)
             if configured_url:
@@ -168,8 +169,8 @@ def build_system_routes() -> APIRouter:
             config = None
 
         # Determine URL
-        repo_url = "https://github.com/Git-on-my-level/codex-autorunner.git"
-        repo_ref = "main"
+        repo_url = DEFAULT_UPDATE_REPO_URL
+        repo_ref = DEFAULT_UPDATE_REPO_REF
         skip_checks = False
         update_backend = "auto"
         update_services: Optional[dict[str, str]] = None

@@ -9,6 +9,8 @@ import httpx
 
 from .config import Config
 
+_TELEGRAM_API_BASE_URL = "https://api.telegram.org"
+
 DEFAULT_EVENTS = {"run_finished", "run_error", "tui_idle"}
 KNOWN_EVENTS = {"run_finished", "run_error", "tui_idle", "tui_session_finished", "all"}
 DEFAULT_TIMEOUT_SECONDS = 5.0
@@ -436,7 +438,7 @@ class NotificationManager:
         thread_id: Optional[int],
         message: str,
     ) -> None:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        url = f"{_TELEGRAM_API_BASE_URL}/bot{bot_token}/sendMessage"
         payload: dict[str, object] = {"chat_id": chat_id, "text": message}
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
@@ -451,7 +453,7 @@ class NotificationManager:
         thread_id: Optional[int],
         message: str,
     ) -> None:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        url = f"{_TELEGRAM_API_BASE_URL}/bot{bot_token}/sendMessage"
         payload: dict[str, object] = {"chat_id": chat_id, "text": message}
         if thread_id is not None:
             payload["message_thread_id"] = thread_id

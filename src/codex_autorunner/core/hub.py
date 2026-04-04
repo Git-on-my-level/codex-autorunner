@@ -95,6 +95,16 @@ from .utils import atomic_write, is_within, subprocess_env
 
 logger = logging.getLogger("codex_autorunner.hub")
 
+_GIT_FETCH_TIMEOUT_SECONDS = 120
+_GIT_PULL_TIMEOUT_SECONDS = 120
+_GIT_CLONE_TIMEOUT_SECONDS = 300
+_GIT_WORKTREE_TIMEOUT_SECONDS = 120
+_GIT_PUSH_DELETE_TIMEOUT_SECONDS = 120
+_DOCKER_INSPECT_TIMEOUT_SECONDS = 15
+_DOCKER_STOP_TIMEOUT_SECONDS = 15
+_DOCKER_RM_TIMEOUT_SECONDS = 30
+_WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS = 600
+
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
 AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
 BackendOrchestratorBuilder = Callable[[Path, RepoConfig], BackendOrchestratorProtocol]
@@ -974,7 +984,7 @@ class HubSupervisor:
                 ["fetch", "--prune", "origin"],
                 repo_root,
                 check=False,
-                timeout_seconds=120,
+                timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
             )
         except GitError as exc:
             raise ValueError(f"git fetch failed: {exc}") from exc
@@ -1006,7 +1016,7 @@ class HubSupervisor:
                 ["pull", "--ff-only", "origin", default_branch],
                 repo_root,
                 check=False,
-                timeout_seconds=120,
+                timeout_seconds=_GIT_PULL_TIMEOUT_SECONDS,
             )
         except GitError as exc:
             raise ValueError(f"git pull failed: {exc}") from exc
@@ -1138,7 +1148,7 @@ class HubSupervisor:
                 ["clone", git_url, str(target)],
                 target.parent,
                 check=False,
-                timeout_seconds=300,
+                timeout_seconds=_GIT_CLONE_TIMEOUT_SECONDS,
             )
         except GitError as exc:
             raise ValueError(f"git clone failed: {exc}") from exc
@@ -1212,7 +1222,7 @@ class HubSupervisor:
                     ["fetch", "--prune", "origin"],
                     base_path,
                     check=False,
-                    timeout_seconds=120,
+                    timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
                 )
             except GitError as exc:
                 raise ValueError(
@@ -1258,7 +1268,7 @@ class HubSupervisor:
                     ["worktree", "add", str(worktree_path), branch],
                     base_path,
                     check=False,
-                    timeout_seconds=120,
+                    timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
                 )
             else:
                 cmd = [
@@ -1273,7 +1283,7 @@ class HubSupervisor:
                     cmd,
                     base_path,
                     check=False,
-                    timeout_seconds=120,
+                    timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
                 )
         except GitError as exc:
             raise ValueError(f"git worktree add failed: {exc}") from exc
@@ -1630,7 +1640,7 @@ class HubSupervisor:
         try:
             inspect_proc = self._run_docker_command(
                 ["inspect", "--format", "{{.State.Running}}", container_name],
-                timeout_seconds=15,
+                timeout_seconds=_DOCKER_INSPECT_TIMEOUT_SECONDS,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             message = f"docker inspect failed: {exc}"
@@ -1683,7 +1693,7 @@ class HubSupervisor:
             try:
                 stop_proc = self._run_docker_command(
                     ["stop", "-t", "10", container_name],
-                    timeout_seconds=15,
+                    timeout_seconds=_DOCKER_STOP_TIMEOUT_SECONDS,
                 )
             except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
                 message = f"docker stop failed: {exc}"
@@ -1718,7 +1728,7 @@ class HubSupervisor:
         try:
             rm_proc = self._run_docker_command(
                 ["rm", container_name],
-                timeout_seconds=30,
+                timeout_seconds=_DOCKER_RM_TIMEOUT_SECONDS,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             message = f"docker rm failed: {exc}"
@@ -1878,7 +1888,7 @@ class HubSupervisor:
                 ["worktree", "remove", "--force", str(worktree_path)],
                 base_path,
                 check=False,
-                timeout_seconds=120,
+                timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
             )
         except GitError as exc:
             raise ValueError(f"git worktree remove failed: {exc}") from exc
@@ -1912,7 +1922,7 @@ class HubSupervisor:
                     ["push", "origin", "--delete", entry.branch],
                     base_path,
                     check=False,
-                    timeout_seconds=120,
+                    timeout_seconds=_GIT_PUSH_DELETE_TIMEOUT_SECONDS,
                 )
                 if proc.returncode != 0:
                     logger.warning(
@@ -3449,14 +3459,19 @@ class HubSupervisor:
                         cwd=str(worktree_path),
                         capture_output=True,
                         text=True,
-                        timeout=600,
+                        timeout=_WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS,
                         env=subprocess_env(),
                         check=False,
                     )
                 except subprocess.TimeoutExpired as exc:
                     raise ValueError(
-                        "Worktree setup command %d/%d timed out after 600s: %r"
-                        % (idx, len(normalized), command)
+                        "Worktree setup command %d/%d timed out after %ds: %r"
+                        % (
+                            idx,
+                            len(normalized),
+                            _WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS,
+                            command,
+                        )
                     ) from exc
                 output = (proc.stdout or "") + (proc.stderr or "")
                 if output:
