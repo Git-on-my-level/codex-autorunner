@@ -6,7 +6,6 @@ import hashlib
 import inspect
 import logging
 import os
-import re
 import sqlite3
 import subprocess
 import time
@@ -47,7 +46,6 @@ from ...core.config import (
     load_repo_config,
     resolve_env_for_root,
 )
-from ...core.constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from ...core.exceptions import CircuitOpenError
 from ...core.filebox import (
     delete_regular_files,
@@ -89,7 +87,10 @@ from ...core.flows.ux_helpers import (
     ticket_flow_archive_requires_force,
     ticket_progress,
 )
-from ...core.git_utils import GitError, reset_branch_from_origin_main
+from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
+    GitError,
+    reset_branch_from_origin_main,
+)
 from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
@@ -100,7 +101,7 @@ from ...core.ticket_flow_summary import (
     build_ticket_flow_display,
     format_ticket_flow_summary_lines,
 )
-from ...core.update import (
+from ...core.update import (  # noqa: F401 - kept for test monkeypatching
     UpdateInProgressError,
     _available_update_target_definitions,
     _format_update_confirmation_warning,
@@ -110,8 +111,8 @@ from ...core.update import (
     _spawn_update_process,
     _update_target_restarts_surface,
 )
-from ...core.update_paths import resolve_update_paths
-from ...core.update_targets import get_update_target_label
+from ...core.update_paths import resolve_update_paths  # noqa: F401
+from ...core.update_targets import get_update_target_label  # noqa: F401
 from ...core.utils import (
     atomic_write,
     canonicalize_path,
@@ -131,9 +132,7 @@ from ...integrations.app_server.threads import (
 )
 from ...integrations.chat.agents import (
     DEFAULT_CHAT_AGENT,
-    build_agent_switch_state,
     chat_agent_supports_effort,
-    chat_hermes_profile_options,
     format_chat_agent_selection,
     normalize_chat_agent,
     normalize_hermes_profile,
@@ -156,8 +155,6 @@ from ...integrations.chat.command_diagnostics import (
     build_status_text,
 )
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
-from ...integrations.chat.compaction import build_compact_seed_prompt
-from ...integrations.chat.constants import TOPIC_NOT_BOUND_DISCORD_MESSAGE
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -180,9 +177,7 @@ from ...integrations.chat.model_selection import (
     REASONING_EFFORT_VALUES,
     _coerce_model_entries,
     _display_name_is_model_alias,
-    _is_valid_opencode_model_name,
     _model_list_with_agent_compat,
-    format_model_set_message,
 )
 from ...integrations.chat.models import (
     ChatEvent,
@@ -209,7 +204,7 @@ from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
 )
-from ...integrations.chat.update_notifier import (
+from ...integrations.chat.update_notifier import (  # noqa: F401 - kept for test monkeypatching
     ChatUpdateStatusNotifier,
     format_update_status_message,
     mark_update_status_notified,
@@ -232,7 +227,6 @@ from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ...voice.provider_catalog import normalize_voice_provider
 from ...voice.service import VoiceTransientError
 from ..chat.approval_modes import (
-    APPROVAL_MODE_USAGE,
     normalize_approval_mode,
     resolve_approval_mode_policies,
 )
@@ -270,20 +264,14 @@ from .components import (
     DISCORD_BUTTON_STYLE_SUCCESS,
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_action_row,
-    build_agent_picker,
-    build_agent_profile_picker,
     build_bind_picker,
     build_button,
     build_flow_runs_picker,
     build_flow_status_buttons,
     build_model_effort_picker,
-    build_model_picker,
     build_queue_notice_buttons,
-    build_review_commit_picker,
-    build_session_threads_picker,
     build_ticket_filter_picker,
     build_ticket_picker,
-    build_update_target_picker,
 )
 from .config import DiscordBotConfig
 from .errors import DiscordAPIError, DiscordTransientError
@@ -307,8 +295,6 @@ from .interactions import (
 from .message_turns import (
     DiscordMessageTurnResult,
     build_discord_thread_orchestration_service,
-    clear_discord_turn_progress_reuse,
-    request_discord_turn_progress_reuse,
     resolve_bound_workspace_root,
     run_agent_turn_for_message,
     run_managed_thread_turn_for_message,
@@ -6450,190 +6436,14 @@ class DiscordBotService:
         channel_id: str,
         guild_id: Optional[str],
     ) -> None:
-        deferred = await self._defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            text = format_discord_message(
-                "This channel is not bound. Run `/car bind path:<...>` first."
-            )
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
+        from .car_handlers.session_commands import handle_car_newt
 
-        pma_enabled = bool(binding.get("pma_enabled", False))
-        if pma_enabled:
-            text = format_discord_message(
-                "/car newt is not available in PMA mode. Use `/car new` instead."
-            )
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-
-        workspace_raw = binding.get("workspace_path")
-        workspace_root: Optional[Path] = None
-        if isinstance(workspace_raw, str) and workspace_raw.strip():
-            workspace_root = canonicalize_path(Path(workspace_raw))
-            if not workspace_root.exists() or not workspace_root.is_dir():
-                workspace_root = None
-        if workspace_root is None:
-            text = format_discord_message(
-                "Binding is invalid. Run `/car bind path:<workspace>`."
-            )
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-
-        safe_channel_id = re.sub(r"[^a-zA-Z0-9]+", "-", channel_id).strip("-")
-        if not safe_channel_id:
-            safe_channel_id = "channel"
-        branch_suffix = hashlib.sha256(str(workspace_root).encode("utf-8")).hexdigest()[
-            :10
-        ]
-        branch_name = f"thread-{safe_channel_id}-{branch_suffix}"
-
-        try:
-            default_branch = await asyncio.to_thread(
-                reset_branch_from_origin_main,
-                workspace_root,
-                branch_name,
-            )
-        except GitError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.newt.branch_reset.failed",
-                channel_id=channel_id,
-                branch=branch_name,
-                exc=exc,
-            )
-            text = format_discord_message(
-                f"Failed to reset branch `{branch_name}` from origin default branch: {exc}"
-            )
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-
-        setup_command_count = 0
-        hub_supervisor = getattr(self, "_hub_supervisor", None)
-        if hub_supervisor is not None:
-            repo_id_raw = binding.get("repo_id")
-            repo_id_hint = (
-                repo_id_raw.strip()
-                if isinstance(repo_id_raw, str) and repo_id_raw
-                else None
-            )
-            try:
-                setup_command_count = await asyncio.to_thread(
-                    hub_supervisor.run_setup_commands_for_workspace,
-                    workspace_root,
-                    repo_id_hint=repo_id_hint,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.newt.setup.failed",
-                    channel_id=channel_id,
-                    workspace_path=str(workspace_root),
-                    exc=exc,
-                )
-                text = format_discord_message(
-                    f"Reset branch `{branch_name}` to `origin/{default_branch}` but setup commands failed: {exc}"
-                )
-                await self._send_or_respond_public(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-                return
-
-        agent, agent_profile = self._resolve_agent_state(binding)
-        resource_kind = (
-            str(binding.get("resource_kind")).strip()
-            if isinstance(binding.get("resource_kind"), str)
-            and str(binding.get("resource_kind")).strip()
-            else None
-        )
-        resource_id = (
-            str(binding.get("resource_id")).strip()
-            if isinstance(binding.get("resource_id"), str)
-            and str(binding.get("resource_id")).strip()
-            else None
-        )
-
-        try:
-            had_previous, _new_thread_id = await self._reset_discord_thread_binding(
-                channel_id=channel_id,
-                workspace_root=workspace_root,
-                agent=agent,
-                agent_profile=agent_profile,
-                repo_id=(
-                    str(binding.get("repo_id")).strip()
-                    if isinstance(binding.get("repo_id"), str)
-                    and str(binding.get("repo_id")).strip()
-                    else None
-                ),
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-                pma_enabled=pma_enabled,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.newt.thread_reset.failed",
-                channel_id=channel_id,
-                workspace_root=str(workspace_root),
-                agent=agent,
-                exc=exc,
-            )
-            text = format_discord_message(
-                "Branch reset succeeded, but starting a fresh session failed."
-            )
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
-        await self._store.clear_pending_compact_seed(channel_id=channel_id)
-        mode_label = "PMA" if pma_enabled else "repo"
-        state_label = "cleared previous thread" if had_previous else "new thread ready"
-        setup_note = (
-            f" Ran {setup_command_count} setup command(s)."
-            if setup_command_count
-            else ""
-        )
-
-        text = format_discord_message(
-            f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` ({state_label}).{setup_note}"
-        )
-        await self._send_or_respond_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
+        await handle_car_newt(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            guild_id=guild_id,
         )
 
     async def _handle_car_resume(
@@ -6644,235 +6454,14 @@ class DiscordBotService:
         channel_id: str,
         options: dict[str, Any],
     ) -> None:
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            text = format_discord_message(
-                "This channel is not bound. Run `/car bind path:<...>` first."
-            )
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-            return
+        from .car_handlers.session_commands import handle_car_resume
 
-        pma_enabled = bool(binding.get("pma_enabled", False))
-        workspace_raw = binding.get("workspace_path")
-        workspace_root: Optional[Path] = None
-        if isinstance(workspace_raw, str) and workspace_raw.strip():
-            workspace_root = canonicalize_path(Path(workspace_raw))
-            if not workspace_root.exists() or not workspace_root.is_dir():
-                workspace_root = None
-        if workspace_root is None:
-            if pma_enabled:
-                workspace_root = canonicalize_path(Path(self._config.root))
-            else:
-                text = format_discord_message(
-                    "Binding is invalid. Run `/car bind path:<workspace>`."
-                )
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-                return
-
-        agent, agent_profile = self._resolve_agent_state(binding)
-        runtime_agent = self._runtime_agent_for_binding(binding)
-
-        repo_id = (
-            str(binding.get("repo_id")).strip()
-            if isinstance(binding.get("repo_id"), str)
-            and str(binding.get("repo_id")).strip()
-            else None
-        )
-        resource_kind = (
-            str(binding.get("resource_kind")).strip()
-            if isinstance(binding.get("resource_kind"), str)
-            and str(binding.get("resource_kind")).strip()
-            else None
-        )
-        resource_id = (
-            str(binding.get("resource_id")).strip()
-            if isinstance(binding.get("resource_id"), str)
-            and str(binding.get("resource_id")).strip()
-            else None
-        )
-        mode = "pma" if pma_enabled else "repo"
-        orchestration_service, _current_binding, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-        )
-
-        raw_thread_id = options.get("thread_id")
-        thread_id = raw_thread_id.strip() if isinstance(raw_thread_id, str) else None
-        current_thread_id = (
-            str(getattr(current_thread, "thread_target_id", "") or "").strip() or None
-        )
-
-        if thread_id:
-            thread_items = self._list_discord_thread_targets_for_picker(
-                workspace_root=workspace_root,
-                agent=agent,
-                agent_profile=agent_profile,
-                current_thread_id=current_thread_id,
-                mode=mode,
-                repo_id=repo_id,
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-            )
-            if thread_items:
-
-                async def _prompt_thread_matches(
-                    query_text: str,
-                    filtered_items: list[tuple[str, str]],
-                ) -> None:
-                    header = (
-                        f"Current thread: `{current_thread_id}`\n\n"
-                        if current_thread_id
-                        else ""
-                    )
-                    await self._send_or_respond_ephemeral(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        deferred=deferred,
-                        text=format_discord_message(
-                            header
-                            + (
-                                f"Matched {len(filtered_items)} threads for "
-                                f"`{query_text}`. Select a thread to resume:"
-                            )
-                        ),
-                    )
-                    await self._send_followup_ephemeral(
-                        interaction_token=interaction_token,
-                        content="Choose one thread from the filtered picker below.",
-                        components=[build_session_threads_picker(filtered_items)],
-                    )
-
-                resolved_thread_id = await self._resolve_picker_query_or_prompt(
-                    query=thread_id,
-                    items=thread_items,
-                    limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
-                    prompt_filtered_items=_prompt_thread_matches,
-                )
-                if resolved_thread_id is None:
-                    return
-                thread_id = resolved_thread_id
-            target_thread = orchestration_service.get_thread_target(thread_id)
-            if target_thread is None:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=format_discord_message(
-                        f"Unknown thread `{thread_id}` for this workspace."
-                    ),
-                )
-                return
-            if str(getattr(target_thread, "workspace_root", "") or "").strip() != str(
-                workspace_root.resolve()
-            ):
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=format_discord_message(
-                        "Selected thread belongs to a different workspace."
-                    ),
-                )
-                return
-            if (
-                str(getattr(target_thread, "agent_id", "") or "").strip()
-                != runtime_agent
-            ):
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=format_discord_message(
-                        "Selected thread belongs to a different agent. "
-                        f"Current agent: `{self._format_agent_state(agent, agent_profile)}`."
-                    ),
-                )
-                return
-            lifecycle_status = (
-                str(getattr(target_thread, "lifecycle_status", "") or "")
-                .strip()
-                .lower()
-            )
-            if lifecycle_status and lifecycle_status != "active":
-                try:
-                    orchestration_service.resume_thread_target(thread_id)
-                except Exception:
-                    pass
-            self._attach_discord_thread_binding(
-                channel_id=channel_id,
-                thread_target_id=thread_id,
-                agent=agent,
-                agent_profile=agent_profile,
-                repo_id=repo_id,
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-                workspace_root=workspace_root,
-                pma_enabled=pma_enabled,
-            )
-            await self._store.clear_pending_compact_seed(channel_id=channel_id)
-            mode_label = "PMA" if pma_enabled else "repo"
-            text = format_discord_message(
-                f"Resumed {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` with thread `{thread_id}`."
-            )
-        else:
-            thread_items = self._list_discord_thread_targets_for_picker(
-                workspace_root=workspace_root,
-                agent=agent,
-                agent_profile=agent_profile,
-                current_thread_id=current_thread_id,
-                mode=mode,
-                repo_id=repo_id,
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-            )
-            if thread_items:
-                header = (
-                    f"Current thread: `{current_thread_id}`\n\n"
-                    if current_thread_id
-                    else ""
-                )
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=format_discord_message(header + "Select a thread to resume:"),
-                )
-                await self._send_followup_ephemeral(
-                    interaction_token=interaction_token,
-                    content="Choose one thread from the picker below.",
-                    components=[build_session_threads_picker(thread_items)],
-                )
-                return
-            if current_thread_id:
-                text = format_discord_message(
-                    f"Current thread: `{current_thread_id}`\n\n"
-                    "No additional threads found. Use `/car session resume thread_id:<thread_id>` to resume a specific thread."
-                )
-            else:
-                text = format_discord_message(
-                    "No thread is currently active.\n\n"
-                    "Use `/car session resume thread_id:<thread_id>` to resume a specific thread, "
-                    "or start a new conversation to begin."
-                )
-
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
+        await handle_car_resume(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            options=options,
         )
 
     async def _handle_car_update(
@@ -6884,282 +6473,31 @@ class DiscordBotService:
         options: dict[str, Any],
         response_mode: str = "command",
     ) -> None:
-        component_response = response_mode == "component"
-        raw_target = options.get("target")
-        confirmed = bool(options.get("confirmed"))
-        if not isinstance(raw_target, str) or not raw_target.strip():
-            components = [
-                build_update_target_picker(
-                    custom_id=UPDATE_TARGET_SELECT_ID,
-                    target_definitions=self._dynamic_update_target_definitions(),
-                )
-            ]
-            if component_response:
-                await self._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text="Select update target:",
-                    components=components,
-                )
-            else:
-                await self._respond_with_components(
-                    interaction_id,
-                    interaction_token,
-                    "Select update target:",
-                    components,
-                )
-            return
-        if isinstance(raw_target, str) and raw_target.strip().lower() == "status":
-            await self._handle_car_update_status(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                component_response=component_response,
-            )
-            return
+        from .car_handlers.system_commands import handle_car_update
 
-        try:
-            update_target = _normalize_update_target(
-                raw_target if isinstance(raw_target, str) else None
-            )
-        except ValueError as exc:
-            components = [
-                build_update_target_picker(
-                    custom_id=UPDATE_TARGET_SELECT_ID,
-                    target_definitions=self._dynamic_update_target_definitions(),
-                )
-            ]
-            text = f"{exc} Select update target:"
-            if component_response:
-                await self._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text=text,
-                    components=components,
-                )
-            else:
-                await self._respond_with_components(
-                    interaction_id,
-                    interaction_token,
-                    text,
-                    components,
-                )
-            return
-        deferred = (
-            await self._defer_component_update(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-            if component_response
-            else await self._defer_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
+        await handle_car_update(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            options=options,
+            response_mode=response_mode,
         )
-        if not confirmed and _update_target_restarts_surface(
-            update_target, surface="discord"
-        ):
-            warning = _format_update_confirmation_warning(
-                active_count=self._active_update_session_count(),
-                singular_label="Codex session",
-            )
-            if warning:
-                warning_text = format_discord_message(warning)
-                components = self._build_update_confirmation_components(
-                    update_target=update_target
-                )
-                if component_response:
-                    await self._send_or_update_component_message(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        deferred=deferred,
-                        text=warning_text,
-                        components=components,
-                    )
-                else:
-                    await self._send_or_respond_with_components_ephemeral(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        deferred=deferred,
-                        text=warning_text,
-                        components=components,
-                    )
-                return
-
-        target_label = get_update_target_label(update_target)
-        restarts_discord = _update_target_restarts_surface(
-            update_target, surface="discord"
-        )
-        if restarts_discord:
-            text = format_discord_message(
-                f"Preparing update ({target_label}). Checking whether the update can start now. "
-                "If it does, the selected service(s) will restart shortly and I will post completion status in this channel. "
-                "Use `/car update target:status` for progress."
-            )
-            if component_response:
-                await self._send_or_update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-            else:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-        repo_url = (self._update_repo_url or DEFAULT_UPDATE_REPO_URL).strip()
-        if not repo_url:
-            repo_url = DEFAULT_UPDATE_REPO_URL
-        repo_ref = _normalize_update_ref(
-            self._update_repo_ref or DEFAULT_UPDATE_REPO_REF
-        )
-        update_dir = resolve_update_paths().cache_dir
-        notify_metadata = self._update_status_notifier.build_spawn_metadata(
-            chat_id=channel_id
-        )
-
-        linux_hub_service_name: Optional[str] = None
-        linux_telegram_service_name: Optional[str] = None
-        linux_discord_service_name: Optional[str] = None
-        update_services = self._update_linux_service_names
-        if isinstance(update_services, dict):
-            hub_service = update_services.get("hub")
-            telegram_service = update_services.get("telegram")
-            discord_service = update_services.get("discord")
-            if isinstance(hub_service, str) and hub_service.strip():
-                linux_hub_service_name = hub_service.strip()
-            if isinstance(telegram_service, str) and telegram_service.strip():
-                linux_telegram_service_name = telegram_service.strip()
-            if isinstance(discord_service, str) and discord_service.strip():
-                linux_discord_service_name = discord_service.strip()
-
-        try:
-            await asyncio.to_thread(
-                _spawn_update_process,
-                repo_url=repo_url,
-                repo_ref=repo_ref,
-                update_dir=update_dir,
-                logger=self._logger,
-                update_target=update_target,
-                skip_checks=bool(self._update_skip_checks),
-                update_backend=self._update_backend,
-                linux_hub_service_name=linux_hub_service_name,
-                linux_telegram_service_name=linux_telegram_service_name,
-                linux_discord_service_name=linux_discord_service_name,
-                **notify_metadata,
-            )
-        except UpdateInProgressError as exc:
-            text = format_discord_message(
-                f"{exc} Use `/car update target:status` for current state."
-            )
-            if component_response:
-                await self._send_or_update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-            else:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-            return
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.update.failed_start",
-                update_target=update_target,
-                exc=exc,
-            )
-            if component_response:
-                await self._send_or_update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text="Update failed to start. Check logs for details.",
-                )
-            else:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text="Update failed to start. Check logs for details.",
-                )
-            return
-
-        if restarts_discord:
-            self._update_status_notifier.schedule_watch({"chat_id": channel_id})
-            return
-        text = format_discord_message(
-            f"Update started ({target_label}). The selected service(s) will restart. "
-            "I will post completion status in this channel. "
-            "Use `/car update target:status` for progress."
-        )
-        if component_response:
-            await self._send_or_update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-        else:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-        self._update_status_notifier.schedule_watch({"chat_id": channel_id})
 
     @staticmethod
     def _update_thread_blocks_restart_warning(thread: Any) -> bool:
-        thread_kind = str(getattr(thread, "thread_kind", "") or "").strip().lower()
-        return thread_kind != "ticket_flow"
+        from .car_handlers.system_commands import (
+            _update_thread_blocks_restart_warning as update_thread_blocks_restart_warning,
+        )
+
+        return update_thread_blocks_restart_warning(thread)
 
     def _active_update_session_count(self) -> int:
-        try:
-            orchestration_service = self._discord_thread_service()
-            threads = orchestration_service.list_thread_targets(
-                lifecycle_status="active"
-            )
-        except Exception:
-            return 0
-        get_running_execution = getattr(
-            orchestration_service, "get_running_execution", None
+        from .car_handlers.system_commands import (
+            _active_update_session_count as active_update_session_count,
         )
-        if not callable(get_running_execution):
-            return sum(
-                1
-                for thread in threads
-                if self._update_thread_blocks_restart_warning(thread)
-                if str(getattr(thread, "status", "") or "").strip().lower() == "running"
-            )
 
-        active_count = 0
-        for thread in threads:
-            if not self._update_thread_blocks_restart_warning(thread):
-                continue
-            thread_target_id = str(
-                getattr(thread, "thread_target_id", "") or ""
-            ).strip()
-            if not thread_target_id:
-                continue
-            try:
-                if get_running_execution(thread_target_id) is not None:
-                    active_count += 1
-            except Exception:
-                if (
-                    str(getattr(thread, "status", "") or "").strip().lower()
-                    == "running"
-                ):
-                    active_count += 1
-        return active_count
+        return active_update_session_count(self)
 
     def _workspace_has_running_opencode_execution(
         self, workspace_root: Path
@@ -7209,75 +6547,48 @@ class DiscordBotService:
         *,
         update_target: str,
     ) -> list[dict[str, Any]]:
-        return [
-            build_action_row(
-                [
-                    build_button(
-                        "Update anyway",
-                        f"{UPDATE_CONFIRM_PREFIX}:{update_target}",
-                        style=DISCORD_BUTTON_STYLE_DANGER,
-                    ),
-                    build_button("Cancel", f"{UPDATE_CANCEL_PREFIX}:{update_target}"),
-                ]
-            )
-        ]
+        from .car_handlers.system_commands import (
+            _build_update_confirmation_components as build_update_confirmation_components,
+        )
+
+        return build_update_confirmation_components(self, update_target=update_target)
 
     def _update_status_path(self) -> Path:
-        return resolve_update_paths().status_path
+        from .car_handlers.system_commands import (
+            _update_status_path as update_status_path,
+        )
+
+        return update_status_path(self)
 
     def _format_update_status_message(self, status: Optional[dict[str, Any]]) -> str:
-        rendered = format_update_status_message(status)
-        if not status:
-            return rendered
-        lines = [rendered]
-        repo_ref = status.get("repo_ref")
-        if isinstance(repo_ref, str) and repo_ref.strip():
-            lines.append(f"Ref: {repo_ref.strip()}")
-        log_path = status.get("log_path")
-        if isinstance(log_path, str) and log_path.strip():
-            lines.append(f"Log: {log_path.strip()}")
-        return "\n".join(lines)
+        from .car_handlers.system_commands import (
+            _format_update_status_message as fmt_status_msg,
+        )
+
+        return fmt_status_msg(self, status)
 
     def _dynamic_update_target_definitions(self):
-        raw_config = self._hub_raw_config_cache
-        if raw_config is None:
-            try:
-                raw_config = load_hub_config(self._config.root).raw
-            except Exception:
-                raw_config = {}
-            self._hub_raw_config_cache = raw_config
-        return _available_update_target_definitions(
-            raw_config=raw_config if isinstance(raw_config, dict) else None,
-            update_backend=self._update_backend,
-            linux_service_names=(
-                self._update_linux_service_names
-                if isinstance(self._update_linux_service_names, dict)
-                else None
-            ),
+        from .car_handlers.system_commands import (
+            _dynamic_update_target_definitions as dynamic_update_target_definitions,
         )
+
+        return dynamic_update_target_definitions(self)
 
     async def _send_update_status_notice(
         self, notify_context: dict[str, Any], text: str
     ) -> None:
-        channel_raw = notify_context.get("chat_id")
-        if isinstance(channel_raw, int) and not isinstance(channel_raw, bool):
-            channel_id = str(channel_raw)
-        elif isinstance(channel_raw, str) and channel_raw.strip():
-            channel_id = channel_raw.strip()
-        else:
-            return
-        await self._send_channel_message_safe(
-            channel_id,
-            {"content": format_discord_message(text)},
+        from .car_handlers.system_commands import (
+            _send_update_status_notice as send_update_status_notice,
         )
 
+        await send_update_status_notice(self, notify_context, text)
+
     def _mark_update_notified(self, status: dict[str, Any]) -> None:
-        mark_update_status_notified(
-            path=self._update_status_path(),
-            status=status,
-            logger=self._logger,
-            log_event_name="discord.update.notify_write_failed",
+        from .car_handlers.system_commands import (
+            _mark_update_notified as mark_update_notified,
         )
+
+        mark_update_notified(self, status)
 
     async def _handle_car_update_status(
         self,
@@ -7286,31 +6597,13 @@ class DiscordBotService:
         interaction_token: str,
         component_response: bool = False,
     ) -> None:
-        if component_response:
-            status = await asyncio.to_thread(_read_update_status)
-            if not isinstance(status, dict):
-                status = None
-            text = self._format_update_status_message(status)
-            await self._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text=text,
-                components=[],
-            )
-            return
-        deferred = await self._defer_ephemeral(
+        from .car_handlers.system_commands import handle_car_update_status
+
+        await handle_car_update_status(
+            self,
             interaction_id=interaction_id,
             interaction_token=interaction_token,
-        )
-        status = await asyncio.to_thread(_read_update_status)
-        if not isinstance(status, dict):
-            status = None
-        text = self._format_update_status_message(status)
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=text,
+            component_response=component_response,
         )
 
     def _agent_descriptor(self, agent: object) -> AgentDescriptor | None:
@@ -7359,162 +6652,14 @@ class DiscordBotService:
         channel_id: str,
         options: dict[str, Any],
     ) -> None:
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            text = format_discord_message(
-                "This channel is not bound. Run `/car bind path:<...>` first."
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
-            )
-            return
+        from .car_handlers.agent_commands import handle_car_agent
 
-        current_agent, current_profile = self._resolve_agent_state(binding)
-        agent_name = options.get("name")
-        profile_name = options.get("profile")
-
-        def _agent_picker_components(
-            *,
-            agent: str,
-            profile: Optional[str],
-        ) -> list[dict[str, Any]]:
-            components = [build_agent_picker(current_agent=agent, context=self)]
-            if agent == "hermes" and chat_hermes_profile_options(self):
-                components.append(
-                    build_agent_profile_picker(
-                        current_profile=profile,
-                        context=self,
-                        custom_id=AGENT_PROFILE_SELECT_ID,
-                    )
-                )
-            return components
-
-        if not agent_name and not profile_name:
-            lines = [f"Current agent: {current_agent}"]
-            if current_agent == "hermes":
-                lines.append(f"Hermes profile: {current_profile or '(default)'}")
-            lines.extend(["", "Select an agent:"])
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                format_discord_message("\n".join(lines)),
-                _agent_picker_components(
-                    agent=current_agent,
-                    profile=current_profile,
-                ),
-            )
-            return
-
-        desired_agent = current_agent
-        if agent_name:
-            desired_agent = normalize_chat_agent(agent_name, context=self) or ""
-        if not desired_agent:
-            available = ", ".join(self._known_agent_values())
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Invalid agent '{agent_name}'. Valid options: {available}",
-            )
-            return
-
-        desired_profile = current_profile if desired_agent == "hermes" else None
-        if profile_name is not None:
-            if desired_agent != "hermes":
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Hermes profiles can only be selected when the active agent is Hermes.",
-                )
-                return
-            normalized_profile_name = str(profile_name).strip().lower()
-            if normalized_profile_name in {"", "clear", "reset", "default"}:
-                desired_profile = None
-            else:
-                desired_profile = self._normalize_agent_profile(profile_name)
-                if desired_profile is None:
-                    available_profiles = ", ".join(
-                        option.profile for option in chat_hermes_profile_options(self)
-                    )
-                    suffix = (
-                        f" Known Hermes profiles: {available_profiles}."
-                        if available_profiles
-                        else ""
-                    )
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        f"Unknown Hermes profile '{profile_name}'.{suffix}",
-                    )
-                    return
-
-        if desired_agent == current_agent and desired_profile == current_profile:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    f"Agent already set to {self._format_agent_state(current_agent, current_profile)}."
-                ),
-            )
-            return
-
-        switch_state = build_agent_switch_state(
-            desired_agent,
-            desired_profile,
-            model_reset="clear",
-            context=self,
-        )
-        agent_changed = switch_state.agent != current_agent
-        if agent_changed:
-            await self._store.update_agent_state(
-                channel_id=channel_id,
-                agent=switch_state.agent,
-                agent_profile=switch_state.profile,
-                model_override=switch_state.model,
-                reasoning_effort=switch_state.effort,
-            )
-            await self._store.clear_pending_compact_seed(channel_id=channel_id)
-        else:
-            await self._store.update_agent_state(
-                channel_id=channel_id,
-                agent=switch_state.agent,
-                agent_profile=switch_state.profile,
-            )
-
-        selection_label = self._format_agent_state(
-            switch_state.agent,
-            switch_state.profile,
-        )
-        if (
-            switch_state.agent == "hermes"
-            and agent_changed
-            and profile_name is None
-            and chat_hermes_profile_options(self)
-        ):
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                format_discord_message(
-                    "\n".join(
-                        [
-                            f"Agent set to {selection_label}.",
-                            "",
-                            "Select a Hermes profile to override the default runtime, or leave it at `(default profile)`.",
-                        ]
-                    )
-                ),
-                _agent_picker_components(
-                    agent=switch_state.agent,
-                    profile=switch_state.profile,
-                ),
-            )
-            return
-
-        await self._respond_ephemeral(
+        await handle_car_agent(
+            self,
             interaction_id,
             interaction_token,
-            f"Agent set to {selection_label}. Will apply on the next turn.",
+            channel_id=channel_id,
+            options=options,
         )
 
     VALID_REASONING_EFFORTS = REASONING_EFFORT_VALUES
@@ -7563,303 +6708,15 @@ class DiscordBotService:
         user_id: Optional[str],
         options: dict[str, Any],
     ) -> None:
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            text = format_discord_message(
-                "This channel is not bound. Run `/car bind path:<...>` first."
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
-            )
-            return
+        from .car_handlers.agent_commands import handle_car_model
 
-        current_agent, _current_profile = self._resolve_agent_state(binding)
-        current_model = binding.get("model_override")
-        if not isinstance(current_model, str) or not current_model.strip():
-            current_model = None
-        current_effort = binding.get("reasoning_effort")
-        model_name = options.get("name")
-        effort = options.get("effort")
-
-        if not model_name:
-            deferred = await self._defer_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-
-            def _fallback_model_text(note: Optional[str] = None) -> str:
-                lines = [
-                    f"Current agent: {current_agent}",
-                    f"Current model: {current_model or '(default)'}",
-                ]
-                if isinstance(current_effort, str) and current_effort.strip():
-                    lines.append(f"Reasoning effort: {current_effort}")
-                if note:
-                    lines.extend(["", note])
-                lines.extend(
-                    [
-                        "",
-                        "Use `/car model name:<id>` to set a model.",
-                        "Use `/car model name:<id> effort:<value>` when the current agent supports reasoning effort.",
-                        "",
-                        f"Valid efforts: {', '.join(self.VALID_REASONING_EFFORTS)}",
-                    ]
-                )
-                return format_discord_message("\n".join(lines))
-
-            async def _send_model_picker_or_fallback(
-                text: str,
-                *,
-                components: Optional[list[dict[str, Any]]] = None,
-            ) -> None:
-                if deferred:
-                    sent = await self._send_followup_ephemeral(
-                        interaction_token=interaction_token,
-                        content=text,
-                        components=components,
-                    )
-                    if sent:
-                        return
-                if components:
-                    await self._respond_with_components(
-                        interaction_id,
-                        interaction_token,
-                        text,
-                        components,
-                    )
-                    return
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    text,
-                )
-
-            supports_model_listing = self._agent_supports_capability(
-                current_agent, "model_listing"
-            )
-            if not supports_model_listing:
-                supported_agents = self._agents_supporting_capability("model_listing")
-                supported_hint = (
-                    f" Switch to an agent with model picker support: {', '.join(supported_agents)}."
-                    if supported_agents
-                    else ""
-                )
-                await _send_model_picker_or_fallback(
-                    _fallback_model_text(
-                        f"{self._agent_display_name(current_agent)} does not expose a model catalog in Discord.{supported_hint}"
-                    ),
-                )
-                return
-
-            if current_agent == "opencode":
-                try:
-                    model_items = await self._list_opencode_models_for_picker(
-                        workspace_path=binding.get("workspace_path")
-                    )
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.model.list.failed",
-                        channel_id=channel_id,
-                        agent=current_agent,
-                        exc=exc,
-                    )
-                    await _send_model_picker_or_fallback(
-                        _fallback_model_text("Failed to list models for picker."),
-                    )
-                    return
-                if model_items is None:
-                    await _send_model_picker_or_fallback(
-                        _fallback_model_text(
-                            "Workspace unavailable for model picker. Re-bind this channel with `/car bind` and try again."
-                        ),
-                    )
-                    return
-                if not model_items and not current_model:
-                    await _send_model_picker_or_fallback(
-                        _fallback_model_text("No models found from OpenCode."),
-                    )
-                    return
-            else:
-                try:
-                    client = await self._client_for_workspace(
-                        binding.get("workspace_path")
-                    )
-                except AppServerUnavailableError as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.model.list.failed",
-                        channel_id=channel_id,
-                        agent=current_agent,
-                        exc=exc,
-                    )
-                    await _send_model_picker_or_fallback(
-                        _fallback_model_text(
-                            "Model picker unavailable right now (app server unavailable)."
-                        ),
-                    )
-                    return
-                if client is None:
-                    await _send_model_picker_or_fallback(
-                        _fallback_model_text(
-                            "Workspace unavailable for model picker. Re-bind this channel with `/car bind` and try again."
-                        ),
-                    )
-                    return
-                try:
-                    result = await _model_list_with_agent_compat(
-                        client,
-                        params={
-                            "cursor": None,
-                            "limit": DISCORD_SELECT_OPTION_MAX_OPTIONS,
-                            "agent": current_agent,
-                        },
-                    )
-                    model_items = _coerce_model_picker_items(result)
-                except Exception as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "discord.model.list.failed",
-                        channel_id=channel_id,
-                        agent=current_agent,
-                        exc=exc,
-                    )
-                    await _send_model_picker_or_fallback(
-                        _fallback_model_text("Failed to list models for picker."),
-                    )
-                    return
-
-                if not model_items and not current_model:
-                    await _send_model_picker_or_fallback(
-                        _fallback_model_text("No models found from the app server."),
-                    )
-                    return
-
-            lines = [
-                f"Current agent: {current_agent}",
-                f"Current model: {current_model or '(default)'}",
-            ]
-            if isinstance(current_effort, str) and current_effort.strip():
-                lines.append(f"Reasoning effort: {current_effort}")
-            lines.extend(
-                [
-                    "",
-                    "Select a model override:",
-                    "(default model) clears the override.",
-                    "Use `/car model name:<id> effort:<value>` when the current agent supports reasoning effort.",
-                ]
-            )
-            await _send_model_picker_or_fallback(
-                format_discord_message("\n".join(lines)),
-                components=[
-                    build_model_picker(
-                        model_items,
-                        current_model=current_model,
-                    )
-                ],
-            )
-            return
-
-        model_name = model_name.strip()
-        if model_name.lower() in ("clear", "reset"):
-            await self._store.update_model_state(
-                channel_id=channel_id, clear_model=True
-            )
-            await self._respond_ephemeral(
-                interaction_id, interaction_token, "Model override cleared."
-            )
-            return
-
-        available_model_items: Optional[list[tuple[str, str]]] = None
-        try:
-            available_model_items = await self._list_model_items_for_binding(
-                binding=binding,
-                agent=current_agent,
-                limit=MODEL_SEARCH_FETCH_LIMIT,
-            )
-        except Exception:
-            available_model_items = None
-
-        if available_model_items:
-
-            async def _prompt_model_matches(
-                query_text: str,
-                filtered_items: list[tuple[str, str]],
-            ) -> None:
-                lines = [
-                    f"Current agent: {current_agent}",
-                    f"Current model: {current_model or '(default)'}",
-                    "",
-                    f"Matched {len(filtered_items)} models for `{query_text}`:",
-                    "Select a model override:",
-                    "(default model) clears the override.",
-                ]
-                if isinstance(current_effort, str) and current_effort.strip():
-                    lines.insert(2, f"Reasoning effort: {current_effort}")
-                await self._respond_with_components(
-                    interaction_id,
-                    interaction_token,
-                    format_discord_message("\n".join(lines)),
-                    [
-                        build_model_picker(
-                            filtered_items,
-                            current_model=current_model,
-                        )
-                    ],
-                )
-
-            resolved_model_name = await self._resolve_picker_query_or_prompt(
-                query=model_name,
-                items=available_model_items,
-                limit=max(1, DISCORD_SELECT_OPTION_MAX_OPTIONS - 1),
-                prompt_filtered_items=_prompt_model_matches,
-            )
-            if resolved_model_name is None:
-                return
-            model_name = resolved_model_name
-
-        if current_agent == "opencode" and not _is_valid_opencode_model_name(
-            model_name
-        ):
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "OpenCode model must be in `provider/model` format.",
-            )
-            return
-
-        if effort:
-            if not self._agent_supports_effort(current_agent):
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"Reasoning effort is not supported for {self._agent_display_name(current_agent)}.",
-                )
-                return
-            effort = effort.lower().strip()
-            if effort not in self.VALID_REASONING_EFFORTS:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"Invalid effort '{effort}'. Valid options: {', '.join(self.VALID_REASONING_EFFORTS)}",
-                )
-                return
-
-        await self._store.update_model_state(
-            channel_id=channel_id,
-            model_override=model_name,
-            reasoning_effort=effort,
-        )
-
-        await self._respond_ephemeral(
+        await handle_car_model(
+            self,
             interaction_id,
             interaction_token,
-            format_model_set_message(model_name, effort=effort),
+            channel_id=channel_id,
+            user_id=user_id,
+            options=options,
         )
 
     async def _handle_model_picker_selection(
@@ -11789,89 +10646,13 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Channel not bound. Use /car bind first.",
-            )
-            return
+        from .car_handlers.session_commands import handle_car_reset
 
-        pma_enabled = bool(binding.get("pma_enabled", False))
-        workspace_raw = binding.get("workspace_path")
-        workspace_root: Optional[Path] = None
-        if isinstance(workspace_raw, str) and workspace_raw.strip():
-            workspace_root = canonicalize_path(Path(workspace_raw))
-            if not workspace_root.exists() or not workspace_root.is_dir():
-                workspace_root = None
-
-        if workspace_root is None:
-            if pma_enabled:
-                workspace_root = canonicalize_path(Path(self._config.root))
-            else:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Binding is invalid. Run `/car bind path:<workspace>`.",
-                )
-                return
-
-        agent, agent_profile = self._resolve_agent_state(binding)
-        resource_kind = (
-            str(binding.get("resource_kind")).strip()
-            if isinstance(binding.get("resource_kind"), str)
-            and str(binding.get("resource_kind")).strip()
-            else None
-        )
-        resource_id = (
-            str(binding.get("resource_id")).strip()
-            if isinstance(binding.get("resource_id"), str)
-            and str(binding.get("resource_id")).strip()
-            else None
-        )
-
-        try:
-            had_previous, _new_thread_id = await self._reset_discord_thread_binding(
-                channel_id=channel_id,
-                workspace_root=workspace_root,
-                agent=agent,
-                agent_profile=agent_profile,
-                repo_id=(
-                    str(binding.get("repo_id")).strip()
-                    if isinstance(binding.get("repo_id"), str)
-                    and str(binding.get("repo_id")).strip()
-                    else None
-                ),
-                resource_kind=resource_kind,
-                resource_id=resource_id,
-                pma_enabled=pma_enabled,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.reset.failed",
-                channel_id=channel_id,
-                workspace_root=str(workspace_root),
-                agent=agent,
-                agent_profile=agent_profile,
-                exc=exc,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Failed to reset Discord thread state.",
-            )
-            return
-        await self._store.clear_pending_compact_seed(channel_id=channel_id)
-        mode_label = "PMA" if pma_enabled else "repo"
-        state_label = "cleared previous thread" if had_previous else "fresh state"
-
-        await self._respond_ephemeral(
+        await handle_car_reset(
+            self,
             interaction_id,
             interaction_token,
-            f"Reset {mode_label} thread state ({state_label}) for `{self._format_agent_state(agent, agent_profile)}`.",
+            channel_id=channel_id,
         )
 
     async def _handle_car_review(
@@ -11883,295 +10664,15 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Channel binding not found.",
-            )
-            return
+        from .car_handlers.review_commands import handle_car_review
 
-        current_agent, current_profile = self._resolve_agent_state(binding)
-
-        supports_review = self._agent_supports_capability(current_agent, "review")
-        if not supports_review:
-            supported_agents = self._agents_supporting_capability("review")
-            supported_hint = (
-                f" Switch to an agent with review support: {', '.join(supported_agents)}."
-                if supported_agents
-                else ""
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"{self._agent_display_name(current_agent)} does not support code review in Discord.{supported_hint}",
-            )
-            return
-
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        target_arg = options.get("target", "")
-        target_type = "uncommittedChanges"
-        target_value: Optional[str] = None
-        prompt_commit_picker = False
-
-        if isinstance(target_arg, str) and target_arg.strip():
-            target_text = target_arg.strip()
-            target_lower = target_text.lower()
-            if target_lower.startswith("base "):
-                branch = target_text[5:].strip()
-                if branch:
-                    target_type = "baseBranch"
-                    target_value = branch
-            elif target_lower == "commit" or target_lower.startswith("commit "):
-                sha = target_text[6:].strip()
-                if sha:
-                    commits = await self._list_recent_commits_for_picker(workspace_root)
-                    commit_subjects = {
-                        commit_sha: subject for commit_sha, subject in commits
-                    }
-                    search_items = [
-                        (commit_sha, commit_sha) for commit_sha, _ in commits
-                    ]
-                    aliases = {
-                        commit_sha: (subject,) if subject else ()
-                        for commit_sha, subject in commits
-                    }
-
-                    async def _prompt_commit_matches(
-                        query_text: str,
-                        filtered_search_items: list[tuple[str, str]],
-                    ) -> None:
-                        filtered_commits = [
-                            (commit_sha, commit_subjects.get(commit_sha, ""))
-                            for commit_sha, _label in filtered_search_items
-                        ]
-                        await self._send_or_respond_with_components_ephemeral(
-                            interaction_id=interaction_id,
-                            interaction_token=interaction_token,
-                            deferred=deferred,
-                            text=(
-                                f"Matched {len(filtered_commits)} commits for `{query_text}`. "
-                                "Select a commit to review:"
-                            ),
-                            components=[
-                                build_review_commit_picker(
-                                    filtered_commits,
-                                    custom_id=REVIEW_COMMIT_SELECT_ID,
-                                )
-                            ],
-                        )
-
-                    resolved_commit = await self._resolve_picker_query_or_prompt(
-                        query=sha,
-                        items=search_items,
-                        limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
-                        aliases=aliases,
-                        prompt_filtered_items=_prompt_commit_matches,
-                    )
-                    if resolved_commit is not None:
-                        target_type = "commit"
-                        target_value = resolved_commit
-                    elif commits:
-                        return
-                    else:
-                        target_type = "commit"
-                        target_value = sha
-                else:
-                    prompt_commit_picker = True
-            elif target_lower in ("uncommitted", ""):
-                pass
-            elif target_lower == "custom":
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=(
-                        "Provide custom review instructions after `custom`, for example: "
-                        "`/car review target:custom focus on security regressions`."
-                    ),
-                )
-                return
-            elif target_lower.startswith("custom "):
-                custom_instructions = target_text[7:].strip()
-                if not custom_instructions:
-                    await self._send_or_respond_ephemeral(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        deferred=deferred,
-                        text=(
-                            "Provide custom review instructions after `custom`, for example: "
-                            "`/car review target:custom focus on security regressions`."
-                        ),
-                    )
-                    return
-                target_type = "custom"
-                target_value = custom_instructions
-            else:
-                target_type = "custom"
-                target_value = target_text
-
-        if prompt_commit_picker:
-            commits = await self._list_recent_commits_for_picker(workspace_root)
-            if not commits:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text="No recent commits found. Use `/car review target:commit <sha>`.",
-                )
-                return
-            await self._send_or_respond_with_components_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="Select a commit to review:",
-                components=[
-                    build_review_commit_picker(
-                        commits, custom_id=REVIEW_COMMIT_SELECT_ID
-                    )
-                ],
-            )
-            return
-
-        prompt_parts: list[str] = ["Please perform a code review."]
-        if target_type == "uncommittedChanges":
-            prompt_parts.append(
-                "Review the uncommitted changes in the working directory. "
-                "Use `git diff` to see what has changed and provide feedback."
-            )
-        elif target_type == "baseBranch" and target_value:
-            prompt_parts.append(
-                f"Review the changes compared to the base branch `{target_value}`. "
-                f"Use `git diff {target_value}...HEAD` to see the diff and provide feedback."
-            )
-        elif target_type == "commit" and target_value:
-            prompt_parts.append(
-                f"Review the commit `{target_value}`. "
-                f"Use `git show {target_value}` to see the changes and provide feedback."
-            )
-        elif target_type == "custom" and target_value:
-            prompt_parts.append(f"Review instructions: {target_value}")
-
-        prompt_parts.append(
-            "\n\nProvide actionable feedback focusing on: bugs, security issues, "
-            "performance problems, and significant code quality issues. "
-            "Include file paths and line numbers where relevant."
-        )
-        prompt_text = "\n".join(prompt_parts)
-
-        agent, agent_profile = self._resolve_agent_state(binding)
-        model_override = binding.get("model_override")
-        if not isinstance(model_override, str) or not model_override.strip():
-            model_override = None
-        reasoning_effort = binding.get("reasoning_effort")
-        if not isinstance(reasoning_effort, str) or not reasoning_effort.strip():
-            reasoning_effort = None
-
-        session_key = self._build_message_session_key(
+        await handle_car_review(
+            self,
+            interaction_id,
+            interaction_token,
             channel_id=channel_id,
             workspace_root=workspace_root,
-            pma_enabled=False,
-            agent=agent,
-            agent_profile=agent_profile,
-        )
-
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.review.starting",
-            channel_id=channel_id,
-            workspace_root=str(workspace_root),
-            target_type=target_type,
-            target_value=target_value,
-            agent=agent,
-            agent_profile=agent_profile,
-        )
-
-        try:
-            turn_result = await self._run_agent_turn_for_message(
-                workspace_root=workspace_root,
-                prompt_text=prompt_text,
-                agent=agent,
-                model_override=model_override,
-                reasoning_effort=reasoning_effort,
-                session_key=session_key,
-                orchestrator_channel_key=channel_id,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.review.failed",
-                channel_id=channel_id,
-                workspace_root=str(workspace_root),
-                target_type=target_type,
-                exc=exc,
-            )
-            await self._send_channel_message_safe(
-                channel_id,
-                {"content": f"Review failed: {exc}"},
-            )
-            return
-
-        if isinstance(turn_result, DiscordMessageTurnResult):
-            response_text = turn_result.final_message
-            preview_message_id = turn_result.preview_message_id
-        else:
-            response_text = str(turn_result or "")
-            preview_message_id = None
-
-        if not response_text or not response_text.strip():
-            response_text = "(Review completed with no output.)"
-
-        chunks = chunk_discord_message(
-            response_text,
-            max_len=self._config.max_message_length,
-            with_numbering=False,
-        )
-        if not chunks:
-            chunks = ["(Review completed with no output.)"]
-
-        for idx, chunk in enumerate(chunks, 1):
-            await self._send_channel_message_safe(
-                channel_id,
-                {"content": chunk},
-                record_id=f"review:{session_key}:{idx}:{uuid.uuid4().hex[:8]}",
-            )
-        if isinstance(preview_message_id, str) and preview_message_id:
-            await self._delete_channel_message_safe(
-                channel_id=channel_id,
-                message_id=preview_message_id,
-                record_id=(
-                    f"review:delete_progress:{session_key}:{uuid.uuid4().hex[:8]}"
-                ),
-            )
-
-        try:
-            await self._flush_outbox_files(
-                workspace_root=workspace_root,
-                channel_id=channel_id,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.review.outbox_flush_failed",
-                channel_id=channel_id,
-                target_type=target_type,
-                message_id=preview_message_id,
-                exc=exc,
-            )
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.review.completed",
-            channel_id=channel_id,
-            target_type=target_type,
-            chunk_count=len(chunks),
+            options=options,
         )
 
     async def _handle_car_approvals(
@@ -12182,54 +10683,14 @@ class DiscordBotService:
         channel_id: str,
         options: dict[str, Any],
     ) -> None:
-        mode = options.get("mode", "")
-        if not isinstance(mode, str):
-            mode = ""
-        mode = mode.strip().lower()
+        from .car_handlers.review_commands import handle_car_approvals
 
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Channel not bound. Use /car bind first.",
-            )
-            return
-
-        if not mode:
-            current_mode = binding.get("approval_mode", "yolo")
-            approval_policy = binding.get("approval_policy", "default")
-            sandbox_policy = binding.get("sandbox_policy", "default")
-
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "\n".join(
-                    [
-                        f"Approval mode: {current_mode}",
-                        f"Approval policy: {approval_policy}",
-                        f"Sandbox policy: {sandbox_policy}",
-                        "",
-                        f"Usage: /car approvals {APPROVAL_MODE_USAGE}",
-                    ]
-                ),
-            )
-            return
-
-        new_mode = normalize_approval_mode(mode, include_command_aliases=True)
-        if new_mode is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Unknown mode: {mode}. Valid options: {APPROVAL_MODE_USAGE}",
-            )
-            return
-
-        await self._store.update_approval_mode(channel_id=channel_id, mode=new_mode)
-        await self._respond_ephemeral(
+        await handle_car_approvals(
+            self,
             interaction_id,
             interaction_token,
-            f"Approval mode set to {new_mode}.",
+            channel_id=channel_id,
+            options=options,
         )
 
     async def _handle_car_mention(
@@ -12240,106 +10701,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        path_arg = options.get("path", "")
-        request_arg = options.get("request", "Please review this file.")
+        from .car_handlers.system_commands import handle_car_mention
 
-        if not isinstance(path_arg, str) or not path_arg.strip():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Usage: /car mention path:<file> [request:<text>]",
-            )
-            return
-
-        path = Path(path_arg.strip())
-        if not path.is_absolute():
-            path = workspace_root / path
-
-        try:
-            path = canonicalize_path(path)
-        except Exception:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Could not resolve path: {path_arg}",
-            )
-            return
-
-        if not path.exists() or not path.is_file():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"File not found: {path}",
-            )
-            return
-
-        try:
-            path.relative_to(workspace_root)
-        except ValueError:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "File must be within the bound workspace.",
-            )
-            return
-
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        max_bytes = 100000
-        try:
-            data = path.read_bytes()
-        except Exception:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="Failed to read file.",
-            )
-            return
-
-        if len(data) > max_bytes:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=f"File too large (max {max_bytes} bytes).",
-            )
-            return
-
-        null_count = data.count(b"\x00")
-        if null_count > 0 and null_count > len(data) * 0.1:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="File appears to be binary; refusing to include it.",
-            )
-            return
-
-        try:
-            display_path = str(path.relative_to(workspace_root))
-        except ValueError:
-            display_path = str(path)
-
-        if not isinstance(request_arg, str) or not request_arg.strip():
-            request_arg = "Please review this file."
-
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=(
-                f"File `{display_path}` ready for mention.\n\n"
-                f"To include it in a request, send a message starting with:\n"
-                f"```\n"
-                f'<file path="{display_path}">\n'
-                f"...\n"
-                f"</file>\n"
-                f"```\n\n"
-                f"Your request: {request_arg}"
-            ),
+        await handle_car_mention(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
         )
 
     async def _handle_car_experimental(
@@ -12350,69 +10719,14 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        action = options.get("action", "")
-        feature = options.get("feature", "")
+        from .car_handlers.agent_commands import handle_car_experimental
 
-        if not isinstance(action, str):
-            action = ""
-        action = action.strip().lower()
-
-        if not isinstance(feature, str):
-            feature = ""
-        feature = feature.strip()
-
-        usage_text = (
-            "Usage:\n"
-            "- `/car admin experimental action:list`\n"
-            "- `/car admin experimental action:enable feature:<feature>`\n"
-            "- `/car admin experimental action:disable feature:<feature>`"
-        )
-
-        if not action or action in ("list", "ls", "all"):
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Experimental features listing requires the app server client.\n\n"
-                f"{usage_text}",
-            )
-            return
-
-        if action in ("enable", "on", "true"):
-            if not feature:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"Missing feature for `enable`.\n\n{usage_text}",
-                )
-                return
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Feature `{feature}` enable requested.\n\n"
-                "Note: Feature toggling requires the app server client.",
-            )
-            return
-
-        if action in ("disable", "off", "false"):
-            if not feature:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    f"Missing feature for `disable`.\n\n{usage_text}",
-                )
-                return
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Feature `{feature}` disable requested.\n\n"
-                "Note: Feature toggling requires the app server client.",
-            )
-            return
-
-        await self._respond_ephemeral(
+        await handle_car_experimental(
+            self,
             interaction_id,
             interaction_token,
-            f"Unknown action: {action}.\n\nValid actions: list, enable, disable.\n\n{usage_text}",
+            workspace_root=workspace_root,
+            options=options,
         )
 
     COMPACT_SUMMARY_PROMPT = (
@@ -12427,342 +10741,14 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        async def _finish_compact_interaction(text: str) -> None:
-            if deferred:
-                updated = await self._edit_original_component_message(
-                    interaction_token=interaction_token,
-                    text=text,
-                    components=[],
-                )
-                if updated:
-                    return
-                max_len = max(int(self._config.max_message_length), 32)
-                sent = await self._send_followup_ephemeral(
-                    interaction_token=interaction_token,
-                    content=truncate_for_discord(text, max_len=max_len),
-                )
-                if sent:
-                    return
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                text,
-            )
+        from .car_handlers.compact_commands import handle_car_compact
 
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Channel not bound. Use /car bind first.",
-            )
-            return
-
-        workspace_raw = binding.get("workspace_path")
-        workspace_root: Optional[Path] = None
-        if isinstance(workspace_raw, str) and workspace_raw.strip():
-            candidate = canonicalize_path(Path(workspace_raw))
-            if candidate.exists() and candidate.is_dir():
-                workspace_root = candidate
-
-        pma_enabled = bool(binding.get("pma_enabled", False))
-        if workspace_root is None and pma_enabled:
-            fallback = canonicalize_path(Path(self._config.root))
-            if fallback.exists() and fallback.is_dir():
-                workspace_root = fallback
-
-        if workspace_root is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Binding is invalid. Run /car bind first.",
-            )
-            return
-
-        agent, agent_profile = self._resolve_agent_state(binding)
-        model_override = binding.get("model_override")
-        if not isinstance(model_override, str) or not model_override.strip():
-            model_override = None
-        reasoning_effort = binding.get("reasoning_effort")
-        if not isinstance(reasoning_effort, str) or not reasoning_effort.strip():
-            reasoning_effort = None
-
-        mode = "pma" if pma_enabled else "repo"
-        _orchestration_service, _binding_row, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
+        await handle_car_compact(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
         )
-        lifecycle_status = (
-            str(getattr(current_thread, "lifecycle_status", "") or "").strip().lower()
-            if current_thread is not None
-            else ""
-        )
-        if current_thread is None or lifecycle_status != "active":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No active session to compact. Send a message first to start a conversation.",
-            )
-            return
-
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-        interaction_text: Optional[str] = None
-        previous_thread_id = current_thread.thread_target_id
-        next_thread_id: Optional[str] = None
-        try:
-            try:
-                turn_result = await self._run_agent_turn_for_message(
-                    workspace_root=workspace_root,
-                    prompt_text=self.COMPACT_SUMMARY_PROMPT,
-                    agent=agent,
-                    model_override=model_override,
-                    reasoning_effort=reasoning_effort,
-                    session_key=current_thread.thread_target_id,
-                    orchestrator_channel_key=(
-                        channel_id if not pma_enabled else f"pma:{channel_id}"
-                    ),
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.compact.turn_failed",
-                    channel_id=channel_id,
-                    workspace_root=str(workspace_root),
-                    exc=exc,
-                )
-                await self._send_channel_message_safe(
-                    channel_id,
-                    {"content": f"Compact failed: {exc}"},
-                )
-                interaction_text = (
-                    "Compaction failed. Check the channel for the error message."
-                )
-                return
-
-            response_text = (
-                turn_result.final_message.strip() if turn_result.final_message else ""
-            )
-            if not response_text:
-                response_text = "(No summary generated.)"
-            try:
-                (
-                    _had_previous,
-                    next_thread_id,
-                ) = await self._reset_discord_thread_binding(
-                    channel_id=channel_id,
-                    workspace_root=workspace_root,
-                    agent=agent,
-                    agent_profile=agent_profile,
-                    repo_id=(
-                        str(binding.get("repo_id")).strip()
-                        if isinstance(binding.get("repo_id"), str)
-                        and str(binding.get("repo_id")).strip()
-                        else None
-                    ),
-                    resource_kind=(
-                        str(binding.get("resource_kind")).strip()
-                        if isinstance(binding.get("resource_kind"), str)
-                        and str(binding.get("resource_kind")).strip()
-                        else None
-                    ),
-                    resource_id=(
-                        str(binding.get("resource_id")).strip()
-                        if isinstance(binding.get("resource_id"), str)
-                        and str(binding.get("resource_id")).strip()
-                        else None
-                    ),
-                    pma_enabled=pma_enabled,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.compact.reset_failed",
-                    channel_id=channel_id,
-                    workspace_root=str(workspace_root),
-                    exc=exc,
-                )
-                await self._send_channel_message_safe(
-                    channel_id,
-                    {
-                        "content": "Compact summary generated, but starting a fresh thread failed."
-                    },
-                )
-                interaction_text = "Compaction generated a summary, but starting a fresh thread failed."
-                return
-            compact_pending_session_key = self._build_message_session_key(
-                channel_id=channel_id,
-                workspace_root=workspace_root,
-                pma_enabled=pma_enabled,
-                agent=agent,
-                agent_profile=agent_profile,
-            )
-            try:
-                await self._store.set_pending_compact_seed(
-                    channel_id=channel_id,
-                    seed_text=build_compact_seed_prompt(response_text),
-                    session_key=compact_pending_session_key,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.compact.seed_save_failed",
-                    channel_id=channel_id,
-                    workspace_root=str(workspace_root),
-                    next_thread_id=next_thread_id,
-                    previous_thread_id=previous_thread_id,
-                    exc=exc,
-                )
-                rollback_failed = False
-                try:
-                    orchestration_service = self._discord_thread_service()
-                    if next_thread_id:
-                        with contextlib.suppress(Exception):
-                            orchestration_service.archive_thread_target(next_thread_id)
-                    restored = orchestration_service.resume_thread_target(
-                        previous_thread_id
-                    )
-                    self._attach_discord_thread_binding(
-                        channel_id=channel_id,
-                        thread_target_id=restored.thread_target_id,
-                        agent=agent,
-                        agent_profile=agent_profile,
-                        repo_id=(
-                            str(binding.get("repo_id")).strip()
-                            if isinstance(binding.get("repo_id"), str)
-                            and str(binding.get("repo_id")).strip()
-                            else None
-                        ),
-                        resource_kind=(
-                            str(binding.get("resource_kind")).strip()
-                            if isinstance(binding.get("resource_kind"), str)
-                            and str(binding.get("resource_kind")).strip()
-                            else None
-                        ),
-                        resource_id=(
-                            str(binding.get("resource_id")).strip()
-                            if isinstance(binding.get("resource_id"), str)
-                            and str(binding.get("resource_id")).strip()
-                            else None
-                        ),
-                        workspace_root=workspace_root,
-                        pma_enabled=pma_enabled,
-                    )
-                except Exception as rollback_exc:
-                    rollback_failed = True
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.compact.seed_save_rollback_failed",
-                        channel_id=channel_id,
-                        workspace_root=str(workspace_root),
-                        next_thread_id=next_thread_id,
-                        previous_thread_id=previous_thread_id,
-                        exc=rollback_exc,
-                    )
-                await self._send_channel_message_safe(
-                    channel_id,
-                    {
-                        "content": (
-                            "Compaction summary generated, but saving the compacted context failed. "
-                            "Restored the previous thread; please retry."
-                            if not rollback_failed
-                            else "Compaction summary generated, but saving the compacted context failed and restoring the previous thread also failed."
-                        )
-                    },
-                )
-                interaction_text = (
-                    "Compaction summary generated, but saving the compacted context failed. "
-                    "Restored the previous thread; please retry."
-                    if not rollback_failed
-                    else "Compaction summary generated, but saving the compacted context failed and restoring the previous thread also failed."
-                )
-                return
-
-            try:
-                chunks = chunk_discord_message(
-                    f"**Conversation Summary:**\n\n{response_text}",
-                    max_len=self._config.max_message_length,
-                    with_numbering=False,
-                )
-                if not chunks:
-                    chunks = ["**Conversation Summary:**\n\n(No summary generated.)"]
-
-                next_chunk_index = 0
-                preview_chunk_applied = False
-                preview_message_id = (
-                    turn_result.preview_message_id
-                    if isinstance(turn_result.preview_message_id, str)
-                    and turn_result.preview_message_id
-                    else None
-                )
-
-                if preview_message_id:
-                    try:
-                        preview_payload: dict[str, Any] = {"content": chunks[0]}
-                        await self._rest.edit_channel_message(
-                            channel_id=channel_id,
-                            message_id=preview_message_id,
-                            payload=preview_payload,
-                        )
-                        preview_chunk_applied = True
-                        next_chunk_index = 1
-                    except Exception as exc:
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "discord.compact.preview_edit_failed",
-                            channel_id=channel_id,
-                            message_id=preview_message_id,
-                            exc=exc,
-                        )
-
-                if not preview_chunk_applied:
-                    first_payload: dict[str, Any] = {"content": chunks[0]}
-                    await self._send_channel_message_safe(
-                        channel_id,
-                        first_payload,
-                    )
-                    next_chunk_index = 1
-
-                for chunk in chunks[next_chunk_index:]:
-                    payload: dict[str, Any] = {"content": chunk}
-                    await self._send_channel_message_safe(channel_id, payload)
-                await self._flush_outbox_files(
-                    workspace_root=workspace_root,
-                    channel_id=channel_id,
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.compact.finalize_failed",
-                    channel_id=channel_id,
-                    workspace_root=str(workspace_root),
-                    exc=exc,
-                )
-                await self._send_channel_message_safe(
-                    channel_id,
-                    {
-                        "content": "Compaction summary posted, but finalizing the fresh thread failed."
-                    },
-                )
-                interaction_text = (
-                    "Compaction summary posted, but finalizing the fresh thread failed."
-                )
-                return
-            interaction_text = (
-                "Compaction complete. Summary posted in the channel. "
-                "Send your next message to continue this session."
-            )
-        finally:
-            if interaction_text:
-                await _finish_compact_interaction(interaction_text)
 
     async def _handle_car_rollout(
         self,
@@ -12771,31 +10757,14 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Channel not bound. Use /car bind first.",
-            )
-            return
+        from .car_handlers.agent_commands import handle_car_rollout
 
-        rollout_path = binding.get("rollout_path")
-        workspace_path = binding.get("workspace_path", "unknown")
-
-        if rollout_path:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Rollout path: {rollout_path}\nWorkspace: {workspace_path}",
-            )
-        else:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"No rollout path available.\nWorkspace: {workspace_path}\n\n"
-                "The rollout path is set after a conversation turn completes.",
-            )
+        await handle_car_rollout(
+            self,
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+        )
 
     async def _handle_car_logout(
         self,
@@ -12804,41 +10773,13 @@ class DiscordBotService:
         *,
         workspace_root: Path,
     ) -> None:
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        client = await self._client_for_workspace(str(workspace_root))
-        if client is None:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=format_discord_message(TOPIC_NOT_BOUND_DISCORD_MESSAGE),
-            )
-            return
-        try:
-            await client.request("account/logout", params=None)
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.logout.failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=format_discord_message("Logout failed; check logs for details."),
-            )
-            return
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text="Logged out.",
+        from .car_handlers.system_commands import handle_car_logout
+
+        await handle_car_logout(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
         )
 
     async def _handle_car_feedback(
@@ -12850,76 +10791,15 @@ class DiscordBotService:
         options: dict[str, Any],
         channel_id: Optional[str] = None,
     ) -> None:
-        reason = options.get("reason", "")
-        if not isinstance(reason, str):
-            reason = ""
-        reason = reason.strip()
+        from .car_handlers.system_commands import handle_car_feedback
 
-        if not reason:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Usage: /car admin feedback reason:<description>",
-            )
-            return
-
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        client = await self._client_for_workspace(str(workspace_root))
-        if client is None:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=format_discord_message(TOPIC_NOT_BOUND_DISCORD_MESSAGE),
-            )
-            return
-
-        params: dict[str, Any] = {
-            "classification": "bug",
-            "reason": reason,
-            "includeLogs": True,
-        }
-        if channel_id:
-            binding = await self._store.get_binding(channel_id=channel_id)
-            if binding:
-                active_thread_id = binding.get("active_thread_id")
-                if isinstance(active_thread_id, str) and active_thread_id:
-                    params["threadId"] = active_thread_id
-
-        try:
-            result = await client.request("feedback/upload", params)
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.feedback.failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=format_discord_message(
-                    "Feedback upload failed; check logs for details."
-                ),
-            )
-            return
-
-        report_id = None
-        if isinstance(result, dict):
-            report_id = result.get("threadId") or result.get("id")
-        message_text = "Feedback sent."
-        if isinstance(report_id, str):
-            message_text = f"Feedback sent (report {report_id})."
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=message_text,
+        await handle_car_feedback(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
+            channel_id=channel_id,
         )
 
     async def _handle_car_archive(
@@ -12929,87 +10809,13 @@ class DiscordBotService:
         *,
         channel_id: str,
     ) -> None:
-        from ...core.archive import (
-            archive_workspace_for_fresh_start,
-            resolve_workspace_archive_target,
-        )
+        from .car_handlers.session_commands import handle_car_archive
 
-        workspace_root = await self._require_bound_workspace(
+        await handle_car_archive(
+            self,
             interaction_id,
             interaction_token,
             channel_id=channel_id,
-        )
-        if workspace_root is None:
-            return
-
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-
-        try:
-            target = resolve_workspace_archive_target(
-                workspace_root,
-                hub_root=self._config.root,
-                manifest_path=self._manifest_path,
-            )
-            result = await asyncio.to_thread(
-                archive_workspace_for_fresh_start,
-                hub_root=self._config.root,
-                base_repo_root=target.base_repo_root,
-                base_repo_id=target.base_repo_id,
-                worktree_repo_root=workspace_root,
-                worktree_repo_id=target.workspace_repo_id,
-                branch=None,
-                worktree_of=target.worktree_of,
-                note="Discord /car archive",
-                source_path=target.source_path,
-            )
-        except ValueError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=str(exc),
-            )
-            return
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.archive_state.failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=format_discord_message("Archive failed; check logs for details."),
-            )
-            return
-
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=format_discord_message(
-                "\n".join(
-                    [
-                        (
-                            f"Archived workspace state to snapshot `{result.snapshot_id}`."
-                            if result.snapshot_id
-                            else "Workspace CAR state was already clean."
-                        ),
-                        f"Archived paths: {', '.join(result.archived_paths) or 'none'}",
-                        (
-                            f"Archived {len(result.archived_thread_ids)} managed thread"
-                            f"{'' if len(result.archived_thread_ids) == 1 else 's'}."
-                        ),
-                        "The binding remains active for fresh work.",
-                    ]
-                )
-            ),
         )
 
     async def _handle_car_interrupt(
@@ -13027,196 +10833,22 @@ class DiscordBotService:
         source_command: Optional[str] = None,
         source_user_id: Optional[str] = None,
     ) -> None:
-        log_event(
-            self._logger,
-            logging.INFO,
-            "discord.interrupt.requested",
+        from .car_handlers.session_commands import handle_car_interrupt
+
+        await handle_car_interrupt(
+            self,
+            interaction_id,
+            interaction_token,
             channel_id=channel_id,
-            interaction_id=interaction_id,
+            active_turn_text=active_turn_text,
+            progress_reuse_source_message_id=progress_reuse_source_message_id,
+            progress_reuse_acknowledgement=progress_reuse_acknowledgement,
             source=source,
-            source_user_id=source_user_id,
-            source_command=source_command,
             source_custom_id=source_custom_id,
             source_message_id=source_message_id,
+            source_command=source_command,
+            source_user_id=source_user_id,
         )
-        binding = await self._store.get_binding(channel_id=channel_id)
-        if binding is None:
-            text = format_discord_message(
-                "This channel is not bound. Run `/car bind path:<workspace>` first."
-            )
-            await self._respond_ephemeral(interaction_id, interaction_token, text)
-            return
-
-        pma_enabled = bool(binding.get("pma_enabled", False))
-        workspace_raw = binding.get("workspace_path")
-        workspace_root: Optional[Path] = None
-        if isinstance(workspace_raw, str) and workspace_raw.strip():
-            candidate = canonicalize_path(Path(workspace_raw))
-            if candidate.exists() and candidate.is_dir():
-                workspace_root = candidate
-
-        if workspace_root is None and pma_enabled:
-            fallback = canonicalize_path(Path(self._config.root))
-            if fallback.exists() and fallback.is_dir():
-                workspace_root = fallback
-
-        if workspace_root is None:
-            text = format_discord_message(
-                "Binding is invalid. Run `/car bind path:<workspace>` first."
-            )
-            await self._respond_ephemeral(interaction_id, interaction_token, text)
-            return
-
-        mode = "pma" if pma_enabled else "repo"
-        orchestration_service, _binding_row, current_thread = (
-            self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-        )
-        if current_thread is None:
-            if progress_reuse_source_message_id or progress_reuse_acknowledgement:
-                clear_discord_turn_progress_reuse(
-                    self,
-                    thread_target_id=(
-                        getattr(_binding_row, "thread_target_id", None) or ""
-                    ),
-                )
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.interrupt.no_active_turn",
-                channel_id=channel_id,
-                interaction_id=interaction_id,
-                source=source,
-                source_user_id=source_user_id,
-                source_command=source_command,
-                source_custom_id=source_custom_id,
-                source_message_id=source_message_id,
-            )
-            text = format_discord_message("No active turn to interrupt.")
-            await self._respond_ephemeral(interaction_id, interaction_token, text)
-            return
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        try:
-            stop_outcome = await orchestration_service.stop_thread(
-                current_thread.thread_target_id
-            )
-            interrupted_active = bool(
-                getattr(stop_outcome, "interrupted_active", False)
-            )
-            recovered_lost_backend = bool(
-                getattr(stop_outcome, "recovered_lost_backend", False)
-            )
-            cancelled_queued = int(getattr(stop_outcome, "cancelled_queued", 0) or 0)
-            execution_record = getattr(stop_outcome, "execution", None)
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.interrupt.completed",
-                channel_id=channel_id,
-                interaction_id=interaction_id,
-                source=source,
-                source_user_id=source_user_id,
-                source_command=source_command,
-                source_custom_id=source_custom_id,
-                source_message_id=source_message_id,
-                thread_target_id=current_thread.thread_target_id,
-                interrupted_active=interrupted_active,
-                recovered_lost_backend=recovered_lost_backend,
-                cancelled_queued=cancelled_queued,
-                execution_id=(
-                    execution_record.execution_id
-                    if execution_record is not None
-                    else None
-                ),
-                execution_status=(
-                    execution_record.status if execution_record is not None else None
-                ),
-                execution_backend_turn_id=(
-                    execution_record.backend_id
-                    if execution_record is not None
-                    else None
-                ),
-            )
-            if (
-                not interrupted_active
-                and not recovered_lost_backend
-                and not cancelled_queued
-            ):
-                if progress_reuse_source_message_id or progress_reuse_acknowledgement:
-                    clear_discord_turn_progress_reuse(
-                        self,
-                        thread_target_id=current_thread.thread_target_id,
-                    )
-                text = format_discord_message("No active turn to interrupt.")
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=text,
-                )
-                return
-            if interrupted_active:
-                request_discord_turn_progress_reuse(
-                    self,
-                    thread_target_id=current_thread.thread_target_id,
-                    source_message_id=str(progress_reuse_source_message_id or ""),
-                    acknowledgement=str(progress_reuse_acknowledgement or ""),
-                )
-            elif progress_reuse_source_message_id or progress_reuse_acknowledgement:
-                clear_discord_turn_progress_reuse(
-                    self,
-                    thread_target_id=current_thread.thread_target_id,
-                )
-            parts = []
-            if interrupted_active:
-                parts.append(active_turn_text)
-            elif recovered_lost_backend:
-                parts.append("Recovered stale session after backend thread was lost.")
-            if cancelled_queued:
-                parts.append(f"Cancelled {cancelled_queued} queued turn(s).")
-            text = format_discord_message(
-                "Recovered stale session after backend thread was lost."
-                if recovered_lost_backend
-                else active_turn_text
-            )
-            if parts:
-                text = format_discord_message(" ".join(parts))
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
-        except Exception as exc:
-            if progress_reuse_source_message_id or progress_reuse_acknowledgement:
-                clear_discord_turn_progress_reuse(
-                    self,
-                    thread_target_id=current_thread.thread_target_id,
-                )
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.interrupt.failed",
-                channel_id=channel_id,
-                interaction_id=interaction_id,
-                source=source,
-                source_user_id=source_user_id,
-                source_command=source_command,
-                source_custom_id=source_custom_id,
-                source_message_id=source_message_id,
-                workspace_root=str(workspace_root),
-                thread_target_id=current_thread.thread_target_id,
-                exc=exc,
-            )
-            text = format_discord_message("Interrupt failed. Please try again.")
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=text,
-            )
 
     async def _handle_cancel_turn_button(
         self,
