@@ -1738,40 +1738,7 @@ class UsageSeriesCache:
                 since=since,
                 until=until,
             )
-        repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
-
-        def _match_repo(cwd: Optional[Path]) -> Optional[str]:
-            if not cwd:
-                return None
-            for repo_id, repo_path in repo_map:
-                if cwd == repo_path or repo_path in cwd.parents:
-                    return repo_id
-            return None
-
-        base_repo_ids = sorted(
-            {repo_id for repo_id, _ in repo_map}, key=lambda rid: (-len(rid), rid)
-        )
-
-        def _heuristic_match_base(cwd: Optional[Path]) -> Optional[str]:
-            if not cwd:
-                return None
-            for repo_id in base_repo_ids:
-                prefix = f"{repo_id}--"
-                if cwd.name.startswith(prefix):
-                    logger.debug(
-                        "Heuristic matched cwd %s to base %s via name", cwd, repo_id
-                    )
-                    return repo_id
-                for part in cwd.parts:
-                    if part.startswith(prefix):
-                        logger.debug(
-                            "Heuristic matched cwd %s to base %s via path part %s",
-                            cwd,
-                            repo_id,
-                            part,
-                        )
-                        return repo_id
-            return None
+        _match_repo, _heuristic_match_base = _build_repo_matchers(repo_map)
 
         rollups = cast(Dict[str, Any], payload.get("summary", {}).get("by_cwd", {}))
         per_repo: Dict[str, _SummaryAccumulator] = {
@@ -1910,13 +1877,7 @@ class UsageSeriesCache:
             raise UsageError(f"Unsupported bucket: {bucket}")
         if segment not in allowed_segments:
             raise UsageError(f"Unsupported segment: {segment}")
-        repo_map = [(repo_id, path.resolve()) for repo_id, path in repo_map]
-
-        def _match_repo(cwd: Path) -> Optional[str]:
-            for repo_id, repo_path in repo_map:
-                if cwd == repo_path or repo_path in cwd.parents:
-                    return repo_id
-            return None
+        _match_repo, _ = _build_repo_matchers(repo_map)
 
         rollups = cast(Dict[str, Any], payload.get("rollups", {}).get("by_cwd", {}))
         series_map: Dict[Tuple[str, Optional[str], Optional[str]], Dict[str, int]] = {}
@@ -1942,7 +1903,7 @@ class UsageSeriesCache:
                     ) + int(entry.get("total", 0))
                 continue
 
-            repo_id = _match_repo(cwd_path) if cwd_path else None
+            repo_id = _match_repo(cwd_path)
             label = repo_id or "other"
             for bucket_label, entry in bucket_rollups.items():
                 repo_key: Tuple[str, Optional[str], Optional[str]] = (
