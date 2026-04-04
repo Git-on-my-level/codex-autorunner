@@ -1344,7 +1344,7 @@ class FlowCommands(TelegramCommandSupportMixin):
         limit = 5
         limit_raw = self._first_non_flag(argv)
         if limit_raw:
-            limit_value = self._coerce_int(limit_raw)
+            limit_value = self._coerce_optional_int(limit_raw)
             if limit_value is None or limit_value <= 0:
                 await self._send_message(
                     message.chat_id,

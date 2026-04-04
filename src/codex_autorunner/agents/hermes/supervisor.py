@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, S
 
 from ...core.config import HubConfig, RepoConfig
 from ...core.orchestration.turn_event_buffer import TurnEventBuffer
+from ...core.text_utils import _normalize_optional_text
 from ...core.utils import resolve_executable
 from ...workspace import canonical_workspace_root
 from ..acp import (
@@ -505,13 +506,6 @@ class HermesSupervisor:
             decision,
             reason,
         )
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _normalize_approval_decision(value: Any, *, default: str) -> str:

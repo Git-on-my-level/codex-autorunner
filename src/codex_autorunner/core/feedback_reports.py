@@ -11,25 +11,26 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .orchestration.sqlite import open_orchestration_sqlite
+from .text_utils import _json_dumps, _normalize_text
 from .time_utils import now_iso
 
 
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
+def _normalize_feedback_text(value: Any) -> Optional[str]:
+    normalized = _normalize_text(value)
+    if normalized is None:
         return None
-    text = value.replace("\r\n", "\n").replace("\r", "\n").strip()
-    return text or None
+    return normalized.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _normalize_title(value: Any, *, field_name: str) -> str:
-    normalized = _normalize_text(value)
+    normalized = _normalize_feedback_text(value)
     if normalized is None:
         raise ValueError(f"{field_name} is required")
     return " ".join(normalized.split())
 
 
 def _normalize_body(value: Any, *, field_name: str) -> str:
-    normalized = _normalize_text(value)
+    normalized = _normalize_feedback_text(value)
     if normalized is None:
         raise ValueError(f"{field_name} is required")
     return "\n".join(line.rstrip() for line in normalized.split("\n"))
@@ -56,10 +57,6 @@ def _normalize_confidence(value: Any) -> Optional[float]:
     if normalized < 0 or normalized > 1:
         raise ValueError("confidence must be between 0 and 1")
     return round(normalized, 6)
-
-
-def _json_dumps(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
 
 
 def _canonicalize_json(value: Any) -> Any:
@@ -90,7 +87,7 @@ def _canonicalize_json(value: Any) -> Any:
         normalized_items.sort(key=_json_dumps)
         return normalized_items
     if isinstance(value, str):
-        return _normalize_text(value)
+        return _normalize_feedback_text(value)
     if isinstance(value, bool):
         return value
     if isinstance(value, int):
@@ -369,7 +366,7 @@ class FeedbackReportStore:
                 f"""
                 SELECT *
                   FROM orch_feedback_reports
-                 WHERE {' AND '.join(where_clauses)}
+                 WHERE {" AND ".join(where_clauses)}
                  ORDER BY updated_at DESC, created_at DESC, report_id DESC
                  LIMIT ?
                 """,

@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Mapping, Optional, cast
 from ..car_context import CarContextProfile, normalize_car_context_profile
 from ..logging_utils import log_event
 from ..pma_thread_store import PmaThreadStore
+from ..text_utils import _truncate_text
 from .bindings import ActiveWorkSummary, OrchestrationBindingStore
 from .catalog import MappingAgentDefinitionCatalog, RuntimeAgentDescriptor
 from .events import OrchestrationEvent
@@ -70,14 +71,6 @@ class BusyInterruptFailedError(RuntimeError):
         self.active_execution_id = active_execution_id
         self.backend_thread_id = backend_thread_id
         self.detail = detail
-
-
-def _truncate_text(value: str, limit: int = MessagePreviewLimit) -> str:
-    if len(value) <= limit:
-        return value
-    if limit <= 3:
-        return value[:limit]
-    return value[: limit - 3] + "..."
 
 
 def _truncate_rehydration_text(value: str, limit: int = _REHYDRATION_TEXT_LIMIT) -> str:
@@ -1136,7 +1129,7 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         self.thread_store.record_thread_activity(
             thread.thread_target_id,
             execution_id=execution.execution_id,
-            message_preview=_truncate_text(request.message_text),
+            message_preview=_truncate_text(request.message_text, MessagePreviewLimit),
         )
         if execution.status != "running":
             return execution

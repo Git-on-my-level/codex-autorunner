@@ -32,6 +32,7 @@ from .scm_observability import (
 from .scm_reaction_router import route_scm_reactions
 from .scm_reaction_state import ScmReactionStateStore
 from .scm_reaction_types import ReactionIntent, ScmReactionConfig
+from .text_utils import _normalize_text
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -165,13 +166,6 @@ class ScmReactionStateTracker(Protocol):
 
 
 def _normalize_event_id(value: object) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
-def _normalize_text(value: object) -> Optional[str]:
     if not isinstance(value, str):
         return None
     text = value.strip()

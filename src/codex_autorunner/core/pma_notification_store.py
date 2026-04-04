@@ -8,37 +8,14 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from .orchestration.sqlite import open_orchestration_sqlite
+from .text_utils import _json_dumps, _json_loads_object, _normalize_text
 from .time_utils import now_iso
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = value if isinstance(value, str) else str(value)
-    text = text.strip()
-    return text or None
 
 
 def _normalize_json_object(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     return {}
-
-
-def _json_dumps(payload: dict[str, Any]) -> str:
-    return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
-
-
-def _json_loads_object(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if not isinstance(value, str) or not value.strip():
-        return {}
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return {}
-    return dict(parsed) if isinstance(parsed, dict) else {}
 
 
 @dataclass(frozen=True)

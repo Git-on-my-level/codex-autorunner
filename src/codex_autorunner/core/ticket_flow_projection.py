@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,14 +10,11 @@ from .config import load_repo_config
 from .flows.models import FlowRunRecord, FlowRunStatus
 from .flows.store import FlowStore
 from .freshness import build_freshness_payload
+from .text_utils import _iso_now
 
 _START_NEW_FLOW_TOKEN = " flow ticket_flow start "
 _COMPLETED_FLOW_STATUSES = {"completed", "done"}
 _ATTENTION_STATES = {"blocked", "dead", "paused"}
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _normalize_optional_str(value: Any) -> Optional[str]:

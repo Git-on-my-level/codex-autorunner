@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from ..core.state_roots import resolve_repo_state_root
+from ..core.text_utils import _iso_now
 from ..core.utils import atomic_write
 
 INGEST_STATE_SCHEMA_VERSION = 1
 INGEST_STATE_FILENAME = "ingest_state.json"
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _is_valid_iso_timestamp(value: str) -> bool:

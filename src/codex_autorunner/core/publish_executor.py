@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 from .mutation_policy import PolicyDecision
 from .mutation_policy import evaluate as evaluate_mutation_policy
 from .publish_journal import PublishJournalStore, PublishOperation
+from .text_utils import _normalize_optional_text
 
 DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS = (0.0, 30.0, 300.0)
 _LOGGER = logging.getLogger(__name__)
@@ -90,14 +91,6 @@ def _resolve_error_text(exc: Exception) -> str:
     if details:
         return f"{exc.__class__.__name__}: {details}"
     return exc.__class__.__name__
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = value if isinstance(value, str) else str(value)
-    text = text.strip()
-    return text or None
 
 
 def _normalize_mapping(value: Any) -> Mapping[str, Any]:

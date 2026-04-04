@@ -5,6 +5,7 @@ from typing import Any, Callable, Optional, Protocol, cast
 
 from ...core.publish_executor import PublishActionExecutor, TerminalPublishError
 from ...core.publish_journal import PublishOperation
+from ...core.text_utils import _normalize_optional_text
 from .service import GitHubError, GitHubService, RepoInfo, parse_pr_input
 
 
@@ -25,14 +26,6 @@ class GitHubCommentPublisher(Protocol):
 GitHubServiceFactory = Callable[
     [Path, Optional[dict[str, Any]]], GitHubCommentPublisher
 ]
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = value if isinstance(value, str) else str(value)
-    text = text.strip()
-    return text or None
 
 
 def _normalize_payload(value: Any) -> dict[str, Any]:

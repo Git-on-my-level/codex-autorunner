@@ -155,7 +155,7 @@ def _payload_matches_conversation(
     ):
         return True
 
-    payload_chat = _coerce_int(payload.get("chat_id"))
+    payload_chat = _coerce_optional_int(payload.get("chat_id"))
     if payload_chat != chat_id:
         return False
 
@@ -193,7 +193,7 @@ def _line_matches_conversation(
     )
 
 
-def _coerce_int(value: Any) -> Optional[int]:
+def _coerce_optional_int(value: Any) -> Optional[int]:
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
@@ -210,7 +210,7 @@ def _coerce_optional_thread_id(value: Any) -> tuple[bool, Optional[int]]:
         return True, None
     if isinstance(value, str) and value.strip().lower() == "root":
         return True, None
-    coerced = _coerce_int(value)
+    coerced = _coerce_optional_int(value)
     if coerced is None:
         return False, None
     return True, coerced

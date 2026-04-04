@@ -12,6 +12,7 @@ from typing import Any, Optional
 from .locks import file_lock
 from .orchestration.migrate_legacy_state import backfill_legacy_queue_state
 from .orchestration.sqlite import open_orchestration_sqlite
+from .text_utils import _json_loads_object
 from .time_utils import now_iso
 from .utils import atomic_write
 
@@ -642,8 +643,8 @@ class PmaQueue:
         )
 
     def _row_to_item(self, row: Any) -> PmaQueueItem:
-        payload = self._json_loads_object(row["payload_json"])
-        result = self._json_loads_object(row["result_json"])
+        payload = _json_loads_object(row["payload_json"])
+        result = _json_loads_object(row["result_json"])
         state_raw = str(row["state"] or QueueItemState.PENDING.value)
         try:
             state = QueueItemState(state_raw)
@@ -662,16 +663,6 @@ class PmaQueue:
             dedupe_reason=row["dedupe_reason"],
             result=result or None,
         )
-
-    @staticmethod
-    def _json_loads_object(raw: Any) -> dict[str, Any]:
-        if not isinstance(raw, str) or not raw.strip():
-            return {}
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
 
     def _read_items_from_sqlite(self, lane_id: str) -> list[PmaQueueItem]:
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:

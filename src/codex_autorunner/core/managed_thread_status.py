@@ -39,6 +39,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping, Optional
 
+from .text_utils import _normalize_text
+
 
 class ManagedThreadStatus(str, Enum):
     ACTIVE = "active"
@@ -141,13 +143,6 @@ TRANSITION_TABLE: tuple[dict[str, Any], ...] = (
 _TRANSITIONS = {
     str(entry["signal"]).strip().lower(): entry for entry in TRANSITION_TABLE
 }
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _parse_iso(value: Any) -> Optional[datetime]:

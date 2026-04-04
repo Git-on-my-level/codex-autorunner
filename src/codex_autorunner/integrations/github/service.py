@@ -21,6 +21,7 @@ from ...core.pr_binding_runtime import (
 )
 from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.prompts import build_github_issue_to_spec_prompt, build_sync_agent_prompt
+from ...core.text_utils import _normalize_optional_text
 from ...core.utils import (
     atomic_write,
     read_json,
@@ -317,13 +318,6 @@ def _repo_slug_dirname(slug: str) -> str:
     # practically impossible.
     digest = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:10]
     return f"{safe_base[:80]}-{digest}"
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _normalize_optional_identifier_text(value: Any) -> Optional[str]:

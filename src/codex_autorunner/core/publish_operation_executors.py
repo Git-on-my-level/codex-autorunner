@@ -16,14 +16,7 @@ from .pma_thread_store import PmaThreadStore
 from .publish_executor import PublishActionExecutor, TerminalPublishError
 from .publish_journal import PublishOperation
 from .scm_observability import correlation_id_for_operation, correlation_id_from_payload
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = value if isinstance(value, str) else str(value)
-    text = text.strip()
-    return text or None
+from .text_utils import _coerce_int, _normalize_optional_text
 
 
 def _require_text(value: Any, *, field_name: str) -> str:
@@ -39,12 +32,6 @@ def _normalize_mapping(value: Any) -> dict[str, Any]:
 
 def _normalize_request_kind(value: Any) -> MessageRequestKind:
     return "review" if _normalize_optional_text(value) == "review" else "message"
-
-
-def _coerce_int(value: Any) -> int:
-    if value is None:
-        return 0
-    return int(value)
 
 
 def _operation_digest(operation: PublishOperation, *, prefix: str) -> str:

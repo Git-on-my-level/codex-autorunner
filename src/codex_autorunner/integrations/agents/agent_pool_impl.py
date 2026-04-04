@@ -52,6 +52,7 @@ from ...core.ports.run_event import (
 )
 from ...core.sse import parse_sse_lines
 from ...core.state import RunnerState
+from ...core.text_utils import _normalize_optional_text
 from ...manifest import ManifestError, load_manifest
 from ...tickets.agent_pool import AgentTurnRequest, AgentTurnResult, EmitEventFn
 from ..app_server.event_buffer import AppServerEventBuffer
@@ -89,13 +90,6 @@ def _find_hub_root(repo_root: Path) -> Path:
             break
         current = parent
     return repo_root.resolve()
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _runtime_message_id(params: dict[str, Any]) -> Optional[str]:

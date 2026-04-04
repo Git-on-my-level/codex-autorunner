@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
+from .text_utils import lock_path_for
 from .time_utils import now_iso
 from .utils import atomic_write
 
@@ -40,7 +41,7 @@ class PmaStateStore:
         return self._path
 
     def _lock_path(self) -> Path:
-        return self._path.with_suffix(self._path.suffix + ".lock")
+        return lock_path_for(self._path)
 
     def _stamp(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

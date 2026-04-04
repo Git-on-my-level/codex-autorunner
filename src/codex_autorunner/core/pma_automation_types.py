@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from .time_utils import now_iso
+from .text_utils import _iso_now, _normalize_text
 
 PMA_AUTOMATION_STORE_FILENAME = "automation_store.json"
 PMA_AUTOMATION_VERSION = 1
@@ -11,13 +11,6 @@ DEFAULT_PMA_LANE_ID = "pma:default"
 TIMER_TYPE_ONE_SHOT = "one_shot"
 TIMER_TYPE_WATCHDOG = "watchdog"
 DEFAULT_WATCHDOG_IDLE_SECONDS = 300
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _normalize_lane_id(value: Any) -> str:
@@ -117,10 +110,6 @@ def _normalize_due_timestamp(
     if parsed is None:
         raise ValueError(f"{field_name} must be a valid ISO-8601 timestamp")
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _iso_now() -> str:
-    return now_iso()
 
 
 def _iso_after_seconds(seconds: int) -> str:

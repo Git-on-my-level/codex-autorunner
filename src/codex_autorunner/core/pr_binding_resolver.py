@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,22 +11,12 @@ from .pr_binding_runtime import (
 )
 from .pr_bindings import PrBinding, PrBindingStore
 from .scm_events import ScmEvent
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
+from .text_utils import _mapping, _normalize_text
 
 
 def _normalize_lower_text(value: Any) -> Optional[str]:
     text = _normalize_text(value)
     return text.lower() if text is not None else None
-
-
-def _mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
 
 
 def _event_head_branch(event: ScmEvent) -> Optional[str]:

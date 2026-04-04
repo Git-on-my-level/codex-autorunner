@@ -6,9 +6,10 @@ from typing import Any, Optional
 from ...core.pr_bindings import PrBinding
 from ...core.scm_events import ScmEvent
 from ...core.scm_reaction_types import ReactionKind, ReactionOperationKind
+from ...core.text_utils import _mapping
 
 
-def _normalize_text(value: Any) -> Optional[str]:
+def _collapse_whitespace(value: Any) -> Optional[str]:
     if not isinstance(value, str):
         return None
     text = " ".join(value.split())
@@ -16,12 +17,8 @@ def _normalize_text(value: Any) -> Optional[str]:
 
 
 def _normalize_lower_text(value: Any) -> Optional[str]:
-    text = _normalize_text(value)
+    text = _collapse_whitespace(value)
     return text.lower() if text is not None else None
-
-
-def _mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
 
 
 def _event_payload(event: ScmEvent) -> Mapping[str, Any]:
@@ -29,8 +26,8 @@ def _event_payload(event: ScmEvent) -> Mapping[str, Any]:
 
 
 def _resolved_repo_slug(event: ScmEvent, binding: Optional[PrBinding]) -> Optional[str]:
-    return _normalize_text(event.repo_slug) or (
-        _normalize_text(binding.repo_slug) if binding is not None else None
+    return _collapse_whitespace(event.repo_slug) or (
+        _collapse_whitespace(binding.repo_slug) if binding is not None else None
     )
 
 
@@ -51,7 +48,7 @@ def _ensure_sentence(text: str) -> str:
 
 
 def _trimmed_summary(value: Any, *, limit: int = 120) -> Optional[str]:
-    text = _normalize_text(value)
+    text = _collapse_whitespace(value)
     if text is None:
         return None
     if len(text) <= limit:
@@ -67,7 +64,7 @@ def _join_message(summary: str, next_step: Optional[str] = None) -> str:
 
 
 def _check_detail(payload: Mapping[str, Any]) -> Optional[str]:
-    check_name = _normalize_text(payload.get("name"))
+    check_name = _collapse_whitespace(payload.get("name"))
     conclusion = _normalize_lower_text(payload.get("conclusion"))
     if check_name and conclusion:
         return f"{check_name} ({conclusion})"
@@ -79,11 +76,11 @@ def _check_detail(payload: Mapping[str, Any]) -> Optional[str]:
 
 
 def _reviewer_login(payload: Mapping[str, Any]) -> Optional[str]:
-    return _normalize_text(payload.get("author_login"))
+    return _collapse_whitespace(payload.get("author_login"))
 
 
 def _comment_location(payload: Mapping[str, Any]) -> Optional[str]:
-    path = _normalize_text(payload.get("path"))
+    path = _collapse_whitespace(payload.get("path"))
     line = payload.get("line")
     if path is None:
         return None

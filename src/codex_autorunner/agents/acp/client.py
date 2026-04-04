@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Optional, Sequence
 
+from ...core.text_utils import _normalize_optional_text
 from .errors import (
     ACPError,
     ACPInitializationError,
@@ -96,13 +97,6 @@ class _PromptState:
     closed: bool = False
     replay_task: Optional[asyncio.Task[None]] = None
     request_task: Optional[asyncio.Task[Any]] = None
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:

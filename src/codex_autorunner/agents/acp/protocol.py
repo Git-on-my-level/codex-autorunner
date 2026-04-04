@@ -3,15 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if isinstance(value, (int, float)):
-        text = str(value).strip()
-        return text or None
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
+from ...core.text_utils import _normalize_optional_text
 
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:

@@ -7,18 +7,12 @@ from pathlib import Path
 from typing import Any, Optional, cast
 
 from .orchestration.sqlite import open_orchestration_sqlite
+from .text_utils import _normalize_limit, _normalize_text
 from .time_utils import now_iso
 
 _PR_STATES = frozenset({"open", "closed", "merged", "draft"})
 _ACTIVE_PR_STATES = ("open", "draft")
 _TERMINAL_PR_STATES = frozenset({"closed", "merged"})
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _normalize_int(value: Any, *, field_name: str) -> int:
@@ -29,15 +23,6 @@ def _normalize_int(value: Any, *, field_name: str) -> int:
     if normalized <= 0:
         raise ValueError(f"{field_name} must be > 0")
     return normalized
-
-
-def _normalize_limit(value: Any, *, default: int) -> int:
-    if value is None:
-        return default
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return default
 
 
 def _normalize_state(value: Any, *, field_name: str = "pr_state") -> str:
@@ -311,7 +296,7 @@ class PrBindingStore:
         query = f"""
             SELECT *
               FROM orch_pr_bindings
-             WHERE {' AND '.join(where_clauses)}
+             WHERE {" AND ".join(where_clauses)}
              ORDER BY updated_at DESC, created_at DESC, pr_number DESC
              LIMIT ?
         """

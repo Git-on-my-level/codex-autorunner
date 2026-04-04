@@ -3,18 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Union
 
+from ...core.text_utils import _normalize_optional_text
+
 
 def _coerce_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
     return {}
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _extract_identifier(payload: Mapping[str, Any], *keys: str) -> Optional[str]:

@@ -54,6 +54,7 @@ from .....core.pma_thread_store import (
 )
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import Completed, Failed, RunEvent
+from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
 from .....integrations.app_server.event_buffer import AppServerEventBuffer
 from .....integrations.chat.approval_modes import resolve_approval_mode_policies
@@ -133,15 +134,6 @@ def _track_managed_thread_task(app: Any, task: asyncio.Task[Any]) -> None:
     task.add_done_callback(lambda done: task_pool.discard(done))
 
 
-def _truncate_text(value: Any, limit: int) -> str:
-    if value is None:
-        return ""
-    s = str(value)
-    if len(s) <= limit:
-        return s
-    return s[: limit - 3] + "..."
-
-
 def _resolve_managed_thread_policies(
     thread: dict[str, Any],
 ) -> tuple[Optional[str], Optional[Any]]:
@@ -194,7 +186,7 @@ def _compose_execution_prompt(
         return execution_message
 
     preamble = format_pma_discoverability_preamble(hub_root=hub_root)
-    user_message = "<user_message>\n" f"{execution_message}\n" "</user_message>\n"
+    user_message = f"<user_message>\n{execution_message}\n</user_message>\n"
     bundle = build_car_context_bundle(
         context_profile,
         prompt_text=message,

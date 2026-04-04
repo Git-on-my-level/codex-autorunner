@@ -8,10 +8,10 @@ import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO, Any, Literal, Optional, Tuple
 
+from ..text_utils import _iso_now, _pid_is_running
 from ..utils import resolve_executable
 
 logger = logging.getLogger(__name__)
@@ -68,10 +68,6 @@ def _worker_exit_path(artifacts_dir: Path) -> Path:
 
 def _worker_crash_path(artifacts_dir: Path) -> Path:
     return artifacts_dir / _WORKER_CRASH_FILENAME
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _signal_from_returncode(returncode: Optional[int]) -> Optional[str]:
@@ -249,19 +245,6 @@ def _build_worker_cmd(entrypoint: str, run_id: str, repo_root: Path) -> list[str
         "--run-id",
         normalized_run_id,
     ]
-
-
-def _pid_is_running(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Process exists but we may not own it.
-        return True
-    except OSError:
-        return False
-    return True
 
 
 def _read_process_cmdline(pid: int) -> list[str] | None:

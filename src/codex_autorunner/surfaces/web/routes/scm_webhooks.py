@@ -20,6 +20,7 @@ from ....core.scm_observability import (
     create_or_preserve_correlation_id,
 )
 from ....core.scm_reaction_state import ScmReactionStateStore
+from ....core.text_utils import _mapping
 from ....integrations.github import GitHubWebhookConfig, normalize_github_webhook
 
 ScmDrainCallback = Callable[[Request, ScmEvent], object]
@@ -27,10 +28,6 @@ _DEFAULT_INSPECT_LIMIT = 50
 _MAX_INSPECT_LIMIT = 200
 _DEFAULT_MAX_PAYLOAD_BYTES = 262_144
 _DEFAULT_MAX_RAW_PAYLOAD_BYTES = 65_536
-
-
-def _mapping(value: object) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
 
 
 def _github_automation_config(raw_config: object) -> Mapping[str, Any]:

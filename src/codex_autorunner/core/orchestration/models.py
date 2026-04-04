@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Mapping, Optional
 
 from ..car_context import CarContextProfile, normalize_car_context_profile
+from ..text_utils import _normalize_optional_text
 
 TargetCapability = Literal[
     "durable_threads",
@@ -22,13 +23,6 @@ NativeTargetKind = Literal["ticket_flow", "pma"]
 MessageRequestKind = Literal["message", "review"]
 BusyThreadPolicy = Literal["queue", "interrupt", "reject"]
 OrchestrationTableRole = Literal["authoritative", "mirror", "projection", "ops"]
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def normalize_resource_owner_fields(

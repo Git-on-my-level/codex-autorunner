@@ -9,9 +9,9 @@ from .locks import file_lock
 from .pma_automation_types import (
     PMA_AUTOMATION_STORE_FILENAME,
     PMA_AUTOMATION_VERSION,
-    _normalize_text,
     default_pma_automation_state,
 )
+from .text_utils import _normalize_text, lock_path_for
 from .utils import atomic_write
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class PmaAutomationPersistence:
         return self._path
 
     def _lock_path(self) -> Path:
-        return self._path.with_suffix(self._path.suffix + ".lock")
+        return lock_path_for(self._path)
 
     def load(self) -> dict[str, Any]:
         with file_lock(self._lock_path()):

@@ -24,6 +24,7 @@ from ...core.managed_processes.registry import (
 from ...core.process_termination import terminate_record
 from ...core.state_roots import resolve_global_state_root
 from ...core.supervisor_utils import evict_lru_handle_locked, pop_idle_handles_locked
+from ...core.text_utils import _pid_is_running as _standalone_pid_is_running
 from ...core.utils import (
     infer_home_from_workspace,
     resolve_opencode_auth_path,
@@ -982,15 +983,7 @@ class OpenCodeSupervisor:
         handle.started = True
 
     def _pid_is_running(self, pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return True
-        except OSError:
-            return False
-        return True
+        return _standalone_pid_is_running(pid)
 
     def _record_pid_is_running(self, record: ProcessRecord) -> bool:
         pid = record.pid

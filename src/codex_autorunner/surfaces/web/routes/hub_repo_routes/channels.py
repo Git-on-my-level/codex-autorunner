@@ -22,6 +22,7 @@ from .....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
 from .....core.pma_thread_store import PmaThreadStore, default_pma_threads_db_path
+from .....core.text_utils import _coerce_int as _standalone_coerce_int
 from .....integrations.app_server.threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -165,12 +166,7 @@ class HubChannelService:
         return normalized or None
 
     def _coerce_int(self, value: Any) -> int:
-        if isinstance(value, bool):
-            return 0
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
+        return _standalone_coerce_int(value)
 
     def _coerce_usage_int(self, value: Any) -> Optional[int]:
         if isinstance(value, bool):

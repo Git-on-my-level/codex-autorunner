@@ -14,26 +14,16 @@ from .scm_reaction_types import (
     ScmReactionConfig,
     stable_reaction_operation_key,
 )
+from .text_utils import _mapping, _normalize_text
 
 _FAILED_CHECK_CONCLUSIONS = frozenset(
     {"action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"}
 )
 
 
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
 def _normalize_lower_text(value: Any) -> Optional[str]:
     text = _normalize_text(value)
     return text.lower() if text is not None else None
-
-
-def _mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
 
 
 def _event_payload(event: ScmEvent) -> Mapping[str, Any]:

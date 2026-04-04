@@ -20,6 +20,7 @@ from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.models import ThreadTarget
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_thread_store import PmaThreadStore
+from .....core.text_utils import _truncate_text
 from .....integrations.chat.approval_modes import normalize_approval_mode
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
@@ -1112,12 +1113,3 @@ def build_managed_thread_crud_routes(
                 for s in summaries
             ]
         }
-
-
-def _truncate_text(value: Any, limit: int) -> str:
-    if value is None:
-        return ""
-    s = str(value)
-    if len(s) <= limit:
-        return s
-    return s[: limit - 3] + "..."

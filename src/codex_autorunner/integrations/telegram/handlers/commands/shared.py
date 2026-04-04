@@ -32,7 +32,7 @@ class TelegramCommandSupportMixin:
     All methods use `self` to access instance attributes.
     """
 
-    def _coerce_int(self, value: Any) -> Optional[int]:
+    def _coerce_optional_int(self, value: Any) -> Optional[int]:
         """Safely coerce value to int, rejecting bool.
 
         Args:

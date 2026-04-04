@@ -325,7 +325,7 @@ HELPER_OWNERSHIP_RULES = (
         owner_path="src/codex_autorunner/integrations/chat/progress_primitives.py",
         helper_names=(
             "format_elapsed",
-            "_normalize_text",
+            "_normalize_inline_text",
             "_normalize_output_text",
             "_truncate_tail",
             "_merge_output_text",

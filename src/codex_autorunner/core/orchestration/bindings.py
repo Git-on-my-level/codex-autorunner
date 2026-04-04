@@ -7,16 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from ..text_utils import _normalize_text
 from ..time_utils import now_iso
 from .models import Binding, normalize_resource_owner_fields
 from .sqlite import open_orchestration_sqlite
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _decode_metadata(raw: Any) -> dict[str, Any]:

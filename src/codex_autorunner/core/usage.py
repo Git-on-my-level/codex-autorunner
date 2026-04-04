@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple, cast
 
+from .text_utils import _coerce_int, _iso_now
+
 logger = logging.getLogger("codex_autorunner.core.usage")
 
 
@@ -210,26 +212,6 @@ def _coerce_opencode_int(value: object) -> int:
     return _coerce_int(value)
 
 
-def _coerce_int(value: object) -> int:
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            return 0
-        try:
-            return int(stripped)
-        except ValueError as exc:
-            logger.debug("Failed to coerce int from %r: %s", value, exc)
-            return 0
-    logger.debug("Failed to coerce int from unsupported type: %s", type(value).__name__)
-    return 0
-
-
 def _coerce_opencode_field(payload: Mapping[str, object], keys: List[str]) -> int:
     for key in keys:
         if key in payload and payload.get(key) is not None:
@@ -285,10 +267,6 @@ def _clamp_non_negative_totals(totals: TokenTotals) -> TokenTotals:
 
 def _opencode_persisted_usage_path(repo_root: Path) -> Path:
     return repo_root / _OPENCODE_PERSISTED_USAGE_REL_PATH
-
-
-def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def persist_opencode_usage_snapshot(

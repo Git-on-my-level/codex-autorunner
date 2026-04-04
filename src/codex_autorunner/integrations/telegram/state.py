@@ -14,6 +14,7 @@ from urllib.parse import quote, unquote
 
 from ...core.sqlite_utils import connect_sqlite
 from ...core.state import now_iso
+from ...core.text_utils import _parse_iso_timestamp
 from ..chat.agents import normalize_chat_agent, normalize_hermes_profile
 from ..chat.approval_modes import (
     APPROVAL_MODE_VALUES,
@@ -92,15 +93,6 @@ def parse_topic_key(key: str) -> tuple[int, Optional[int], Optional[str]]:
     if isinstance(scope_raw, str) and scope_raw:
         scope = _decode_scope(scope_raw)
     return chat_id, thread_id, scope
-
-
-def _parse_iso_timestamp(raw: Optional[str]) -> Optional[datetime]:
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        return datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
 
 
 def _base_topic_key(raw_key: str) -> Optional[str]:

@@ -14,6 +14,7 @@ from .orchestration.sqlite import (
     open_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
 )
+from .text_utils import lock_path_for
 from .utils import atomic_write
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ class _LegacyJsonLifecycleEventStore:
         return self._path
 
     def _lock_path(self) -> Path:
-        return self._path.with_suffix(LIFECYCLE_EVENTS_LOCK_SUFFIX)
+        return lock_path_for(self._path)
 
     @staticmethod
     def _deserialize_event(entry: Any) -> Optional[LifecycleEvent]:

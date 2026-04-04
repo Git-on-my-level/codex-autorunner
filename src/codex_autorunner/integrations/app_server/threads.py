@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...core.locks import file_lock
+from ...core.text_utils import lock_path_for
 from ...core.utils import atomic_write
 
 APP_SERVER_THREADS_FILENAME = ".codex-autorunner/app_server_threads.json"
@@ -307,7 +308,7 @@ class AppServerThreadRegistry:
         return self._path
 
     def _lock_path(self) -> Path:
-        return self._path.with_suffix(self._path.suffix + ".lock")
+        return lock_path_for(self._path)
 
     def _notice_path(self) -> Path:
         return self._path.with_name(

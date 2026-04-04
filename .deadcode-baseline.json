@@ -7,22 +7,14 @@
     "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",
     "python:function:src/codex_autorunner/core/git_utils.py:156:git_status_porcelain",
+    "python:function:src/codex_autorunner/core/managed_processes/reaper.py:26:_pid_is_zombie",
     "python:function:src/codex_autorunner/core/patch_utils.py:127:ensure_patch_targets_allowed",
     "python:function:src/codex_autorunner/core/patch_utils.py:167:apply_patch_file",
     "python:function:src/codex_autorunner/core/patch_utils.py:176:preview_patch",
     "python:function:src/codex_autorunner/core/patch_utils.py:97:normalize_patch_text",
-    "python:function:src/codex_autorunner/core/state_retention.py:244:aggregate_cleanup_plans",
-    "python:function:src/codex_autorunner/core/state_retention.py:248:aggregate_cleanup_results",
-    "python:function:src/codex_autorunner/core/state_retention.py:287:adapt_archive_prune_summary_to_result",
-    "python:function:src/codex_autorunner/core/state_retention.py:340:adapt_filebox_prune_summary_to_result",
-    "python:function:src/codex_autorunner/core/state_retention.py:392:adapt_report_prune_summary_to_result",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:21:run_turn_with_backend",
-    "python:function:src/codex_autorunner/integrations/app_server/retention.py:358:adapt_workspace_summary_to_result",
     "python:function:src/codex_autorunner/integrations/chat/agents.py:164:validate_hermes_profile",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:19:_flatten_opencode_tokens",
-    "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value",
-    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:138:log_stream",
-    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:171:jsonl_event_stream",
-    "python:function:src/codex_autorunner/surfaces/web/routes/shared.py:217:state_stream"
+    "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value"
   ]
 }

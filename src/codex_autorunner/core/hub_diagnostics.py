@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .logging_utils import log_event, safe_log
+from .text_utils import _pid_is_running
 from .utils import atomic_write
 
 HUB_PID_FILENAME = "hub.pid"
@@ -49,20 +50,6 @@ def _iso_from_mtime(path: Path) -> str | None:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
     except OSError:
         return None
-
-
-def _pid_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
 
 
 def read_hub_endpoint(hub_root: Path) -> dict[str, Any] | None:

@@ -60,6 +60,7 @@ from .pma_active_context import (
 from .pma_audit import PmaActionType, PmaAuditEntry, PmaAuditLog
 from .pma_thread_store import PmaThreadStore, default_pma_threads_db_path
 from .state_roots import resolve_hub_templates_root
+from .text_utils import _parse_iso_timestamp
 from .ticket_flow_projection import (
     build_canonical_state_v1,
     select_authoritative_run_record,
@@ -810,21 +811,6 @@ def enrich_pma_file_inbox_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
     enriched = dict(entry)
     enriched.update(classify_pma_file_inbox_entry(enriched))
     return enriched
-
-
-def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def _timestamp_sort_value(value: Any) -> float:

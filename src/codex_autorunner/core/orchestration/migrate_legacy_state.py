@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..sqlite_utils import open_sqlite
+from ..text_utils import _json_dumps
 from ..time_utils import now_iso
 
 LEGACY_PMA_THREADS_DB_PATH = Path(".codex-autorunner/pma/threads.sqlite3")
@@ -14,10 +15,6 @@ LEGACY_PMA_REACTIVE_PATH = Path(".codex-autorunner/pma/reactive_state.json")
 LEGACY_PMA_TRANSCRIPTS_DIR = Path(".codex-autorunner/pma/transcripts")
 LEGACY_PMA_AUDIT_LOG_PATH = Path(".codex-autorunner/pma/audit_log.jsonl")
 LEGACY_PMA_LIFECYCLE_LOG_PATH = Path(".codex-autorunner/pma/lifecycle_events.jsonl")
-
-
-def _json_dumps(value: Any) -> str:
-    return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
 def _load_json_file(path: Path) -> dict[str, Any] | None:

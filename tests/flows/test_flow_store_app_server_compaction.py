@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 
-from codex_autorunner.core.flows.app_server_event_compaction import _truncate_text
+from codex_autorunner.core.flows.app_server_event_compaction import _truncate_head_tail
 from codex_autorunner.core.flows.models import FlowEventType
 from codex_autorunner.core.flows.store import FlowStore
 
 
 def test_middle_truncate_helper_respects_tiny_limits() -> None:
-    assert _truncate_text("abcdefghi", 6) == "a ... "
+    assert _truncate_head_tail("abcdefghi", 6) == "a ... "
 
 
 def _create_run(store: FlowStore) -> str:

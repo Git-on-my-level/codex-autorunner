@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Optional
 
 from .flows.store import FlowStore
+from .text_utils import _truncate_text
 from .utils import is_within
 
 if TYPE_CHECKING:
@@ -12,13 +13,6 @@ if TYPE_CHECKING:
 
 
 TRUNCATION_SUFFIX = "... (truncated)\n"
-
-
-def _truncate_text(text: str, limit: Optional[int]) -> str:
-    if limit is None or limit <= 0 or len(text) <= limit:
-        return text
-    head = text[: max(0, limit - len(TRUNCATION_SUFFIX))]
-    return head.rstrip() + TRUNCATION_SUFFIX
 
 
 def _safe_read(path: Path) -> str:
@@ -90,7 +84,12 @@ def _artifact_entries(
             lines.append(
                 f"  - #{event.seq} {event.timestamp} {event.event_type.value}{details}"
             )
-    pairs.append(("Flow run summary", _truncate_text("\n".join(lines), limit)))
+    pairs.append(
+        (
+            "Flow run summary",
+            _truncate_text("\n".join(lines), limit, suffix=TRUNCATION_SUFFIX),
+        )
+    )
 
     label_by_kind = {
         "output": "Output",
@@ -107,7 +106,7 @@ def _artifact_entries(
         if not is_within(root=repo_root, target=path) or not path.exists():
             continue
         label = label_by_kind.get(artifact.kind, f"Artifact ({artifact.kind})")
-        content = _truncate_text(_safe_read(path), limit)
+        content = _truncate_text(_safe_read(path), limit, suffix=TRUNCATION_SUFFIX)
         pairs.append((label, content))
     return pairs
 

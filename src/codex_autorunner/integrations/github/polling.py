@@ -12,6 +12,7 @@ from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.scm_events import ScmEventStore
 from ...core.scm_polling_watches import ScmPollingWatch, ScmPollingWatchStore
 from ...core.scm_reaction_types import ScmReactionConfig
+from ...core.text_utils import _mapping, _normalize_text
 from ...core.time_utils import now_iso
 from ...manifest import ManifestError, load_manifest
 
@@ -26,17 +27,6 @@ if TYPE_CHECKING:
 
 
 GitHubServiceFactory = Callable[[Path, Optional[dict[str, Any]]], "GitHubService"]
-
-
-def _mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _normalize_lower_text(value: Any) -> Optional[str]:

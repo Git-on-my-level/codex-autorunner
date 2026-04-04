@@ -532,12 +532,6 @@ def _read_update_lock() -> Optional[dict[str, object]]:
     return None
 
 
-def _pid_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    return process_matches_identity(pid)
-
-
 def _update_lock_active() -> Optional[dict]:
     lock = _read_update_lock()
     if not lock:

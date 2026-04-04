@@ -32,6 +32,7 @@ from .pma_automation_types import (
     _parse_iso,
     default_pma_automation_state,
 )
+from .text_utils import lock_path_for
 
 logger = logging.getLogger(__name__)
 
@@ -365,7 +366,7 @@ class PmaAutomationStore:
         return self._path
 
     def _lock_path(self) -> Path:
-        return self._persistence._lock_path()
+        return lock_path_for(self._persistence.path)
 
     def load(self) -> dict[str, Any]:
         with file_lock(self._lock_path()):
@@ -447,8 +448,7 @@ class PmaAutomationStore:
         dropped_wakeups = len(wakeups) - len(filtered_wakeups)
         if dropped_timers or dropped_wakeups:
             logger.warning(
-                "Dropping orphaned automation rows before save "
-                "(timers=%s, wakeups=%s)",
+                "Dropping orphaned automation rows before save (timers=%s, wakeups=%s)",
                 dropped_timers,
                 dropped_wakeups,
             )

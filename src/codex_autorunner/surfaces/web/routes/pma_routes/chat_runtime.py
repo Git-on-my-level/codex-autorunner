@@ -51,6 +51,7 @@ from .....core.ports.run_event import (
     RunEvent,
 )
 from .....core.sse import format_sse
+from .....core.text_utils import _normalize_optional_text, _truncate_text
 from .....core.time_utils import now_iso
 from .....integrations.app_server import is_missing_thread_error
 from .....integrations.app_server.threads import pma_base_key
@@ -61,7 +62,6 @@ from ...services.pma.common import (
 from ...services.pma.common import pma_config_from_raw
 from ..agents import _available_agents
 from ..shared import SSE_HEADERS
-from .automation_adapter import normalize_optional_text
 from .publish import publish_automation_result
 from .runtime_state import PmaRuntimeState
 from .tail_stream import resolve_resume_after
@@ -72,10 +72,6 @@ PMA_TIMEOUT_SECONDS = 7200
 _SUCCESSFUL_COMPLETION_STATUSES = frozenset(
     {"ok", "completed", "complete", "done", "success"}
 )
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    return normalize_optional_text(value)
 
 
 def _requires_fresh_pma_conversation(exc: Exception) -> bool:
@@ -178,16 +174,9 @@ def _build_idempotency_key(
     )
 
 
-def _truncate_text(text: str, max_len: int) -> str:
-    if len(text) <= max_len:
-        return text
-    return text[: max_len - 3] + "..."
-
-
 def _format_last_result(
     result: dict[str, Any], current: dict[str, Any]
 ) -> dict[str, Any]:
-
     status = result.get("status") or "error"
     message = result.get("message")
     detail = result.get("detail")
@@ -311,7 +300,6 @@ async def _persist_transcript(
     finished_at: str,
     timeline_events: Optional[list[RunEvent]] = None,
 ) -> Optional[dict[str, Any]]:
-
     store = PmaTranscriptStore(hub_root)
     assistant_text = _resolve_transcript_text(result)
     metadata = _build_transcript_metadata(
@@ -365,7 +353,6 @@ async def _finalize_result(
     reasoning: Optional[str] = None,
     timeline_events: Optional[list[RunEvent]] = None,
 ) -> None:
-
     async with await runtime.get_pma_lock():
         current_snapshot = dict(runtime.pma_current or {})
         runtime.pma_last_result = _format_last_result(result or {}, current_snapshot)

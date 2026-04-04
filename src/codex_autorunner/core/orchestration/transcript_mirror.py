@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from ..text_utils import _json_dumps
 from ..time_utils import now_iso
 from .sqlite import open_orchestration_sqlite
 
@@ -34,11 +35,7 @@ _MAX_STRING_LENGTH = 16_000
 _TRANSCRIPT_PREVIEW_CHARS = 400
 
 
-def _json_dumps(value: Any) -> str:
-    return json.dumps(value, separators=(",", ":"), sort_keys=True)
-
-
-def _truncate_text(value: str) -> str:
+def _truncate_long_string(value: str) -> str:
     if len(value) <= _MAX_STRING_LENGTH:
         return value
     return value[:_MAX_STRING_LENGTH]
@@ -47,7 +44,7 @@ def _truncate_text(value: str) -> str:
 def _sanitize_metadata_value(value: Any, *, depth: int = 0) -> Any:
     if value is None or isinstance(value, _SCALAR_TYPES):
         if isinstance(value, str):
-            return _truncate_text(value)
+            return _truncate_long_string(value)
         return value
     if depth >= 4:
         return None
@@ -87,7 +84,7 @@ def build_plain_text_transcript(*, user_text: str, assistant_text: str) -> str:
     normalized_user = (user_text or "").strip()
     normalized_assistant = (assistant_text or "").strip()
     if normalized_user and normalized_assistant:
-        return f"User:\n{normalized_user}\n\n" f"Assistant:\n{normalized_assistant}"
+        return f"User:\n{normalized_user}\n\nAssistant:\n{normalized_assistant}"
     if normalized_user:
         return normalized_user
     return normalized_assistant

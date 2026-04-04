@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from ....core import update as update_core
 from ....core.config import HubConfig
 from ....core.self_describe import collect_describe_data
+from ....core.text_utils import _pid_is_running
 from ....core.update import (
     UpdateInProgressError,
     _format_update_confirmation_warning,
@@ -33,7 +34,7 @@ from ..schemas import (
 from ..static_assets import missing_static_assets
 from ..static_refresh import refresh_static_assets
 
-_pid_is_running = update_core._pid_is_running
+_pid_is_running = _pid_is_running
 _system_update_worker = update_core._system_update_worker
 _update_lock_active = update_core._update_lock_active
 _update_lock_path = update_core._update_lock_path

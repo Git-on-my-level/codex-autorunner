@@ -4,6 +4,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
+from ...core.text_utils import _truncate_text
+
 COMPACT_MAX_ACTIONS = 10
 COMPACT_MAX_TEXT_LENGTH = 80
 STATUS_ICONS = {
@@ -27,7 +29,7 @@ def format_elapsed(seconds: float) -> str:
     return f"{hours}h {minutes}m"
 
 
-def _normalize_text(value: str) -> str:
+def _normalize_inline_text(value: str) -> str:
     return " ".join(value.split()).strip()
 
 
@@ -43,16 +45,6 @@ def _truncate_tail(text: str, limit: int) -> str:
     if limit <= 3:
         return text[-limit:]
     return f"...{text[-(limit - 3) :]}"
-
-
-def _truncate_text(text: str, limit: int) -> str:
-    if limit <= 0:
-        return ""
-    if len(text) <= limit:
-        return text
-    if limit <= 3:
-        return text[:limit]
-    return f"{text[: limit - 3]}..."
 
 
 def _merge_output_text(current: str, incoming: str) -> str:
@@ -132,7 +124,9 @@ class TurnProgressTracker:
         normalize_text: bool = True,
     ) -> None:
         normalized = (
-            _normalize_text(text) if normalize_text else _normalize_output_text(text)
+            _normalize_inline_text(text)
+            if normalize_text
+            else _normalize_output_text(text)
         )
         if not normalized.strip():
             return
@@ -178,7 +172,7 @@ class TurnProgressTracker:
     def update_action(self, index: Optional[int], text: str, status: str) -> None:
         if index is None or index < 0 or index >= len(self.actions):
             return
-        normalized = _normalize_text(text)
+        normalized = _normalize_inline_text(text)
         if not normalized:
             return
         action = self.actions[index]
@@ -254,7 +248,7 @@ class TurnProgressTracker:
         return False
 
     def note_thinking(self, text: str) -> None:
-        normalized = _normalize_text(text)
+        normalized = _normalize_inline_text(text)
         if not normalized:
             return
         self.add_action("thinking", normalized, "update")
@@ -289,13 +283,13 @@ class TurnProgressTracker:
         self.update_action_raw(self.last_output_index, self.output_buffer, "update")
 
     def note_command(self, text: str) -> None:
-        normalized = _normalize_text(text)
+        normalized = _normalize_inline_text(text)
         if not normalized:
             return
         self.add_action("command", normalized, "done")
 
     def note_tool(self, text: str) -> None:
-        normalized = _normalize_text(text)
+        normalized = _normalize_inline_text(text)
         if not normalized:
             return
         self.add_action("tool", normalized, "done")

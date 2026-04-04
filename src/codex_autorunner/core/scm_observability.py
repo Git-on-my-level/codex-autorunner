@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -12,6 +11,7 @@ from .pr_bindings import PrBinding
 from .publish_journal import PublishOperation
 from .scm_events import ScmEvent
 from .scm_reaction_types import ReactionIntent
+from .text_utils import _json_dumps, _mapping, _normalize_text
 from .time_utils import now_iso
 
 SCM_AUDIT_INGEST = "scm.ingest"
@@ -28,21 +28,6 @@ _CORRELATION_PAYLOAD_KEYS = (
     "correlation_id",
     "request_id",
 )
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
-def _mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _json_dumps(payload: Mapping[str, Any]) -> str:
-    return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
 
 
 def _compact_payload(payload: Mapping[str, Any]) -> dict[str, Any]:

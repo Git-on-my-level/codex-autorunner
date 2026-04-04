@@ -17,6 +17,7 @@ from .config import (
     normalize_generated_hub_config,
     resolve_env_for_root,
 )
+from .text_utils import _mapping
 
 CAPABILITY_HINT_ITEM_TYPE = "capability_hint"
 CAPABILITY_HINT_VERSION = 1
@@ -355,10 +356,6 @@ def _hint_item(
             "is_handoff": False,
         },
     }
-
-
-def _mapping(value: object) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
 
 
 def _explicit_bool(mapping: Mapping[str, Any], key: str) -> Optional[bool]:

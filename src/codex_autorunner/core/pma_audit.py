@@ -13,6 +13,7 @@ from typing import Any, Optional
 from .locks import file_lock
 from .orchestration.migrate_legacy_state import backfill_legacy_audit_entries
 from .orchestration.sqlite import open_orchestration_sqlite
+from .text_utils import lock_path_for
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ class PmaAuditLog:
         return self._path
 
     def _lock_path(self) -> Path:
-        return self._path.with_suffix(PMA_AUDIT_LOG_LOCK_SUFFIX)
+        return lock_path_for(self._path)
 
     def append(self, entry: PmaAuditEntry) -> str:
         self._append_sqlite(entry)

@@ -8,17 +8,10 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Mapping, Optional
 
 from ...core.scm_events import ScmEvent
+from ...core.text_utils import _normalize_optional_text
 from ...core.time_utils import now_iso
 
 WebhookStatus = Literal["accepted", "ignored", "rejected"]
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = value if isinstance(value, str) else str(value)
-    text = text.strip()
-    return text or None
 
 
 def _normalize_optional_int(value: Any) -> Optional[int]:

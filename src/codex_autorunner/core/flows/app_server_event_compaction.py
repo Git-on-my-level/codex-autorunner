@@ -35,7 +35,9 @@ def _coerce_non_empty_str(value: Any) -> Optional[str]:
     return text or None
 
 
-def _truncate_text(value: Any, limit: int = _APP_SERVER_PREVIEW_CHARS) -> Optional[str]:
+def _truncate_head_tail(
+    value: Any, limit: int = _APP_SERVER_PREVIEW_CHARS
+) -> Optional[str]:
     if not isinstance(value, str):
         return None
     if len(value) <= limit:
@@ -99,11 +101,11 @@ def _compact_part_state_summary(value: Any) -> Optional[dict[str, Any]]:
 
 def _compact_delta_summary(value: Any) -> Optional[Any]:
     if isinstance(value, str):
-        return _truncate_text(value)
+        return _truncate_head_tail(value)
     delta = _coerce_dict(value)
     if not delta:
         return None
-    text = _truncate_text(delta.get("text"))
+    text = _truncate_head_tail(delta.get("text"))
     if text is None:
         return None
     return {"text": text}
@@ -111,11 +113,11 @@ def _compact_delta_summary(value: Any) -> Optional[Any]:
 
 def _extract_delta_text(value: Any) -> Optional[str]:
     if isinstance(value, str):
-        return _truncate_text(value)
+        return _truncate_head_tail(value)
     delta = _coerce_dict(value)
     if not delta:
         return None
-    return _truncate_text(delta.get("text"))
+    return _truncate_head_tail(delta.get("text"))
 
 
 def _compact_tool_input_container(value: Any) -> Optional[dict[str, str]]:
@@ -123,7 +125,7 @@ def _compact_tool_input_container(value: Any) -> Optional[dict[str, str]]:
     if not container:
         return None
     for key in ("command", "cmd", "script", "input"):
-        text = _truncate_text(container.get(key))
+        text = _truncate_head_tail(container.get(key))
         if text:
             return {key: text}
     return None
@@ -136,7 +138,7 @@ def _compact_file_entries(value: Any) -> Optional[list[dict[str, Any] | str]]:
     compact_entries: list[dict[str, Any] | str] = []
     for entry in entries[:_COMPACT_FILE_LIMIT]:
         if isinstance(entry, str):
-            compact_entries.append(_truncate_text(entry) or entry)
+            compact_entries.append(_truncate_head_tail(entry) or entry)
             continue
         if isinstance(entry, dict):
             compact_entry = _pick_summary_fields(
@@ -154,7 +156,7 @@ def _collect_file_labels(value: Any, limit: int = _COMPACT_FILE_LIMIT) -> list[s
         if len(labels) >= limit:
             break
         if isinstance(entry, str):
-            text = _truncate_text(entry)
+            text = _truncate_head_tail(entry)
             if text:
                 labels.append(text)
             continue
@@ -163,7 +165,7 @@ def _collect_file_labels(value: Any, limit: int = _COMPACT_FILE_LIMIT) -> list[s
                 entry.get("path"), entry.get("file"), entry.get("name")
             )
             if text:
-                labels.append(_truncate_text(text) or text)
+                labels.append(_truncate_head_tail(text) or text)
     return labels
 
 
@@ -178,7 +180,7 @@ def _file_change_preview(value: Any) -> Optional[str]:
         if remaining:
             suffix = " file" if remaining == 1 else " files"
             summary = f"{summary} +{remaining} more{suffix}"
-        return _truncate_text(summary) or summary
+        return _truncate_head_tail(summary) or summary
     count = len(entries)
     noun = "file change" if count == 1 else "file changes"
     return f"{count} {noun}"
@@ -208,7 +210,7 @@ def _compact_part_summary(
         ),
     )
     for key in ("input", "command", "cmd", "script"):
-        text = _truncate_text(part.get(key))
+        text = _truncate_head_tail(part.get(key))
         if text:
             summary[key] = text
             break
@@ -256,7 +258,7 @@ def _extract_preview_from_message(method: str, params: dict[str, Any]) -> Option
         part_type = str(part.get("type") or "").strip().lower()
         if part_type in {"", "text", "reasoning"}:
             return (
-                _truncate_text(part.get("text"))
+                _truncate_head_tail(part.get("text"))
                 or _extract_delta_text(params.get("delta"))
                 or _extract_delta_text(params.get("text"))
                 or _extract_delta_text(params.get("output"))
@@ -269,13 +271,13 @@ def _extract_preview_from_message(method: str, params: dict[str, Any]) -> Option
             part.get("script"),
         )
         if tool_preview:
-            return _truncate_text(tool_preview)
+            return _truncate_head_tail(tool_preview)
         args = (
             _coerce_dict(part.get("args"))
             or _coerce_dict(part.get("arguments"))
             or _coerce_dict(part.get("params"))
         )
-        return _truncate_text(
+        return _truncate_head_tail(
             args.get("command")
             or args.get("input")
             or args.get("cmd")
@@ -284,7 +286,7 @@ def _extract_preview_from_message(method: str, params: dict[str, Any]) -> Option
     if method == "message.updated":
         info = _coerce_dict(properties.get("info"))
         summary = _coerce_dict(info.get("summary"))
-        return _truncate_text(
+        return _truncate_head_tail(
             summary.get("title") or params.get("message") or params.get("status")
         )
     if method == "session.diff":
@@ -296,7 +298,7 @@ def _extract_preview_from_message(method: str, params: dict[str, Any]) -> Option
             count = len(diff)
             noun = "file change" if count == 1 else "file changes"
             return f"{count} {noun}"
-        return _truncate_text(params.get("message") or params.get("status"))
+        return _truncate_head_tail(params.get("message") or params.get("status"))
     return None
 
 

@@ -27,6 +27,7 @@ from ....core.pma_context import (
     get_latest_ticket_flow_run_state_with_record,
 )
 from ....core.pma_thread_store import PmaThreadStore, default_pma_threads_db_path
+from ....core.text_utils import _coerce_int
 from ....integrations.app_server.threads import (
     AppServerThreadRegistry,
     default_app_server_threads_path,
@@ -199,14 +200,6 @@ def build_hub_repo_routes(
             return None
         normalized = value.strip()
         return normalized or None
-
-    def _coerce_int(value: Any) -> int:
-        if isinstance(value, bool):
-            return 0
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
 
     def _coerce_usage_int(value: Any) -> Optional[int]:
         if isinstance(value, bool):

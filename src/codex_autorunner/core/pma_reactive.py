@@ -9,6 +9,7 @@ from typing import Any, Optional
 from .locks import file_lock
 from .orchestration.migrate_legacy_state import backfill_legacy_reactive_state
 from .orchestration.sqlite import open_orchestration_sqlite
+from .text_utils import lock_path_for
 from .time_utils import now_iso
 from .utils import atomic_write
 
@@ -32,7 +33,7 @@ class PmaReactiveStore:
         )
 
     def _lock_path(self) -> Path:
-        return self._path.with_suffix(self._path.suffix + ".lock")
+        return lock_path_for(self._path)
 
     def load(self) -> dict[str, Any]:
         with file_lock(self._lock_path()):

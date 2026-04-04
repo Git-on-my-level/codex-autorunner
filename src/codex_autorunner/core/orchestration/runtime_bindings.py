@@ -4,15 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from ..text_utils import _normalize_optional_text
 from ..time_utils import now_iso
 from .sqlite import open_orchestration_sqlite
-
-
-def _normalize_optional_text(value: object) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 @dataclass(frozen=True)

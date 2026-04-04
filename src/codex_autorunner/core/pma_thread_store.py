@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,6 +23,7 @@ from .orchestration.runtime_bindings import (
 )
 from .orchestration.sqlite import open_orchestration_sqlite
 from .sqlite_utils import open_sqlite
+from .text_utils import _json_dumps, _json_loads_object
 from .time_utils import now_iso
 
 PMA_THREADS_DB_FILENAME = "threads.sqlite3"
@@ -91,20 +91,6 @@ def _normalize_request_kind(value: Any) -> str:
     if normalized == "review":
         return "review"
     return "message"
-
-
-def _json_dumps(value: dict[str, Any]) -> str:
-    return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
-
-
-def _json_loads_object(raw: Any) -> dict[str, Any]:
-    if not isinstance(raw, str) or not raw.strip():
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
 
 
 def _sanitize_thread_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any]:

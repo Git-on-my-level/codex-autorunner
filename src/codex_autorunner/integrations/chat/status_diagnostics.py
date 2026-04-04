@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from ...core.text_utils import _parse_iso_timestamp
+
 
 @dataclass(frozen=True)
 class StatusBlockContext:
@@ -119,18 +121,6 @@ def _format_rate_limit_window(window_minutes: Optional[int]) -> Optional[str]:
     if window_minutes % 60 == 0:
         return f"{window_minutes // 60}h"
     return f"{window_minutes}m"
-
-
-def _parse_iso_timestamp(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
 
 
 def _coerce_datetime(value: Any) -> Optional[datetime]:

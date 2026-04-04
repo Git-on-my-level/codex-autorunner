@@ -13,20 +13,13 @@ from .chat_bindings import (
 )
 from .config import load_hub_config
 from .pma_notification_store import PmaNotificationStore
+from .text_utils import _normalize_optional_text
 from .time_utils import now_iso
 from .utils import canonicalize_path
 
 logger = logging.getLogger(__name__)
 
 _DISCORD_MESSAGE_MAX_LEN = 1900
-
-
-def _normalize_optional_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = value if isinstance(value, str) else str(value)
-    text = text.strip()
-    return text or None
 
 
 def _resolve_state_path(

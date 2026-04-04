@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, cast
 
+from .text_utils import _mapping, _normalize_optional_text
+
 MutationPolicyValue = Literal["allow", "deny", "require_approval"]
 
 MUTATION_POLICY_ALLOWED_VALUES: tuple[MutationPolicyValue, ...] = (
@@ -34,17 +36,6 @@ _MUTATION_POLICY_VALUE_ALIASES: dict[str, MutationPolicyValue] = {
     "review": "require_approval",
     "ask": "require_approval",
 }
-
-
-def _mapping(value: object) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _normalize_optional_text(value: object) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    return normalized or None
 
 
 def _looks_like_policy_mapping(value: Mapping[str, Any]) -> bool:

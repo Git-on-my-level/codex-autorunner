@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
@@ -12,16 +11,15 @@ from .orchestration.sqlite import open_orchestration_sqlite
 from .pr_bindings import PrBinding
 from .scm_events import ScmEvent
 from .scm_reaction_types import ReactionIntent, ReactionKind
+from .text_utils import (
+    _json_dumps,
+    _json_loads_object,
+    _normalize_limit,
+    _normalize_text,
+)
 from .time_utils import now_iso
 
 _RESOLVED_STATES_ALLOW_REEMIT = frozenset({"resolved"})
-
-
-def _normalize_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
 
 
 def _normalize_int(value: Any, *, field_name: str) -> int:
@@ -37,31 +35,6 @@ def _normalize_json_object(value: Any, *, field_name: str) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     raise ValueError(f"{field_name} must be a JSON object")
-
-
-def _normalize_limit(value: Any, *, default: int) -> int:
-    if value is None:
-        return default
-    try:
-        return max(0, int(value))
-    except (TypeError, ValueError):
-        return default
-
-
-def _json_dumps(payload: Mapping[str, Any]) -> str:
-    return json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
-
-
-def _json_loads_object(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if not isinstance(value, str) or not value.strip():
-        return {}
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return {}
-    return dict(parsed) if isinstance(parsed, dict) else {}
 
 
 def _canonicalize(value: Any) -> Any:
@@ -357,7 +330,7 @@ class ScmReactionStateStore:
                 f"""
                 SELECT *
                   FROM orch_reaction_state
-                 WHERE {' AND '.join(where_clauses)}
+                 WHERE {" AND ".join(where_clauses)}
                  ORDER BY updated_at DESC,
                           created_at DESC,
                           binding_id DESC,
