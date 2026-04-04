@@ -149,6 +149,26 @@ class ScmPollingWatchStore:
     def __init__(self, hub_root: Path) -> None:
         self._hub_root = Path(hub_root)
 
+    def get_watch(
+        self,
+        *,
+        provider: str,
+        binding_id: str,
+    ) -> Optional[ScmPollingWatch]:
+        normalized_provider = _normalize_text(provider)
+        normalized_binding_id = _normalize_text(binding_id)
+        if normalized_provider is None:
+            raise ValueError("provider is required")
+        if normalized_binding_id is None:
+            raise ValueError("binding_id is required")
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            row = self._load_watch_row(
+                conn,
+                provider=normalized_provider,
+                binding_id=normalized_binding_id,
+            )
+        return _watch_from_row(row) if row is not None else None
+
     def upsert_watch(
         self,
         *,

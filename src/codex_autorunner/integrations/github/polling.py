@@ -7,11 +7,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
+from ...core.pma_thread_store import PmaThreadStore
 from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.scm_events import ScmEventStore
 from ...core.scm_polling_watches import ScmPollingWatch, ScmPollingWatchStore
 from ...core.scm_reaction_types import ScmReactionConfig
 from ...core.time_utils import now_iso
+from ...manifest import ManifestError, load_manifest
 
 _FAILED_CHECK_CONCLUSIONS = frozenset(
     {"action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"}
@@ -351,6 +353,94 @@ class GitHubScmPollingService:
             snapshot=snapshot,
         )
 
+    def discover_and_arm_missing_watches(self, *, limit: int = 20) -> dict[str, int]:
+        counts = {
+            "candidate_workspaces": 0,
+            "bindings_discovered": 0,
+            "watches_armed": 0,
+            "discovery_errors": 0,
+        }
+        polling_config = GitHubPollingConfig.from_mapping(self._raw_config)
+        if not polling_config.enabled:
+            return counts
+
+        candidate_roots, workspaces_by_repo_id, workspaces_by_thread_id = (
+            self._candidate_workspace_roots()
+        )
+        counts["candidate_workspaces"] = len(candidate_roots)
+
+        active_bindings = self._active_bindings(limit=max(100, limit * 10))
+        for workspace_root in candidate_roots:
+            try:
+                github = self._github_service_factory(
+                    workspace_root,
+                    self._raw_config if isinstance(self._raw_config, dict) else None,
+                )
+                binding = github.discover_pr_binding(cwd=workspace_root)
+            except Exception:
+                _LOGGER.warning(
+                    "Failed discovering polling binding for workspace %s",
+                    workspace_root,
+                    exc_info=True,
+                )
+                counts["discovery_errors"] += 1
+                continue
+            if binding is None or binding.pr_state not in _ACTIVE_PR_STATES:
+                continue
+            if binding.binding_id not in active_bindings:
+                counts["bindings_discovered"] += 1
+            active_bindings[binding.binding_id] = binding
+
+        repo_slug_cache: dict[str, Optional[str]] = {}
+        for binding in active_bindings.values():
+            watch = self._watch_store.get_watch(
+                provider="github",
+                binding_id=binding.binding_id,
+            )
+
+            resolved_workspace_root = self._resolve_workspace_root_for_binding(
+                binding=binding,
+                existing_watch=watch,
+                candidate_roots=candidate_roots,
+                workspaces_by_repo_id=workspaces_by_repo_id,
+                workspaces_by_thread_id=workspaces_by_thread_id,
+                repo_slug_cache=repo_slug_cache,
+            )
+            if resolved_workspace_root is None:
+                continue
+            if (
+                watch is not None
+                and watch.state == "active"
+                and Path(watch.workspace_root).resolve()
+                == resolved_workspace_root.resolve()
+            ):
+                continue
+            try:
+                armed: Optional[ScmPollingWatch]
+                if watch is not None and watch.state == "active":
+                    armed = self._repair_active_watch(
+                        binding=binding,
+                        watch=watch,
+                        workspace_root=resolved_workspace_root,
+                    )
+                else:
+                    armed = self.arm_watch(
+                        binding=binding,
+                        workspace_root=resolved_workspace_root,
+                    )
+            except Exception:
+                _LOGGER.warning(
+                    "Failed arming discovered SCM polling watch for %s#%s",
+                    binding.repo_slug,
+                    binding.pr_number,
+                    exc_info=True,
+                )
+                counts["discovery_errors"] += 1
+                continue
+            if armed is not None:
+                counts["watches_armed"] += 1
+        return counts
+
     def process_due_watches(self, *, limit: int = 20) -> dict[str, int]:
         counts = {
             "due": 0,
@@ -434,6 +524,166 @@ class GitHubScmPollingService:
             counts["polled"] += 1
             counts["events_emitted"] += emitted
         return counts
+
+    def process(self, *, limit: int = 20) -> dict[str, int]:
+        counts = {
+            "due": 0,
+            "polled": 0,
+            "events_emitted": 0,
+            "expired": 0,
+            "closed": 0,
+            "errors": 0,
+            "candidate_workspaces": 0,
+            "bindings_discovered": 0,
+            "watches_armed": 0,
+            "discovery_errors": 0,
+        }
+        discovery_counts = self.discover_and_arm_missing_watches(limit=limit)
+        due_counts = self.process_due_watches(limit=limit)
+        for key, value in discovery_counts.items():
+            counts[key] = counts.get(key, 0) + int(value)
+        for key, value in due_counts.items():
+            counts[key] = counts.get(key, 0) + int(value)
+        return counts
+
+    def _active_bindings(self, *, limit: int) -> dict[str, PrBinding]:
+        binding_store = PrBindingStore(self._hub_root)
+        active_bindings: dict[str, PrBinding] = {}
+        for state in sorted(_ACTIVE_PR_STATES):
+            for binding in binding_store.list_bindings(
+                provider="github",
+                pr_state=state,
+                limit=limit,
+            ):
+                active_bindings[binding.binding_id] = binding
+        return active_bindings
+
+    def _repair_active_watch(
+        self,
+        *,
+        binding: PrBinding,
+        watch: ScmPollingWatch,
+        workspace_root: Path,
+    ) -> ScmPollingWatch:
+        return self._watch_store.upsert_watch(
+            provider="github",
+            binding_id=binding.binding_id,
+            repo_slug=binding.repo_slug,
+            repo_id=binding.repo_id,
+            pr_number=binding.pr_number,
+            workspace_root=str(workspace_root.resolve()),
+            thread_target_id=binding.thread_target_id,
+            poll_interval_seconds=watch.poll_interval_seconds,
+            next_poll_at=watch.next_poll_at,
+            expires_at=watch.expires_at,
+            reaction_config=watch.reaction_config,
+            snapshot=watch.snapshot,
+        )
+
+    def _candidate_workspace_roots(
+        self,
+    ) -> tuple[list[Path], dict[str, list[Path]], dict[str, Path]]:
+        roots: list[Path] = []
+        seen_roots: set[Path] = set()
+        workspaces_by_repo_id: dict[str, list[Path]] = {}
+        workspaces_by_thread_id: dict[str, Path] = {}
+
+        def add_root(
+            workspace_root: Path,
+            *,
+            repo_id: Optional[str] = None,
+            thread_target_id: Optional[str] = None,
+        ) -> None:
+            resolved_root = workspace_root.resolve()
+            if not resolved_root.exists() or not resolved_root.is_dir():
+                return
+            if resolved_root not in seen_roots:
+                seen_roots.add(resolved_root)
+                roots.append(resolved_root)
+            normalized_repo_id = _normalize_text(repo_id)
+            if normalized_repo_id is not None:
+                bucket = workspaces_by_repo_id.setdefault(normalized_repo_id, [])
+                if resolved_root not in bucket:
+                    bucket.append(resolved_root)
+            normalized_thread_target_id = _normalize_text(thread_target_id)
+            if normalized_thread_target_id is not None:
+                workspaces_by_thread_id[normalized_thread_target_id] = resolved_root
+
+        manifest_path = self._hub_root / ".codex-autorunner" / "manifest.yml"
+        if manifest_path.exists():
+            try:
+                manifest = load_manifest(manifest_path, self._hub_root)
+            except ManifestError:
+                manifest = None
+            if manifest is not None:
+                for repo in manifest.repos:
+                    if not repo.enabled:
+                        continue
+                    add_root(self._hub_root / repo.path, repo_id=repo.id)
+
+        try:
+            threads = PmaThreadStore(self._hub_root).list_threads(
+                status="active",
+                limit=500,
+            )
+        except Exception:
+            threads = []
+        for thread in threads:
+            workspace_root = _normalize_text(thread.get("workspace_root"))
+            if workspace_root is None:
+                continue
+            add_root(
+                Path(workspace_root),
+                repo_id=_normalize_text(thread.get("repo_id")),
+                thread_target_id=_normalize_text(thread.get("managed_thread_id")),
+            )
+        return roots, workspaces_by_repo_id, workspaces_by_thread_id
+
+    def _resolve_workspace_root_for_binding(
+        self,
+        *,
+        binding: PrBinding,
+        existing_watch: Optional[ScmPollingWatch],
+        candidate_roots: list[Path],
+        workspaces_by_repo_id: Mapping[str, list[Path]],
+        workspaces_by_thread_id: Mapping[str, Path],
+        repo_slug_cache: dict[str, Optional[str]],
+    ) -> Optional[Path]:
+        if existing_watch is not None:
+            existing_watch_root = Path(existing_watch.workspace_root).resolve()
+            if existing_watch_root.exists() and existing_watch_root.is_dir():
+                return existing_watch_root
+
+        if binding.thread_target_id is not None:
+            thread_root = workspaces_by_thread_id.get(binding.thread_target_id)
+            if thread_root is not None:
+                return thread_root
+
+        if binding.repo_id is not None:
+            repo_roots = workspaces_by_repo_id.get(binding.repo_id) or []
+            if repo_roots:
+                return repo_roots[0]
+
+        for candidate_root in candidate_roots:
+            candidate_key = str(candidate_root)
+            if candidate_key not in repo_slug_cache:
+                try:
+                    github = self._github_service_factory(
+                        candidate_root,
+                        (
+                            self._raw_config
+                            if isinstance(self._raw_config, dict)
+                            else None
+                        ),
+                    )
+                    repo_slug_cache[candidate_key] = _normalize_text(
+                        github.repo_info().name_with_owner
+                    )
+                except Exception:
+                    repo_slug_cache[candidate_key] = None
+            if repo_slug_cache.get(candidate_key) == binding.repo_slug:
+                return candidate_root
+        return None
 
     def _emit_new_conditions(
         self,
@@ -564,7 +814,7 @@ def build_hub_scm_poll_processor(
         return GitHubScmPollingService(
             hub_root,
             raw_config=raw_config,
-        ).process_due_watches(limit=limit)
+        ).process(limit=limit)
 
     return processor
 

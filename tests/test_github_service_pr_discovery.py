@@ -431,6 +431,54 @@ def test_discover_pr_binding_summary_prefers_canonical_binding_for_hub_repo(
     }
 
 
+def test_discover_pr_binding_summary_ignores_closed_canonical_binding_and_uses_live_pr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo")
+    PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=88,
+        pr_state="closed",
+        head_branch="feature/login",
+        base_branch="main",
+    )
+
+    service = GitHubService(repo_root, raw_config={})
+    monkeypatch.setattr(
+        service,
+        "pr_for_branch",
+        lambda *, branch, cwd=None: {
+            "number": 99,
+            "state": "OPEN",
+            "isDraft": False,
+            "headRefName": branch,
+            "baseRefName": "main",
+        },
+    )
+    monkeypatch.setattr(
+        service,
+        "repo_info",
+        lambda: RepoInfo(
+            name_with_owner="acme/widgets",
+            url="https://github.com/acme/widgets",
+            default_branch="main",
+        ),
+    )
+
+    assert service.discover_pr_binding_summary(branch="feature/login") == {
+        "repo_slug": "acme/widgets",
+        "pr_number": 99,
+        "pr_state": "open",
+        "head_branch": "feature/login",
+        "base_branch": "main",
+    }
+
+
 def test_sync_pr_persists_binding_and_keeps_link_state_as_session_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

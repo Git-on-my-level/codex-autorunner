@@ -2607,6 +2607,10 @@ class HubSupervisor:
                 "expired": 0,
                 "closed": 0,
                 "errors": 0,
+                "candidate_workspaces": 0,
+                "bindings_discovered": 0,
+                "watches_armed": 0,
+                "discovery_errors": 0,
             }
         try:
             return processor(limit)
@@ -2619,6 +2623,10 @@ class HubSupervisor:
                 "expired": 0,
                 "closed": 0,
                 "errors": 1,
+                "candidate_workspaces": 0,
+                "bindings_discovered": 0,
+                "watches_armed": 0,
+                "discovery_errors": 1,
             }
 
     def _start_lifecycle_event_processor(self) -> None:

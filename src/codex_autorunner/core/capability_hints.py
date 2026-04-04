@@ -196,13 +196,18 @@ def _build_scm_hint(
     enabled = _explicit_bool(automation, "enabled")
     ingress = _mapping(automation.get("webhook_ingress"))
     ingress_enabled = _explicit_bool(ingress, "enabled")
+    polling = _mapping(automation.get("polling"))
+    polling_enabled = _explicit_bool(polling, "enabled")
 
     if enabled is False:
         reason_code = "scm_automation_disabled"
         prerequisite = "Enable `github.automation.enabled`."
-    elif enabled is True and ingress_enabled is False:
-        reason_code = "scm_webhook_ingress_disabled"
-        prerequisite = "Enable `github.automation.webhook_ingress.enabled`."
+    elif enabled is True and ingress_enabled is False and polling_enabled is False:
+        reason_code = "scm_automation_transport_disabled"
+        prerequisite = (
+            "Enable `github.automation.polling.enabled` or "
+            "`github.automation.webhook_ingress.enabled`."
+        )
     else:
         return None
 
@@ -214,11 +219,11 @@ def _build_scm_hint(
             "PMA prompt:",
             (
                 "Enable GitHub SCM automation for this repo. Turn on "
-                "`github.automation.enabled` and "
-                "`github.automation.webhook_ingress.enabled`, configure the "
-                "webhook secret, and confirm PRs are bound to a managed "
-                "thread so review feedback and CI failures can be routed into "
-                "follow-up work. Report back any remaining prerequisites."
+                "`github.automation.enabled`, choose either polling or "
+                "webhook ingress as the transport, and confirm PRs are bound "
+                "to a managed thread so review feedback and CI failures can "
+                "be routed into follow-up work. Report back any remaining "
+                "prerequisites."
             ),
         ]
     )

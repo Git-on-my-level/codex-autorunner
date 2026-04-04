@@ -1166,7 +1166,7 @@ _TABLE_DEFINITIONS = (
     OrchestrationTableDefinition(
         name="orch_scm_polling_watches",
         role="authoritative",
-        description="Bounded SCM polling watches for outbound-only PR follow-up automation.",
+        description="Bounded SCM polling watches for GitHub PR follow-up automation, including outbound-only deployments.",
     ),
     OrchestrationTableDefinition(
         name="orch_notification_conversations",

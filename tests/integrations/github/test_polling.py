@@ -79,6 +79,77 @@ class _AutomationServiceFake:
         return []
 
 
+class _DiscoveringGitHubServiceStub(_GitHubServiceStub):
+    def __init__(
+        self,
+        repo_root: Path,
+        raw_config: dict | None = None,
+        *,
+        hub_root: Path,
+        repo_id: str,
+        repo_slug: str,
+        pr_number: int,
+        head_branch: str,
+        base_branch: str = "main",
+        pr_state: str = "open",
+        discover: bool = True,
+    ) -> None:
+        super().__init__(
+            repo_root,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": pr_state == "draft",
+                "headRefOid": "abc123",
+                "author": {"login": "pr-author"},
+            },
+            reviews_payload=[],
+            checks_payload=[],
+        )
+        self._hub_root = hub_root
+        self._repo_id = repo_id
+        self._repo_slug = repo_slug
+        self._pr_number = pr_number
+        self._head_branch = head_branch
+        self._base_branch = base_branch
+        self._pr_state = pr_state
+        self._discover = discover
+
+    def discover_pr_binding(self, *, branch=None, cwd=None):
+        _ = branch, cwd
+        if not self._discover:
+            return None
+        return PrBindingStore(self._hub_root).upsert_binding(
+            provider="github",
+            repo_slug=self._repo_slug,
+            repo_id=self._repo_id,
+            pr_number=self._pr_number,
+            pr_state=self._pr_state,
+            head_branch=self._head_branch,
+            base_branch=self._base_branch,
+        )
+
+
+def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -> None:
+    manifest_path = hub_root / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "version: 3",
+                "repos:",
+                f"  - id: {repo_id}",
+                f"    path: {repo_rel}",
+                "    enabled: true",
+                "    auto_run: false",
+                "    kind: base",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _polling_config(*, profile: str | None = None) -> dict[str, object]:
     reactions: dict[str, object] = {}
     if profile is not None:
@@ -676,3 +747,160 @@ def test_claim_due_watches_prevents_duplicate_claims(
         )
         == []
     )
+
+
+def test_process_discovers_external_pr_binding_and_arms_watch_from_manifest_workspace(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo")
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=42,
+            head_branch="feature/external-pr",
+            discover=True,
+        )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["candidate_workspaces"] == 1
+    assert result["bindings_discovered"] == 1
+    assert result["watches_armed"] == 1
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=42,
+    )
+    assert binding is not None
+    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert watch is not None
+    assert watch.state == "active"
+    assert watch.workspace_root == str(repo_root.resolve())
+
+
+def test_process_arms_watch_for_existing_binding_without_discovery(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo")
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=43,
+        pr_state="open",
+        head_branch="feature/missing-watch",
+        base_branch="main",
+    )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=43,
+            head_branch="feature/missing-watch",
+            discover=False,
+        )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["bindings_discovered"] == 0
+    assert result["watches_armed"] == 1
+    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert watch is not None
+    assert watch.state == "active"
+    assert watch.workspace_root == str(repo_root.resolve())
+
+
+def test_process_repairs_active_watch_workspace_root_without_resetting_snapshot(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo")
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=44,
+        pr_state="open",
+        head_branch="feature/repair-watch",
+        base_branch="main",
+    )
+    stale_root = hub_root / "workspace" / "missing"
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=44,
+            head_branch="feature/repair-watch",
+            discover=False,
+        )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        repo_id=binding.repo_id,
+        pr_number=binding.pr_number,
+        workspace_root=str(stale_root),
+        thread_target_id=binding.thread_target_id,
+        poll_interval_seconds=90,
+        next_poll_at="2099-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"head_sha": "abc123", "pr_state": "open"},
+    )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["watches_armed"] == 1
+    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert watch is not None
+    assert watch.workspace_root == str(repo_root.resolve())
+    assert watch.snapshot == {"head_sha": "abc123", "pr_state": "open"}
