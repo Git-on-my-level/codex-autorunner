@@ -55,6 +55,7 @@ from .supervisor_protocol import OpenCodeHarnessSupervisorProtocol
 _logger = logging.getLogger(__name__)
 _GLOB_META_RE = re.compile(r"[*?\[\]{]")
 _SILENT_TURN_HEARTBEAT_SECONDS = 20.0
+_SILENT_TURN_PROGRESS_POLL_SECONDS = 1.0
 
 
 @dataclass
@@ -76,6 +77,9 @@ class _PendingTurnConfig:
     progress_events_skipped_session: int = 0
     progress_events_idle: int = 0
     heartbeat_task: Optional[asyncio.Task[None]] = None
+    message_progress_task: Optional[asyncio.Task[None]] = None
+    message_progress_roles_seen: set[str] = field(default_factory=set)
+    message_progress_part_signatures: dict[str, str] = field(default_factory=dict)
 
 
 async def _pre_connect_event_stream(
@@ -233,6 +237,83 @@ def _synthetic_command_result_events(
             )
         )
     return events
+
+
+def _synthetic_message_snapshot_events(
+    conversation_id: str,
+    payload: Any,
+    *,
+    message_roles_seen: set[str],
+    part_signatures: dict[str, str],
+) -> list[dict[str, Any]]:
+    messages_raw: Any = payload
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, list):
+            messages_raw = data
+    if not isinstance(messages_raw, list):
+        return []
+
+    raw_events: list[dict[str, Any]] = []
+    for entry in messages_raw:
+        if not isinstance(entry, dict):
+            continue
+        info_raw = entry.get("info")
+        info = info_raw if isinstance(info_raw, dict) else {}
+        message_id = info.get("id") or entry.get("id")
+        role = info.get("role") or entry.get("role")
+        if not isinstance(message_id, str) or not message_id:
+            continue
+        if role != "assistant":
+            continue
+        if message_id not in message_roles_seen:
+            message_roles_seen.add(message_id)
+            raw_events.append(
+                _wrap_runtime_raw_event(
+                    "message.updated",
+                    {
+                        "sessionID": conversation_id,
+                        "info": {"id": message_id, "role": "assistant"},
+                    },
+                )
+            )
+        parts = entry.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for index, part in enumerate(parts):
+            if not isinstance(part, dict):
+                continue
+            part_type = str(part.get("type") or "").strip().lower()
+            if part_type not in {"reasoning", "tool", "patch", "usage"}:
+                continue
+            normalized_part = dict(part)
+            normalized_part.setdefault("messageID", message_id)
+            normalized_part.setdefault("sessionID", conversation_id)
+            part_id = (
+                normalized_part.get("id")
+                or normalized_part.get("callID")
+                or f"{part_type}:{message_id}:{index}"
+            )
+            signature_key = str(part_id)
+            signature = json.dumps(normalized_part, sort_keys=True, ensure_ascii=True)
+            if part_signatures.get(signature_key) == signature:
+                continue
+            part_signatures[signature_key] = signature
+            raw_events.append(
+                _wrap_runtime_raw_event(
+                    "message.part.updated",
+                    {
+                        "sessionID": conversation_id,
+                        "messageID": message_id,
+                        "properties": {
+                            "messageID": message_id,
+                            "info": {"id": message_id, "role": "assistant"},
+                            "part": normalized_part,
+                        },
+                    },
+                )
+            )
+    return raw_events
 
 
 def _observe_background_task(task: asyncio.Task[Any]) -> None:
@@ -977,7 +1058,36 @@ class OpenCodeHarness(AgentHarness):
                 except asyncio.CancelledError:
                     raise
 
+            async def _poll_message_progress() -> None:
+                try:
+                    while not command_task.done():
+                        if pending.pre_connected_event_seen.is_set():
+                            break
+                        try:
+                            payload = await client.list_messages(
+                                conversation_id, limit=10
+                            )
+                        except Exception:
+                            await asyncio.sleep(_SILENT_TURN_PROGRESS_POLL_SECONDS)
+                            continue
+                        if pending.pre_connected_event_seen.is_set():
+                            break
+                        for raw_event in _synthetic_message_snapshot_events(
+                            conversation_id,
+                            payload,
+                            message_roles_seen=pending.message_progress_roles_seen,
+                            part_signatures=pending.message_progress_part_signatures,
+                        ):
+                            pending.synthetic_raw_events.append(raw_event)
+                            await pending.event_buffer.append(raw_event)
+                        await asyncio.sleep(_SILENT_TURN_PROGRESS_POLL_SECONDS)
+                except asyncio.CancelledError:
+                    raise
+
             pending.heartbeat_task = asyncio.create_task(_emit_busy_heartbeats())
+            pending.message_progress_task = asyncio.create_task(
+                _poll_message_progress()
+            )
         return TurnRef(
             conversation_id=conversation_id,
             turn_id=turn_id,
@@ -1098,7 +1208,36 @@ class OpenCodeHarness(AgentHarness):
                 except asyncio.CancelledError:
                     raise
 
+            async def _poll_message_progress() -> None:
+                try:
+                    while not command_task.done():
+                        if pending.pre_connected_event_seen.is_set():
+                            break
+                        try:
+                            payload = await client.list_messages(
+                                conversation_id, limit=10
+                            )
+                        except Exception:
+                            await asyncio.sleep(_SILENT_TURN_PROGRESS_POLL_SECONDS)
+                            continue
+                        if pending.pre_connected_event_seen.is_set():
+                            break
+                        for raw_event in _synthetic_message_snapshot_events(
+                            conversation_id,
+                            payload,
+                            message_roles_seen=pending.message_progress_roles_seen,
+                            part_signatures=pending.message_progress_part_signatures,
+                        ):
+                            pending.synthetic_raw_events.append(raw_event)
+                            await pending.event_buffer.append(raw_event)
+                        await asyncio.sleep(_SILENT_TURN_PROGRESS_POLL_SECONDS)
+                except asyncio.CancelledError:
+                    raise
+
             pending.heartbeat_task = asyncio.create_task(_emit_busy_heartbeats())
+            pending.message_progress_task = asyncio.create_task(
+                _poll_message_progress()
+            )
         return TurnRef(conversation_id=conversation_id, turn_id=turn_id)
 
     async def interrupt(
@@ -1481,6 +1620,9 @@ class OpenCodeHarness(AgentHarness):
             return await asyncio.wait_for(_collect(), timeout=timeout)
         finally:
             heartbeat_task = pending.heartbeat_task if pending is not None else None
+            message_progress_task = (
+                pending.message_progress_task if pending is not None else None
+            )
             pre_stream_task = (
                 pending.pre_connected_stream_task if pending is not None else None
             )
@@ -1493,6 +1635,10 @@ class OpenCodeHarness(AgentHarness):
                 heartbeat_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat_task
+            if message_progress_task is not None and not message_progress_task.done():
+                message_progress_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await message_progress_task
             if pre_stream_task is not None and not pre_stream_task.done():
                 pre_stream_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

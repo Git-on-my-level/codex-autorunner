@@ -15,7 +15,9 @@ from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import get_registered_agents
 from codex_autorunner.core.orchestration import FreshConversationRequiredError
 from codex_autorunner.core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
     merge_runtime_thread_raw_events,
+    normalize_runtime_thread_raw_event,
 )
 from codex_autorunner.core.sse import SSEEvent
 
@@ -500,6 +502,134 @@ async def test_opencode_harness_start_turn_returns_before_prompt_finishes_and_sy
     ]
     assert "message.completed" in methods
     assert "session.idle" in methods
+
+
+@pytest.mark.asyncio
+async def test_opencode_harness_polls_messages_for_rich_progress_when_sse_is_silent(
+    monkeypatch,
+) -> None:
+    workspace = Path("/tmp/workspace").resolve()
+    client = _StubClient([])
+    release_prompt = asyncio.Event()
+
+    async def _prompt_async(session_id: str, **kwargs: object) -> dict[str, object]:
+        _ = kwargs
+        await release_prompt.wait()
+        return {
+            "info": {"id": "backend-turn-1"},
+            "sessionID": session_id,
+            "parts": [{"type": "text", "text": "Agent reply"}],
+        }
+
+    message_snapshots = [
+        {
+            "data": [
+                {
+                    "info": {"id": "assistant-1", "role": "assistant"},
+                    "parts": [],
+                }
+            ]
+        },
+        {
+            "data": [
+                {
+                    "info": {"id": "assistant-1", "role": "assistant"},
+                    "parts": [
+                        {
+                            "id": "reason-1",
+                            "type": "reasoning",
+                            "messageID": "assistant-1",
+                            "sessionID": "session-1",
+                            "text": "Looking for AGENTS.md",
+                        },
+                        {
+                            "id": "tool-1",
+                            "type": "tool",
+                            "messageID": "assistant-1",
+                            "sessionID": "session-1",
+                            "tool": "shell",
+                            "input": "rg AGENTS.md",
+                            "state": {"status": "running"},
+                        },
+                    ],
+                }
+            ]
+        },
+    ]
+    list_message_calls = 0
+
+    async def _list_messages(session_id: str, **_kwargs: Any) -> Any:
+        nonlocal list_message_calls
+        assert session_id == "session-1"
+        snapshot = message_snapshots[
+            min(list_message_calls, len(message_snapshots) - 1)
+        ]
+        list_message_calls += 1
+        return snapshot
+
+    client.prompt_async = _prompt_async  # type: ignore[method-assign]
+    client.list_messages = _list_messages  # type: ignore[method-assign]
+    harness = OpenCodeHarness(_StubSupervisor(client))
+    monkeypatch.setattr(harness_module, "_SILENT_TURN_PROGRESS_POLL_SECONDS", 0.01)
+
+    turn = await harness.start_turn(
+        workspace,
+        "session-1",
+        prompt="hello",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    event_iter = harness.stream_events(workspace, "session-1", turn.turn_id)
+    collected: list[dict[str, Any]] = []
+    for _ in range(10):
+        event = await asyncio.wait_for(event_iter.__anext__(), timeout=1.0)
+        collected.append(event)
+        part_types = {
+            item.get("message", {})
+            .get("params", {})
+            .get("properties", {})
+            .get("part", {})
+            .get("type")
+            for item in collected
+            if item.get("message", {}).get("method") == "message.part.updated"
+        }
+        if {"reasoning", "tool"}.issubset(part_types):
+            break
+    await event_iter.aclose()
+
+    message_part_events = [
+        item
+        for item in collected
+        if item.get("message", {}).get("method") == "message.part.updated"
+    ]
+    assert message_part_events
+    assert any(
+        item["message"]["params"]["properties"]["part"]["type"] == "reasoning"
+        for item in message_part_events
+    )
+    assert any(
+        item["message"]["params"]["properties"]["part"]["type"] == "tool"
+        for item in message_part_events
+    )
+
+    normalized_state = RuntimeThreadRunEventState()
+    normalized_events = []
+    for item in collected:
+        normalized_events.extend(
+            await normalize_runtime_thread_raw_event(item, normalized_state)
+        )
+    assert any(getattr(item, "kind", None) == "thinking" for item in normalized_events)
+    assert any(
+        getattr(item, "tool_name", None) == "shell" for item in normalized_events
+    )
+
+    release_prompt.set()
+    result = await harness.wait_for_turn(workspace, "session-1", turn.turn_id)
+    assert result.status == "ok"
+    assert result.assistant_text == "Agent reply"
 
 
 @pytest.mark.asyncio
