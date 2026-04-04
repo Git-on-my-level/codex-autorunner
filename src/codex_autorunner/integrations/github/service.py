@@ -557,13 +557,22 @@ class GitHubService:
         hub_root, repo_id = self._binding_context()
         store = PrBindingStore(hub_root) if hub_root is not None else None
         if store is not None and repo_id is not None:
-            canonical_bindings = store.list_bindings(
-                provider="github",
-                repo_id=repo_id,
-                head_branch=resolved_branch,
-                limit=1,
-            )
+            canonical_bindings: list[PrBinding] = []
+            for pr_state in ("open", "draft"):
+                canonical_bindings.extend(
+                    store.list_bindings(
+                        provider="github",
+                        repo_id=repo_id,
+                        pr_state=pr_state,
+                        head_branch=resolved_branch,
+                        limit=1,
+                    )
+                )
             if canonical_bindings:
+                canonical_bindings.sort(
+                    key=lambda binding: (binding.updated_at, binding.pr_number),
+                    reverse=True,
+                )
                 return binding_summary(canonical_bindings[0])
 
         pr = self.pr_for_branch(branch=resolved_branch, cwd=cwd)
@@ -591,6 +600,38 @@ class GitHubService:
                 else None
             )
         return summary
+
+    def discover_pr_binding(
+        self, *, branch: Optional[str] = None, cwd: Optional[Path] = None
+    ) -> Optional[PrBinding]:
+        summary = self.discover_pr_binding_summary(branch=branch, cwd=cwd)
+        if summary is None:
+            return None
+
+        binding_store = self._pr_binding_store()
+        existing_binding: Optional[PrBinding] = None
+        repo_slug = _normalize_optional_text(summary.get("repo_slug"))
+        head_branch = _normalize_optional_text(summary.get("head_branch"))
+        if (
+            binding_store is not None
+            and repo_slug is not None
+            and head_branch is not None
+        ):
+            existing_binding = binding_store.find_active_binding_for_branch(
+                provider="github",
+                repo_slug=repo_slug,
+                branch_name=head_branch,
+            )
+
+        return (
+            self._persist_pr_binding(
+                repo_slug=str(summary["repo_slug"]),
+                summary=summary,
+                existing_binding=existing_binding,
+            )
+            if repo_slug is not None
+            else None
+        )
 
     def list_open_issues(
         self, *, limit: int = 10, cwd: Optional[Path] = None

@@ -11,7 +11,7 @@ Use these only after base setup is complete:
 - Telegram interactive bot onboarding: `docs/AGENT_SETUP_TELEGRAM_GUIDE.md`
 - Discord interactive bot onboarding: `docs/AGENT_SETUP_DISCORD_GUIDE.md`
 - GitHub SCM automation: auto-address PR review feedback and CI failures on
-  bound PRs via webhook ingress and managed-thread follow-up.
+  bound PRs via polling-only or webhook-backed managed-thread follow-up.
 
 These are optional integrations, not required for baseline CAR setup.
 
