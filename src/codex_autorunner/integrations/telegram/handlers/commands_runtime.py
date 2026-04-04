@@ -27,6 +27,10 @@ from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
 from ....core.utils import canonicalize_path
 from ...app_server.client import _normalize_sandbox_policy
+from ...chat.constants import (
+    APP_SERVER_UNAVAILABLE_MESSAGE,
+    TOPIC_NOT_BOUND_MESSAGE,
+)
 from ...chat.media import (
     format_media_batch_failure as _format_media_batch_failure,  # noqa: F401
 )
@@ -963,7 +967,7 @@ class TelegramCommandHandlers(
         if workspace_path is None:
             await self._send_message(
                 message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -992,7 +996,7 @@ class TelegramCommandHandlers(
                 )
                 await self._send_message(
                     message.chat_id,
-                    "App server unavailable; try again or check logs.",
+                    APP_SERVER_UNAVAILABLE_MESSAGE,
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1000,7 +1004,7 @@ class TelegramCommandHandlers(
             if client is None:
                 await self._send_message(
                     message.chat_id,
-                    error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    error or TOPIC_NOT_BOUND_MESSAGE,
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1549,7 +1553,7 @@ class TelegramCommandHandlers(
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1654,7 +1658,7 @@ class TelegramCommandHandlers(
             )
             await self._send_message(
                 message.chat_id,
-                "App server unavailable; try again or check logs.",
+                APP_SERVER_UNAVAILABLE_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1662,7 +1666,7 @@ class TelegramCommandHandlers(
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1774,7 +1778,7 @@ class TelegramCommandHandlers(
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1928,7 +1932,7 @@ class TelegramCommandHandlers(
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1974,7 +1978,7 @@ class TelegramCommandHandlers(
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2021,7 +2025,7 @@ class TelegramCommandHandlers(
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2251,7 +2255,7 @@ class TelegramCommandHandlers(
         if not workspace_path:
             return (
                 False,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
             )
         try:
             client = await self._client_for_workspace(workspace_path)
@@ -2264,11 +2268,11 @@ class TelegramCommandHandlers(
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            return False, "App server unavailable; try again or check logs."
+            return False, APP_SERVER_UNAVAILABLE_MESSAGE
         if client is None:
             return (
                 False,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
             )
         log_event(
             self._logger,
@@ -2606,7 +2610,7 @@ Summary applied.""",
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3138,7 +3142,7 @@ Summary applied.""",
         if workspace_path is None:
             await self._send_message(
                 message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3147,7 +3151,7 @@ Summary applied.""",
         if client is None:
             await self._send_message(
                 message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3200,7 +3204,7 @@ Summary applied.""",
         if workspace_path is None:
             await self._send_message(
                 message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3209,7 +3213,7 @@ Summary applied.""",
         if client is None:
             await self._send_message(
                 message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )

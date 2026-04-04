@@ -23,6 +23,7 @@ from .....core.filebox import (
 from .....core.injected_context import wrap_injected_context
 from .....core.logging_utils import log_event
 from .....core.state import now_iso
+from ....chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ....chat.media import IMAGE_CONTENT_TYPES, IMAGE_EXTS
 from ...adapter import TelegramMessage
 from ...config import TelegramMediaCandidate
@@ -685,7 +686,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             await self._send_message(
                 first_msg.chat_id,
                 self._with_conversation_id(
-                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    TOPIC_NOT_BOUND_MESSAGE,
                     chat_id=first_msg.chat_id,
                     thread_id=first_msg.thread_id,
                 ),
@@ -1508,7 +1509,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             await self._send_message(
                 message.chat_id,
                 self._with_conversation_id(
-                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    TOPIC_NOT_BOUND_MESSAGE,
                     chat_id=message.chat_id,
                     thread_id=message.thread_id,
                 ),

@@ -32,6 +32,10 @@ from .....core.state import now_iso
 from ....app_server.client import (
     CodexAppServerDisconnected,
 )
+from ....chat.constants import (
+    APP_SERVER_UNAVAILABLE_MESSAGE,
+    TOPIC_NOT_BOUND_MESSAGE,
+)
 from ....chat.turn_metrics import compose_turn_response_with_footer
 from ...adapter import (
     InlineButton,
@@ -230,7 +234,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
             )
             await self._send_message(
                 message.chat_id,
-                "App server unavailable; try again or check logs.",
+                APP_SERVER_UNAVAILABLE_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -238,7 +242,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )

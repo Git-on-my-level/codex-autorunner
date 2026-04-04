@@ -158,6 +158,7 @@ from ...integrations.chat.command_diagnostics import (
 )
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.compaction import build_compact_seed_prompt
+from ...integrations.chat.constants import TOPIC_NOT_BOUND_DISCORD_MESSAGE
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -13115,9 +13116,7 @@ class DiscordBotService:
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
-                text=format_discord_message(
-                    "Topic not bound. Use `/car bind path:<workspace>` first."
-                ),
+                text=format_discord_message(TOPIC_NOT_BOUND_DISCORD_MESSAGE),
             )
             return
         try:
@@ -13176,9 +13175,7 @@ class DiscordBotService:
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
                 deferred=deferred,
-                text=format_discord_message(
-                    "Topic not bound. Use `/car bind path:<workspace>` first."
-                ),
+                text=format_discord_message(TOPIC_NOT_BOUND_DISCORD_MESSAGE),
             )
             return
 

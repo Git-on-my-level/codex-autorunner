@@ -15,6 +15,10 @@ from ....chat.agents import (
     format_chat_agent_selection,
     normalize_chat_agent,
 )
+from ....chat.constants import (
+    APP_SERVER_UNAVAILABLE_MESSAGE,
+    TOPIC_NOT_BOUND_MESSAGE,
+)
 from ...adapter import TelegramMessage
 from ...config import AppServerUnavailableError
 from ...constants import AGENT_PICKER_PROMPT, AGENT_PROFILE_PICKER_PROMPT
@@ -22,7 +26,6 @@ from ...types import SelectionState
 
 _INVALID_PARAMS_ERROR_CODES = {-32600, -32602}
 _MODEL_LIST_MAX_PAGES = 10
-_AGENT_PICKER_DEFAULT_MESSAGE = "Topic not bound. Use /bind <repo_id> or /bind <path>."
 
 
 async def _handle_agent_command(
@@ -87,7 +90,7 @@ async def _handle_agent_command(
     if workspace_path is None:
         await commands._send_message(
             message.chat_id,
-            error or _AGENT_PICKER_DEFAULT_MESSAGE,
+            error or TOPIC_NOT_BOUND_MESSAGE,
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -105,7 +108,7 @@ async def _handle_agent_command(
         )
         await commands._send_message(
             message.chat_id,
-            "App server unavailable; try again or check logs.",
+            APP_SERVER_UNAVAILABLE_MESSAGE,
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )
@@ -113,7 +116,7 @@ async def _handle_agent_command(
     if client is None:
         await commands._send_message(
             message.chat_id,
-            error or _AGENT_PICKER_DEFAULT_MESSAGE,
+            error or TOPIC_NOT_BOUND_MESSAGE,
             thread_id=message.thread_id,
             reply_to=message.message_id,
         )

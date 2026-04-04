@@ -4,6 +4,7 @@ import inspect
 from typing import Any, Callable, Optional, cast
 
 from ....core.update import _normalize_update_target, _update_target_restarts_surface
+from ...chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ...chat.handlers.models import ChatContext
 from ...chat.handlers.selections import ChatSelectionHandlers
 from ...chat.models import ChatThreadRef
@@ -511,9 +512,7 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
         )
         record = await self._require_bound_record(message)
         if not record:
-            await self._finalize_selection(
-                key, callback, "Topic not bound. Use /bind <repo_id> or /bind <path>."
-            )
+            await self._finalize_selection(key, callback, TOPIC_NOT_BOUND_MESSAGE)
             return
         thread_id = await self._ensure_thread_id(message, record)
         if not thread_id:

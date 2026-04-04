@@ -72,6 +72,10 @@ from .....integrations.app_server.threads import (
     pma_topic_scoped_key,
 )
 from .....integrations.chat.compaction import match_pending_compact_seed
+from .....integrations.chat.constants import (
+    APP_SERVER_UNAVAILABLE_MESSAGE,
+    TOPIC_NOT_BOUND_MESSAGE,
+)
 from .....integrations.chat.runtime_thread_errors import (
     resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
 )
@@ -1157,7 +1161,7 @@ async def _run_telegram_managed_thread_turn(
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            failure_message = "App server unavailable; try again or check logs."
+            failure_message = APP_SERVER_UNAVAILABLE_MESSAGE
             if send_failure_response:
                 await handlers._send_message(
                     message.chat_id,
@@ -1172,7 +1176,7 @@ async def _run_telegram_managed_thread_turn(
                 transcript_text,
             )
         if client is None:
-            failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
+            failure_message = TOPIC_NOT_BOUND_MESSAGE
             if send_failure_response:
                 await handlers._send_message(
                     message.chat_id,
@@ -1768,7 +1772,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             )
             await self._send_message(
                 message.chat_id,
-                "App server unavailable; try again or check logs.",
+                APP_SERVER_UNAVAILABLE_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1776,7 +1780,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1889,7 +1893,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -3155,7 +3159,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 thread_id=message.thread_id,
                 exc=exc,
             )
-            failure_message = "App server unavailable; try again or check logs."
+            failure_message = APP_SERVER_UNAVAILABLE_MESSAGE
             if send_failure_response:
                 await self._send_message(
                     message.chat_id,
@@ -3168,7 +3172,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             )
 
         if client is None:
-            failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
+            failure_message = TOPIC_NOT_BOUND_MESSAGE
             if send_failure_response:
                 await self._send_message(
                     message.chat_id,
@@ -3848,7 +3852,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 record = TelegramTopicRecord(pma_enabled=True)
             record = dataclasses.replace(record, workspace_path=str(hub_root))
         if record is None or not record.workspace_path:
-            failure_message = "Topic not bound. Use /bind <repo_id> or /bind <path>."
+            failure_message = TOPIC_NOT_BOUND_MESSAGE
             if send_failure_response:
                 await self._send_message(
                     message.chat_id,

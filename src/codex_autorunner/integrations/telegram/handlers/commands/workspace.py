@@ -28,6 +28,11 @@ from ....chat.agents import (
     resolve_chat_agent_and_profile,
     resolve_chat_runtime_agent,
 )
+from ....chat.constants import (
+    APP_SERVER_UNAVAILABLE_MESSAGE,
+    TOPIC_NOT_BOUND_MESSAGE,
+    TOPIC_NOT_BOUND_RESUME_MESSAGE,
+)
 from ....chat.status_diagnostics import (
     StatusBlockContext,
     build_status_block_lines,
@@ -170,7 +175,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             if hub_root is None:
                 return None, "PMA unavailable; hub root not configured."
             return str(hub_root), None
-        return None, "Topic not bound. Use /bind <repo_id> or /bind <path>."
+        return None, TOPIC_NOT_BOUND_MESSAGE
 
     def _record_with_workspace_path(
         self,
@@ -409,7 +414,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             )
             await self._send_message(
                 message.chat_id,
-                "App server unavailable; try again or check logs.",
+                APP_SERVER_UNAVAILABLE_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -417,7 +422,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -666,7 +671,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if record is None:
             await self._send_message(
                 message.chat_id,
-                prompt or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                prompt or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -688,7 +693,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if not record.workspace_path:
             await self._send_message(
                 message.chat_id,
-                prompt or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                prompt or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -796,7 +801,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             )
             await self._send_message(
                 message.chat_id,
-                "App server unavailable; try again or check logs.",
+                APP_SERVER_UNAVAILABLE_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -804,7 +809,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if client is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1216,7 +1221,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1301,7 +1306,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 )
                 await self._send_message(
                     message.chat_id,
-                    "App server unavailable; try again or check logs.",
+                    APP_SERVER_UNAVAILABLE_MESSAGE,
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1309,7 +1314,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             if client is None:
                 await self._send_message(
                     message.chat_id,
-                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    TOPIC_NOT_BOUND_MESSAGE,
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1457,7 +1462,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1571,7 +1576,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 )
                 await self._send_message(
                     message.chat_id,
-                    "App server unavailable; try again or check logs.",
+                    APP_SERVER_UNAVAILABLE_MESSAGE,
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1579,7 +1584,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             if client is None:
                 await self._send_message(
                     message.chat_id,
-                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    TOPIC_NOT_BOUND_MESSAGE,
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -1684,7 +1689,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1989,7 +1994,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if record is None or not record.workspace_path:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2295,7 +2300,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if record is None:
             await self._send_message(
                 message.chat_id,
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2317,7 +2322,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             else:
                 await self._send_message(
                     message.chat_id,
-                    "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                    TOPIC_NOT_BOUND_MESSAGE,
                     thread_id=message.thread_id,
                     reply_to=message.message_id,
                 )
@@ -2350,7 +2355,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if workspace_path is None:
             await self._send_message(
                 message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2368,7 +2373,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             )
             await self._send_message(
                 message.chat_id,
-                "App server unavailable; try again or check logs.",
+                APP_SERVER_UNAVAILABLE_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2376,7 +2381,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         if client is None:
             await self._send_message(
                 message.chat_id,
-                error or "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                error or TOPIC_NOT_BOUND_MESSAGE,
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -2831,7 +2836,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 key,
                 callback,
                 _with_conversation_id(
-                    error or "Topic not bound; use /bind before resuming.",
+                    error or TOPIC_NOT_BOUND_RESUME_MESSAGE,
                     chat_id=chat_id,
                     thread_id=thread_id_val,
                 ),
@@ -2855,7 +2860,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 key,
                 callback,
                 _with_conversation_id(
-                    "App server unavailable; try again or check logs.",
+                    APP_SERVER_UNAVAILABLE_MESSAGE,
                     chat_id=chat_id,
                     thread_id=thread_id_val,
                 ),
@@ -2867,7 +2872,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 key,
                 callback,
                 _with_conversation_id(
-                    "Topic not bound; use /bind before resuming.",
+                    TOPIC_NOT_BOUND_RESUME_MESSAGE,
                     chat_id=chat_id,
                     thread_id=thread_id_val,
                 ),
@@ -2932,7 +2937,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 key,
                 callback,
                 _with_conversation_id(
-                    "Topic not bound; use /bind before resuming.",
+                    TOPIC_NOT_BOUND_RESUME_MESSAGE,
                     chat_id=chat_id,
                     thread_id=thread_id_val,
                 ),
@@ -3040,7 +3045,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 key,
                 callback,
                 _with_conversation_id(
-                    error or "Topic not bound; use /bind before resuming.",
+                    error or TOPIC_NOT_BOUND_RESUME_MESSAGE,
                     chat_id=chat_id,
                     thread_id=thread_id_val,
                 ),

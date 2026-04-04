@@ -23,6 +23,7 @@ from ....core.pma_notification_store import (
     notification_surface_key,
 )
 from ....core.utils import canonicalize_path
+from ....integrations.chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ...chat.forwarding import compose_forwarded_message_text
 from ...chat.handlers.messages import message_text_candidate
 from ...chat.media import audio_content_type_for_input, is_image_mime_or_path
@@ -1305,7 +1306,7 @@ async def handle_media_message(
         await handlers._send_message(
             message.chat_id,
             handlers._with_conversation_id(
-                "Topic not bound. Use /bind <repo_id> or /bind <path>.",
+                TOPIC_NOT_BOUND_MESSAGE,
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
             ),
