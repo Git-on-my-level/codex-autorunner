@@ -1734,7 +1734,7 @@ fi
 current_real="$(_realpath "${CURRENT_VENV_LINK}")"
 prev_real="$(_realpath "${PREV_VENV_LINK}")"
 
-printf '%s\n' "${to_delete[@]:-}" | while read -r old; do
+for old in "${to_delete[@]}"; do
   if [[ -z "${old}" ]]; then
     continue
   fi
