@@ -146,8 +146,15 @@ def build_service_in_closed_loop(
 
 
 async def _drain_spawned_tasks(service: TelegramBotService) -> None:
-    while service._spawned_tasks:
-        await asyncio.gather(*tuple(service._spawned_tasks))
+    # Per-topic work may run on TopicQueue workers (see concurrency.per_topic_queue)
+    # rather than service._spawned_tasks; drain both until stable.
+    while True:
+        while service._spawned_tasks:
+            await asyncio.gather(*tuple(service._spawned_tasks))
+        for runtime in service._router._topics.values():
+            await runtime.queue.join_idle()
+        if not service._spawned_tasks:
+            return
 
 
 class FakeBot:

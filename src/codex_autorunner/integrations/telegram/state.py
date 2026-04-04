@@ -2151,6 +2151,14 @@ class TopicQueue:
     def pending(self) -> int:
         return self._queue.qsize()
 
+    async def join_idle(self) -> None:
+        """Block until the queue has no backlog and no in-flight work item."""
+
+        while self.pending() > 0 or (
+            self._current_task is not None and not self._current_task.done()
+        ):
+            await asyncio.sleep(0)
+
     def cancel_active(self) -> bool:
         task = self._current_task
         if task is None or task.done():

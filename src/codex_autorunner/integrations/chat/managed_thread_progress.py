@@ -14,7 +14,7 @@ from ...core.ports.run_event import (
     RunNotice,
     ToolCall,
 )
-from .progress_primitives import TurnProgressTracker
+from .progress_primitives import ProgressAction, TurnProgressTracker
 
 
 @dataclass
@@ -133,6 +133,13 @@ def apply_run_event_to_progress_tracker(
                 remove_components=True,
                 terminal=True,
             )
+        if run_event.kind == "progress":
+            if tracker.transient_action is not None:
+                return ProgressTrackerEventOutcome(changed=False)
+            tracker.transient_action = ProgressAction(
+                label="notice", text=notice, status="update"
+            )
+            return ProgressTrackerEventOutcome(changed=True)
         tracker.add_action("notice", notice, "update")
         return ProgressTrackerEventOutcome(changed=True)
 

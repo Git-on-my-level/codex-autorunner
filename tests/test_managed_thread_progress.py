@@ -206,3 +206,171 @@ def test_apply_run_event_to_progress_tracker_preserves_boundary_between_snapshot
         "Scanning repo",
         "Scanning repo complete.",
     ]
+
+
+def test_progress_notice_shows_when_no_transient_action() -> None:
+    tracker = _tracker()
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:00Z",
+            kind="progress",
+            message="agent busy",
+        ),
+        runtime_state=ProgressRuntimeState(),
+    )
+
+    assert outcome.changed is True
+    assert tracker.transient_action is not None
+    assert tracker.transient_action.label == "notice"
+    assert tracker.transient_action.text == "agent busy"
+    assert len(tracker.actions) == 0
+
+
+def test_progress_notice_does_not_overwrite_tool_trace() -> None:
+    tracker = _tracker()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        ToolCall(timestamp="2026-03-15T00:00:00Z", tool_name="exec", tool_input={}),
+        runtime_state=ProgressRuntimeState(),
+    )
+    assert tracker.transient_action is not None
+    assert tracker.transient_action.label == "tool"
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:01Z",
+            kind="progress",
+            message="agent busy",
+        ),
+        runtime_state=ProgressRuntimeState(),
+    )
+
+    assert outcome.changed is False
+    assert tracker.transient_action.label == "tool"
+    assert tracker.transient_action.text == "exec"
+    assert len(tracker.actions) == 0
+
+
+def test_progress_notice_does_not_overwrite_thinking_trace() -> None:
+    tracker = _tracker()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:00Z",
+            kind="thinking",
+            message="analyzing code",
+        ),
+        runtime_state=ProgressRuntimeState(),
+    )
+    assert tracker.transient_action is not None
+    assert tracker.transient_action.label == "thinking"
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:01Z",
+            kind="progress",
+            message="agent busy",
+        ),
+        runtime_state=ProgressRuntimeState(),
+    )
+
+    assert outcome.changed is False
+    assert tracker.transient_action.label == "thinking"
+    assert tracker.transient_action.text == "analyzing code"
+
+
+def test_progress_notice_does_not_accumulate_in_action_list() -> None:
+    tracker = _tracker()
+
+    for i in range(5):
+        apply_run_event_to_progress_tracker(
+            tracker,
+            RunNotice(
+                timestamp=f"2026-03-15T00:00:0{i}Z",
+                kind="progress",
+                message="agent busy",
+            ),
+            runtime_state=ProgressRuntimeState(),
+        )
+
+    assert len(tracker.actions) == 0
+    assert tracker.transient_action is not None
+    assert tracker.transient_action.text == "agent busy"
+
+
+def test_tool_call_replaces_progress_notice() -> None:
+    tracker = _tracker()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(
+            timestamp="2026-03-15T00:00:00Z",
+            kind="progress",
+            message="agent busy",
+        ),
+        runtime_state=ProgressRuntimeState(),
+    )
+    assert tracker.transient_action is not None
+    assert tracker.transient_action.label == "notice"
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        ToolCall(timestamp="2026-03-15T00:00:01Z", tool_name="read", tool_input={}),
+        runtime_state=ProgressRuntimeState(),
+    )
+
+    assert tracker.transient_action is not None
+    assert tracker.transient_action.label == "tool"
+    assert tracker.transient_action.text == "read"
+
+
+def test_interleaved_busy_and_tool_events_preserves_tools() -> None:
+    """Simulates real OpenCode flow: busy → tool → busy → thinking → busy."""
+    tracker = _tracker()
+    state = ProgressRuntimeState()
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(timestamp="t0", kind="progress", message="agent busy"),
+        runtime_state=state,
+    )
+    assert tracker.transient_action.label == "notice"
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        ToolCall(timestamp="t1", tool_name="exec", tool_input={}),
+        runtime_state=state,
+    )
+    assert tracker.transient_action.label == "tool"
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(timestamp="t2", kind="progress", message="agent busy"),
+        runtime_state=state,
+    )
+    assert outcome.changed is False
+    assert tracker.transient_action.label == "tool"
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(timestamp="t3", kind="thinking", message="planning next step"),
+        runtime_state=state,
+    )
+    assert tracker.transient_action.label == "thinking"
+
+    outcome = apply_run_event_to_progress_tracker(
+        tracker,
+        RunNotice(timestamp="t4", kind="progress", message="agent busy"),
+        runtime_state=state,
+    )
+    assert outcome.changed is False
+    assert tracker.transient_action.label == "thinking"
+    assert tracker.transient_action.text == "planning next step"
+
+    assert len(tracker.actions) == 0

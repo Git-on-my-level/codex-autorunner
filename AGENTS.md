@@ -57,7 +57,7 @@ Reference docs in `docs/` (e.g., configuration, operations, debugging).
 - Prefer `gh pr create --body-file` (or a here-doc) to preserve PR body newlines.
 
 ## Git commits
-- Use a 30 second (or longer) timeout for `git commit` commands so pre-commit hooks can finish.
+- Use a 300 second timeout for `git commit` commands so pre-commit hooks can finish.
 - Avoid `--no-verify` and always err on the side of fixing things; if you must use it, ask the user first; if the fix is simple and non-harmful, make the fix and include it in your changes.
 
 ## Releases
