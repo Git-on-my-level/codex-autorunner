@@ -313,7 +313,7 @@ async def test_repeated_5xx_opens_shared_breaker() -> None:
 
 
 @pytest.mark.anyio
-async def test_retryable_5xx_that_recovers_does_not_open_shared_breaker(
+async def test_interaction_response_is_fail_fast_without_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attempts = {"count": 0}
@@ -328,9 +328,7 @@ async def test_retryable_5xx_that_recovers_does_not_open_shared_breaker(
 
     def handler(_request: httpx.Request) -> httpx.Response:
         attempts["count"] += 1
-        if attempts["count"] <= 2:
-            return httpx.Response(500, json={"message": "temporary outage"})
-        return httpx.Response(204)
+        return httpx.Response(500, json={"message": "temporary outage"})
 
     client = DiscordRestClient(
         bot_token="abc123",
@@ -339,16 +337,14 @@ async def test_retryable_5xx_that_recovers_does_not_open_shared_breaker(
     )
     await _configure_mock_client(client, httpx.MockTransport(handler))
     try:
-        await client.create_interaction_response(
-            interaction_id="123",
-            interaction_token="token",
-            payload={"type": 5},
-        )
+        with pytest.raises(DiscordTransientError, match="server error"):
+            await client.create_interaction_response(
+                interaction_id="123",
+                interaction_token="token",
+                payload={"type": 5},
+            )
     finally:
         await client.close()
 
-    assert attempts["count"] == 3
-    assert len(sleeps) == 2
-    breaker = client._circuit_breakers["interactions"]
-    assert breaker._state.failure_count == 0
-    assert breaker._state.state.value == "closed"
+    assert attempts["count"] == 1
+    assert sleeps == []
