@@ -48,7 +48,7 @@ interface PayloadParams {
   delta?: string;
   text?: string;
   output?: string;
-  status?: string;
+  status?: unknown;
   message?: string;
   files?: Array<string | { path?: string; file?: string; name?: string }>;
   fileChanges?: Array<string | { path?: string; file?: string; name?: string }>;
@@ -322,6 +322,43 @@ function extractErrorMessage(params: PayloadParams | null | undefined): string {
   }
   if (typeof err === "string") return err;
   if (typeof params.message === "string") return params.message;
+  return "";
+}
+
+function normalizeStatusSummary(statusValue: unknown): string {
+  if (typeof statusValue === "string") return statusValue.trim();
+  if (typeof statusValue === "number" || typeof statusValue === "boolean") {
+    return String(statusValue);
+  }
+  const statusObj = asRecord(statusValue);
+  if (!statusObj) return "";
+
+  const statusType = statusObj.type;
+  if (typeof statusType === "string" && statusType.trim()) return statusType.trim();
+
+  const nestedStatus = statusObj.status;
+  if (typeof nestedStatus === "string" && nestedStatus.trim()) return nestedStatus.trim();
+  const nestedStatusObj = asRecord(nestedStatus);
+  if (nestedStatusObj) {
+    const nestedType = nestedStatusObj.type;
+    if (typeof nestedType === "string" && nestedType.trim()) return nestedType.trim();
+    const nestedState = nestedStatusObj.state;
+    if (typeof nestedState === "string" && nestedState.trim()) return nestedState.trim();
+  }
+
+  const state = statusObj.state;
+  if (typeof state === "string" && state.trim()) return state.trim();
+  const message = statusObj.message;
+  if (typeof message === "string" && message.trim()) return message.trim();
+  const reason = statusObj.reason;
+  if (typeof reason === "string" && reason.trim()) return reason.trim();
+
+  try {
+    const encoded = JSON.stringify(statusObj);
+    if (encoded && encoded !== "{}") return encoded;
+  } catch {
+    // Ignore serialization failures and fall back to default status text.
+  }
   return "";
 }
 
@@ -679,7 +716,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
   // Handle generic status updates
   if (method === "status" || params.status) {
     title = "Status";
-    summary = params.status || "Processing";
+    summary = normalizeStatusSummary(params.status) || "Processing";
     kind = "status";
   } else if (method === "item/completed") {
     const itemType = (item as CommandItem).type;
@@ -722,7 +759,7 @@ export function parseAppServerEvent(payload: unknown): ParsedAgentEvent | null {
     kind = "file";
   } else if (method === "turn/completed") {
     title = "Turn completed";
-    summary = params.status || "completed";
+    summary = normalizeStatusSummary(params.status) || "completed";
     kind = "status";
   } else if (method === "error") {
     title = "Error";

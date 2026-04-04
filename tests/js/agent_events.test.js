@@ -459,3 +459,24 @@ test("caps raw session.diff file extraction work for large payloads", () => {
   assert.equal(parsed.event.summary, "src/0.ts, src/1.ts, src/2.ts, src/3.ts +46 more");
   assert.equal(parsed.event.detail, "50 file changes");
 });
+
+test("renders object-based status values without object coercion noise", () => {
+  resetOpenCodeEventState();
+  const parsed = parseAppServerEvent({
+    id: "status-object",
+    received_at: 2000,
+    message: {
+      method: "session.status",
+      params: {
+        status: {
+          type: "busy",
+        },
+      },
+    },
+  });
+
+  assert.ok(parsed);
+  assert.equal(parsed.event.kind, "status");
+  assert.equal(parsed.event.title, "Status");
+  assert.equal(parsed.event.summary, "busy");
+});
