@@ -11,7 +11,6 @@ import sqlite3
 import subprocess
 import time
 import uuid
-from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import (
@@ -325,6 +324,7 @@ from .rendering import (
     sanitize_discord_outbound_text,
     truncate_for_discord,
 )
+from .response_helpers import DiscordResponder
 from .rest import DiscordRestClient
 from .state import DiscordStateStore, OutboxRecord
 
@@ -365,7 +365,6 @@ TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
 TICKETS_SELECT_ID = "tickets_select"
 TICKETS_MODAL_PREFIX = "tickets_modal"
 TICKETS_BODY_INPUT_ID = "ticket_body"
-PREPARED_INTERACTION_CACHE_LIMIT = 512
 
 
 class AppServerUnavailableError(Exception):
@@ -766,7 +765,11 @@ class DiscordBotService:
         self._pending_ticket_context: dict[str, dict[str, str]] = {}
         self._pending_ticket_filters: dict[str, str] = {}
         self._pending_ticket_search_queries: dict[str, str] = {}
-        self._prepared_interaction_policies: OrderedDict[str, str] = OrderedDict()
+        self._responder = DiscordResponder(
+            rest=self._rest,
+            config=self._config,
+            logger=self._logger,
+        )
         self._queued_notice_messages: dict[tuple[str, str], str] = {}
         self._discord_turn_progress_reuse_requests: dict[str, Any] = {}
         self._discord_reusable_progress_messages: dict[str, Any] = {}
@@ -5284,14 +5287,7 @@ class DiscordBotService:
         self,
         interaction_token: str,
     ) -> Optional[str]:
-        token = interaction_token.strip()
-        if not token:
-            return None
-        policy = self._prepared_interaction_policies.get(token)
-        if policy is None:
-            return None
-        self._prepared_interaction_policies.move_to_end(token)
-        return policy
+        return self._responder.prepared_interaction_policy(interaction_token)
 
     def _remember_prepared_interaction_policy(
         self,
@@ -5299,15 +5295,10 @@ class DiscordBotService:
         interaction_token: str,
         policy: str,
     ) -> None:
-        token = interaction_token.strip()
-        if not token:
-            return
-        self._prepared_interaction_policies[token] = policy
-        self._prepared_interaction_policies.move_to_end(token)
-        while (
-            len(self._prepared_interaction_policies) > PREPARED_INTERACTION_CACHE_LIMIT
-        ):
-            self._prepared_interaction_policies.popitem(last=False)
+        self._responder.remember_prepared_interaction_policy(
+            interaction_token=interaction_token,
+            policy=policy,
+        )
 
     async def _prepare_command_interaction(
         self,
@@ -10203,38 +10194,9 @@ class DiscordBotService:
         interaction_token: str,
         text: str,
     ) -> None:
-        max_len = max(int(self._config.max_message_length), 32)
-        content = truncate_for_discord(text, max_len=max_len)
-        if self._prepared_interaction_policy(interaction_token) is not None:
-            sent_followup = await self._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=content,
-            )
-            if sent_followup:
-                return
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={
-                    "type": 4,
-                    "data": {
-                        "content": content,
-                        "flags": DISCORD_EPHEMERAL_FLAG,
-                    },
-                },
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            sent_followup = await self._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=content,
-            )
-            if not sent_followup:
-                self._logger.error(
-                    "Failed to send ephemeral response: %s (interaction_id=%s)",
-                    exc,
-                    interaction_id,
-                )
+        await self._responder.respond(
+            interaction_id, interaction_token, text, ephemeral=True
+        )
 
     async def _defer_ephemeral(
         self,
@@ -10242,31 +10204,11 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
-        if self._prepared_interaction_policy(interaction_token) is not None:
-            return True
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={
-                    "type": 5,
-                    "data": {
-                        "flags": DISCORD_EPHEMERAL_FLAG,
-                    },
-                },
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            self._logger.warning(
-                "Failed to defer ephemeral response: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
-            )
-            return False
-        self._remember_prepared_interaction_policy(
+        return await self._responder.defer(
+            interaction_id=interaction_id,
             interaction_token=interaction_token,
-            policy="defer_ephemeral",
+            ephemeral=True,
         )
-        return True
 
     async def _defer_component_update(
         self,
@@ -10303,15 +10245,13 @@ class DiscordBotService:
         deferred: bool,
         text: str,
     ) -> None:
-        if deferred:
-            max_len = max(int(self._config.max_message_length), 32)
-            sent = await self._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
-            )
-            if sent:
-                return
-        await self._respond_ephemeral(interaction_id, interaction_token, text)
+        await self._responder.send_or_respond(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            ephemeral=True,
+        )
 
     async def _send_or_respond_with_components_ephemeral(
         self,
@@ -10322,17 +10262,13 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        if deferred:
-            max_len = max(int(self._config.max_message_length), 32)
-            sent = await self._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
-                components=components,
-            )
-            if sent:
-                return
-        await self._respond_with_components(
-            interaction_id, interaction_token, text, components
+        await self._responder.send_or_respond_with_components(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            components=components,
+            ephemeral=True,
         )
 
     async def _send_or_update_component_message(
@@ -10345,7 +10281,7 @@ class DiscordBotService:
         components: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         if deferred:
-            updated = await self._edit_original_component_message(
+            updated = await self._responder.edit_original_component_message(
                 interaction_token=interaction_token,
                 text=text,
                 components=components,
@@ -10353,10 +10289,11 @@ class DiscordBotService:
             if updated:
                 return
             max_len = max(int(self._config.max_message_length), 32)
-            sent = await self._send_followup_ephemeral(
+            sent = await self._responder.send_followup(
                 interaction_token=interaction_token,
                 content=truncate_for_discord(text, max_len=max_len),
                 components=components,
+                ephemeral=True,
             )
             if sent:
                 return
@@ -10375,50 +10312,13 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        max_len = max(int(self._config.max_message_length), 32)
-        content = truncate_for_discord(text, max_len=max_len)
-        prepared_policy = self._prepared_interaction_policy(interaction_token)
-        if prepared_policy == "defer_component_update":
-            updated = await self._edit_original_component_message(
-                interaction_token=interaction_token,
-                text=content,
-                components=components,
-            )
-            if updated:
-                return
-        if prepared_policy is not None:
-            sent_followup = await self._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-            )
-            if sent_followup:
-                return
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={
-                    "type": 4,
-                    "data": {
-                        "content": content,
-                        "flags": DISCORD_EPHEMERAL_FLAG,
-                        "components": components,
-                    },
-                },
-            )
-        except DiscordAPIError as exc:
-            sent_followup = await self._send_followup_ephemeral(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-            )
-            if not sent_followup:
-                self._logger.error(
-                    "Failed to send component response: %s (interaction_id=%s)",
-                    exc,
-                    interaction_id,
-                )
+        await self._responder.respond_with_components(
+            interaction_id,
+            interaction_token,
+            text,
+            components,
+            ephemeral=True,
+        )
 
     async def _respond_autocomplete(
         self,
@@ -10469,7 +10369,7 @@ class DiscordBotService:
         content = truncate_for_discord(text, max_len=max_len)
         prepared_policy = self._prepared_interaction_policy(interaction_token)
         if prepared_policy == "defer_component_update":
-            updated = await self._edit_original_component_message(
+            updated = await self._responder.edit_original_component_message(
                 interaction_token=interaction_token,
                 text=content,
                 components=components,
@@ -10477,10 +10377,11 @@ class DiscordBotService:
             if updated:
                 return
         if prepared_policy is not None:
-            sent_followup = await self._send_followup_ephemeral(
+            sent_followup = await self._responder.send_followup(
                 interaction_token=interaction_token,
                 content=content,
                 components=components,
+                ephemeral=True,
             )
             if sent_followup:
                 return
@@ -10497,10 +10398,11 @@ class DiscordBotService:
                 },
             )
         except DiscordAPIError as exc:
-            sent_followup = await self._send_followup_ephemeral(
+            sent_followup = await self._responder.send_followup(
                 interaction_token=interaction_token,
                 content=content,
                 components=components,
+                ephemeral=True,
             )
             if not sent_followup:
                 self._logger.error(
@@ -10516,27 +10418,11 @@ class DiscordBotService:
         text: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        application_id = (self._config.application_id or "").strip()
-        if not application_id:
-            return False
-        max_len = max(int(self._config.max_message_length), 32)
-        payload: dict[str, Any] = {
-            "content": truncate_for_discord(text, max_len=max_len),
-            "components": components or [],
-        }
-        try:
-            await self._rest.edit_original_interaction_response(
-                application_id=application_id,
-                interaction_token=interaction_token,
-                payload=payload,
-            )
-        except DiscordAPIError as exc:
-            self._logger.error(
-                "Failed to edit original interaction response: %s",
-                exc,
-            )
-            return False
-        return True
+        return await self._responder.edit_original_component_message(
+            interaction_token=interaction_token,
+            text=text,
+            components=components,
+        )
 
     async def _send_followup_ephemeral(
         self,
@@ -10545,24 +10431,12 @@ class DiscordBotService:
         content: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        application_id = (self._config.application_id or "").strip()
-        if not application_id:
-            return False
-        payload: dict[str, Any] = {
-            "content": content,
-            "flags": DISCORD_EPHEMERAL_FLAG,
-        }
-        if components:
-            payload["components"] = components
-        try:
-            await self._rest.create_followup_message(
-                application_id=application_id,
-                interaction_token=interaction_token,
-                payload=payload,
-            )
-        except Exception:
-            return False
-        return True
+        return await self._responder.send_followup(
+            interaction_token=interaction_token,
+            content=content,
+            components=components,
+            ephemeral=True,
+        )
 
     async def _respond_public(
         self,
@@ -10570,46 +10444,9 @@ class DiscordBotService:
         interaction_token: str,
         text: str,
     ) -> None:
-        max_len = max(int(self._config.max_message_length), 32)
-        content = truncate_for_discord(text, max_len=max_len)
-        prepared_policy = self._prepared_interaction_policy(interaction_token)
-        if prepared_policy == "defer_component_update":
-            updated = await self._edit_original_component_message(
-                interaction_token=interaction_token,
-                text=content,
-                components=[],
-            )
-            if updated:
-                return
-        if prepared_policy is not None:
-            sent_followup = await self._send_followup_public(
-                interaction_token=interaction_token,
-                content=content,
-            )
-            if sent_followup:
-                return
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={
-                    "type": 4,
-                    "data": {
-                        "content": content,
-                    },
-                },
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            sent_followup = await self._send_followup_public(
-                interaction_token=interaction_token,
-                content=content,
-            )
-            if not sent_followup:
-                self._logger.error(
-                    "Failed to send public response: %s (interaction_id=%s)",
-                    exc,
-                    interaction_id,
-                )
+        await self._responder.respond(
+            interaction_id, interaction_token, text, ephemeral=False
+        )
 
     async def _defer_public(
         self,
@@ -10617,26 +10454,11 @@ class DiscordBotService:
         interaction_id: str,
         interaction_token: str,
     ) -> bool:
-        if self._prepared_interaction_policy(interaction_token) is not None:
-            return True
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={"type": 5},
-            )
-        except (DiscordAPIError, CircuitOpenError) as exc:
-            self._logger.warning(
-                "Failed to defer public response: %s (interaction_id=%s)",
-                exc,
-                interaction_id,
-            )
-            return False
-        self._remember_prepared_interaction_policy(
+        return await self._responder.defer(
+            interaction_id=interaction_id,
             interaction_token=interaction_token,
-            policy="defer_public",
+            ephemeral=False,
         )
-        return True
 
     async def _send_or_respond_public(
         self,
@@ -10646,15 +10468,13 @@ class DiscordBotService:
         deferred: bool,
         text: str,
     ) -> None:
-        if deferred:
-            max_len = max(int(self._config.max_message_length), 32)
-            sent = await self._send_followup_public(
-                interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
-            )
-            if sent:
-                return
-        await self._respond_public(interaction_id, interaction_token, text)
+        await self._responder.send_or_respond(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            ephemeral=False,
+        )
 
     async def _send_or_respond_with_components_public(
         self,
@@ -10665,17 +10485,13 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        if deferred:
-            max_len = max(int(self._config.max_message_length), 32)
-            sent = await self._send_followup_public(
-                interaction_token=interaction_token,
-                content=truncate_for_discord(text, max_len=max_len),
-                components=components,
-            )
-            if sent:
-                return
-        await self._respond_with_components_public(
-            interaction_id, interaction_token, text, components
+        await self._responder.send_or_respond_with_components(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+            components=components,
+            ephemeral=False,
         )
 
     async def _respond_with_components_public(
@@ -10685,49 +10501,13 @@ class DiscordBotService:
         text: str,
         components: list[dict[str, Any]],
     ) -> None:
-        max_len = max(int(self._config.max_message_length), 32)
-        content = truncate_for_discord(text, max_len=max_len)
-        prepared_policy = self._prepared_interaction_policy(interaction_token)
-        if prepared_policy == "defer_component_update":
-            updated = await self._edit_original_component_message(
-                interaction_token=interaction_token,
-                text=content,
-                components=components,
-            )
-            if updated:
-                return
-        if prepared_policy is not None:
-            sent_followup = await self._send_followup_public(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-            )
-            if sent_followup:
-                return
-        try:
-            await self._rest.create_interaction_response(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                payload={
-                    "type": 4,
-                    "data": {
-                        "content": content,
-                        "components": components,
-                    },
-                },
-            )
-        except DiscordAPIError as exc:
-            sent_followup = await self._send_followup_public(
-                interaction_token=interaction_token,
-                content=content,
-                components=components,
-            )
-            if not sent_followup:
-                self._logger.error(
-                    "Failed to send public component response: %s (interaction_id=%s)",
-                    exc,
-                    interaction_id,
-                )
+        await self._responder.respond_with_components(
+            interaction_id,
+            interaction_token,
+            text,
+            components,
+            ephemeral=False,
+        )
 
     async def _send_followup_public(
         self,
@@ -10736,23 +10516,12 @@ class DiscordBotService:
         content: str,
         components: Optional[list[dict[str, Any]]] = None,
     ) -> bool:
-        application_id = (self._config.application_id or "").strip()
-        if not application_id:
-            return False
-        payload: dict[str, Any] = {
-            "content": content,
-        }
-        if components:
-            payload["components"] = components
-        try:
-            await self._rest.create_followup_message(
-                application_id=application_id,
-                interaction_token=interaction_token,
-                payload=payload,
-            )
-        except Exception:
-            return False
-        return True
+        return await self._responder.send_followup(
+            interaction_token=interaction_token,
+            content=content,
+            components=components,
+            ephemeral=False,
+        )
 
     async def _handle_component_interaction(
         self, interaction_payload: dict[str, Any]
