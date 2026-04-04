@@ -545,6 +545,77 @@ async def test_telegram_text_messages_route_through_orchestration_ingress(
 
 
 @pytest.mark.anyio
+async def test_telegram_opencode_turn_routes_through_managed_thread_without_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    record = TelegramTopicRecord(
+        workspace_path=str(workspace),
+        pma_enabled=False,
+        agent="opencode",
+    )
+    handler = _ExecutionStub(record, tmp_path)
+    captured: dict[str, object] = {}
+
+    async def _fake_run(_handlers: Any, **kwargs: Any) -> _TurnRunResult:
+        captured.update(kwargs)
+        return _TurnRunResult(
+            record=kwargs["record"],
+            thread_id="managed-thread-1",
+            turn_id="managed-turn-1",
+            response="ok",
+            placeholder_id=None,
+            elapsed_seconds=0.0,
+            token_usage=None,
+            transcript_message_id=None,
+            transcript_text=None,
+        )
+
+    async def _legacy_opencode_turn(*_args: Any, **_kwargs: Any) -> _TurnRunResult:
+        raise AssertionError("legacy opencode execution path should not be used")
+
+    monkeypatch.setattr(
+        execution_commands_module, "_run_telegram_managed_thread_turn", _fake_run
+    )
+    monkeypatch.setattr(_ExecutionStub, "_execute_opencode_turn", _legacy_opencode_turn)
+    handler._effective_agent = lambda _record: "opencode"
+    handler._effective_policies = lambda _record: (None, None)
+    handler._files_inbox_dir = lambda _workspace, _topic_key: tmp_path / "inbox"
+    handler._files_outbox_pending_dir = (
+        lambda _workspace, _topic_key: tmp_path / "outbox"
+    )
+    handler._files_topic_dir = lambda _workspace, _topic_key: tmp_path / "topic"
+    handler._config.media = SimpleNamespace(max_file_bytes=1024)
+    handler._config.defaults = SimpleNamespace(
+        policies_for_mode=lambda _mode: (None, None)
+    )
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=123,
+        thread_id=456,
+        from_user_id=789,
+        text="hello",
+        date=None,
+        is_topic_message=True,
+    )
+
+    result = await handler._run_turn_and_collect_result(
+        message,
+        runtime=SimpleNamespace(),
+        text_override=None,
+        send_placeholder=False,
+    )
+
+    assert isinstance(result, _TurnRunResult)
+    assert captured["mode"] == "repo"
+    assert captured["pma_enabled"] is False
+    assert captured["execution_prompt"] == captured["prompt_text"]
+    assert captured["record"] is record
+
+
+@pytest.mark.anyio
 async def test_pma_media_uses_hub_root(tmp_path: Path) -> None:
     hub_root = tmp_path / "hub"
     hub_root.mkdir(parents=True, exist_ok=True)
@@ -1864,6 +1935,199 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
     assert len(edited_texts) >= 2
     assert len(set(edited_texts)) >= 2
     assert "telegram managed final reply" in handler._sent
+
+    remaining_tasks = list(handler._spawned_tasks)
+    for task in remaining_tasks:
+        if not task.done():
+            task.cancel()
+    for task in remaining_tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.anyio
+async def test_pma_managed_opencode_turn_edits_placeholder_with_thinking_and_tool_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    record = TelegramTopicRecord(
+        pma_enabled=True,
+        workspace_path=None,
+        repo_id="repo-1",
+        agent="opencode",
+    )
+    handler = _ManagedThreadPMAHandler(record, tmp_path)
+    stream_finished = asyncio.Event()
+
+    class _FakeHarness:
+        display_name = "Fake"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+            }
+        )
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        async def backend_runtime_instance_id(
+            self, workspace_root: Path
+        ) -> Optional[str]:
+            _ = workspace_root
+            return "runtime-test-1"
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="telegram-backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            _ = workspace_root
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                prompt,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            return SimpleNamespace(
+                conversation_id=conversation_id,
+                turn_id="telegram-backend-turn-1",
+            )
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, turn_id, timeout
+            await stream_finished.wait()
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="telegram opencode managed final reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            yield {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "sessionID": "telegram-backend-thread-1",
+                        "messageID": "assistant-1",
+                        "properties": {
+                            "messageID": "assistant-1",
+                            "info": {"id": "assistant-1", "role": "assistant"},
+                            "part": {
+                                "id": "reason-1",
+                                "type": "reasoning",
+                                "messageID": "assistant-1",
+                                "sessionID": "telegram-backend-thread-1",
+                                "text": "thinking through telegram opencode progress",
+                            },
+                        },
+                    },
+                }
+            }
+            yield {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "sessionID": "telegram-backend-thread-1",
+                        "messageID": "assistant-1",
+                        "properties": {
+                            "messageID": "assistant-1",
+                            "info": {"id": "assistant-1", "role": "assistant"},
+                            "part": {
+                                "id": "tool-1",
+                                "type": "tool",
+                                "messageID": "assistant-1",
+                                "sessionID": "telegram-backend-thread-1",
+                                "tool": "shell",
+                                "input": "rg AGENTS.md",
+                                "state": {"status": "running"},
+                            },
+                        },
+                    },
+                }
+            }
+            stream_finished.set()
+
+    harness = _FakeHarness()
+    monkeypatch.setattr(
+        execution_commands_module,
+        "get_registered_agents",
+        lambda: {
+            "opencode": AgentDescriptor(
+                id="opencode",
+                name="OpenCode",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    message = TelegramMessage(
+        update_id=1,
+        message_id=10,
+        chat_id=-1001,
+        thread_id=101,
+        from_user_id=42,
+        text="stream this telegram prompt",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_normal_message(message, runtime=_RuntimeStub())
+
+    assert handler._placeholders
+    assert handler._edited
+    edited_texts = [str(edit["text"]) for edit in handler._edited]
+    assert len(edited_texts) >= 2
+    assert any(
+        "thinking through telegram opencode progress" in text for text in edited_texts
+    )
+    assert any("shell" in text for text in edited_texts)
+    assert "telegram opencode managed final reply" in handler._sent
 
     remaining_tasks = list(handler._spawned_tasks)
     for task in remaining_tasks:

@@ -248,6 +248,31 @@ def _build_managed_thread_input_items(
     return normalized or None
 
 
+def _telegram_state_root(handlers: Any) -> Path:
+    state_root = getattr(getattr(handlers, "_config", None), "root", None)
+    if state_root is None:
+        state_root = getattr(handlers, "_hub_root", None)
+    if state_root is None:
+        state_root = Path(".")
+    return Path(state_root)
+
+
+def _spawn_telegram_background_task(handlers: Any, coro: Any) -> asyncio.Task[Any]:
+    spawn_task = getattr(handlers, "_spawn_task", None)
+    if callable(spawn_task):
+        spawned = spawn_task(coro)
+        if isinstance(spawned, asyncio.Task):
+            return spawned
+    task = asyncio.create_task(coro)
+    spawned_tasks = getattr(handlers, "_spawned_tasks", None)
+    if isinstance(spawned_tasks, set):
+        spawned_tasks.add(task)
+    log_task_result = getattr(handlers, "_log_task_result", None)
+    if callable(log_task_result):
+        task.add_done_callback(log_task_result)
+    return task
+
+
 def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
     cached = getattr(handlers, "_telegram_managed_thread_orchestration_service", None)
     if cached is None:
@@ -270,11 +295,7 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
             wrap_requested_agent_context(handlers, agent_id=agent_id, profile=profile)
         )
 
-    state_root = getattr(getattr(handlers, "_config", None), "root", None)
-    if state_root is None:
-        state_root = getattr(handlers, "_hub_root", None)
-    if state_root is None:
-        state_root = Path(".")
+    state_root = _telegram_state_root(handlers)
 
     created = build_harness_backed_orchestration_service(
         descriptors=descriptors,
@@ -646,8 +667,9 @@ async def _finalize_telegram_managed_thread_execution(
     runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
     on_progress_event: Optional[Any] = None,
 ) -> dict[str, Any]:
-    thread_store = PmaThreadStore(handlers._config.root)
-    transcripts = PmaTranscriptStore(handlers._config.root)
+    state_root = _telegram_state_root(handlers)
+    thread_store = PmaThreadStore(state_root)
+    transcripts = PmaTranscriptStore(state_root)
     managed_thread_id = started.thread.thread_target_id
     managed_turn_id = started.execution.execution_id
     current_thread_row = thread_store.get_thread(managed_thread_id) or {}
@@ -1051,7 +1073,7 @@ def _ensure_telegram_managed_thread_queue_worker(
             ):
                 task_map.pop(managed_thread_id, None)
 
-    worker_task = handlers._spawn_task(_queue_worker())
+    worker_task = _spawn_telegram_background_task(handlers, _queue_worker())
     task_map[managed_thread_id] = worker_task
 
 
@@ -1266,7 +1288,7 @@ async def _run_telegram_managed_thread_turn(
         )
     if execution_prompt is None:
         execution_prompt = (
-            f"{format_pma_discoverability_preamble(hub_root=handlers._config.root)}"
+            f"{format_pma_discoverability_preamble(hub_root=_telegram_state_root(handlers))}"
             "<user_message>\n"
             f"{prompt_text}\n"
             "</user_message>\n"
@@ -3931,11 +3953,11 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 ),
             )
 
-        if (
-            pma_enabled
-            and getattr(self._config, "root", None) is not None
-            and callable(getattr(self, "_spawn_task", None))
-        ):
+        agent = self._effective_agent(record)
+        has_managed_thread_runtime = getattr(
+            self._config, "root", None
+        ) is not None and callable(getattr(self, "_spawn_task", None))
+        if pma_enabled and (has_managed_thread_runtime or agent == "opencode"):
             approval_policy, sandbox_policy = self._effective_policies(record)
             return await _run_telegram_managed_thread_turn(
                 self,
@@ -3956,9 +3978,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 sandbox_policy=sandbox_policy,
             )
 
-        if getattr(self._config, "root", None) is not None and callable(
-            getattr(self, "_spawn_task", None)
-        ):
+        if has_managed_thread_runtime or agent == "opencode":
             approval_policy, sandbox_policy = self._effective_policies(record)
             return await _run_telegram_managed_thread_turn(
                 self,
@@ -3994,27 +4014,6 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             send_placeholder=send_placeholder,
             queued=queued,
         )
-
-        agent = self._effective_agent(record)
-        if agent == "opencode":
-            return await self._execute_opencode_turn(
-                message,
-                runtime,
-                record,
-                prompt_text,
-                thread_id,
-                key,
-                turn_semaphore,
-                placeholder_id=placeholder_id,
-                placeholder_text=placeholder_text,
-                send_failure_response=send_failure_response,
-                allow_new_thread=allow_new_thread,
-                missing_thread_message=missing_thread_message,
-                transcript_message_id=transcript_message_id,
-                transcript_text=transcript_text,
-                pma_thread_registry=pma_thread_registry,
-                pma_thread_key=pma_thread_key,
-            )
 
         return await self._execute_codex_turn(
             message,

@@ -1483,6 +1483,7 @@ def _patch_streaming_harness(
     monkeypatch: pytest.MonkeyPatch,
     events: list[Any],
     *,
+    agent_id: str = "codex",
     status: str = "ok",
     assistant_text: str = "done",
     errors: Optional[list[str]] = None,
@@ -1503,9 +1504,9 @@ def _patch_streaming_harness(
         discord_message_turns_module,
         "get_registered_agents",
         lambda: {
-            "codex": AgentDescriptor(
-                id="codex",
-                name="Codex",
+            agent_id: AgentDescriptor(
+                id=agent_id,
+                name=agent_id.title(),
                 capabilities=harness.capabilities,
                 make_harness=lambda _ctx: harness,
             )
@@ -3883,6 +3884,99 @@ async def test_message_create_streaming_turn_surfaces_fast_transient_thinking_an
             for content in progress_contents
         )
         assert any("tool: exec" in content for content in progress_contents)
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_message_create_opencode_streaming_turn_surfaces_thinking_and_tool_updates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_agent_state(channel_id="channel-1", agent="opencode")
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    _patch_streaming_harness(
+        monkeypatch,
+        [
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "sessionID": "discord-backend-thread-1",
+                        "messageID": "assistant-1",
+                        "properties": {
+                            "messageID": "assistant-1",
+                            "info": {"id": "assistant-1", "role": "assistant"},
+                            "part": {
+                                "id": "reason-1",
+                                "type": "reasoning",
+                                "messageID": "assistant-1",
+                                "sessionID": "discord-backend-thread-1",
+                                "text": "checking Discord progress visibility",
+                            },
+                        },
+                    },
+                }
+            },
+            {
+                "message": {
+                    "method": "message.part.updated",
+                    "params": {
+                        "sessionID": "discord-backend-thread-1",
+                        "messageID": "assistant-1",
+                        "properties": {
+                            "messageID": "assistant-1",
+                            "info": {"id": "assistant-1", "role": "assistant"},
+                            "part": {
+                                "id": "tool-1",
+                                "type": "tool",
+                                "messageID": "assistant-1",
+                                "sessionID": "discord-backend-thread-1",
+                                "tool": "shell",
+                                "input": "rg AGENTS.md",
+                                "state": {"status": "running"},
+                            },
+                        },
+                    },
+                }
+            },
+        ],
+        agent_id="opencode",
+        assistant_text="done from opencode streaming turn",
+        wait_for_stream=True,
+    )
+
+    try:
+        await service.run_forever()
+        progress_contents = [
+            str(msg["payload"].get("content", ""))
+            for msg in rest.edited_channel_messages
+        ]
+        assert any(
+            "checking Discord progress visibility" in content
+            for content in progress_contents
+        )
+        assert any("tool: shell" in content for content in progress_contents)
     finally:
         await store.close()
 
