@@ -1447,3 +1447,58 @@ async def test_ticket_runner_bounds_failed_commit_resolution_turns(
     assert "Working tree status" in (third.reason_details or "")
     assert third.state.get("commit", {}).get("retries") == 2
     assert len(pool.requests) == 3
+
+
+@pytest.mark.asyncio
+async def test_ticket_runner_clears_commit_gate_when_ticket_reopens(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path
+    _init_git_repo(workspace_root)
+    ticket_dir = workspace_root / ".codex-autorunner" / "tickets"
+    ticket_dir.mkdir(parents=True, exist_ok=True)
+    ticket_path = ticket_dir / "TICKET-001.md"
+    _write_ticket(ticket_path, done=False)
+
+    prompts: list[str] = []
+
+    def handler(req: AgentTurnRequest) -> AgentTurnResult:
+        prompts.append(req.prompt)
+        _set_ticket_done(ticket_path, done=True)
+        return AgentTurnResult(
+            agent_id=req.agent_id,
+            conversation_id="conv1",
+            turn_id="t1",
+            text="normal execution resumed",
+        )
+
+    _set_ticket_done(ticket_path, done=False)
+    (workspace_root / "work.txt").write_text("dirty\n", encoding="utf-8")
+
+    pool = FakeAgentPool(handler)
+    runner = TicketRunner(
+        workspace_root=workspace_root,
+        run_id="run-1",
+        config=TicketRunConfig(
+            ticket_dir=Path(".codex-autorunner/tickets"),
+            auto_commit=False,
+        ),
+        agent_pool=pool,
+    )
+
+    seeded_state = {
+        "current_ticket": ".codex-autorunner/tickets/TICKET-001.md",
+        "current_ticket_id": "ticket-1",
+        "commit": {
+            "pending": True,
+            "retries": 1,
+            "status_porcelain": " M work.txt",
+        },
+    }
+
+    result = await runner.step(seeded_state)
+    assert result.status == "continue"
+    assert len(prompts) == 1
+    assert "<CAR_COMMIT_REQUIRED>" not in prompts[0]
+    assert result.state.get("commit", {}).get("pending") is True
+    assert result.state.get("commit", {}).get("retries") == 0

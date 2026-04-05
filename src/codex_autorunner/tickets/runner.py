@@ -283,9 +283,10 @@ class TicketRunner:
             )
 
         current_path = selection_result.selected.path
-        if selection_result.reset_commit_state:
-            commit_pending = False
-            commit_retries = 0
+        _commit_raw = state.get("commit")
+        commit_state = _commit_raw if isinstance(_commit_raw, dict) else {}
+        commit_pending = bool(commit_state.get("pending"))
+        commit_retries = int(commit_state.get("retries") or 0)
 
         # Determine lint-retry mode early. When lint state is present, we allow the
         # agent to fix the ticket frontmatter even if the ticket is currently
