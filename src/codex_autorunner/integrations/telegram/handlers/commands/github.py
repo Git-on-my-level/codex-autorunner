@@ -97,26 +97,32 @@ def _opencode_review_arguments(target: dict[str, Any]) -> str:
 
 
 @dataclass
+class ReviewTurnContext:
+    """Unified state for an in-flight review turn (Codex or OpenCode)."""
+
+    placeholder_id: Optional[int]
+    turn_key: Optional[TurnKey]
+    turn_id: Optional[str]
+    turn_semaphore: asyncio.Semaphore
+    turn_started_at: Optional[float]
+    turn_elapsed_seconds: Optional[float]
+    queued: bool
+    turn_slot_acquired: bool
+    agent_handle: Optional[Any] = None
+    review_session_id: Optional[str] = None
+
+
+CodexTurnContext = ReviewTurnContext
+OpencodeTurnContext = ReviewTurnContext
+
+
+@dataclass
 class CodexReviewSetup:
     """Prepared client and review payload for Codex reviews."""
 
     client: Any
     agent: str
     review_kwargs: dict[str, Any]
-
-
-@dataclass
-class CodexTurnContext:
-    """State for an in-flight Codex review turn."""
-
-    placeholder_id: Optional[int]
-    turn_handle: Any
-    turn_key: Optional[TurnKey]
-    turn_semaphore: asyncio.Semaphore
-    turn_started_at: Optional[float]
-    queued: bool
-    turn_elapsed_seconds: Optional[float] = None
-    turn_slot_acquired: bool = False
 
 
 @dataclass
@@ -130,21 +136,6 @@ class OpencodeReviewSetup:
     approval_mode: Optional[str]
     sandbox_policy: Optional[Any]
     review_args: str
-
-
-@dataclass
-class OpencodeTurnContext:
-    """State for an in-flight OpenCode review."""
-
-    placeholder_id: Optional[int]
-    turn_key: Optional[TurnKey]
-    turn_id: Optional[str]
-    review_session_id: str
-    turn_semaphore: asyncio.Semaphore
-    turn_started_at: Optional[float]
-    turn_elapsed_seconds: Optional[float] = None
-    queued: bool = False
-    turn_slot_acquired: bool = False
 
 
 class GitHubCommands(TelegramCommandSupportMixin):
@@ -178,7 +169,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
             target=target.get("type"),
             agent=setup.agent,
         )
-        turn_context: Optional[CodexTurnContext] = None
+        turn_context: Optional[ReviewTurnContext] = None
         result = None
         try:
             turn_context = await self._launch_codex_review_turn(
@@ -205,7 +196,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
             )
             return
         finally:
-            await self._cleanup_codex_review_turn(turn_context, runtime)
+            await self._cleanup_review_turn(turn_context, runtime)
         if result is None:
             return
         await self._finalize_codex_review_success(
@@ -271,20 +262,15 @@ class GitHubCommands(TelegramCommandSupportMixin):
             review_kwargs=review_kwargs,
         )
 
-    async def _launch_codex_review_turn(
+    async def _acquire_review_turn_slot(
         self,
         message: TelegramMessage,
         runtime: Any,
-        record: "TelegramTopicRecord",
-        thread_id: str,
-        target: dict[str, Any],
-        delivery: str,
-        setup: CodexReviewSetup,
-    ) -> Optional[CodexTurnContext]:
-        """Send placeholder, acquire slot, and start the Codex review turn."""
-        placeholder_id: Optional[int] = None
-        turn_handle = None
-        turn_key: Optional[TurnKey] = None
+        *,
+        session_id: str,
+        agent_handle: Optional[Any] = None,
+        review_session_id: Optional[str] = None,
+    ) -> Optional[tuple[ReviewTurnContext, float]]:
         turn_semaphore = self._ensure_turn_semaphore()
         queued = turn_semaphore.locked()
         placeholder_text = QUEUED_PLACEHOLDER_TEXT if queued else PLACEHOLDER_TEXT
@@ -295,15 +281,17 @@ class GitHubCommands(TelegramCommandSupportMixin):
             text=placeholder_text,
             reply_markup=self._interrupt_keyboard(),
         )
-        turn_context = CodexTurnContext(
+        turn_context = ReviewTurnContext(
             placeholder_id=placeholder_id,
-            turn_handle=None,
             turn_key=None,
+            turn_id=None,
             turn_semaphore=turn_semaphore,
             turn_started_at=None,
-            queued=queued,
             turn_elapsed_seconds=None,
+            queued=queued,
             turn_slot_acquired=False,
+            agent_handle=agent_handle,
+            review_session_id=review_session_id,
         )
         queue_started_at = time.monotonic()
         acquired = await self._await_turn_slot(
@@ -317,99 +305,137 @@ class GitHubCommands(TelegramCommandSupportMixin):
             runtime.interrupt_requested = False
             return None
         turn_context.turn_slot_acquired = True
-        try:
-            queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.review.queue_wait",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                codex_thread_id=thread_id,
-                queue_wait_ms=queue_wait_ms,
-                queued=queued,
-                max_parallel_turns=self._config.concurrency.max_parallel_turns,
-                per_topic_queue=self._config.concurrency.per_topic_queue,
+        queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
+        log_event(
+            self._logger,
+            logging.INFO,
+            "telegram.review.queue_wait",
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=session_id,
+            queue_wait_ms=queue_wait_ms,
+            queued=queued,
+            max_parallel_turns=self._config.concurrency.max_parallel_turns,
+            per_topic_queue=self._config.concurrency.per_topic_queue,
+        )
+        if (
+            queued
+            and placeholder_id is not None
+            and placeholder_text != PLACEHOLDER_TEXT
+        ):
+            await self._edit_message_text(
+                message.chat_id,
+                placeholder_id,
+                PLACEHOLDER_TEXT,
             )
-            if (
-                queued
-                and placeholder_id is not None
-                and placeholder_text != PLACEHOLDER_TEXT
-            ):
-                await self._edit_message_text(
-                    message.chat_id,
-                    placeholder_id,
-                    PLACEHOLDER_TEXT,
-                )
+        return turn_context, queue_started_at
+
+    async def _register_review_turn_context(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        runtime: Any,
+        turn_context: ReviewTurnContext,
+        session_id: str,
+        turn_id: str,
+        agent_label: str,
+    ) -> bool:
+        turn_key = self._turn_key(session_id, turn_id)
+        turn_context.turn_key = turn_key
+        turn_context.turn_id = turn_id
+        runtime.current_turn_id = turn_id
+        runtime.current_turn_key = turn_key
+        topic_key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        ctx = TurnContext(
+            topic_key=topic_key,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            codex_thread_id=session_id,
+            reply_to_message_id=message.message_id,
+            placeholder_message_id=turn_context.placeholder_id,
+        )
+        if turn_key is None or not self._register_turn_context(turn_key, turn_id, ctx):
+            runtime.current_turn_id = None
+            runtime.current_turn_key = None
+            runtime.interrupt_requested = False
+            await self._send_message(
+                message.chat_id,
+                "Turn collision detected; please retry.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            if turn_context.placeholder_id is not None:
+                await self._delete_message(message.chat_id, turn_context.placeholder_id)
+            if turn_context.turn_slot_acquired:
+                turn_context.turn_semaphore.release()
+            return False
+        await self._start_turn_progress(
+            turn_key,
+            ctx=ctx,
+            agent=self._effective_agent(record),
+            model=record.model,
+            label=agent_label,
+        )
+        return True
+
+    async def _launch_codex_review_turn(
+        self,
+        message: TelegramMessage,
+        runtime: Any,
+        record: "TelegramTopicRecord",
+        thread_id: str,
+        target: dict[str, Any],
+        delivery: str,
+        setup: CodexReviewSetup,
+    ) -> Optional[ReviewTurnContext]:
+        slot_result = await self._acquire_review_turn_slot(
+            message, runtime, session_id=thread_id
+        )
+        if slot_result is None:
+            return None
+        turn_context, _queue_started_at = slot_result
+        try:
             turn_handle = await setup.client.review_start(
                 thread_id,
                 target=target,
                 delivery=delivery,
                 **setup.review_kwargs,
             )
-            turn_context.turn_handle = turn_handle
+            turn_context.agent_handle = turn_handle
             turn_context.turn_started_at = time.monotonic()
-            turn_key = self._turn_key(thread_id, turn_handle.turn_id)
-            turn_context.turn_key = turn_key
-            runtime.current_turn_id = turn_handle.turn_id
-            runtime.current_turn_key = turn_key
-            topic_key = await self._resolve_topic_key(
-                message.chat_id, message.thread_id
-            )
-            ctx = TurnContext(
-                topic_key=topic_key,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                codex_thread_id=thread_id,
-                reply_to_message_id=message.message_id,
-                placeholder_message_id=placeholder_id,
-            )
-            if turn_key is None or not self._register_turn_context(
-                turn_key, turn_handle.turn_id, ctx
+            if not await self._register_review_turn_context(
+                message,
+                record,
+                runtime,
+                turn_context,
+                thread_id,
+                turn_handle.turn_id,
+                "working",
             ):
-                runtime.current_turn_id = None
-                runtime.current_turn_key = None
-                runtime.interrupt_requested = False
-                await self._send_message(
-                    message.chat_id,
-                    "Turn collision detected; please retry.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                if placeholder_id is not None:
-                    await self._delete_message(message.chat_id, placeholder_id)
-                if turn_context.turn_slot_acquired:
-                    turn_semaphore.release()
                 return None
-            await self._start_turn_progress(
-                turn_key,
-                ctx=ctx,
-                agent=self._effective_agent(record),
-                model=record.model,
-                label="working",
-            )
             return turn_context
         except Exception:
-            if placeholder_id is not None:
+            if turn_context.placeholder_id is not None:
                 with suppress(Exception):
-                    await self._delete_message(message.chat_id, placeholder_id)
+                    await self._delete_message(
+                        message.chat_id, turn_context.placeholder_id
+                    )
             if turn_context.turn_slot_acquired:
-                turn_semaphore.release()
+                turn_context.turn_semaphore.release()
             raise
 
     async def _wait_for_codex_review_result(
         self,
         message: TelegramMessage,
         setup: CodexReviewSetup,
-        turn_context: CodexTurnContext,
+        turn_context: ReviewTurnContext,
     ):
-        """Wait for the Codex review to finish and record timing."""
-        if turn_context.turn_handle is None:
+        if turn_context.agent_handle is None:
             return None
         topic_key = await self._resolve_topic_key(message.chat_id, message.thread_id)
         result = await self._wait_for_turn_result(
             setup.client,
-            turn_context.turn_handle,
+            turn_context.agent_handle,
             timeout_seconds=self._config.agent_turn_timeout_seconds.get("codex"),
             topic_key=topic_key,
             chat_id=message.chat_id,
@@ -425,11 +451,9 @@ class GitHubCommands(TelegramCommandSupportMixin):
         self,
         message: TelegramMessage,
         exc: Exception,
-        turn_context: Optional[CodexTurnContext],
+        turn_context: Optional[ReviewTurnContext],
     ) -> None:
-        """Send failure feedback when a Codex review fails."""
-        placeholder_id = turn_context.placeholder_id if turn_context else None
-        turn_handle = turn_context.turn_handle if turn_context else None
+        agent_handle = turn_context.agent_handle if turn_context else None
         failure_message = "Codex review failed; check logs for details."
         reason = "review_failed"
         if isinstance(exc, asyncio.TimeoutError):
@@ -445,12 +469,44 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 "telegram.app_server.disconnected_during_review",
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
-                turn_id=turn_handle.turn_id if turn_handle else None,
+                turn_id=agent_handle.turn_id if agent_handle else None,
             )
             failure_message = (
                 "Codex app-server disconnected; recovering now. "
                 "Your review did not complete. Please resend the review command in a moment."
             )
+        await self._handle_review_failure(
+            message,
+            exc,
+            turn_context,
+            failure_message=failure_message,
+            reason=reason,
+        )
+
+    async def _cleanup_review_turn(
+        self, turn_context: Optional[ReviewTurnContext], runtime: Any
+    ) -> None:
+        if turn_context is not None:
+            if turn_context.turn_key is not None:
+                self._turn_contexts.pop(turn_context.turn_key, None)
+                self._clear_thinking_preview(turn_context.turn_key)
+                self._clear_turn_progress(turn_context.turn_key)
+            if turn_context.turn_slot_acquired:
+                turn_context.turn_semaphore.release()
+        runtime.current_turn_id = None
+        runtime.current_turn_key = None
+        runtime.interrupt_requested = False
+
+    async def _handle_review_failure(
+        self,
+        message: TelegramMessage,
+        exc: Exception,
+        turn_context: Optional[ReviewTurnContext],
+        *,
+        failure_message: str,
+        reason: str = "review_failed",
+    ) -> None:
+        placeholder_id = turn_context.placeholder_id if turn_context else None
         log_event(
             self._logger,
             logging.WARNING,
@@ -474,20 +530,93 @@ class GitHubCommands(TelegramCommandSupportMixin):
         if response_sent and placeholder_id is not None:
             await self._delete_message(message.chat_id, placeholder_id)
 
-    async def _cleanup_codex_review_turn(
-        self, turn_context: Optional[CodexTurnContext], runtime: Any
+    async def _update_review_topic_summary(
+        self,
+        message: TelegramMessage,
+        session_id: str,
+        preview_text: Optional[str],
+        record: "TelegramTopicRecord",
     ) -> None:
-        """Clear turn bookkeeping and release any held semaphore."""
-        if turn_context is not None:
-            if turn_context.turn_key is not None:
-                self._turn_contexts.pop(turn_context.turn_key, None)
-                self._clear_thinking_preview(turn_context.turn_key)
-                self._clear_turn_progress(turn_context.turn_key)
-            if turn_context.turn_slot_acquired:
-                turn_context.turn_semaphore.release()
-        runtime.current_turn_id = None
-        runtime.current_turn_key = None
-        runtime.interrupt_requested = False
+        if not (session_id and preview_text):
+            return
+        await self._router.update_topic(
+            message.chat_id,
+            message.thread_id,
+            lambda rec: _set_thread_summary(
+                rec,
+                session_id,
+                assistant_preview=preview_text,
+                last_used_at=now_iso(),
+                workspace_path=rec.workspace_path,
+                rollout_path=rec.rollout_path,
+            ),
+        )
+
+    def _get_review_intermediate_response(self, turn_key: Optional[TurnKey]) -> str:
+        if turn_key is None:
+            return ""
+        render_summary = getattr(self, "_render_turn_progress_summary", None)
+        if callable(render_summary):
+            return render_summary(turn_key)
+        render_fn = getattr(self, "_render_final_turn_progress", None)
+        if callable(render_fn):
+            return render_fn(turn_key)
+        return ""
+
+    async def _deliver_review_final_response(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        turn_context: ReviewTurnContext,
+        response_text: str,
+        turn_id: Optional[str],
+    ) -> bool:
+        token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
+        intermediate_response = self._get_review_intermediate_response(
+            turn_context.turn_key
+        )
+        response_text = compose_turn_response_with_footer(
+            response_text,
+            summary_text=intermediate_response,
+            token_usage=token_usage,
+            elapsed_seconds=turn_context.turn_elapsed_seconds,
+            agent=self._effective_agent(record),
+            model=getattr(record, "model", None),
+        )
+        try:
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=turn_context.placeholder_id,
+                response=response_text,
+            )
+        except TypeError as exc:
+            if "intermediate_response" not in str(exc):
+                raise
+            response_sent = await self._deliver_turn_response(
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+                placeholder_id=turn_context.placeholder_id,
+                response=response_text,
+            )
+        return response_sent
+
+    async def _review_success_epilogue(
+        self,
+        message: TelegramMessage,
+        record: "TelegramTopicRecord",
+        turn_id: Optional[str],
+    ) -> None:
+        if turn_id:
+            self._token_usage_by_turn.pop(turn_id, None)
+        await self._flush_outbox_files(
+            record,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
 
     async def _finalize_codex_review_success(
         self,
@@ -495,10 +624,9 @@ class GitHubCommands(TelegramCommandSupportMixin):
         record: "TelegramTopicRecord",
         thread_id: str,
         result: Any,
-        turn_context: CodexTurnContext,
+        turn_context: ReviewTurnContext,
         runtime: Any,
     ) -> None:
-        """Handle successful Codex review completion."""
         response = _compose_agent_response(
             getattr(result, "final_message", None),
             messages=result.agent_messages,
@@ -506,24 +634,14 @@ class GitHubCommands(TelegramCommandSupportMixin):
             status=result.status,
         )
         if thread_id and result.agent_messages:
-            assistant_preview = _preview_from_text(
-                response, RESUME_PREVIEW_ASSISTANT_LIMIT
+            await self._update_review_topic_summary(
+                message,
+                thread_id,
+                _preview_from_text(response, RESUME_PREVIEW_ASSISTANT_LIMIT),
+                record,
             )
-            if assistant_preview:
-                await self._router.update_topic(
-                    message.chat_id,
-                    message.thread_id,
-                    lambda record: _set_thread_summary(
-                        record,
-                        thread_id,
-                        assistant_preview=assistant_preview,
-                        last_used_at=now_iso(),
-                        workspace_path=record.workspace_path,
-                        rollout_path=record.rollout_path,
-                    ),
-                )
         turn_handle_id = (
-            turn_context.turn_handle.turn_id if turn_context.turn_handle else None
+            turn_context.agent_handle.turn_id if turn_context.agent_handle else None
         )
         interrupt_status_fallback_text = None
         if is_interrupt_status(result.status):
@@ -548,40 +666,9 @@ class GitHubCommands(TelegramCommandSupportMixin):
             agent_message_count=len(result.agent_messages),
             error_count=len(result.errors),
         )
-        turn_id = turn_handle_id
-        token_usage = self._token_usage_by_turn.get(turn_id) if turn_id else None
-        response_text = response
-        intermediate_response = ""
-        render_final_turn_progress = getattr(self, "_render_final_turn_progress", None)
-        if turn_context.turn_key is not None and callable(render_final_turn_progress):
-            intermediate_response = render_final_turn_progress(turn_context.turn_key)
-        response_text = compose_turn_response_with_footer(
-            response_text,
-            summary_text=intermediate_response,
-            token_usage=token_usage,
-            elapsed_seconds=turn_context.turn_elapsed_seconds,
-            agent=self._effective_agent(record),
-            model=getattr(record, "model", None),
+        response_sent = await self._deliver_review_final_response(
+            message, record, turn_context, response, turn_handle_id
         )
-        response_sent = False
-        try:
-            response_sent = await self._deliver_turn_response(
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                placeholder_id=turn_context.placeholder_id,
-                response=response_text,
-            )
-        except TypeError as exc:
-            if "intermediate_response" not in str(exc):
-                raise
-            response_sent = await self._deliver_turn_response(
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                placeholder_id=turn_context.placeholder_id,
-                response=response_text,
-            )
         if interrupt_status_fallback_text and turn_handle_id:
             await self._clear_interrupt_status_message(
                 chat_id=message.chat_id,
@@ -590,16 +677,9 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 fallback_text=interrupt_status_fallback_text,
                 outcome_visible=response_sent,
             )
-        if turn_id:
-            self._token_usage_by_turn.pop(turn_id, None)
-        await self._flush_outbox_files(
-            record,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
+        await self._review_success_epilogue(message, record, turn_handle_id)
 
-    async def _start_opencode_review(
+    async def _run_opencode_review(
         self,
         message: TelegramMessage,
         runtime: Any,
@@ -614,7 +694,6 @@ class GitHubCommands(TelegramCommandSupportMixin):
         )
         if setup is None:
             return
-        agent = self._effective_agent(record)
         log_event(
             self._logger,
             logging.INFO,
@@ -624,13 +703,32 @@ class GitHubCommands(TelegramCommandSupportMixin):
             codex_thread_id=setup.review_session_id,
             delivery=delivery,
             target=target.get("type"),
-            agent=agent,
+            agent=self._effective_agent(record),
         )
-        await self._run_opencode_review_flow(
+        turn_context: Optional[ReviewTurnContext] = None
+        output_result = None
+        try:
+            turn_context, output_result = await self._execute_opencode_review_turn(
+                message, runtime, record, setup
+            )
+        except Exception as exc:
+            await self._handle_opencode_review_failure(
+                message,
+                setup,
+                exc,
+                turn_context,
+            )
+            return
+        finally:
+            await self._cleanup_review_turn(turn_context, runtime)
+        if output_result is None or turn_context is None:
+            return
+        await self._finalize_opencode_review_success(
             message,
-            runtime,
             record,
             setup,
+            turn_context,
+            output_result,
         )
 
     async def _prepare_opencode_review_setup(
@@ -737,112 +835,26 @@ class GitHubCommands(TelegramCommandSupportMixin):
             review_args=review_args,
         )
 
-    async def _run_opencode_review_flow(
-        self,
-        message: TelegramMessage,
-        runtime: Any,
-        record: TelegramTopicRecord,
-        setup: OpencodeReviewSetup,
-    ) -> None:
-        """Orchestrate the OpenCode review turn."""
-        turn_context: Optional[OpencodeTurnContext] = None
-        output_result = None
-        try:
-            turn_context, output_result = await self._execute_opencode_review_turn(
-                message, runtime, record, setup
-            )
-        except Exception as exc:
-            await self._handle_opencode_review_failure(
-                message,
-                setup,
-                exc,
-                turn_context,
-            )
-            return
-        finally:
-            await self._cleanup_opencode_review_turn(turn_context, runtime)
-        if output_result is None or turn_context is None:
-            return
-        await self._finalize_opencode_review_success(
-            message,
-            record,
-            setup,
-            turn_context,
-            output_result,
-        )
-
     async def _execute_opencode_review_turn(
         self,
         message: TelegramMessage,
         runtime: Any,
         record: TelegramTopicRecord,
         setup: OpencodeReviewSetup,
-    ) -> tuple[Optional[OpencodeTurnContext], Optional[Any]]:
-        """Run the OpenCode review turn and stream progress."""
-        placeholder_id: Optional[int] = None
-        turn_key: Optional[TurnKey] = None
-        turn_id: Optional[str] = None
-        output_result = None
-        turn_semaphore = self._ensure_turn_semaphore()
-        queued = turn_semaphore.locked()
-        placeholder_text = QUEUED_PLACEHOLDER_TEXT if queued else PLACEHOLDER_TEXT
-        placeholder_id = await self._send_placeholder(
-            message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            text=placeholder_text,
-            reply_markup=self._interrupt_keyboard(),
-        )
-        turn_context = OpencodeTurnContext(
-            placeholder_id=placeholder_id,
-            turn_key=None,
-            turn_id=None,
-            review_session_id=setup.review_session_id,
-            turn_semaphore=turn_semaphore,
-            turn_started_at=None,
-            queued=queued,
-            turn_slot_acquired=False,
-        )
-        queue_started_at = time.monotonic()
-        acquired = await self._await_turn_slot(
-            turn_semaphore,
+    ) -> tuple[Optional[ReviewTurnContext], Optional[Any]]:
+        slot_result = await self._acquire_review_turn_slot(
+            message,
             runtime,
-            message=message,
-            placeholder_id=placeholder_id,
-            queued=queued,
+            session_id=setup.review_session_id,
+            review_session_id=setup.review_session_id,
         )
-        if not acquired:
-            runtime.interrupt_requested = False
-            if turn_semaphore.locked():
-                turn_semaphore.release()
+        if slot_result is None:
             return None, None
-        turn_context.turn_slot_acquired = True
+        turn_context, _queue_started_at = slot_result
+        output_result = None
         opencode_turn_started = False
         turn_started_at: Optional[float] = None
         try:
-            queue_wait_ms = int((time.monotonic() - queue_started_at) * 1000)
-            log_event(
-                self._logger,
-                logging.INFO,
-                "telegram.review.queue_wait",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                codex_thread_id=setup.review_session_id,
-                queue_wait_ms=queue_wait_ms,
-                queued=queued,
-                max_parallel_turns=self._config.concurrency.max_parallel_turns,
-                per_topic_queue=self._config.concurrency.per_topic_queue,
-            )
-            if (
-                queued
-                and placeholder_id is not None
-                and placeholder_text != PLACEHOLDER_TEXT
-            ):
-                await self._edit_message_text(
-                    message.chat_id,
-                    placeholder_id,
-                    PLACEHOLDER_TEXT,
-                )
             try:
                 await setup.supervisor.mark_turn_started(setup.workspace_root)
                 opencode_turn_started = True
@@ -866,11 +878,13 @@ class GitHubCommands(TelegramCommandSupportMixin):
                         chat_id=message.chat_id,
                         thread_id=message.thread_id,
                         reply_to=message.message_id,
-                        placeholder_id=placeholder_id,
+                        placeholder_id=turn_context.placeholder_id,
                         response=failure_message,
                     )
                     if response_sent:
-                        await self._delete_message(message.chat_id, placeholder_id)
+                        await self._delete_message(
+                            message.chat_id, turn_context.placeholder_id
+                        )
                     return turn_context, None
                 turn_started_at = time.monotonic()
                 self._token_usage_by_thread.pop(setup.review_session_id, None)
@@ -896,7 +910,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
                     thread_id=message.thread_id,
                     codex_thread_id=setup.review_session_id,
                     reply_to_message_id=message.message_id,
-                    placeholder_message_id=placeholder_id,
+                    placeholder_message_id=turn_context.placeholder_id,
                 )
                 turn_key = self._turn_key(setup.review_session_id, turn_id)
                 if turn_key is None or not self._register_turn_context(
@@ -924,8 +938,10 @@ class GitHubCommands(TelegramCommandSupportMixin):
                         thread_id=message.thread_id,
                         reply_to=message.message_id,
                     )
-                    if placeholder_id is not None:
-                        await self._delete_message(message.chat_id, placeholder_id)
+                    if turn_context.placeholder_id is not None:
+                        await self._delete_message(
+                            message.chat_id, turn_context.placeholder_id
+                        )
                     return turn_context, None
                 turn_context.turn_key = turn_key
                 turn_context.turn_id = turn_id
@@ -1100,12 +1116,12 @@ class GitHubCommands(TelegramCommandSupportMixin):
                                 chat_id=message.chat_id,
                                 thread_id=message.thread_id,
                                 reply_to=message.message_id,
-                                placeholder_id=placeholder_id,
+                                placeholder_id=turn_context.placeholder_id,
                                 response=failure_message,
                             )
                             if response_sent:
                                 await self._delete_message(
-                                    message.chat_id, placeholder_id
+                                    message.chat_id, turn_context.placeholder_id
                                 )
                             return turn_context, None
                         if interrupt_task is not None and interrupt_task in done:
@@ -1150,60 +1166,27 @@ class GitHubCommands(TelegramCommandSupportMixin):
         message: TelegramMessage,
         setup: OpencodeReviewSetup,
         exc: Exception,
-        turn_context: Optional[OpencodeTurnContext],
+        turn_context: Optional[ReviewTurnContext],
     ) -> None:
-        """Send failure feedback for OpenCode review errors."""
-        placeholder_id = turn_context.placeholder_id if turn_context else None
         failure_message = (
             _format_opencode_exception(exc)
             or "OpenCode review failed; check logs for details."
         )
-        log_event(
-            self._logger,
-            logging.WARNING,
-            "telegram.review.failed",
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            exc=exc,
+        await self._handle_review_failure(
+            message,
+            exc,
+            turn_context,
+            failure_message=failure_message,
         )
-        response_sent = await self._deliver_turn_response(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            placeholder_id=placeholder_id,
-            response=_with_conversation_id(
-                failure_message,
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-            ),
-        )
-        if response_sent and placeholder_id is not None:
-            await self._delete_message(message.chat_id, placeholder_id)
-
-    async def _cleanup_opencode_review_turn(
-        self, turn_context: Optional[OpencodeTurnContext], runtime: Any
-    ) -> None:
-        """Clear state after an OpenCode review turn completes."""
-        if turn_context is not None:
-            if turn_context.turn_key is not None:
-                self._turn_contexts.pop(turn_context.turn_key, None)
-                self._clear_thinking_preview(turn_context.turn_key)
-                self._clear_turn_progress(turn_context.turn_key)
-            if turn_context.turn_slot_acquired:
-                turn_context.turn_semaphore.release()
-        runtime.current_turn_id = None
-        runtime.current_turn_key = None
-        runtime.interrupt_requested = False
 
     async def _finalize_opencode_review_success(
         self,
         message: TelegramMessage,
         record: TelegramTopicRecord,
         setup: OpencodeReviewSetup,
-        turn_context: OpencodeTurnContext,
+        turn_context: ReviewTurnContext,
         output_result: Any,
     ) -> None:
-        """Send OpenCode review results and clean up placeholders."""
         output = output_result.text
         if output_result.error:
             failure_message = f"OpenCode review failed: {output_result.error}"
@@ -1218,22 +1201,12 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 await self._delete_message(message.chat_id, turn_context.placeholder_id)
             return
         if output:
-            assistant_preview = _preview_from_text(
-                output, RESUME_PREVIEW_ASSISTANT_LIMIT
+            await self._update_review_topic_summary(
+                message,
+                setup.review_session_id,
+                _preview_from_text(output, RESUME_PREVIEW_ASSISTANT_LIMIT),
+                record,
             )
-            if assistant_preview:
-                await self._router.update_topic(
-                    message.chat_id,
-                    message.thread_id,
-                    lambda record: _set_thread_summary(
-                        record,
-                        setup.review_session_id,
-                        assistant_preview=assistant_preview,
-                        last_used_at=now_iso(),
-                        workspace_path=record.workspace_path,
-                        rollout_path=record.rollout_path,
-                    ),
-                )
         log_event(
             self._logger,
             logging.INFO,
@@ -1242,51 +1215,13 @@ class GitHubCommands(TelegramCommandSupportMixin):
             thread_id=message.thread_id,
             turn_id=turn_context.turn_id,
         )
-        token_usage = (
-            self._token_usage_by_turn.get(turn_context.turn_id)
-            if turn_context.turn_id
-            else None
-        )
-        response_text = output or "No response."
-        intermediate_response = ""
-        render_turn_progress_summary = getattr(
-            self, "_render_turn_progress_summary", None
-        )
-        if turn_context.turn_key is not None and callable(render_turn_progress_summary):
-            intermediate_response = render_turn_progress_summary(turn_context.turn_key)
-        elif turn_context.turn_key is not None:
-            render_final_turn_progress = getattr(
-                self, "_render_final_turn_progress", None
-            )
-            if callable(render_final_turn_progress):
-                intermediate_response = render_final_turn_progress(
-                    turn_context.turn_key
-                )
-        if response_text.strip() == "No response.":
+        response_text = output or ""
+        if not response_text.strip():
             response_text = ""
-        response_text = compose_turn_response_with_footer(
-            response_text,
-            summary_text=intermediate_response,
-            token_usage=token_usage,
-            elapsed_seconds=turn_context.turn_elapsed_seconds,
-            agent=self._effective_agent(record),
-            model=getattr(record, "model", None),
+        await self._deliver_review_final_response(
+            message, record, turn_context, response_text, turn_context.turn_id
         )
-        await self._deliver_turn_response(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            placeholder_id=turn_context.placeholder_id,
-            response=response_text,
-        )
-        if turn_context.turn_id:
-            self._token_usage_by_turn.pop(turn_context.turn_id, None)
-        await self._flush_outbox_files(
-            record,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
+        await self._review_success_epilogue(message, record, turn_context.turn_id)
 
     async def _start_review(
         self,
@@ -1316,7 +1251,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
             )
             return
         if agent == "opencode":
-            await self._start_opencode_review(
+            await self._run_opencode_review(
                 message,
                 runtime,
                 record=record,

@@ -643,13 +643,16 @@ async def test_finalize_codex_review_success_clears_interrupt_status_message(
         interrupt_message_id=333,
         interrupt_turn_id="turn-1",
     )
-    turn_context = github_commands.CodexTurnContext(
+    turn_context = github_commands.ReviewTurnContext(
         placeholder_id=201,
-        turn_handle=SimpleNamespace(turn_id="turn-1"),
         turn_key=None,
+        turn_id="turn-1",
         turn_semaphore=asyncio.Semaphore(1),
         turn_started_at=None,
+        turn_elapsed_seconds=None,
         queued=False,
+        turn_slot_acquired=False,
+        agent_handle=SimpleNamespace(turn_id="turn-1"),
     )
     result = SimpleNamespace(
         final_message="",
@@ -690,13 +693,16 @@ async def test_finalize_codex_review_success_keeps_interrupt_signal_when_deliver
         interrupt_message_id=334,
         interrupt_turn_id="turn-2",
     )
-    turn_context = github_commands.CodexTurnContext(
+    turn_context = github_commands.ReviewTurnContext(
         placeholder_id=201,
-        turn_handle=SimpleNamespace(turn_id="turn-2"),
         turn_key=None,
+        turn_id="turn-2",
         turn_semaphore=asyncio.Semaphore(1),
         turn_started_at=None,
+        turn_elapsed_seconds=None,
         queued=False,
+        turn_slot_acquired=False,
+        agent_handle=SimpleNamespace(turn_id="turn-2"),
     )
     result = SimpleNamespace(
         final_message="",
