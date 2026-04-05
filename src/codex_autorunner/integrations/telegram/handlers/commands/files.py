@@ -31,17 +31,8 @@ from ...forwarding import format_forwarded_telegram_message_text
 from ...helpers import _path_within, format_public_error
 from ...state import PendingVoiceRecord, TelegramTopicRecord
 from .. import messages as message_handlers
-from .shared import TelegramCommandSupportMixin
+from .shared import FILES_HINT_TEMPLATE, TelegramCommandSupportMixin
 
-FILES_HINT_TEMPLATE = (
-    "Inbox: {inbox}\n"
-    "Outbox (pending): {outbox}\n"
-    "Topic key: {topic_key}\n"
-    "Topic dir: {topic_dir}\n"
-    "Place files in outbox pending to send after this turn finishes.\n"
-    "Check delivery with /files outbox.\n"
-    "Max file size: {max_bytes} bytes."
-)
 PMA_FILES_HINT_TEMPLATE = (
     "PMA inbox: {inbox}\n"
     "PMA outbox (pending): {outbox}\n"

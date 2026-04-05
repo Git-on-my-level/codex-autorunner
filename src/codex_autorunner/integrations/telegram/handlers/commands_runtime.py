@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import math
 import re
-import secrets
 import shlex
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -25,8 +21,6 @@ from ....core.update import (
 )
 from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
-from ....core.utils import canonicalize_path
-from ...app_server.client import _normalize_sandbox_policy
 from ...chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
@@ -67,18 +61,14 @@ from ..constants import (
     DEFAULT_UPDATE_REPO_REF,
     DEFAULT_UPDATE_REPO_URL,
     INIT_PROMPT,
-    MAX_MENTION_BYTES,
     MODEL_CATALOG_TTL_SECONDS,
     MODEL_PICKER_PROMPT,
     REASONING_EFFORT_VALUES,
-    SHELL_MESSAGE_BUFFER_CHARS,
-    TELEGRAM_MAX_MESSAGE_LENGTH,
     THREAD_LIST_MAX_PAGES,
     THREAD_LIST_PAGE_LIMIT,
     UPDATE_PICKER_PROMPT,
     UPDATE_TARGET_OPTIONS,
     VALID_REASONING_EFFORTS,
-    TurnKey,
 )
 from ..helpers import (
     CodexFeatureRow,
@@ -93,13 +83,8 @@ from ..helpers import (
     _format_help_text,
     _format_mcp_list,
     _format_model_list,
-    _format_shell_body,
     _format_skills_list,
-    _looks_binary,
     _parse_review_commit_log,
-    _path_within,
-    _prepare_shell_response,
-    _render_command_output,
     _set_model_overrides,
     _set_pending_compact_seed,
     _set_rollout_path,
@@ -132,6 +117,7 @@ from .commands import (
     WorkspaceCommands,
 )
 from .commands.execution import _TurnRunFailure
+from .commands.shared import _RuntimeStub  # noqa: F401
 
 PROMPT_CONTEXT_RE = re.compile("\\bprompt\\b", re.IGNORECASE)
 PROMPT_CONTEXT_HINT = (
@@ -142,26 +128,9 @@ OUTBOX_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 
-FILES_HINT_TEMPLATE = """Inbox: {inbox}
-Outbox (pending): {outbox}
-Topic key: {topic_key}
-Topic dir: {topic_dir}
-Place files in outbox pending to send after this turn finishes.
-Check delivery with /files outbox.
-Max file size: {max_bytes} bytes."""
-
 _COMMAND_ALIASES = {
     "models": "model",
 }
-
-
-@dataclass
-class _RuntimeStub:
-    current_turn_id: Optional[str] = None
-    current_turn_key: Optional[TurnKey] = None
-    interrupt_requested: bool = False
-    interrupt_message_id: Optional[int] = None
-    interrupt_turn_id: Optional[str] = None
 
 
 _GENERIC_TELEGRAM_ERRORS = {
@@ -1621,352 +1590,6 @@ class TelegramCommandHandlers(
         if exit_code not in (None, 0) and not stdout.strip():
             return []
         return _parse_review_commit_log(stdout)
-
-    async def _handle_bang_shell(
-        self, message: TelegramMessage, text: str, _runtime: Any
-    ) -> None:
-        if not self._config.shell.enabled:
-            await self._send_message(
-                message.chat_id,
-                "Shell commands are disabled. Enable telegram_bot.shell.enabled.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        record = await self._require_bound_record(message)
-        if not record:
-            return
-        command_text = text[1:].strip()
-        if not command_text:
-            await self._send_message(
-                message.chat_id,
-                "Prefix a command with ! to run it locally.\nExample: !ls",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        try:
-            client = await self._client_for_workspace(record.workspace_path)
-        except AppServerUnavailableError as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.app_server.unavailable",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                APP_SERVER_UNAVAILABLE_MESSAGE,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if client is None:
-            await self._send_message(
-                message.chat_id,
-                TOPIC_NOT_BOUND_MESSAGE,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        placeholder_id = await self._send_placeholder(
-            message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        _approval_policy, sandbox_policy = self._effective_policies(record)
-        params: dict[str, Any] = {
-            "cwd": record.workspace_path,
-            "command": ["bash", "-lc", command_text],
-            "timeoutMs": self._config.shell.timeout_ms,
-        }
-        if sandbox_policy:
-            params["sandboxPolicy"] = _normalize_sandbox_policy(sandbox_policy)
-        timeout_seconds = max(0.1, self._config.shell.timeout_ms / 1000.0)
-        request_timeout = timeout_seconds + 1.0
-        try:
-            result = await client.request(
-                "command/exec", params, timeout=request_timeout
-            )
-        except asyncio.TimeoutError:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.shell.timeout",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                command=command_text,
-                timeout_seconds=timeout_seconds,
-            )
-            timeout_label = int(math.ceil(timeout_seconds))
-            timeout_message = (
-                f"Shell command timed out after {timeout_label}s: `{command_text}`.\n"
-                "Interactive commands (top/htop/watch/tail -f) do not exit. "
-                "Try a one-shot flag like `top -l 1` (macOS) or "
-                "`top -b -n 1` (Linux)."
-            )
-            await self._deliver_turn_response(
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                placeholder_id=placeholder_id,
-                response=_with_conversation_id(
-                    timeout_message,
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                ),
-            )
-            return
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.shell.failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            await self._deliver_turn_response(
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-                placeholder_id=placeholder_id,
-                response=_with_conversation_id(
-                    "Shell command failed; check logs for details.",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                ),
-            )
-            return
-        stdout, stderr, exit_code = _extract_command_result(result)
-        full_body = _format_shell_body(command_text, stdout, stderr, exit_code)
-        max_output_chars = min(
-            self._config.shell.max_output_chars,
-            TELEGRAM_MAX_MESSAGE_LENGTH - SHELL_MESSAGE_BUFFER_CHARS,
-        )
-        filename = f"shell-output-{secrets.token_hex(4)}.txt"
-        response_text, attachment = _prepare_shell_response(
-            full_body,
-            max_output_chars=max_output_chars,
-            filename=filename,
-        )
-        await self._deliver_turn_response(
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-            placeholder_id=placeholder_id,
-            response=response_text,
-        )
-        if attachment is not None:
-            await self._send_document(
-                message.chat_id,
-                attachment,
-                filename=filename,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-
-    async def _handle_diff(
-        self, message: TelegramMessage, _args: str, _runtime: Any
-    ) -> None:
-        record = await self._require_bound_record(message)
-        if not record:
-            return
-        client = await self._client_for_workspace(record.workspace_path)
-        if client is None:
-            await self._send_message(
-                message.chat_id,
-                TOPIC_NOT_BOUND_MESSAGE,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        command = (
-            "git rev-parse --is-inside-work-tree >/dev/null 2>&1 || "
-            "{ echo 'Not a git repo'; exit 0; }\n"
-            "git diff --color;\n"
-            "git ls-files --others --exclude-standard | "
-            'while read -r f; do git diff --color --no-index -- /dev/null "$f"; done'
-        )
-        try:
-            result = await client.request(
-                "command/exec",
-                {
-                    "cwd": record.workspace_path,
-                    "command": ["bash", "-lc", command],
-                    "timeoutMs": 10000,
-                },
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.diff.failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                _with_conversation_id(
-                    "Failed to compute diff; check logs for details.",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                ),
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        output = _render_command_output(result)
-        if not output.strip():
-            output = "(No diff output.)"
-        await self._send_message(
-            message.chat_id,
-            output,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-
-    async def _handle_mention(
-        self, message: TelegramMessage, args: str, runtime: Any
-    ) -> None:
-        record = await self._require_bound_record(message)
-        if not record:
-            return
-        argv = self._parse_command_args(args)
-        if not argv:
-            await self._send_message(
-                message.chat_id,
-                "Usage: /mention <path> [request]",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        workspace = canonicalize_path(Path(record.workspace_path or ""))
-        path = Path(argv[0]).expanduser()
-        if not path.is_absolute():
-            path = workspace / path
-        try:
-            path = canonicalize_path(path)
-        except Exception:
-            await self._send_message(
-                message.chat_id,
-                "Could not resolve that path.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if not _path_within(root=workspace, target=path):
-            await self._send_message(
-                message.chat_id,
-                "File must be within the bound workspace.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if not path.exists() or not path.is_file():
-            await self._send_message(
-                message.chat_id,
-                "File not found.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        try:
-            data = path.read_bytes()
-        except Exception:
-            await self._send_message(
-                message.chat_id,
-                "Failed to read file.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if len(data) > MAX_MENTION_BYTES:
-            await self._send_message(
-                message.chat_id,
-                f"File too large (max {MAX_MENTION_BYTES} bytes).",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        if _looks_binary(data):
-            await self._send_message(
-                message.chat_id,
-                "File appears to be binary; refusing to include it.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        text = data.decode("utf-8", errors="replace")
-        try:
-            display_path = str(path.relative_to(workspace))
-        except ValueError:
-            display_path = str(path)
-        request = " ".join(argv[1:]).strip()
-        if not request:
-            request = "Please review this file."
-        prompt = "\n".join(
-            [
-                "Please use the file below as authoritative context.",
-                "",
-                f'<file path="{display_path}">',
-                text,
-                "</file>",
-                "",
-                f"My request: {request}",
-            ]
-        )
-        await self._handle_normal_message(
-            message,
-            runtime,
-            text_override=prompt,
-            record=record,
-        )
-        record = await self._require_bound_record(message)
-        if not record:
-            return
-        client = await self._client_for_workspace(record.workspace_path)
-        if client is None:
-            await self._send_message(
-                message.chat_id,
-                TOPIC_NOT_BOUND_MESSAGE,
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        try:
-            result = await client.request(
-                "skills/list", {"cwds": [record.workspace_path], "forceReload": False}
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "telegram.skills.failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            await self._send_message(
-                message.chat_id,
-                _with_conversation_id(
-                    "Failed to list skills; check logs for details.",
-                    chat_id=message.chat_id,
-                    thread_id=message.thread_id,
-                ),
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        await self._send_message(
-            message.chat_id,
-            _format_skills_list(result, record.workspace_path),
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
 
     async def _handle_mcp(
         self, message: TelegramMessage, _args: str, _runtime: Any
