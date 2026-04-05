@@ -90,6 +90,14 @@ def _normalize_positive_int(value: Any) -> Optional[int]:
     return normalized if normalized > 0 else None
 
 
+def _normalize_non_negative_int(value: Any) -> Optional[int]:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized >= 0 else None
+
+
 def _parse_optional_iso(value: Any) -> Optional[datetime]:
     normalized = _normalize_text(value)
     if normalized is None:
@@ -136,7 +144,7 @@ def _quota_state_from_payload(
     for resource_name in _RATE_LIMIT_RESOURCES:
         entry = _mapping(resources.get(resource_name))
         limit = _normalize_positive_int(entry.get("limit"))
-        remaining = _normalize_positive_int(entry.get("remaining"))
+        remaining = _normalize_non_negative_int(entry.get("remaining"))
         reset_epoch = _normalize_positive_int(entry.get("reset"))
         if limit is None or remaining is None:
             continue
@@ -174,6 +182,15 @@ def _activity_sort_key(timestamp: Optional[datetime]) -> tuple[int, float]:
     if timestamp >= recent_cutoff:
         return (0, -timestamp.timestamp())
     return (2, -timestamp.timestamp())
+
+
+def _rotated(items: list[Path], *, offset: int) -> list[Path]:
+    if not items:
+        return []
+    normalized_offset = offset % len(items)
+    if normalized_offset == 0:
+        return list(items)
+    return list(items[normalized_offset:]) + list(items[:normalized_offset])
 
 
 def _binding_from_polling_row(row: sqlite3.Row) -> PrBinding:
@@ -529,9 +546,10 @@ class GitHubScmPollingService:
         )
         counts["invalid_bindings_skipped"] += invalid_bindings
 
-        prioritized_roots = sorted(
-            candidate_roots,
-            key=lambda root: _activity_sort_key(workspace_activity.get(str(root))),
+        prioritized_roots = self._prioritized_discovery_roots(
+            candidate_roots=candidate_roots,
+            workspace_activity=workspace_activity,
+            polling_config=polling_config,
         )
         for workspace_root in prioritized_roots[: max(1, limit)]:
             counts["candidate_workspaces_scanned"] += 1
@@ -959,6 +977,26 @@ class GitHubScmPollingService:
         except Exception:
             cache[cache_key] = None
         return cache[cache_key]
+
+    def _prioritized_discovery_roots(
+        self,
+        *,
+        candidate_roots: list[Path],
+        workspace_activity: Mapping[str, datetime],
+        polling_config: GitHubPollingConfig,
+    ) -> list[Path]:
+        if len(candidate_roots) <= 1:
+            return list(candidate_roots)
+        grouped: dict[int, list[Path]] = {0: [], 1: [], 2: []}
+        for root in candidate_roots:
+            activity_key = _activity_sort_key(workspace_activity.get(str(root.resolve())))
+            grouped.setdefault(activity_key[0], []).append(root)
+        cycle_index = int(_utc_now().timestamp()) // max(1, polling_config.interval_seconds)
+        ordered: list[Path] = []
+        for group_key in sorted(grouped):
+            bucket = grouped[group_key]
+            ordered.extend(_rotated(bucket, offset=cycle_index))
+        return ordered
 
     def _repair_active_watch(
         self,

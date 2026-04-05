@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+import codex_autorunner.integrations.github.polling as github_polling
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_events import ScmEventStore
@@ -1047,7 +1049,7 @@ def test_process_defers_baseline_when_rate_limit_budget_is_low(
             },
             reviews_payload=[],
             checks_payload=[],
-            rate_limit_payload=_rate_limit_payload(graphql_remaining=25),
+            rate_limit_payload=_rate_limit_payload(graphql_remaining=0),
         )
 
     watch_store = ScmPollingWatchStore(hub_root)
@@ -1067,6 +1069,72 @@ def test_process_defers_baseline_when_rate_limit_budget_is_low(
     assert watch is not None
     assert watch.snapshot == {"baseline_pending": True}
     assert watch.last_error_text == "GitHub rate-limit budget low; baseline deferred"
+
+
+def test_process_rotates_discovery_across_candidate_workspaces(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    roots = [hub_root / "workspace" / f"repo-{index}" for index in range(4)]
+    for root in roots:
+        root.mkdir(parents=True)
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-4",
+            repo_slug="acme/rotated",
+            pr_number=64,
+            head_branch="feature/rotated-discovery",
+            discover=repo_root_arg == roots[3],
+        )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_candidate_workspace_roots",
+        lambda: (list(roots), {}, {}),
+    )
+    monkeypatch.setattr(
+        service,
+        "_thread_activity",
+        lambda: ({}, {}),
+    )
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 5, 8, 0, 0, tzinfo=timezone.utc),
+    )
+    first = service.process(limit=2)
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 5, 8, 3, 0, tzinfo=timezone.utc),
+    )
+    second = service.process(limit=2)
+
+    assert first["candidate_workspaces_scanned"] == 2
+    assert first["bindings_discovered"] == 0
+    assert second["candidate_workspaces_scanned"] == 2
+    assert second["bindings_discovered"] == 1
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/rotated",
+        pr_number=64,
+    )
+    assert binding is not None
 
 
 def test_process_due_watches_continues_after_rate_limited_watch(
