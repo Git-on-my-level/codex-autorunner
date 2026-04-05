@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
 import codex_autorunner.core.hub as hub_module
+import codex_autorunner.core.hub_runner_orchestrator as orch_module
 import codex_autorunner.core.hub_worktree_manager as wtm_module
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
@@ -975,11 +976,12 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
     archived: list[dict[str, object]] = []
 
     monkeypatch.setattr(
-        supervisor,
-        "_ensure_runner",
+        supervisor._runner_orchestrator,
+        "ensure_runner",
         lambda repo_id, allow_uninitialized=True: fake_runner,
     )
     monkeypatch.setattr(hub_module.time, "sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(orch_module.time, "sleep", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         hub_module,
         "read_lock_status",
@@ -990,7 +992,7 @@ def test_archive_repo_state_waits_for_runner_exit_before_archiving(
         ),
     )
     monkeypatch.setattr(
-        hub_module,
+        orch_module,
         "load_state",
         lambda _path: hub_module.RunnerState(
             last_run_id=None,

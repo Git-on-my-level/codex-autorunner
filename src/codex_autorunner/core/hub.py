@@ -54,6 +54,7 @@ from .hub_lifecycle import (
     LifecycleRetryPolicy,
 )
 from .hub_repo_manager import RepoManager
+from .hub_runner_orchestrator import RunnerOrchestrator
 from .hub_worktree_manager import WorktreeManager
 from .lifecycle_events import (
     LifecycleEvent,
@@ -557,14 +558,22 @@ class HubSupervisor:
     ):
         self.hub_config = hub_config
         self.state_path = hub_config.root / ".codex-autorunner" / "hub_state.json"
-        self._runners: Dict[str, RepoRunner] = {}
+        self._runner_orchestrator = RunnerOrchestrator(
+            hub_config,
+            spawn_fn=spawn_fn,
+            backend_factory_builder=backend_factory_builder,
+            app_server_supervisor_factory_builder=(
+                app_server_supervisor_factory_builder
+            ),
+            backend_orchestrator_builder=backend_orchestrator_builder,
+            agent_id_validator=agent_id_validator,
+        )
         self._spawn_fn = spawn_fn
         self._backend_factory_builder = backend_factory_builder
         self._app_server_supervisor_factory_builder = (
             app_server_supervisor_factory_builder
         )
         self._backend_orchestrator_builder = backend_orchestrator_builder
-        self._agent_id_validator = agent_id_validator
         self.state = load_hub_state(self.state_path, self.hub_config.root)
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
@@ -595,7 +604,7 @@ class HubSupervisor:
             on_stop_runner=self._stop_runner_and_wait_for_exit,
             on_cleanup_worktree=self.cleanup_worktree,
             on_list_repos=self.list_repos,
-            runners=self._runners,
+            runners=self._runner_orchestrator.runners,
         )
         self._worktree_manager = WorktreeManager(
             hub_config,
@@ -883,15 +892,11 @@ class HubSupervisor:
                 )
 
     def run_repo(self, repo_id: str, once: bool = False) -> RepoSnapshot:
-        runner = self._ensure_runner(repo_id)
-        assert runner is not None
-        runner.start(once=once)
+        self._runner_orchestrator.run(repo_id, once=once)
         return self._snapshot_for_repo(repo_id)
 
     def stop_repo(self, repo_id: str) -> RepoSnapshot:
-        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
-        if runner:
-            runner.stop()
+        self._runner_orchestrator.stop(repo_id)
         return self._snapshot_for_repo(repo_id)
 
     def _stop_runner_and_wait_for_exit(
@@ -902,53 +907,19 @@ class HubSupervisor:
         timeout_seconds: float = 30.0,
         poll_interval_seconds: float = 0.2,
     ) -> None:
-        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
-        if not runner:
-            return
-
-        runner.stop()
-        deadline = time.monotonic() + max(timeout_seconds, poll_interval_seconds)
-        lock_path = repo_path / ".codex-autorunner" / "lock"
-        state_path = repo_path / ".codex-autorunner" / "state.sqlite3"
-        last_error: Optional[Exception] = None
-
-        while True:
-            runner.reconcile()
-
-            try:
-                lock_status = read_lock_status(lock_path)
-                runner_state = load_state(state_path) if state_path.exists() else None
-                last_error = None
-            except Exception as exc:
-                last_error = exc
-            else:
-                if lock_status != LockStatus.LOCKED_ALIVE and (
-                    runner_state is None
-                    or (
-                        runner_state.runner_pid is None
-                        and runner_state.status != "running"
-                    )
-                ):
-                    return
-
-            if time.monotonic() >= deadline:
-                message = f"Timed out waiting for repo runner to stop before proceeding: {repo_id}"
-                if last_error is not None:
-                    raise ValueError(f"{message} ({last_error})") from last_error
-                raise ValueError(message)
-
-            time.sleep(poll_interval_seconds)
+        self._runner_orchestrator.stop_and_wait_for_exit(
+            repo_id=repo_id,
+            repo_path=repo_path,
+            timeout_seconds=timeout_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+        )
 
     def resume_repo(self, repo_id: str, once: bool = False) -> RepoSnapshot:
-        runner = self._ensure_runner(repo_id)
-        assert runner is not None
-        runner.resume(once=once)
+        self._runner_orchestrator.resume(repo_id, once=once)
         return self._snapshot_for_repo(repo_id)
 
     def kill_repo(self, repo_id: str) -> RepoSnapshot:
-        runner = self._ensure_runner(repo_id, allow_uninitialized=True)
-        if runner:
-            runner.kill()
+        self._runner_orchestrator.kill(repo_id)
         return self._snapshot_for_repo(repo_id)
 
     def init_repo(self, repo_id: str) -> RepoSnapshot:
@@ -1511,37 +1482,6 @@ class HubSupervisor:
             delete_worktrees=delete_worktrees,
             force_attestation=force_attestation,
         )
-
-    def _ensure_runner(
-        self, repo_id: str, allow_uninitialized: bool = False
-    ) -> Optional[RepoRunner]:
-        if repo_id in self._runners:
-            return self._runners[repo_id]
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        repo = manifest.get(repo_id)
-        if not repo:
-            raise ValueError(f"Repo {repo_id} not found in manifest")
-        repo_root = (self.hub_config.root / repo.path).resolve()
-        tickets_dir = repo_root / ".codex-autorunner" / "tickets"
-        if not allow_uninitialized and not tickets_dir.exists():
-            raise ValueError(f"Repo {repo_id} is not initialized")
-        if not tickets_dir.exists():
-            return None
-        repo_config = derive_repo_config(self.hub_config, repo_root, load_env=False)
-        runner = RepoRunner(
-            repo_id,
-            repo_root,
-            repo_config=repo_config,
-            spawn_fn=self._spawn_fn,
-            backend_factory_builder=self._backend_factory_builder,
-            app_server_supervisor_factory_builder=(
-                self._app_server_supervisor_factory_builder
-            ),
-            backend_orchestrator_builder=self._backend_orchestrator_builder,
-            agent_id_validator=self._agent_id_validator,
-        )
-        self._runners[repo_id] = runner
-        return runner
 
     def _manifest_records(
         self, manifest_only: bool = False
