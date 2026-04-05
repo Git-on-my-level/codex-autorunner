@@ -2616,9 +2616,12 @@ class HubSupervisor:
                 "closed": 0,
                 "errors": 0,
                 "candidate_workspaces": 0,
+                "candidate_workspaces_scanned": 0,
                 "bindings_discovered": 0,
                 "watches_armed": 0,
                 "discovery_errors": 0,
+                "invalid_bindings_skipped": 0,
+                "rate_limited_skipped": 0,
             }
         try:
             return processor(limit)
@@ -2632,9 +2635,12 @@ class HubSupervisor:
                 "closed": 0,
                 "errors": 1,
                 "candidate_workspaces": 0,
+                "candidate_workspaces_scanned": 0,
                 "bindings_discovered": 0,
                 "watches_armed": 0,
                 "discovery_errors": 1,
+                "invalid_bindings_skipped": 0,
+                "rate_limited_skipped": 0,
             }
 
     def _start_lifecycle_event_processor(self) -> None:

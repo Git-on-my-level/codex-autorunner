@@ -4,10 +4,12 @@ from pathlib import Path
 
 import pytest
 
+from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
 from codex_autorunner.integrations.github.polling import GitHubScmPollingService
+from codex_autorunner.integrations.github.service import GitHubError
 
 
 class _GitHubServiceStub:
@@ -21,6 +23,8 @@ class _GitHubServiceStub:
         checks_payload: list[dict[str, object]],
         issue_comments_payload: list[dict[str, object]] | None = None,
         review_threads_payload: list[dict[str, object]] | None = None,
+        rate_limit_payload: dict[str, object] | None = None,
+        pr_view_exception: Exception | None = None,
     ) -> None:
         self.repo_root = repo_root
         self.raw_config = raw_config or {}
@@ -29,9 +33,13 @@ class _GitHubServiceStub:
         self._checks_payload = checks_payload
         self._issue_comments_payload = issue_comments_payload or []
         self._review_threads_payload = review_threads_payload or []
+        self._rate_limit_payload = rate_limit_payload or {}
+        self._pr_view_exception = pr_view_exception
 
     def pr_view(self, *, number: int, cwd=None, repo_slug=None) -> dict[str, object]:
         _ = number, cwd, repo_slug
+        if self._pr_view_exception is not None:
+            raise self._pr_view_exception
         return dict(self._pr_view_payload)
 
     def pr_reviews(self, *, owner: str, repo: str, number: int, cwd=None):
@@ -58,6 +66,9 @@ class _GitHubServiceStub:
     def pr_review_threads(self, *, owner: str, repo: str, number: int, cwd=None):
         _ = owner, repo, number, cwd
         return list(self._review_threads_payload)
+
+    def rate_limit_status(self) -> dict[str, object]:
+        return dict(self._rate_limit_payload)
 
 
 class _AutomationServiceFake:
@@ -164,6 +175,29 @@ def _polling_config(*, profile: str | None = None) -> dict[str, object]:
                 },
                 "reactions": reactions,
             }
+        }
+    }
+
+
+def _rate_limit_payload(
+    *,
+    graphql_remaining: int,
+    core_remaining: int = 5000,
+    limit: int = 5000,
+    reset_epoch: int = 2147483647,
+) -> dict[str, object]:
+    return {
+        "resources": {
+            "graphql": {
+                "remaining": graphql_remaining,
+                "limit": limit,
+                "reset": reset_epoch,
+            },
+            "core": {
+                "remaining": core_remaining,
+                "limit": limit,
+                "reset": reset_epoch,
+            },
         }
     }
 
@@ -904,3 +938,223 @@ def test_process_repairs_active_watch_workspace_root_without_resetting_snapshot(
     assert watch is not None
     assert watch.workspace_root == str(repo_root.resolve())
     assert watch.snapshot == {"head_sha": "abc123", "pr_state": "open"}
+
+
+def test_process_skips_malformed_active_binding_rows_without_crashing(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo")
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=45,
+        pr_state="open",
+        head_branch="feature/valid-binding",
+        base_branch="main",
+    )
+    with open_orchestration_sqlite(hub_root) as conn:
+        conn.execute(
+            """
+            INSERT INTO orch_pr_bindings (
+                binding_id,
+                provider,
+                repo_slug,
+                repo_id,
+                pr_number,
+                pr_state,
+                head_branch,
+                base_branch,
+                thread_target_id,
+                created_at,
+                updated_at,
+                closed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "bad-binding",
+                "github",
+                "acme/bad",
+                "repo-bad",
+                "not-a-number",
+                "open",
+                "feature/bad",
+                "main",
+                None,
+                "2026-03-30T00:00:00Z",
+                "2026-03-30T00:00:00Z",
+                None,
+            ),
+        )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=45,
+            head_branch="feature/valid-binding",
+            discover=False,
+        )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["invalid_bindings_skipped"] == 1
+    assert result["watches_armed"] == 1
+    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert watch is not None
+
+
+def test_process_defers_baseline_when_rate_limit_budget_is_low(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/repo")
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=46,
+        pr_state="open",
+        head_branch="feature/rate-limited",
+        base_branch="main",
+    )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": "abc123",
+            },
+            reviews_payload=[],
+            checks_payload=[],
+            rate_limit_payload=_rate_limit_payload(graphql_remaining=25),
+        )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["watches_armed"] == 1
+    assert result["rate_limited_skipped"] == 1
+    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert watch is not None
+    assert watch.snapshot == {"baseline_pending": True}
+    assert watch.last_error_text == "GitHub rate-limit budget low; baseline deferred"
+
+
+def test_process_due_watches_continues_after_rate_limited_watch(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root_ok = hub_root / "workspace" / "repo-ok"
+    repo_root_rl = hub_root / "workspace" / "repo-rate-limit"
+    repo_root_ok.mkdir(parents=True)
+    repo_root_rl.mkdir(parents=True)
+
+    binding_ok = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-ok",
+        pr_number=47,
+        pr_state="open",
+        head_branch="feature/ok",
+        base_branch="main",
+    )
+    binding_rl = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/rate-limit",
+        repo_id="repo-rl",
+        pr_number=48,
+        pr_state="open",
+        head_branch="feature/rate-limit",
+        base_branch="main",
+    )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    for binding, workspace_root in (
+        (binding_ok, repo_root_ok),
+        (binding_rl, repo_root_rl),
+    ):
+        watch_store.upsert_watch(
+            provider="github",
+            binding_id=binding.binding_id,
+            repo_slug=binding.repo_slug,
+            repo_id=binding.repo_id,
+            pr_number=binding.pr_number,
+            workspace_root=str(workspace_root.resolve()),
+            thread_target_id=binding.thread_target_id,
+            poll_interval_seconds=90,
+            next_poll_at="2026-03-30T00:00:00Z",
+            expires_at="2099-03-30T01:00:00Z",
+            reaction_config={"enabled": True},
+            snapshot={"baseline_pending": True},
+        )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _GitHubServiceStub:
+        if repo_root_arg == repo_root_rl:
+            return _GitHubServiceStub(
+                repo_root_arg,
+                raw_config,
+                pr_view_payload={},
+                reviews_payload=[],
+                checks_payload=[],
+                rate_limit_payload=_rate_limit_payload(graphql_remaining=5000),
+                pr_view_exception=GitHubError(
+                    "Command failed: gh pr view 48 --json ...: GraphQL: API rate limit already exceeded for user ID 9387252.",
+                    status_code=429,
+                ),
+            )
+        return _GitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": "newsha",
+            },
+            reviews_payload=[],
+            checks_payload=[],
+            rate_limit_payload=_rate_limit_payload(graphql_remaining=5000),
+        )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process_due_watches(limit=10)
+
+    assert result["due"] == 2
+    assert result["polled"] == 1
+    assert result["errors"] == 0
+    assert result["rate_limited_skipped"] == 1

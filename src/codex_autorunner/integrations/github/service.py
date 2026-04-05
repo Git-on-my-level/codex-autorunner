@@ -38,6 +38,13 @@ class GitHubError(Exception):
         self.status_code = status_code
 
 
+def _looks_like_rate_limit(detail: str) -> bool:
+    normalized = (detail or "").strip().lower()
+    if not normalized:
+        return False
+    return "rate limit" in normalized
+
+
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -75,8 +82,9 @@ def _run(
         stderr = (proc.stderr or "").strip()
         stdout = (proc.stdout or "").strip()
         detail = stderr or stdout or f"exit {proc.returncode}"
+        status_code = 429 if _looks_like_rate_limit(detail) else 400
         raise GitHubError(
-            f"Command failed: {' '.join(args)}: {detail}", status_code=400
+            f"Command failed: {' '.join(args)}: {detail}", status_code=status_code
         )
     return proc
 
@@ -453,6 +461,21 @@ class GitHubService:
             return False
         proc = self._gh(["auth", "status"], check=False, timeout_seconds=10)
         return proc.returncode == 0
+
+    def rate_limit_status(self, *, cwd: Optional[Path] = None) -> dict[str, Any]:
+        proc = self._gh(
+            ["api", "rate_limit"],
+            cwd=cwd or self.repo_root,
+            check=False,
+            timeout_seconds=15,
+        )
+        if proc.returncode != 0:
+            return {}
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     def repo_info(self) -> RepoInfo:
         proc = self._gh(
