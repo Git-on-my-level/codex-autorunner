@@ -14,6 +14,7 @@ from .models import (
     TicketRunConfig,
 )
 from .runner import TicketRunner
+from .runner_commit import process_commit_required
 from .runner_execution import (
     capture_git_state,
     capture_git_state_after,
@@ -27,7 +28,6 @@ from .runner_post_turn import (
     check_ticket_frontmatter,
     checkpoint_git,
     create_runner_pause_dispatch,
-    process_commit_required,
 )
 from .runner_prompt import build_prompt
 from .runner_selection import (

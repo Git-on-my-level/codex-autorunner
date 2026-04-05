@@ -121,8 +121,7 @@ def select_ticket(
         state_updates["last_agent_output"] = None
         state_updates["lint"] = None
         state_updates["loop_guard"] = None
-
-    state_updates["commit"] = None
+        state_updates["commit"] = None
 
     return TicketSelectionResult(
         selected=SelectedTicket(

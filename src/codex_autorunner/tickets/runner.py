@@ -8,7 +8,7 @@ from ..contextspace.paths import contextspace_doc_path
 from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats
-from . import runner_post_turn, runner_prompt, runner_selection
+from . import runner_commit, runner_post_turn, runner_prompt, runner_selection
 from .agent_pool import AgentPool
 from .files import list_ticket_paths, safe_relpath
 from .models import TicketContextEntry, TicketResult, TicketRunConfig
@@ -467,6 +467,22 @@ class TicketRunner:
                 )
 
             state.pop("network_retry", None)
+            commit_failure_result = runner_commit.handle_failed_commit_turn(
+                state=state,
+                workspace_root=self._workspace_root,
+                commit_pending=commit_pending,
+                commit_retries=commit_retries,
+                head_before_turn=head_before_turn,
+                max_commit_retries=self._config.max_commit_retries,
+                current_ticket_path=current_ticket_path,
+                result_error=result.error,
+                result_text=result.text,
+                result_agent_id=result.agent_id,
+                result_conversation_id=result.conversation_id,
+                result_turn_id=result.turn_id,
+            )
+            if commit_failure_result is not None:
+                return commit_failure_result
             return self._pause(
                 state,
                 reason="Agent turn failed. Fix the issue and resume.",
@@ -711,8 +727,7 @@ class TicketRunner:
                     commit_reason,
                     commit_reason_code,
                     commit_reason_details,
-                ) = runner_post_turn.process_commit_required(
-                    state=state,
+                ) = runner_commit.process_commit_required(
                     clean_after_agent=clean_after_agent,
                     commit_pending=commit_pending,
                     commit_retries=commit_retries,
