@@ -5,8 +5,6 @@ from typing import Any, Mapping, Optional, Sequence, cast
 from .flows.models import format_flow_duration
 from .managed_thread_status import derive_managed_thread_operator_status
 from .pma_context import (
-    PMA_FILE_NEXT_ACTION_PROCESS,
-    PMA_FILE_NEXT_ACTION_REVIEW_STALE,
     PMA_MAX_AUTOMATION_ITEMS,
     PMA_MAX_LIFECYCLE_EVENTS,
     PMA_MAX_MESSAGES,
@@ -16,8 +14,12 @@ from .pma_context import (
     PMA_MAX_TEMPLATE_FIELD_CHARS,
     PMA_MAX_TEMPLATE_REPOS,
     PMA_MAX_TEXT,
-    _extract_entry_freshness,
     _truncate,
+)
+from .pma_file_inbox import (
+    PMA_FILE_NEXT_ACTION_PROCESS,
+    PMA_FILE_NEXT_ACTION_REVIEW_STALE,
+    _extract_entry_freshness,
 )
 
 

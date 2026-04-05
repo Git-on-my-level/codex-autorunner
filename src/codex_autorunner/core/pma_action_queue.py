@@ -4,7 +4,7 @@ import logging
 from typing import Any, Mapping, Optional, Sequence
 
 from .freshness import build_freshness_payload, iso_now, resolve_stale_threshold_seconds
-from .pma_context import (
+from .pma_file_inbox import (
     PMA_FILE_NEXT_ACTION_REVIEW_STALE,
     _extract_entry_freshness,
     _timestamp_sort_value,

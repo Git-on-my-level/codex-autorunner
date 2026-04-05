@@ -2540,7 +2540,7 @@ class TestIssue975CharacterizationMixedPmaState:
         thread_id = str(thread["managed_thread_id"])
 
         with patch(
-            "codex_autorunner.core.pma_context.active_chat_binding_metadata_by_thread",
+            "codex_autorunner.core.pma_thread_snapshot.active_chat_binding_metadata_by_thread",
             side_effect=RuntimeError("binding db unavailable"),
         ):
             snapshot_threads = _snapshot_pma_threads(hub_env.hub_root)
