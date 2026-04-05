@@ -30,6 +30,9 @@ from .opencode_event_fields import (
     extract_message_part as _event_extract_message_part,
 )
 from .opencode_event_fields import (
+    extract_message_phase as _event_extract_message_phase,
+)
+from .opencode_event_fields import (
     extract_message_role as _event_extract_message_role,
 )
 from .opencode_event_fields import (
@@ -543,7 +546,7 @@ def normalize_runtime_thread_message(
             return []
         if item_type == "agentMessage":
             content = _extract_agent_message_text(item)
-            if not content:
+            if not content or _extract_message_phase(params) == "commentary":
                 return []
             state.note_message_text(content)
             return [
@@ -668,6 +671,8 @@ def normalize_runtime_thread_message(
         if not content:
             return role_events
         if _extract_message_role(params) == "user":
+            return role_events
+        if _extract_message_phase(params) == "commentary":
             return role_events
         state.note_message_text(content)
         return role_events + [
@@ -903,6 +908,10 @@ def _coerce_dict(value: Any) -> dict[str, Any]:
 
 def _extract_message_part(params: dict[str, Any]) -> dict[str, Any]:
     return _event_extract_message_part(params)
+
+
+def _extract_message_phase(params: dict[str, Any]) -> Optional[str]:
+    return _event_extract_message_phase(params)
 
 
 def _extract_output_delta(params: dict[str, Any]) -> str:

@@ -64,6 +64,31 @@ def extract_message_role(params: dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _normalize_message_phase(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized in {"commentary", "final_answer"}:
+        return normalized
+    return None
+
+
+def extract_message_phase(params: dict[str, Any]) -> Optional[str]:
+    phase = _normalize_message_phase(params.get("phase"))
+    if phase is not None:
+        return phase
+    for source in (
+        extract_message_info(params),
+        extract_message_properties(params),
+        coerce_dict(params.get("message")),
+        coerce_dict(params.get("item")),
+    ):
+        phase = _normalize_message_phase(source.get("phase"))
+        if phase is not None:
+            return phase
+    return None
+
+
 def extract_part_message_id(params: dict[str, Any]) -> Optional[str]:
     properties = extract_message_properties(params)
     part = extract_message_part(params)

@@ -149,6 +149,45 @@ async def test_collect_output_supports_message_part_delta_with_direct_ids() -> N
 
 
 @pytest.mark.anyio
+async def test_collect_output_dedupes_delta_then_full_text_update_for_same_part() -> (
+    None
+):
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","properties":{"info":{"id":"assistant-1","role":"assistant"}}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"part":{"id":"p1","messageID":"assistant-1","type":"text","text":""}}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p1","messageID":"assistant-1","delta":"2"}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p1","messageID":"assistant-1","delta":" + 2"}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p1","messageID":"assistant-1","delta":" = 4."}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"part":{"id":"p1","messageID":"assistant-1","type":"text","text":"2 + 2 = 4."}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "2 + 2 = 4."
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_uses_part_type_memory_for_reasoning_delta_events() -> (
     None
 ):
