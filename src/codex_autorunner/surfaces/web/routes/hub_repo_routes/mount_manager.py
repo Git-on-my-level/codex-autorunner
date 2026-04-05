@@ -18,6 +18,117 @@ if TYPE_CHECKING:
     from ...app_state import HubAppContext
 
 
+class _LazyRepoApp:
+    """Build and start a repo sub-app on first use instead of at hub startup."""
+
+    def __init__(
+        self,
+        *,
+        prefix: str,
+        repo_path: Path,
+        build_repo_app: Callable[[Path], ASGIApp],
+        logger: logging.Logger,
+        hub_started: Callable[[], bool],
+    ) -> None:
+        self.prefix = prefix
+        self.repo_path = repo_path
+        self._build_repo_app = build_repo_app
+        self._logger = logger
+        self._hub_started = hub_started
+        self._build_lock: Optional[asyncio.Lock] = None
+        self._sub_app: Optional[ASGIApp] = None
+        self._lifespan: Optional[AbstractAsyncContextManager[Any]] = None
+        self._build_error: Optional[str] = None
+
+    @property
+    def build_error(self) -> Optional[str]:
+        return self._build_error
+
+    @property
+    def app(self) -> Optional[ASGIApp]:
+        return self._sub_app
+
+    async def _ensure_ready(self) -> ASGIApp:
+        if self._sub_app is not None:
+            return self._sub_app
+        if self._build_lock is None:
+            self._build_lock = asyncio.Lock()
+        async with self._build_lock:
+            if self._sub_app is not None:
+                return self._sub_app
+            try:
+                sub_app = await asyncio.to_thread(self._build_repo_app, self.repo_path)
+                fastapi_app = HubMountManager._unwrap_fastapi(sub_app)
+                if fastapi_app is not None:
+                    fastapi_app.state.repo_id = self.prefix
+                    if self._hub_started():
+                        lifespan_context = cast(
+                            Callable[[FastAPI], AbstractAsyncContextManager[Any]],
+                            fastapi_app.router.lifespan_context,
+                        )
+                        self._lifespan = lifespan_context(fastapi_app)
+                        await self._lifespan.__aenter__()
+                self._sub_app = sub_app
+                self._build_error = None
+            except Exception as exc:
+                self._build_error = str(exc)
+                safe_log(
+                    self._logger,
+                    logging.WARNING,
+                    "Lazy repo mount failed for %s",
+                    self.prefix,
+                    exc=exc,
+                )
+                raise
+        return self._sub_app
+
+    async def close(self) -> None:
+        ctx = self._lifespan
+        self._lifespan = None
+        if ctx is None:
+            return
+        try:
+            await ctx.__aexit__(None, None, None)
+        except Exception as exc:
+            safe_log(
+                self._logger,
+                logging.WARNING,
+                "Repo lifespan shutdown failed for %s",
+                self.prefix,
+                exc=exc,
+            )
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            sub_app = await self._ensure_ready()
+        except Exception:
+            message = self._build_error or "Repo mount failed"
+            if scope.get("type") == "websocket":
+                await send(
+                    {
+                        "type": "websocket.close",
+                        "code": 1011,
+                        "reason": message[:120],
+                    }
+                )
+                return
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 503,
+                    "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": message.encode("utf-8", errors="replace"),
+                }
+            )
+            return
+        await sub_app(scope, receive, send)
+
+
 class HubMountManager:
     def __init__(
         self,
@@ -88,6 +199,11 @@ class HubMountManager:
     async def _stop_repo_lifespan_locked(self, prefix: str) -> None:
         ctx = self._repo_lifespans.pop(prefix, None)
         if ctx is None:
+            sub_app = self._repo_apps.get(prefix)
+            close_fn = getattr(sub_app, "close", None)
+            if close_fn is None or not callable(close_fn):
+                return
+            await close_fn()
             return
         try:
             await ctx.__aexit__(None, None, None)
@@ -131,7 +247,13 @@ class HubMountManager:
         if prefix in self._mount_errors:
             return False
         try:
-            sub_app = self._build_repo_app(repo_path)
+            sub_app = _LazyRepoApp(
+                prefix=prefix,
+                repo_path=repo_path,
+                build_repo_app=self._build_repo_app,
+                logger=self.app.state.logger,
+                hub_started=lambda: bool(getattr(self.app.state, "hub_started", False)),
+            )
         except ConfigError as exc:
             self._mount_errors[prefix] = str(exc)
             try:
@@ -156,10 +278,6 @@ class HubMountManager:
                     exc=exc2,
                 )
             return False
-
-        fastapi_app = self._unwrap_fastapi(sub_app)
-        if fastapi_app is not None:
-            fastapi_app.state.repo_id = prefix
 
         self.app.mount(f"/repos/{prefix}", sub_app)
         self._mounted_repos.add(prefix)
@@ -231,6 +349,14 @@ class HubMountManager:
 
     def add_mount_info(self, repo_dict: dict) -> dict:
         repo_id = repo_dict.get("id")
+        if not isinstance(repo_id, str) or not repo_id:
+            repo_dict["mounted"] = False
+            repo_dict.pop("mount_error", None)
+            return repo_dict
+        sub_app = self._repo_apps.get(repo_id)
+        lazy_error = getattr(sub_app, "build_error", None)
+        if isinstance(lazy_error, str) and lazy_error:
+            self._mount_errors[repo_id] = lazy_error
         if repo_id in self._mount_errors:
             repo_dict["mounted"] = False
             repo_dict["mount_error"] = self._mount_errors[repo_id]

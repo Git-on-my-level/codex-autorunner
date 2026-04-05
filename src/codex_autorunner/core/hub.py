@@ -579,6 +579,7 @@ class HubSupervisor:
         self.state = load_hub_state(self.state_path, self.hub_config.root)
         self._list_cache_at: Optional[float] = None
         self._list_cache: Optional[List[RepoSnapshot]] = None
+        self._startup_repo_state_pending = bool(self.state.repos)
         self._list_lock = threading.Lock()
         self._lifecycle_emitter = LifecycleEventEmitter(hub_config.root)
         self._lifecycle_event_processor = LifecycleEventProcessor(
@@ -646,6 +647,12 @@ class HubSupervisor:
             if use_cache and self._list_cache and self._list_cache_at is not None:
                 if time.monotonic() - self._list_cache_at < 2.0:
                     return self._list_cache
+            if use_cache and self._startup_repo_state_pending and self.state.repos:
+                self._startup_repo_state_pending = False
+                self._list_cache = list(self.state.repos)
+                self._list_cache_at = time.monotonic()
+                return self._list_cache
+            self._startup_repo_state_pending = False
             manifest, records = self._manifest_records(manifest_only=True)
             snapshots = self._build_snapshots(records)
             agent_workspaces = self._build_agent_workspace_snapshots(
@@ -2515,6 +2522,7 @@ class HubSupervisor:
         with self._list_lock:
             self._list_cache = None
             self._list_cache_at = None
+            self._startup_repo_state_pending = False
 
     @property
     def lifecycle_emitter(self) -> LifecycleEventEmitter:

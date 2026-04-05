@@ -1,4 +1,5 @@
 import concurrent.futures
+import dataclasses
 import json
 import shutil
 import sqlite3
@@ -211,6 +212,49 @@ def test_scan_writes_hub_state(tmp_path: Path):
     assert snap.initialized is True
     state_repo = next(r for r in payload["repos"] if r["id"] == "demo")
     assert state_repo["status"] == snap.status.value
+
+
+def test_list_repos_refreshes_after_startup_state_cache_ttl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    repo_dir = hub_root / "demo"
+    (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
+
+    initial_supervisor = HubSupervisor(load_hub_config(hub_root))
+    fresh_snapshot = initial_supervisor.scan()[0]
+    stale_snapshot = dataclasses.replace(fresh_snapshot, display_name="persisted-demo")
+    hub_module.save_hub_state(
+        hub_root / ".codex-autorunner" / "hub_state.json",
+        hub_module.HubState(
+            last_scan_at="2026-04-05T00:00:00Z", repos=[stale_snapshot]
+        ),
+        hub_root,
+    )
+
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    manifest_call_count = 0
+    original_manifest_records = supervisor._manifest_records
+
+    def wrapped_manifest_records(*args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal manifest_call_count
+        manifest_call_count += 1
+        return original_manifest_records(*args, **kwargs)
+
+    monkeypatch.setattr(supervisor, "_manifest_records", wrapped_manifest_records)
+
+    first = supervisor.list_repos()
+    assert manifest_call_count == 0
+    assert first[0].display_name == "persisted-demo"
+
+    assert supervisor._list_cache_at is not None
+    supervisor._list_cache_at -= 3.0
+
+    second = supervisor.list_repos()
+    assert manifest_call_count == 1
+    assert second[0].display_name == "demo"
 
 
 def test_scan_writes_pma_threads_artifact(tmp_path: Path) -> None:
@@ -1478,7 +1522,11 @@ def test_hub_mount_enters_repo_lifespan(tmp_path: Path):
     (repo_dir / ".git").mkdir(parents=True, exist_ok=True)
 
     app = create_hub_app(hub_root)
-    with TestClient(app):
+    with TestClient(app) as client:
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
+        version_resp = client.get("/repos/demo/api/version")
+        assert version_resp.status_code == 200
         sub_app = _get_mounted_app(app, "/repos/demo")
         assert sub_app is not None
         fastapi_app = _unwrap_fastapi_app(sub_app)
@@ -1503,6 +1551,8 @@ def test_hub_scan_starts_repo_lifespan(tmp_path: Path):
         entry = next(r for r in payload["repos"] if r["display_name"] == "demo#scan")
         assert entry["id"] == sanitize_repo_id("demo#scan")
         assert entry["mounted"] is True
+        version_resp = client.get(f"/repos/{entry['id']}/api/version")
+        assert version_resp.status_code == 200
 
         sub_app = _get_mounted_app(app, f"/repos/{entry['id']}")
         assert sub_app is not None
@@ -1521,6 +1571,10 @@ def test_hub_scan_unmounts_repo_and_exits_lifespan(tmp_path: Path):
 
     app = create_hub_app(hub_root)
     with TestClient(app) as client:
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
+        version_resp = client.get("/repos/demo/api/version")
+        assert version_resp.status_code == 200
         sub_app = _get_mounted_app(app, "/repos/demo")
         assert sub_app is not None
         fastapi_app = _unwrap_fastapi_app(sub_app)
@@ -1547,6 +1601,8 @@ def test_hub_create_repo_keeps_existing_mounts(tmp_path: Path):
 
     app = create_hub_app(hub_root)
     with TestClient(app) as client:
+        scan_resp = client.post("/hub/repos/scan")
+        assert scan_resp.status_code == 200
         assert _get_mounted_app(app, "/repos/alpha") is not None
 
         resp = client.post("/hub/repos", json={"id": "beta"})
