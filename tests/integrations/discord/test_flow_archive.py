@@ -325,12 +325,11 @@ async def test_flow_archive_command_without_run_id_blocks_latest_active_run(
         await service._store.close()
 
     assert flow_service.archive_calls == []
-    assert rest.interaction_responses[0]["payload"]["type"] == 4
-    assert latest_run_id in rest.interaction_responses[0]["payload"]["data"]["content"]
-    assert (
-        "Stop or pause it before archiving"
-        in rest.interaction_responses[0]["payload"]["data"]["content"]
-    )
+    assert rest.interaction_responses[0]["payload"]["type"] == 5
+    assert len(rest.followup_messages) == 1
+    content = rest.followup_messages[0]["payload"]["content"]
+    assert latest_run_id in content
+    assert "Stop or pause it before archiving" in content
 
 
 @pytest.mark.anyio
@@ -467,12 +466,12 @@ async def test_flow_archive_button_retires_stale_card_on_missing_run(
     finally:
         await service._store.close()
 
-    assert rest.interaction_responses[0]["payload"]["type"] == 4
-    content = rest.interaction_responses[0]["payload"]["data"]["content"]
+    assert rest.interaction_responses[0]["payload"]["type"] == 6
+    assert len(rest.followup_messages) == 1
+    content = rest.followup_messages[0]["payload"]["content"]
     assert run_id in content
     assert "no longer exists" in content
     assert rest.edited_original_interaction_responses == []
-    assert rest.followup_messages == []
 
 
 @pytest.mark.anyio

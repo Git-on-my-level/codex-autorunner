@@ -112,7 +112,10 @@ from ...core.update import (
     _update_target_restarts_surface,
 )
 from ...core.update_paths import resolve_update_paths
-from ...core.update_targets import get_update_target_label
+from ...core.update_targets import (
+    all_update_target_definitions,
+    get_update_target_label,
+)
 from ...core.utils import (
     atomic_write,
     canonicalize_path,
@@ -1444,12 +1447,14 @@ class DiscordBotService:
             ingress,
             command_path=self._normalize_discord_command_path(ingress.command_path),
         )
-        await self._prepare_command_interaction(
+        prepared = await self._prepare_command_interaction_or_abort(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             command_path=ingress.command_path,
             timing="dispatch",
         )
+        if not prepared:
+            return
 
         try:
             if ingress.command_path[:1] == ("car",):
@@ -4497,12 +4502,14 @@ class DiscordBotService:
             ingress,
             command_path=self._normalize_discord_command_path(ingress.command_path),
         )
-        await self._prepare_command_interaction(
+        prepared = await self._prepare_command_interaction_or_abort(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             command_path=ingress.command_path,
             timing="dispatch",
         )
+        if not prepared:
+            return
 
         try:
             if ingress.command_path[:1] == ("car",):
@@ -5384,6 +5391,53 @@ class DiscordBotService:
             interaction_token=interaction_token,
         )
 
+    def _command_interaction_ack_required(
+        self,
+        *,
+        command_path: tuple[str, ...],
+        timing: str,
+    ) -> bool:
+        entry = command_contract_entry_for_path(command_path)
+        if entry is None or entry.discord_ack_policy in (None, "immediate"):
+            return False
+        return entry.discord_ack_timing == timing
+
+    async def _prepare_command_interaction_or_abort(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        command_path: tuple[str, ...],
+        timing: str = "dispatch",
+    ) -> bool:
+        prepared = await self._prepare_command_interaction(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            command_path=command_path,
+            timing=timing,
+        )
+        if prepared:
+            return True
+        if not self._command_interaction_ack_required(
+            command_path=command_path,
+            timing=timing,
+        ):
+            return True
+        log_event(
+            self._logger,
+            logging.WARNING,
+            "discord.interaction.defer_required_failed",
+            command_path=" ".join(command_path),
+            timing=timing,
+            interaction_id=interaction_id,
+        )
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            ("Discord did not acknowledge this command in time. " "Please retry."),
+        )
+        return False
+
     async def _bind_with_path(
         self,
         interaction_id: str,
@@ -6102,6 +6156,17 @@ class DiscordBotService:
                 "Please select a filter and try again.",
             )
             return
+        deferred = await self._defer_component_update(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        if not deferred:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Discord interaction acknowledgement failed. Please retry.",
+            )
+            return
         workspace_root = await self._require_bound_workspace(
             interaction_id, interaction_token, channel_id=channel_id
         )
@@ -6195,7 +6260,20 @@ class DiscordBotService:
             )
             return
         try:
-            ticket_text = candidate.read_text(encoding="utf-8")
+            ticket_text = await asyncio.wait_for(
+                asyncio.to_thread(candidate.read_text, encoding="utf-8"),
+                timeout=1.5,
+            )
+        except asyncio.TimeoutError:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                (
+                    "Ticket load timed out before opening the modal. "
+                    "Try again or edit the file directly."
+                ),
+            )
+            return
         except Exception as exc:
             await self._respond_ephemeral(
                 interaction_id,
@@ -6960,6 +7038,17 @@ class DiscordBotService:
         raw_target = options.get("target")
         confirmed = bool(options.get("confirmed"))
         if not isinstance(raw_target, str) or not raw_target.strip():
+            deferred = (
+                await self._defer_component_update(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if component_response
+                else await self._defer_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+            )
             components = [
                 build_update_target_picker(
                     custom_id=UPDATE_TARGET_SELECT_ID,
@@ -6967,18 +7056,20 @@ class DiscordBotService:
                 )
             ]
             if component_response:
-                await self._update_component_message(
+                await self._send_or_update_component_message(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
+                    deferred=deferred,
                     text="Select update target:",
                     components=components,
                 )
             else:
-                await self._respond_with_components(
-                    interaction_id,
-                    interaction_token,
-                    "Select update target:",
-                    components,
+                await self._send_or_respond_with_components_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text="Select update target:",
+                    components=components,
                 )
             return
         if isinstance(raw_target, str) and raw_target.strip().lower() == "status":
@@ -6994,6 +7085,17 @@ class DiscordBotService:
                 raw_target if isinstance(raw_target, str) else None
             )
         except ValueError as exc:
+            deferred = (
+                await self._defer_component_update(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if component_response
+                else await self._defer_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+            )
             components = [
                 build_update_target_picker(
                     custom_id=UPDATE_TARGET_SELECT_ID,
@@ -7002,18 +7104,20 @@ class DiscordBotService:
             ]
             text = f"{exc} Select update target:"
             if component_response:
-                await self._update_component_message(
+                await self._send_or_update_component_message(
                     interaction_id=interaction_id,
                     interaction_token=interaction_token,
+                    deferred=deferred,
                     text=text,
                     components=components,
                 )
             else:
-                await self._respond_with_components(
-                    interaction_id,
-                    interaction_token,
-                    text,
-                    components,
+                await self._send_or_respond_with_components_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                    deferred=deferred,
+                    text=text,
+                    components=components,
                 )
             return
         deferred = (
@@ -7318,15 +7422,21 @@ class DiscordBotService:
             except Exception:
                 raw_config = {}
             self._hub_raw_config_cache = raw_config
-        return _available_update_target_definitions(
-            raw_config=raw_config if isinstance(raw_config, dict) else None,
-            update_backend=self._update_backend,
-            linux_service_names=(
-                self._update_linux_service_names
-                if isinstance(self._update_linux_service_names, dict)
-                else None
-            ),
-        )
+        try:
+            return _available_update_target_definitions(
+                raw_config=raw_config if isinstance(raw_config, dict) else None,
+                update_backend=self._update_backend,
+                linux_service_names=(
+                    self._update_linux_service_names
+                    if isinstance(self._update_linux_service_names, dict)
+                    else None
+                ),
+                # Slash-command interactions must answer within ~3s.
+                # Runtime launchctl/systemctl probes can exceed that window.
+                include_runtime_probes=False,
+            )
+        except Exception:
+            return all_update_target_definitions()
 
     async def _send_update_status_notice(
         self, notify_context: dict[str, Any], text: str
@@ -9579,6 +9689,10 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
+        deferred = await self._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         confirmed = bool(options.get("confirmed"))
         run_id_opt = options.get("run_id")
         if isinstance(run_id_opt, str) and run_id_opt.strip():
@@ -9588,6 +9702,7 @@ class DiscordBotService:
                 workspace_root=workspace_root,
                 action="archive",
                 run_id_opt=run_id_opt,
+                deferred=deferred,
             )
             if run_id_opt is None:
                 return
@@ -9688,10 +9803,6 @@ class DiscordBotService:
             message_id=interaction_id,
         )
         flow_service = self._ticket_flow_orchestration_service(workspace_root)
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
         try:
             summary = await asyncio.to_thread(
                 flow_service.archive_flow_run,
@@ -10938,6 +11049,17 @@ class DiscordBotService:
                         "Please select a run and try again.",
                     )
                     return
+                deferred = await self._defer_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if not deferred:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Discord interaction acknowledgement failed. Please retry.",
+                    )
+                    return
                 workspace_root = await self._require_bound_workspace(
                     interaction_id, interaction_token, channel_id=channel_id
                 )
@@ -11125,6 +11247,17 @@ class DiscordBotService:
                         f"Unknown flow action picker: {action}",
                     )
                     return
+                deferred = await self._defer_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if not deferred:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Discord interaction acknowledgement failed. Please retry.",
+                    )
+                    return
                 workspace_root = await self._require_bound_workspace(
                     interaction_id,
                     interaction_token,
@@ -11215,6 +11348,17 @@ class DiscordBotService:
                 return
 
             if custom_id.startswith("flow:"):
+                deferred = await self._defer_component_update(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if not deferred:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Discord interaction acknowledgement failed. Please retry.",
+                    )
+                    return
                 workspace_root = await self._require_bound_workspace(
                     interaction_id, interaction_token, channel_id=channel_id
                 )
@@ -11366,6 +11510,17 @@ class DiscordBotService:
                         "Please select a run and try again.",
                     )
                     return
+                deferred = await self._defer_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if not deferred:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Discord interaction acknowledgement failed. Please retry.",
+                    )
+                    return
                 workspace_root = await self._require_bound_workspace(
                     interaction_id, interaction_token, channel_id=channel_id
                 )
@@ -11545,6 +11700,17 @@ class DiscordBotService:
                         f"Unknown flow action picker: {action}",
                     )
                     return
+                deferred = await self._defer_ephemeral(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if not deferred:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Discord interaction acknowledgement failed. Please retry.",
+                    )
+                    return
                 workspace_root = await self._require_bound_workspace(
                     interaction_id,
                     interaction_token,
@@ -11635,6 +11801,17 @@ class DiscordBotService:
                 return
 
             if custom_id.startswith("flow:"):
+                deferred = await self._defer_component_update(
+                    interaction_id=interaction_id,
+                    interaction_token=interaction_token,
+                )
+                if not deferred:
+                    await self._respond_ephemeral(
+                        interaction_id,
+                        interaction_token,
+                        "Discord interaction acknowledgement failed. Please retry.",
+                    )
+                    return
                 workspace_root = await self._require_bound_workspace(
                     interaction_id, interaction_token, channel_id=channel_id
                 )
@@ -11784,6 +11961,17 @@ class DiscordBotService:
                 "No workspace selected.",
             )
             return
+        deferred = await self._defer_component_update(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        if not deferred:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Discord interaction acknowledgement failed. Please retry.",
+            )
+            return
 
         candidates = self._list_bind_workspace_candidates()
         resolved_workspace = self._resolve_workspace_from_token(
@@ -11831,6 +12019,17 @@ class DiscordBotService:
                 "Invalid bind page selection.",
             )
             return
+        deferred = await self._defer_component_update(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        if not deferred:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Discord interaction acknowledgement failed. Please retry.",
+            )
+            return
 
         candidates = self._list_bind_workspace_candidates()
         if not candidates:
@@ -11873,6 +12072,29 @@ class DiscordBotService:
         run_id = parts[1]
         action = parts[2]
         flow_service = self._ticket_flow_orchestration_service(workspace_root)
+        deferred_component = False
+        if action in {
+            "resume",
+            "stop",
+            "archive",
+            "archive_confirm",
+            "archive_cancel",
+            "archive_confirm_prompt",
+            "archive_cancel_prompt",
+            "restart",
+            "refresh",
+        }:
+            deferred_component = await self._defer_component_update(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+            if not deferred_component:
+                await self._respond_ephemeral(
+                    interaction_id,
+                    interaction_token,
+                    "Discord interaction acknowledgement failed. Please retry.",
+                )
+                return
 
         if action == "resume":
             try:
@@ -12000,10 +12222,7 @@ class DiscordBotService:
                 )
                 return
 
-            deferred = await self._defer_component_update(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
+            deferred = deferred_component
             try:
                 summary = await asyncio.to_thread(
                     flow_service.archive_flow_run,
@@ -12064,7 +12283,7 @@ class DiscordBotService:
                 interaction_token,
                 workspace_root=workspace_root,
                 options={"run_id": run_id},
-                deferred_public=False,
+                deferred_public=deferred_component,
             )
         elif action == "refresh":
             await self._handle_flow_status(
