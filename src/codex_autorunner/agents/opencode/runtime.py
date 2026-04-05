@@ -1717,16 +1717,22 @@ async def collect_opencode_output_from_events(
                             continue
                         _append_text_for_message(part_message_id, delta_text)
                         # Update dedupe bookkeeping for text deltas to prevent re-adding later
-                        if isinstance(part_dict, dict):
-                            part_id = part_dict.get("id") or part_dict.get("partId")
+                        if isinstance(part_id, str) and part_id:
+                            if isinstance(part_dict, dict):
+                                text = part_dict.get("text")
+                                if isinstance(text, str):
+                                    part_lengths[part_id] = len(text)
+                                else:
+                                    part_lengths[part_id] = part_lengths.get(
+                                        part_id, 0
+                                    ) + len(delta_text)
+                            else:
+                                part_lengths[part_id] = part_lengths.get(
+                                    part_id, 0
+                                ) + len(delta_text)
+                        elif isinstance(part_dict, dict):
                             text = part_dict.get("text")
-                            if (
-                                isinstance(part_id, str)
-                                and part_id
-                                and isinstance(text, str)
-                            ):
-                                part_lengths[part_id] = len(text)
-                            elif isinstance(text, str):
+                            if isinstance(text, str):
                                 last_full_text = text
                         if part_handler and part_with_session:
                             await part_handler("text", part_with_session, delta_text)

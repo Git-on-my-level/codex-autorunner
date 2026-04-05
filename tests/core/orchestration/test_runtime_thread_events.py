@@ -580,6 +580,50 @@ async def test_normalize_runtime_thread_raw_event_handles_opencode_message_part_
     assert state.best_assistant_text() == "OK"
 
 
+async def test_normalize_runtime_thread_raw_event_ignores_commentary_completed_messages() -> (
+    None
+):
+    state = RuntimeThreadRunEventState()
+
+    commentary = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "item/completed",
+                    "params": {
+                        "itemId": "item-1",
+                        "item": {
+                            "type": "agentMessage",
+                            "text": "draft reply",
+                            "phase": "commentary",
+                        },
+                    },
+                }
+            },
+        ),
+        state,
+    )
+    final_stream = await normalize_runtime_thread_raw_event(
+        format_sse(
+            "app-server",
+            {
+                "message": {
+                    "method": "item/agentMessage/delta",
+                    "params": {"itemId": "item-2", "delta": "final reply"},
+                }
+            },
+        ),
+        state,
+    )
+
+    assert commentary == []
+    assert len(final_stream) == 1
+    assert isinstance(final_stream[0], OutputDelta)
+    assert final_stream[0].content == "final reply"
+    assert state.best_assistant_text() == "final reply"
+
+
 async def test_normalize_runtime_thread_raw_event_maps_opencode_reasoning_parts_to_thinking() -> (
     None
 ):
