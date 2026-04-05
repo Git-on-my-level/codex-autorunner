@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import json
 import os
 import shutil
@@ -27,11 +28,14 @@ import yaml
 DEFAULT_NON_INTEGRATION_TIMEOUT_SECONDS = 120
 _OPENCODE_PROCESS_KIND = "opencode"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_PYTEST_RUNTIME_KEY = hashlib.sha1(str(_REPO_ROOT).encode("utf-8")).hexdigest()[:10]
-_PYTEST_RUNTIME_ROOT = Path("/tmp") / f"cp-{_PYTEST_RUNTIME_KEY}"
-_PYTEST_TEMP_ROOT = _PYTEST_RUNTIME_ROOT / "t"
+_PYTEST_RUNTIME_KEY = hashlib.sha1(
+    str(_REPO_ROOT.expanduser().resolve(strict=False)).encode("utf-8")
+).hexdigest()[:10]
 _PYTEST_OPENCODE_STATE_ROOT = _REPO_ROOT / ".codex-autorunner" / "pytest-opencode-state"
 _PYTEST_RUN_TOKEN = os.environ.setdefault("CAR_PYTEST_RUN_TOKEN", uuid.uuid4().hex[:8])
+_PYTEST_TEMP_ROOT_MAX_BYTES = int(
+    os.environ.get("CAR_PYTEST_TEMP_ROOT_MAX_BYTES", str(5 * 1024 * 1024 * 1024))
+)
 os.environ.setdefault("CODEX_DISABLE_APP_SERVER_AUTORESTART_FOR_TESTS", "1")
 
 
@@ -43,11 +47,28 @@ def _pytest_process_token() -> str:
 
 
 def _pytest_temp_env_root() -> Path:
-    return _PYTEST_TEMP_ROOT / _PYTEST_RUN_TOKEN / _pytest_process_token()
+    return _pytest_temp_run_root() / _pytest_process_token()
+
+
+def _pytest_temp_run_root() -> Path:
+    return _PYTEST_TEMP_ROOT / _PYTEST_RUN_TOKEN
 
 
 def _pytest_global_state_root() -> Path:
     return _PYTEST_OPENCODE_STATE_ROOT / _PYTEST_RUN_TOKEN / _pytest_process_token()
+
+
+def _load_pytest_temp_cleanup_module():
+    src_dir = _REPO_ROOT / "src"
+    src_path = str(src_dir)
+    if sys.path[:1] != [src_path] and src_path not in sys.path:
+        sys.path.insert(0, src_path)
+    return importlib.import_module("codex_autorunner.core.pytest_temp_cleanup")
+
+
+def _system_temp_root() -> Path:
+    cleanup_module = _load_pytest_temp_cleanup_module()
+    return cleanup_module.system_temp_root()
 
 
 def _prepare_repo_local_tmpdir() -> None:
@@ -56,6 +77,10 @@ def _prepare_repo_local_tmpdir() -> None:
     for key in ("TMPDIR", "TMP", "TEMP"):
         os.environ[key] = str(temp_root)
     tempfile.tempdir = None
+
+
+_PYTEST_RUNTIME_ROOT = _system_temp_root() / f"cp-{_PYTEST_RUNTIME_KEY}"
+_PYTEST_TEMP_ROOT = _PYTEST_RUNTIME_ROOT / "t"
 
 
 def _prune_old_runtime_dirs(
@@ -75,10 +100,29 @@ def _prune_old_runtime_dirs(
         shutil.rmtree(path, ignore_errors=True)
 
 
+def _prune_inactive_pytest_temp_runs(*, keep: set[str]) -> None:
+    cleanup_module = _load_pytest_temp_cleanup_module()
+    cleanup_module.cleanup_repo_pytest_temp_runs(_REPO_ROOT, keep_run_tokens=keep)
+
+
+def _format_temp_processes(processes: tuple[object, ...]) -> str:
+    parts: list[str] = []
+    for process in processes[:10]:
+        pid = getattr(process, "pid", "?")
+        command = getattr(process, "command", "?")
+        path = getattr(process, "path", None)
+        if path:
+            parts.append(f"pid={pid} command={command} path={path}")
+        else:
+            parts.append(f"pid={pid} command={command}")
+    remaining = len(processes) - len(parts)
+    if remaining > 0:
+        parts.append(f"... plus {remaining} more")
+    return "; ".join(parts)
+
+
 _prepare_repo_local_tmpdir()
-_prune_old_runtime_dirs(
-    _PYTEST_TEMP_ROOT, keep={_PYTEST_RUN_TOKEN}, max_age_seconds=86400
-)
+_prune_inactive_pytest_temp_runs(keep={_PYTEST_RUN_TOKEN})
 _prune_old_runtime_dirs(
     _PYTEST_OPENCODE_STATE_ROOT, keep={_PYTEST_RUN_TOKEN}, max_age_seconds=86400
 )
@@ -332,7 +376,7 @@ def _configure_opencode_global_state_root(
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _cleanup_codex_app_server_clients() -> None:
+def _cleanup_codex_app_server_clients(_cleanup_pytest_temp_runs_session) -> None:
     """
     Ensure any CodexAppServerClient restart tasks are cancelled after the suite.
 
@@ -351,7 +395,7 @@ def _cleanup_codex_app_server_clients() -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _cleanup_opencode_processes_session() -> None:
+def _cleanup_opencode_processes_session(_cleanup_pytest_temp_runs_session) -> None:
     """
     Reap stale prior-run OpenCode records and fail if this run leaks any.
     """
@@ -372,6 +416,32 @@ def _cleanup_opencode_processes_session() -> None:
             "Leaked OpenCode managed processes remained after the test session: "
             + "; ".join(failures)
         )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_pytest_temp_runs_session() -> None:
+    yield
+    cleanup_module = _load_pytest_temp_cleanup_module()
+    env_root = _pytest_temp_env_root()
+    summary = cleanup_module.cleanup_temp_paths((env_root,))
+    failures: list[str] = []
+    if summary.active_paths:
+        failures.append(
+            "active processes remained under pytest temp root: "
+            + _format_temp_processes(summary.active_processes)
+        )
+    if summary.failed_paths:
+        failures.append("; ".join(summary.failed_paths))
+    if summary.bytes_before > _PYTEST_TEMP_ROOT_MAX_BYTES:
+        gib = summary.bytes_before / float(1024**3)
+        failures.append(
+            "pytest temp root exceeded size guard "
+            f"({gib:.2f} GiB > {_PYTEST_TEMP_ROOT_MAX_BYTES / float(1024**3):.2f} GiB)"
+        )
+    if env_root.exists():
+        failures.append(f"pytest temp env root still exists after cleanup: {env_root}")
+    if failures:
+        raise AssertionError(" ; ".join(failures))
 
 
 @pytest.fixture(autouse=True)

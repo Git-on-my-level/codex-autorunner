@@ -205,6 +205,52 @@ async def test_start_process_writes_registry_record(
     assert written_paths[1].name == "4242.json"
 
 
+@pytest.mark.anyio
+async def test_start_process_failure_reaps_spawned_process_group(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    supervisor = OpenCodeSupervisor(["opencode", "serve"])
+    handle = _handle(tmp_path)
+
+    class _FakeProcess:
+        pid = 5252
+        returncode = None
+        stdout = None
+
+        def terminate(self) -> None:
+            raise AssertionError(
+                "terminate() should not be used when group reap succeeds"
+            )
+
+        def kill(self) -> None:
+            raise AssertionError("kill() should not be used when group reap succeeds")
+
+        async def wait(self) -> int:
+            raise AssertionError("wait() should not be used when group reap succeeds")
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeProcess()
+
+    async def _fake_read_base_url(_process):
+        raise RuntimeError("boom")
+
+    terminate_calls: list[tuple[int, int | None, str]] = []
+
+    def _fake_terminate_record(pid, pgid, **kwargs):
+        terminate_calls.append((pid, pgid, kwargs["event_prefix"]))
+        return True
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(supervisor, "_read_base_url", _fake_read_base_url)
+    monkeypatch.setattr(supervisor_module, "terminate_record", _fake_terminate_record)
+    monkeypatch.setattr(supervisor_module.os, "getpgid", lambda _pid: 5253)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await supervisor._start_process(handle)
+
+    assert terminate_calls == [(5252, 5253, "opencode.supervisor.startup_cleanup")]
+
+
 def test_refresh_registry_ownership_marks_registry_reuse(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

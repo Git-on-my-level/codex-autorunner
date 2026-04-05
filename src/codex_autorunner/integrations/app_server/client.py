@@ -2084,6 +2084,11 @@ class CodexAppServerClient:
             )
 
     async def _force_kill_process(self, process: asyncio.subprocess.Process) -> None:
+        if os.name != "nt" and hasattr(os, "killpg"):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except Exception:
+                pass
         try:
             os.kill(process.pid, signal.SIGKILL)
         except Exception:
