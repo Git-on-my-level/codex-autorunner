@@ -77,7 +77,9 @@ def test_scan_temp_path_fails_closed_when_lsof_is_unavailable(
     root.mkdir()
     (root / "payload.txt").write_text("payload", encoding="utf-8")
 
-    def _raise_file_not_found(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+    def _raise_file_not_found(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
         raise FileNotFoundError("lsof")
 
     monkeypatch.setattr(subprocess, "run", _raise_file_not_found)
@@ -94,7 +96,9 @@ def test_find_processes_using_path_parses_stdout_when_lsof_exits_one(
     root = tmp_path / "active"
     root.mkdir()
 
-    def _completed_process(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+    def _completed_process(
+        *args: object, **kwargs: object
+    ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.CompletedProcess(
             args=args[0],
             returncode=1,
