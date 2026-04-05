@@ -2840,3 +2840,1023 @@ def test_set_worktree_setup_commands_route_accepts_legacy_array_payload(tmp_path
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["worktree_setup_commands"] == ["make setup", "pre-commit install"]
+
+
+def _make_supervisor(hub_root: Path) -> HubSupervisor:
+    return HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+
+
+def test_stop_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    supervisor.create_repo("demo")
+    _init_git_repo(supervisor.list_repos()[0].path)
+
+    stopped = []
+
+    class _FakeOrchestrator:
+        def stop(self, repo_id: str) -> None:
+            stopped.append(repo_id)
+
+    supervisor._runner_orchestrator = _FakeOrchestrator()  # type: ignore[assignment]
+
+    snap = supervisor.stop_repo("demo")
+    assert stopped == ["demo"]
+    assert snap.id == "demo"
+
+
+def test_resume_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    supervisor.create_repo("demo")
+    _init_git_repo(supervisor.list_repos()[0].path)
+
+    resumed = []
+
+    class _FakeOrchestrator:
+        def resume(self, repo_id: str, *, once: bool = False) -> None:
+            resumed.append((repo_id, once))
+
+    supervisor._runner_orchestrator = _FakeOrchestrator()  # type: ignore[assignment]
+
+    snap = supervisor.resume_repo("demo", once=True)
+    assert resumed == [("demo", True)]
+    assert snap.id == "demo"
+
+
+def test_kill_repo_delegates_to_orchestrator(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    supervisor.create_repo("demo")
+    _init_git_repo(supervisor.list_repos()[0].path)
+
+    killed = []
+
+    class _FakeOrchestrator:
+        def kill(self, repo_id: str) -> None:
+            killed.append(repo_id)
+
+    supervisor._runner_orchestrator = _FakeOrchestrator()  # type: ignore[assignment]
+
+    snap = supervisor.kill_repo("demo")
+    assert killed == ["demo"]
+    assert snap.id == "demo"
+
+
+def test_create_agent_workspace_rejects_empty_workspace_id(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    with pytest.raises(ValueError, match="workspace_id is required"):
+        supervisor.create_agent_workspace(workspace_id="  ", runtime="zeroclaw")
+
+
+def test_create_agent_workspace_rejects_empty_runtime(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    with pytest.raises(ValueError, match="runtime is required"):
+        supervisor.create_agent_workspace(workspace_id="zc-main", runtime="")
+
+
+def test_create_agent_workspace_rejects_duplicate_with_different_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    monkeypatch.setattr(
+        hub_module,
+        "known_agent_workspace_runtime_ids",
+        lambda: ("zeroclaw", "otherclaw"),
+    )
+    supervisor.create_agent_workspace(
+        workspace_id="zc-main", runtime="zeroclaw", enabled=False
+    )
+    with pytest.raises(ValueError, match="already exists"):
+        supervisor.create_agent_workspace(
+            workspace_id="zc-main", runtime="otherclaw", enabled=False
+        )
+
+
+def test_remove_agent_workspace_rejects_missing(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.remove_agent_workspace("nope")
+
+
+def test_update_agent_workspace_rejects_missing(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.update_agent_workspace("nope", enabled=True)
+
+
+def test_update_agent_workspace_rejects_empty_display_name(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    supervisor.create_agent_workspace(
+        workspace_id="zc-main", runtime="zeroclaw", enabled=False
+    )
+    with pytest.raises(ValueError, match="display_name must be non-empty"):
+        supervisor.update_agent_workspace("zc-main", display_name="   ")
+
+
+def test_set_agent_workspace_destination_rejects_missing(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.set_agent_workspace_destination("nope", {"kind": "local"})
+
+
+def test_set_parent_repo_pinned_rejects_missing_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.set_parent_repo_pinned("nope", True)
+
+
+def test_sync_main_rejects_unknown_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.sync_main("nope")
+
+
+def test_sync_main_rejects_missing_disk(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    supervisor.create_repo("demo")
+    shutil.rmtree(hub_root / "demo")
+    with pytest.raises(ValueError, match="missing on disk"):
+        supervisor.sync_main("demo")
+
+
+def test_sync_main_rejects_non_git_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    snap = supervisor.create_repo("demo")
+    shutil.rmtree(snap.path / ".git")
+    with pytest.raises(ValueError, match="not a git repository"):
+        supervisor.sync_main("demo")
+
+
+def test_sync_main_rejects_dirty_tree(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    snap = supervisor.create_repo("demo")
+    _init_git_repo(snap.path)
+    (snap.path / "untracked.txt").write_text("dirty", encoding="utf-8")
+    run_git(["add", "untracked.txt"], snap.path, check=True)
+    with pytest.raises(ValueError, match="uncommitted changes"):
+        supervisor.sync_main("demo")
+
+
+def test_set_worktree_setup_commands_rejects_unknown_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.set_worktree_setup_commands("nope", ["echo hi"])
+
+
+def test_set_worktree_setup_commands_rejects_non_base_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+    bare_path = tmp_path / "origin.git"
+    run_git(["init", "--bare", str(bare_path)], tmp_path, check=True)
+    run_git(["remote", "add", "origin", str(bare_path)], base.path, check=True)
+    run_git(
+        [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "init",
+        ],
+        base.path,
+        check=True,
+    )
+    run_git(["push", "-u", "origin", "master"], base.path, check=False)
+    wt = supervisor.create_worktree(base_repo_id="base", branch="feature/test")
+    with pytest.raises(ValueError, match="base repos"):
+        supervisor.set_worktree_setup_commands(wt.id, ["echo hi"])
+
+
+def test_check_repo_removal_rejects_unknown_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.check_repo_removal("nope")
+
+
+def test_archive_repo_state_rejects_unknown_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.archive_repo_state(repo_id="nope")
+
+
+def test_archive_repo_state_rejects_missing_path(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    supervisor.create_repo("demo")
+    shutil.rmtree(hub_root / "demo")
+    with pytest.raises(ValueError, match="does not exist"):
+        supervisor.archive_repo_state(repo_id="demo")
+
+
+def test_cleanup_repo_threads_rejects_unknown_repo(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.cleanup_repo_threads(repo_id="nope")
+
+
+def test_cleanup_repo_threads_rejects_missing_path(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = _make_supervisor(hub_root)
+    supervisor.create_repo("demo")
+    shutil.rmtree(hub_root / "demo")
+    with pytest.raises(ValueError, match="does not exist"):
+        supervisor.cleanup_repo_threads(repo_id="demo")
+
+
+def test_ensure_pma_automation_store_creates_store(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        store = supervisor.ensure_pma_automation_store()
+        assert store is not None
+        assert supervisor.ensure_pma_automation_store() is store
+    finally:
+        supervisor.shutdown()
+
+
+def test_automation_store_aliases(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        primary = supervisor.ensure_pma_automation_store()
+        assert supervisor.ensure_automation_store() is primary
+        assert supervisor.get_pma_automation_store() is primary
+        assert supervisor.get_automation_store() is primary
+        assert supervisor.pma_automation_store is primary
+        assert supervisor.automation_store is primary
+    finally:
+        supervisor.shutdown()
+
+
+def test_lifecycle_emitter_property(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        emitter = supervisor.lifecycle_emitter
+        assert emitter is not None
+        assert emitter is supervisor._lifecycle_emitter
+    finally:
+        supervisor.shutdown()
+
+
+def test_lifecycle_store_property(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        store = supervisor.lifecycle_store
+        assert store is not None
+    finally:
+        supervisor.shutdown()
+
+
+def test_set_pma_lane_worker_starter(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        started = []
+        supervisor.set_pma_lane_worker_starter(lambda lane_id: started.append(lane_id))
+        supervisor._request_pma_lane_worker_start("test-lane")
+        assert started == ["test-lane"]
+    finally:
+        supervisor.shutdown()
+
+
+def test_request_pma_lane_worker_start_uses_default_lane(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        started = []
+        supervisor.set_pma_lane_worker_starter(lambda lane_id: started.append(lane_id))
+        supervisor._request_pma_lane_worker_start(None)
+        supervisor._request_pma_lane_worker_start("")
+        supervisor._request_pma_lane_worker_start("   ")
+        from codex_autorunner.core.pma_automation_store import DEFAULT_PMA_LANE_ID
+
+        assert started == [DEFAULT_PMA_LANE_ID] * 3
+    finally:
+        supervisor.shutdown()
+
+
+def test_request_pma_lane_worker_start_handles_starter_exception(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+
+        def _boom(lane_id: str) -> None:
+            raise RuntimeError("boom")
+
+        supervisor.set_pma_lane_worker_starter(_boom)
+        supervisor._request_pma_lane_worker_start("lane")
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_pma_automation_timers_returns_zero_for_bad_limit(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        assert supervisor.process_pma_automation_timers(limit=0) == 0
+        assert supervisor.process_pma_automation_timers(limit=-1) == 0
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_pma_automation_timers_returns_zero_when_no_dequeue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        store = supervisor.ensure_pma_automation_store()
+        monkeypatch.setattr(store, "dequeue_due_timers", None, raising=False)
+        assert supervisor.process_pma_automation_timers() == 0
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_pma_automation_timers_processes_due_timers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        store = supervisor.ensure_pma_automation_store()
+        timers = [
+            {
+                "timer_id": "t1",
+                "fired_at": "2025-01-01T00:00:00Z",
+                "repo_id": "demo",
+                "run_id": None,
+                "thread_id": None,
+                "lane_id": None,
+                "from_state": None,
+                "to_state": None,
+                "reason": None,
+                "metadata": None,
+            },
+        ]
+        monkeypatch.setattr(store, "dequeue_due_timers", lambda limit=100: timers)
+        created = supervisor.process_pma_automation_timers()
+        assert created >= 1
+    finally:
+        supervisor.shutdown()
+
+
+def test_drain_pma_automation_wakeups_returns_zero_for_bad_limit(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        assert supervisor.drain_pma_automation_wakeups(limit=0) == 0
+    finally:
+        supervisor.shutdown()
+
+
+def test_drain_pma_automation_wakeups_returns_zero_when_pma_disabled(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["enabled"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        assert supervisor.drain_pma_automation_wakeups() == 0
+    finally:
+        supervisor.shutdown()
+
+
+def test_drain_pma_automation_wakeups_processes_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    started_lanes = []
+    supervisor.set_pma_lane_worker_starter(
+        lambda lane_id: started_lanes.append(lane_id)
+    )
+    try:
+        store = supervisor.ensure_pma_automation_store()
+        wakeups = [
+            {
+                "wakeup_id": "w1",
+                "repo_id": "demo",
+                "run_id": "r1",
+                "thread_id": None,
+                "lane_id": "pma:default",
+                "from_state": None,
+                "to_state": None,
+                "reason": "timer_due",
+                "timestamp": "2025-01-01T00:00:00Z",
+                "source": "timer",
+                "event_type": None,
+                "subscription_id": None,
+                "timer_id": "t1",
+                "event_id": None,
+                "idempotency_key": "timer:t1:2025-01-01T00:00:00Z",
+            },
+        ]
+        monkeypatch.setattr(store, "list_pending_wakeups", lambda limit=100: wakeups)
+        monkeypatch.setattr(store, "mark_wakeup_dispatched", lambda wid: True)
+        drained = supervisor.drain_pma_automation_wakeups()
+        assert drained == 1
+        assert started_lanes == ["pma:default"]
+    finally:
+        supervisor.shutdown()
+
+
+def test_ensure_pma_safety_checker_creates_checker(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        checker = supervisor.ensure_pma_safety_checker()
+        assert checker is not None
+        assert supervisor.ensure_pma_safety_checker() is checker
+        assert supervisor.get_pma_safety_checker() is checker
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_pma_automation_now_combines_timers_and_wakeups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        monkeypatch.setattr(supervisor, "process_pma_automation_timers", lambda **kw: 3)
+        monkeypatch.setattr(supervisor, "drain_pma_automation_wakeups", lambda **kw: 5)
+        result = supervisor.process_pma_automation_now()
+        assert result == {"timers_processed": 3, "wakeups_dispatched": 5}
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_pma_automation_now_skips_timers_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        monkeypatch.setattr(supervisor, "drain_pma_automation_wakeups", lambda **kw: 2)
+        result = supervisor.process_pma_automation_now(include_timers=False)
+        assert result == {"timers_processed": 0, "wakeups_dispatched": 2}
+    finally:
+        supervisor.shutdown()
+
+
+def test_trigger_pma_from_lifecycle_event(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        from codex_autorunner.core.lifecycle_events import (
+            LifecycleEvent,
+            LifecycleEventType,
+        )
+
+        event = LifecycleEvent(
+            event_id="evt-1",
+            event_type=LifecycleEventType.FLOW_COMPLETED,
+            repo_id="demo",
+            run_id="r1",
+            timestamp="2025-01-01T00:00:00Z",
+            data=None,
+            origin="test",
+        )
+        event.processed = True
+        supervisor.trigger_pma_from_lifecycle_event(event)
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_lifecycle_events_drains_wakeups(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        drained = []
+        monkeypatch.setattr(
+            supervisor._lifecycle_event_processor,
+            "process_events",
+            lambda limit=100: None,
+        )
+        monkeypatch.setattr(
+            supervisor,
+            "drain_pma_automation_wakeups",
+            lambda **kw: drained.append(1) or 0,
+        )
+        supervisor.process_lifecycle_events()
+        assert drained == [1]
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_lifecycle_events_handles_drain_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        monkeypatch.setattr(
+            supervisor._lifecycle_event_processor,
+            "process_events",
+            lambda limit=100: None,
+        )
+        monkeypatch.setattr(
+            supervisor,
+            "drain_pma_automation_wakeups",
+            lambda **kw: (_ for _ in ()).throw(RuntimeError("drain failed")),
+        )
+        supervisor.process_lifecycle_events()
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_scm_automation_polls_returns_zeros_without_processor(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        result = supervisor.process_scm_automation_polls()
+        assert result["due"] == 0
+        assert result["errors"] == 0
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_scm_automation_polls_delegates_to_processor(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        supervisor._scm_poll_processor = lambda limit: {"due": 5, "polled": 3}
+        result = supervisor.process_scm_automation_polls()
+        assert result["due"] == 5
+        assert result["polled"] == 3
+    finally:
+        supervisor.shutdown()
+
+
+def test_process_scm_automation_polls_handles_exception(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        supervisor._scm_poll_processor = lambda limit: (_ for _ in ()).throw(
+            RuntimeError("poll failed")
+        )
+        result = supervisor.process_scm_automation_polls()
+        assert result["errors"] == 1
+        assert result["discovery_errors"] == 1
+    finally:
+        supervisor.shutdown()
+
+
+def test_build_pma_wakeup_message_timer_source(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        msg = supervisor._build_pma_wakeup_message(
+            {"source": "timer", "timer_id": "t1", "repo_id": "demo"}
+        )
+        assert "timer" in msg
+        assert "timer_id: t1" in msg
+        assert "repo_id: demo" in msg
+        assert "verify progress" in msg
+    finally:
+        supervisor.shutdown()
+
+
+def test_build_pma_wakeup_message_non_timer(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        msg = supervisor._build_pma_wakeup_message({"source": "lifecycle"})
+        assert "suggested_next_action" in msg
+        assert "inspect the transition" in msg
+    finally:
+        supervisor.shutdown()
+
+
+def test_build_lifecycle_retry_policy_defaults(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        policy = supervisor._build_lifecycle_retry_policy()
+        assert policy.max_attempts == 3
+        assert policy.initial_backoff_seconds == 5.0
+        assert policy.max_backoff_seconds == 300.0
+    finally:
+        supervisor.shutdown()
+
+
+def test_build_lifecycle_retry_policy_custom(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["lifecycle_retry_max_attempts"] = 5
+    cfg["pma"]["lifecycle_retry_initial_backoff_seconds"] = 10
+    cfg["pma"]["lifecycle_retry_max_backoff_seconds"] = 600
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        policy = supervisor._build_lifecycle_retry_policy()
+        assert policy.max_attempts == 5
+        assert policy.initial_backoff_seconds == 10.0
+        assert policy.max_backoff_seconds == 600.0
+    finally:
+        supervisor.shutdown()
+
+
+def test_build_lifecycle_retry_policy_clamps_max_to_initial(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["lifecycle_retry_initial_backoff_seconds"] = 500
+    cfg["pma"]["lifecycle_retry_max_backoff_seconds"] = 100
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        policy = supervisor._build_lifecycle_retry_policy()
+        assert policy.max_backoff_seconds == 500.0
+    finally:
+        supervisor.shutdown()
+
+
+def test_build_pma_lifecycle_message(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        from codex_autorunner.core.lifecycle_events import (
+            LifecycleEvent,
+            LifecycleEventType,
+        )
+
+        event = LifecycleEvent(
+            event_id="e1",
+            event_type=LifecycleEventType.DISPATCH_CREATED,
+            repo_id="demo",
+            run_id="r1",
+            timestamp="2025-01-01T00:00:00Z",
+            data={"key": "val"},
+            origin="test",
+        )
+        msg = supervisor._build_pma_lifecycle_message(event, reason="auto")
+        assert "dispatch_created" in msg
+        assert "demo" in msg
+        assert "reason: auto" in msg
+        assert "Dispatch requires attention" in msg
+    finally:
+        supervisor.shutdown()
+
+
+def test_pma_reactive_gate_allows_by_default(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        from codex_autorunner.core.lifecycle_events import (
+            LifecycleEvent,
+            LifecycleEventType,
+        )
+
+        event = LifecycleEvent(
+            event_id="e1",
+            event_type=LifecycleEventType.FLOW_COMPLETED,
+            repo_id="demo",
+            run_id="r1",
+            timestamp="2025-01-01T00:00:00Z",
+            data=None,
+            origin="test",
+        )
+        allowed, reason = supervisor._pma_reactive_gate(event)
+        assert allowed is True
+        assert reason == "reactive_allowed"
+    finally:
+        supervisor.shutdown()
+
+
+def test_pma_reactive_gate_blocks_disabled(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["reactive_enabled"] = False
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        from codex_autorunner.core.lifecycle_events import (
+            LifecycleEvent,
+            LifecycleEventType,
+        )
+
+        event = LifecycleEvent(
+            event_id="e1",
+            event_type=LifecycleEventType.FLOW_COMPLETED,
+            repo_id="demo",
+            run_id="r1",
+            timestamp="2025-01-01T00:00:00Z",
+            data=None,
+            origin="test",
+        )
+        allowed, reason = supervisor._pma_reactive_gate(event)
+        assert allowed is False
+        assert reason == "reactive_disabled"
+    finally:
+        supervisor.shutdown()
+
+
+def test_pma_reactive_gate_blocks_origin(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["reactive_origin_blocklist"] = ["blocked_bot"]
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        from codex_autorunner.core.lifecycle_events import (
+            LifecycleEvent,
+            LifecycleEventType,
+        )
+
+        event = LifecycleEvent(
+            event_id="e1",
+            event_type=LifecycleEventType.FLOW_COMPLETED,
+            repo_id="demo",
+            run_id="r1",
+            timestamp="2025-01-01T00:00:00Z",
+            data=None,
+            origin="blocked_bot",
+        )
+        allowed, reason = supervisor._pma_reactive_gate(event)
+        assert allowed is False
+        assert reason == "reactive_origin_blocked"
+    finally:
+        supervisor.shutdown()
+
+
+def test_pma_reactive_gate_filters_event_types(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    cfg["pma"]["reactive_event_types"] = ["dispatch_created"]
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    try:
+        from codex_autorunner.core.lifecycle_events import (
+            LifecycleEvent,
+            LifecycleEventType,
+        )
+
+        event = LifecycleEvent(
+            event_id="e1",
+            event_type=LifecycleEventType.FLOW_COMPLETED,
+            repo_id="demo",
+            run_id="r1",
+            timestamp="2025-01-01T00:00:00Z",
+            data=None,
+            origin="test",
+        )
+        allowed, reason = supervisor._pma_reactive_gate(event)
+        assert allowed is False
+        assert reason == "reactive_filtered"
+    finally:
+        supervisor.shutdown()
+
+
+def test_repo_snapshot_to_dict_handles_non_relative_path() -> None:
+    snap = hub_module.RepoSnapshot(
+        id="x",
+        path=Path("/absolute/outside/path"),
+        display_name="test",
+        enabled=True,
+        auto_run=False,
+        worktree_setup_commands=None,
+        kind="base",
+        worktree_of=None,
+        branch=None,
+        exists_on_disk=False,
+        is_clean=None,
+        initialized=False,
+        init_error=None,
+        status=RepoStatus.MISSING,
+        lock_status=hub_module.LockStatus.UNLOCKED,
+        last_run_id=None,
+        last_run_started_at=None,
+        last_run_finished_at=None,
+        last_exit_code=None,
+        runner_pid=None,
+    )
+    d = snap.to_dict(Path("/hub"))
+    assert d["path"] == str(Path("/absolute/outside/path"))
+
+
+def test_agent_workspace_snapshot_to_dict_handles_non_relative_path() -> None:
+    snap = hub_module.AgentWorkspaceSnapshot(
+        id="ws1",
+        runtime="zeroclaw",
+        path=Path("/absolute/outside/ws"),
+        display_name="ws",
+        enabled=True,
+        exists_on_disk=False,
+    )
+    d = snap.to_dict(Path("/hub"))
+    assert d["path"] == str(Path("/absolute/outside/ws"))
+
+
+def test_load_hub_state_handles_malformed_repo_entry(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir(parents=True, exist_ok=True)
+    state_path = hub_root / ".codex-autorunner" / "hub_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "last_scan_at": "2025-01-01T00:00:00Z",
+                "repos": [{"id": "good"}, {"bad_key": "no_id"}],
+                "agent_workspaces": [{"id": "good_ws"}, {"bad_key": "no_id"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = hub_module.load_hub_state(state_path, hub_root)
+    assert len(state.repos) >= 1
+    assert state.repos[0].id == "good"
+    assert len(state.agent_workspaces) >= 1
+    assert state.agent_workspaces[0].id == "good_ws"
+
+
+def test_normalize_pinned_parent_repo_ids_filters() -> None:
+    assert hub_module._normalize_pinned_parent_repo_ids(None) == []
+    assert hub_module._normalize_pinned_parent_repo_ids("not_a_list") == []
+    assert hub_module._normalize_pinned_parent_repo_ids(["a", "b", "a", "", "  "]) == [
+        "a",
+        "b",
+    ]
+    assert hub_module._normalize_pinned_parent_repo_ids([1, 2]) == []
+
+
+def test_runtime_preflight_blocks_enable() -> None:
+    assert hub_module._runtime_preflight_blocks_enable(None) is False
+    assert hub_module._runtime_preflight_blocks_enable({}) is False
+    assert hub_module._runtime_preflight_blocks_enable({"status": "ready"}) is False
+    assert hub_module._runtime_preflight_blocks_enable({"status": "deferred"}) is False
+    assert (
+        hub_module._runtime_preflight_blocks_enable({"status": "incompatible"}) is True
+    )
+    assert hub_module._runtime_preflight_blocks_enable({"status": "error"}) is True
+
+
+def test_git_failure_detail() -> None:
+    class _Proc:
+        returncode = 1
+        stderr = " err "
+        stdout = " out "
+
+    assert hub_module._git_failure_detail(_Proc()) == "err"
+
+    class _Proc2:
+        returncode = 2
+        stderr = ""
+        stdout = " out "
+
+    assert hub_module._git_failure_detail(_Proc2()) == "out"
+
+    class _Proc3:
+        returncode = 3
+        stderr = None
+        stdout = None
+
+    assert hub_module._git_failure_detail(_Proc3()) == "exit 3"
+
+
+def test_get_agent_workspace_runtime_readiness_rejects_missing(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(load_hub_config(hub_root))
+    with pytest.raises(ValueError, match="not found"):
+        supervisor.get_agent_workspace_runtime_readiness("nope")
