@@ -552,7 +552,11 @@ class PmaThreadStore:
         return self._fetch_thread(conn, managed_thread_id)
 
     def _find_stale_running_turn_ids(
-        self, conn: Any, managed_thread_id: str
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        *,
+        include_status_turn_age_recovery: bool = True,
     ) -> list[str]:
         running_rows = conn.execute(
             """
@@ -596,6 +600,8 @@ class PmaThreadStore:
             if status_turn_id and status_turn_id != execution_id:
                 stale_execution_ids.append(execution_id)
                 continue
+            if not include_status_turn_age_recovery and status_turn_id == execution_id:
+                continue
 
             last_activity_at = (
                 parse_iso_datetime(row["last_event_at"])
@@ -609,8 +615,18 @@ class PmaThreadStore:
                 stale_execution_ids.append(execution_id)
         return stale_execution_ids
 
-    def _recover_stale_running_turns(self, conn: Any, managed_thread_id: str) -> int:
-        stale_execution_ids = self._find_stale_running_turn_ids(conn, managed_thread_id)
+    def _recover_stale_running_turns(
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        *,
+        include_status_turn_age_recovery: bool = True,
+    ) -> int:
+        stale_execution_ids = self._find_stale_running_turn_ids(
+            conn,
+            managed_thread_id,
+            include_status_turn_age_recovery=include_status_turn_age_recovery,
+        )
         if not stale_execution_ids:
             return 0
         recovered_at = now_iso()
@@ -1320,7 +1336,13 @@ class PmaThreadStore:
 
     def get_running_turn(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
         with self._write_conn() as conn:
-            self._recover_stale_running_turns(conn, managed_thread_id)
+            # Status checks can be polled frequently; avoid age-based interruption of
+            # the currently-tracked status turn during passive reads.
+            self._recover_stale_running_turns(
+                conn,
+                managed_thread_id,
+                include_status_turn_age_recovery=False,
+            )
             row = conn.execute(
                 """
                 SELECT *

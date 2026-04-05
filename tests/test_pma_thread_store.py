@@ -407,6 +407,11 @@ def test_create_turn_recovers_old_running_execution_when_status_turn_matches(
                 (stale_running_turn["managed_turn_id"],),
             )
 
+    # Passive status reads should not age-interrupt the active status turn.
+    running_snapshot = store.get_running_turn(thread["managed_thread_id"])
+    assert running_snapshot is not None
+    assert running_snapshot["managed_turn_id"] == stale_running_turn["managed_turn_id"]
+
     recovered_running_turn = store.create_turn(
         thread["managed_thread_id"],
         prompt="fresh execution",
