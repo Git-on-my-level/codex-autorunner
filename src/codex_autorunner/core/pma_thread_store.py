@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from .config import load_hub_config
+from .freshness import parse_iso_datetime, resolve_stale_threshold_seconds
 from .locks import file_lock
 from .managed_thread_status import (
     ManagedThreadStatusReason,
@@ -115,6 +118,21 @@ def _sanitize_thread_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, A
 
 def _thread_queue_lane_id(managed_thread_id: str) -> str:
     return f"thread:{managed_thread_id}"
+
+
+def _resolve_stale_running_threshold_seconds(
+    hub_root: Path, *, override: Optional[int]
+) -> int:
+    if isinstance(override, int) and override > 0:
+        return override
+    try:
+        config = load_hub_config(hub_root)
+        pma_cfg = getattr(config, "pma", None)
+        return resolve_stale_threshold_seconds(
+            getattr(pma_cfg, "freshness_stale_threshold_seconds", None)
+        )
+    except Exception:
+        return resolve_stale_threshold_seconds(None)
 
 
 def _latest_turn_for_thread(
@@ -360,10 +378,21 @@ class PmaThreadStore:
     long-term orchestration API surface.
     """
 
-    def __init__(self, hub_root: Path, *, durable: bool = False) -> None:
+    def __init__(
+        self,
+        hub_root: Path,
+        *,
+        durable: bool = False,
+        stale_running_threshold_seconds: Optional[int] = None,
+    ) -> None:
         self._hub_root = hub_root
         self._path = default_pma_threads_db_path(hub_root)
         self._durable = durable
+        self._stale_running_threshold_seconds = (
+            _resolve_stale_running_threshold_seconds(
+                hub_root, override=stale_running_threshold_seconds
+            )
+        )
         self._initialize()
 
     @property
@@ -527,7 +556,7 @@ class PmaThreadStore:
     ) -> list[str]:
         running_rows = conn.execute(
             """
-            SELECT execution_id
+            SELECT execution_id, started_at, created_at
               FROM orch_thread_executions
              WHERE thread_target_id = ?
                AND status = 'running'
@@ -540,7 +569,7 @@ class PmaThreadStore:
 
         thread_row = conn.execute(
             """
-            SELECT runtime_status, status_turn_id
+            SELECT status_turn_id
               FROM orch_thread_targets
              WHERE thread_target_id = ?
             """,
@@ -553,9 +582,20 @@ class PmaThreadStore:
         )
 
         stale_execution_ids: list[str] = []
+        now_dt = datetime.now(timezone.utc)
         for row in running_rows:
             execution_id = str(row["execution_id"])
             if status_turn_id and status_turn_id != execution_id:
+                stale_execution_ids.append(execution_id)
+                continue
+
+            started_at = parse_iso_datetime(row["started_at"]) or parse_iso_datetime(
+                row["created_at"]
+            )
+            if started_at is None:
+                continue
+            age_seconds = max(0, int((now_dt - started_at).total_seconds()))
+            if age_seconds > self._stale_running_threshold_seconds:
                 stale_execution_ids.append(execution_id)
         return stale_execution_ids
 
