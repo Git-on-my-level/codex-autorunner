@@ -381,6 +381,61 @@ def test_claim_next_queued_turn_recovers_stale_running_execution(
     assert stale_after["finished_at"]
 
 
+def test_claim_next_queued_turn_recovers_running_turn_when_thread_status_is_terminal(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    stale_running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second queued",
+        request_kind="review",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second queued", "kind": "review"}},
+    )
+    assert queued_turn["status"] == "queued"
+
+    # Simulate corrupted state: thread reports terminal while a running turn remains.
+    with store._write_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET runtime_status = 'completed',
+                       status_reason = 'managed_turn_completed',
+                       status_turn_id = ?,
+                       status_terminal = 1,
+                       status_updated_at = ?,
+                       updated_at = ?
+                 WHERE thread_target_id = ?
+                """,
+                (
+                    stale_running_turn["managed_turn_id"],
+                    stale_running_turn["started_at"],
+                    stale_running_turn["started_at"],
+                    thread["managed_thread_id"],
+                ),
+            )
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is not None
+    execution, payload = claimed
+    assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
+    assert execution["status"] == "running"
+    assert payload["request"]["kind"] == "review"
+    assert payload["request"]["message_text"] == "second queued"
+
+    stale_after = store.get_turn(
+        thread["managed_thread_id"], stale_running_turn["managed_turn_id"]
+    )
+    assert stale_after is not None
+    assert stale_after["status"] == "interrupted"
+    assert stale_after["error"] == "stale_running_execution_recovered"
+    assert stale_after["finished_at"]
+
+
 def test_recovery_does_not_interrupt_legit_queued_turn_promoted_after_newer_terminal(
     tmp_path: Path,
 ) -> None:
