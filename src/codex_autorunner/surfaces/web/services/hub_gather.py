@@ -489,7 +489,7 @@ def gather_hub_message_snapshot(
     with _hub_snapshot_cache_lock:
         _hub_snapshot_cache[cache_key] = _HubSnapshotCacheEntry(
             fingerprint=store_fingerprint,
-            expires_at=now + _HUB_SNAPSHOT_CACHE_TTL_SECONDS,
+            expires_at=time.monotonic() + _HUB_SNAPSHOT_CACHE_TTL_SECONDS,
             snapshot=copy.deepcopy(snapshot),
         )
     return snapshot

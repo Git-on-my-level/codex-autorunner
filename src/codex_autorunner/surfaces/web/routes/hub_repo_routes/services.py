@@ -184,7 +184,7 @@ class HubRepoEnricher:
         )
         self._repo_state_cache[cache_key] = _RepoEnrichmentCacheEntry(
             fingerprint=fingerprint,
-            expires_at=now + _REPO_ENRICH_CACHE_TTL_SECONDS,
+            expires_at=time.monotonic() + _REPO_ENRICH_CACHE_TTL_SECONDS,
             payload=copy.deepcopy(payload),
         )
         return payload
