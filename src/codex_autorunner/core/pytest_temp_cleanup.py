@@ -191,20 +191,19 @@ def find_processes_using_path(
             check=False,
             timeout=timeout_seconds,
         )
-    except FileNotFoundError:
-        return ()
+    except FileNotFoundError as exc:
+        raise RuntimeError("lsof is unavailable") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"lsof timed out after {timeout_seconds:.1f}s") from exc
     except OSError as exc:
         raise RuntimeError(f"lsof failed: {exc}") from exc
 
-    if result.returncode not in (0, 1):
+    if not result.stdout:
+        if result.returncode in (0, 1):
+            return ()
         stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
         detail = stderr or f"exit code {result.returncode}"
         raise RuntimeError(f"lsof failed: {detail}")
-
-    if result.returncode == 1 or not result.stdout:
-        return ()
 
     current_pid: int | None = None
     current_command = ""
