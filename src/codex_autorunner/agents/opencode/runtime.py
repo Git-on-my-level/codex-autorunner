@@ -1319,8 +1319,11 @@ async def collect_opencode_output_from_events(
                         try:
                             fetched = await session_fetcher()
                             status_type = _extract_status_type(fetched)
-                        except Exception:
-                            pass
+                        except (ConnectionError, OSError, TimeoutError):
+                            logger.debug(
+                                "session fetch during stall recovery failed",
+                                exc_info=True,
+                            )
                     if _status_is_idle(status_type):
                         break
                 return (True, False)
@@ -1392,13 +1395,17 @@ async def collect_opencode_output_from_events(
                             try:
                                 fetched = await session_fetcher()
                                 status_type = _extract_status_type(fetched)
-                            except Exception:
-                                pass
+                            except (ConnectionError, OSError, TimeoutError):
+                                logger.debug(
+                                    "session fetch during first-event timeout check failed",
+                                    exc_info=True,
+                                )
 
                         if status_type and not _status_is_idle(status_type):
-                            should_break, should_continue = (
-                                await _handle_stall_recovery(now=now)
-                            )
+                            (
+                                should_break,
+                                should_continue,
+                            ) = await _handle_stall_recovery(now=now)
                             if should_break:
                                 break
                             if should_continue:
@@ -1432,13 +1439,17 @@ async def collect_opencode_output_from_events(
                             try:
                                 fetched = await session_fetcher()
                                 status_type = _extract_status_type(fetched)
-                            except Exception:
-                                pass
+                            except (ConnectionError, OSError, TimeoutError):
+                                logger.debug(
+                                    "session fetch during irrelevant-event timeout check failed",
+                                    exc_info=True,
+                                )
 
                         if status_type and not _status_is_idle(status_type):
-                            should_break, should_continue = (
-                                await _handle_stall_recovery(now=now)
-                            )
+                            (
+                                should_break,
+                                should_continue,
+                            ) = await _handle_stall_recovery(now=now)
                             if should_break:
                                 break
                             if should_continue:
@@ -1498,14 +1509,20 @@ async def collect_opencode_output_from_events(
                             try:
                                 await reject_question(request_id)
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "reject_question after auto_reply_failed failed",
+                                    exc_info=True,
+                                )
                         continue
                     if answers is None:
                         if reject_question is not None:
                             try:
                                 await reject_question(request_id)
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "reject_question for null answers failed",
+                                    exc_info=True,
+                                )
                         continue
                     normalized_answers = _normalize_question_answers(
                         answers, question_count=question_count

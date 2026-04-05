@@ -104,7 +104,7 @@ class OpenCodeBackend(AgentBackend):
         try:
             await client.close()
         except Exception:
-            pass
+            _logger.debug("aclose: client.close failed", exc_info=True)
 
     def close(self) -> Optional[Any]:
         """Close the backend client if created directly (base_url mode).
@@ -122,7 +122,7 @@ class OpenCodeBackend(AgentBackend):
             try:
                 await client.close()
             except Exception:
-                pass
+                _logger.debug("close: client.close failed", exc_info=True)
 
         return _do_close()
 

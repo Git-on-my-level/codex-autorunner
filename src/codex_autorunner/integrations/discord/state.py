@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from ..chat.agents import normalize_hermes_profile
 
 DISCORD_STATE_SCHEMA_VERSION = 9
 _UNSET = object()
+_logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -58,11 +60,11 @@ class DiscordStateStore:
         try:
             self._close_sync()
         except Exception:
-            pass
+            _logger.debug("close_sync failed in __del__", exc_info=True)
         try:
             self._executor.shutdown(wait=False)
         except Exception:
-            pass
+            _logger.debug("executor shutdown failed in __del__", exc_info=True)
 
     async def upsert_binding(
         self,

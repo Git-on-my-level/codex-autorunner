@@ -1387,7 +1387,7 @@ class GitHubService:
                         check=True,
                         timeout_seconds=30,
                     )
-                except Exception:
+                except (OSError, subprocess.SubprocessError):
                     pass
             pr = self.pr_for_branch(branch=head_branch, cwd=cwd) or pr
 

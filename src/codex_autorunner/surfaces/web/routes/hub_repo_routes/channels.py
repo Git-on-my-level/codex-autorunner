@@ -116,7 +116,7 @@ class HubChannelService:
             mapping[str(path)] = repo_id
             try:
                 mapping[str(path.resolve())] = repo_id
-            except Exception:
+            except OSError:
                 pass
         return mapping
 
@@ -306,7 +306,9 @@ class HubChannelService:
                 try:
                     conn.close()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug(
+                        "Failed to close discord sqlite connection", exc_info=True
+                    )
         return bindings
 
     def _read_telegram_scope_map(
@@ -472,7 +474,9 @@ class HubChannelService:
                 try:
                     conn.close()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug(
+                        "Failed to close telegram sqlite connection", exc_info=True
+                    )
         return bindings
 
     def _read_orchestration_bindings(
@@ -565,7 +569,9 @@ class HubChannelService:
                 try:
                     conn.close()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug(
+                        "Failed to close orchestration sqlite connection", exc_info=True
+                    )
 
     def _read_active_pma_threads(
         self, hub_root: Path, repo_id_by_workspace: dict[str, str]

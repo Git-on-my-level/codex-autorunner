@@ -315,7 +315,9 @@ def build_status_history_routes(
             try:
                 store.close()
             except Exception:
-                pass
+                _logger.debug(
+                    "Failed to close flow store in reply history", exc_info=True
+                )
         if not record:
             raise HTTPException(status_code=404, detail="Run not found")
 

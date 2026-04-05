@@ -446,7 +446,7 @@ def build_history_files_docs_router(
                     f"({context_log_bytes} bytes); consider pruning"
                 )
         except Exception:
-            pass
+            logger.debug("Failed to stat context_log.md", exc_info=True)
 
         return response
 

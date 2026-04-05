@@ -13,7 +13,7 @@
     "python:function:src/codex_autorunner/core/pma_ticket_flow_state.py:84:_get_ticket_flow_summary",
     "python:function:src/codex_autorunner/integrations/agents/runner.py:21:run_turn_with_backend",
     "python:function:src/codex_autorunner/integrations/chat/agents.py:164:validate_hermes_profile",
-    "python:function:src/codex_autorunner/integrations/discord/car_handlers/session_commands.py:20:handle_car_new",
+    "python:function:src/codex_autorunner/integrations/discord/car_handlers/session_commands.py:22:handle_car_new",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:19:_flatten_opencode_tokens",
     "python:function:src/codex_autorunner/integrations/telegram/handlers/utils.py:23:_extract_opencode_usage_value"
   ]

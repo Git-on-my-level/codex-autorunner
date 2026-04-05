@@ -681,7 +681,10 @@ def build_managed_thread_crud_routes(
                     for opt in chat_hermes_profile_options(request.app.state)
                 }
             except Exception:
-                pass
+                _logger.debug(
+                    "Failed to resolve hermes profile options for managed thread",
+                    exc_info=True,
+                )
         if requested_profile is not None and requested_profile not in valid_profiles:
             raise HTTPException(status_code=400, detail="profile is invalid")
         context_profile = normalize_car_context_profile(

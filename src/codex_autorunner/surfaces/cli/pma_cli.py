@@ -2214,8 +2214,7 @@ def pma_thread_compact(
                         err=True,
                     )
             typer.echo(
-                f"Compacted {len(compacted)} thread"
-                f"{'' if len(compacted) == 1 else 's'}"
+                f"Compacted {len(compacted)} thread{'' if len(compacted) == 1 else 's'}"
             )
         if errors:
             raise typer.Exit(code=1) from None
@@ -2318,7 +2317,7 @@ def pma_thread_interrupt(
             "GET", thread_url, token_env=config.server_auth_token_env
         )
     except Exception:
-        pass
+        logger.debug("Failed to fetch thread data for interrupt check", exc_info=True)
     else:
         thread = thread_data.get("thread", {}) if isinstance(thread_data, dict) else {}
         if isinstance(thread, dict):
@@ -2769,7 +2768,9 @@ def pma_context_prune(
         if pma_cfg is not None:
             max_lines = int(getattr(pma_cfg, "active_context_max_lines", max_lines))
     except Exception:
-        pass
+        logger.debug(
+            "Failed to read active_context_max_lines from config", exc_info=True
+        )
 
     try:
         ensure_pma_docs(hub_root)
@@ -2851,7 +2852,9 @@ def pma_context_compact(
                 getattr(pma_cfg, "active_context_max_lines", resolved_max_lines)
             )
     except Exception:
-        pass
+        logger.debug(
+            "Failed to read active_context_max_lines from config", exc_info=True
+        )
     if isinstance(max_lines, int):
         resolved_max_lines = max(1, max_lines)
     else:

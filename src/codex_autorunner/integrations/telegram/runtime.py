@@ -124,7 +124,7 @@ class TelegramWorkspaceAndTurnMixin:
         if normalized_path:
             try:
                 normalized_path = str(canonicalize_path(Path(normalized_path)))
-            except Exception:
+            except OSError:
                 pass
         if normalized_repo and normalized_path:
             return f"{normalized_repo}@{normalized_path}"

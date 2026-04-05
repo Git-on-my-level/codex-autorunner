@@ -2260,7 +2260,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             await asyncio.wait_for(
                                 opencode_client.abort(thread_id), timeout=10
                             )
-                        except Exception:
+                        except (asyncio.TimeoutError, ConnectionError, OSError):
                             pass
 
                     def _should_stop() -> bool:

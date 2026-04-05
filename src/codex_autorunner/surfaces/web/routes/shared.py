@@ -4,6 +4,7 @@ Shared utilities for route modules.
 
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Optional
@@ -33,6 +34,8 @@ SSE_HEADERS = {
     "Connection": "keep-alive",
     "Content-Encoding": "identity",
 }
+
+_logger = logging.getLogger(__name__)
 
 
 async def _interruptible_sleep(
@@ -271,7 +274,7 @@ async def state_stream(
                 try:
                     logger.warning("state stream error", exc_info=True)
                 except Exception:
-                    pass
+                    _logger.debug("state stream error logging failed", exc_info=True)
         if not emitted:
             now = time.monotonic()
             if now - last_emit_at >= heartbeat_interval:

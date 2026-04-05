@@ -50,12 +50,16 @@ def get_diff_stats_by_dispatch_seq(
                 "files_changed": int(data.get("files_changed") or 0),
             }
     except Exception:
-        pass
+        _logger.debug(
+            "Failed to read diff stats events for run %s", record.id, exc_info=True
+        )
     finally:
         try:
             store.close()
         except Exception:
-            pass
+            _logger.debug(
+                "Failed to close flow store after reading diff stats", exc_info=True
+            )
 
     return diff_stats
 
@@ -115,7 +119,6 @@ def get_dispatch_history_file(
     file_path: str,
     flow_type: str,
 ):
-
     from .....core.safe_paths import SafePathError, validate_single_filename
     from ...services.flow_store import get_flow_record
 
@@ -143,7 +146,6 @@ def get_reply_history(
     file_path: str,
     flow_type: str,
 ):
-
     from .....core.safe_paths import SafePathError, validate_single_filename
     from ...services.flow_store import get_flow_record
 
@@ -169,7 +171,6 @@ def get_artifacts(
     run_id: str,
     flow_type: str,
 ) -> dict[str, Any]:
-
     from ...services.flow_store import get_flow_record
 
     record = get_flow_record(repo_root, run_id)
@@ -183,7 +184,7 @@ def get_artifacts(
             for item in history_dir.iterdir():
                 if item.is_dir():
                     artifacts.append({"path": str(item), "seq": item.name})
-        except Exception:
+        except OSError:
             pass
 
     artifacts.sort(key=lambda x: x.get("seq", 0) or 0, reverse=True)
@@ -201,7 +202,6 @@ def get_artifact(
     file_path: str,
     flow_type: str,
 ):
-
     from .....core.safe_paths import SafePathError, validate_single_filename
     from ...services.flow_store import get_flow_record
 

@@ -557,8 +557,7 @@ class DockerRuntime:
         if check and proc.returncode != 0:
             details = (proc.stderr or proc.stdout or "").strip() or "unknown error"
             raise DockerRuntimeError(
-                "Docker exec failed "
-                f"({proc.returncode}) in {container_name}: {details}"
+                f"Docker exec failed ({proc.returncode}) in {container_name}: {details}"
             )
         return proc
 

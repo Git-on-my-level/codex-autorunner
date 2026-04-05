@@ -8,6 +8,7 @@ with the rest of the app.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -28,6 +29,8 @@ from ....core.utils import find_repo_root
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ....tickets.replies import resolve_reply_paths
+
+_logger = logging.getLogger(__name__)
 
 
 def _flows_db_path(repo_root: Path) -> Path:
@@ -222,7 +225,9 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
                 if doc and doc.frontmatter and getattr(doc.frontmatter, "agent", None):
                     agent_id = doc.frontmatter.agent
             except Exception:
-                pass
+                _logger.debug(
+                    "Failed to read ticket frontmatter for analytics", exc_info=True
+                )
 
         failure_payload = get_failure_payload(run_record)
         if failure_payload:

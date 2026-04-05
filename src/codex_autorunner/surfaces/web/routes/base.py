@@ -30,6 +30,8 @@ from .shared import (
     build_opencode_terminal_cmd,
 )
 
+_logger = logging.getLogger(__name__)
+
 ALT_SCREEN_ENTER = b"\x1b[?1049h"
 
 
@@ -273,7 +275,10 @@ def build_base_routes(static_dir: Path) -> APIRouter:
                                     binary_profile = None
                                     break
                         except Exception:
-                            pass
+                            _logger.debug(
+                                "Failed to resolve hermes profile for terminal cmd",
+                                exc_info=True,
+                            )
                     cmd = build_hermes_terminal_cmd(
                         engine.config.agent_binary(binary_agent, profile=binary_profile)
                     )

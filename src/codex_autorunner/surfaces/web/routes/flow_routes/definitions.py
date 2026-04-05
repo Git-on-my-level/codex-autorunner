@@ -89,7 +89,7 @@ def get_flow_controller(
             try:
                 controller.initialize()
             except Exception:
-                pass
+                _logger.debug("Cached flow controller initialize failed", exc_info=True)
             return controller
 
     definition = build_flow_definition(repo_root, flow_type, state)

@@ -16,6 +16,8 @@ from ..message_turns import (
 )
 from ..rendering import format_discord_message
 
+_logger = logging.getLogger(__name__)
+
 
 async def handle_car_new(
     service: Any,
@@ -490,7 +492,9 @@ async def handle_car_resume(
             try:
                 orchestration_service.resume_thread_target(thread_id)
             except Exception:
-                pass
+                _logger.debug(
+                    "resume_thread_target failed for %s", thread_id, exc_info=True
+                )
         service._attach_discord_thread_binding(
             channel_id=channel_id,
             thread_target_id=thread_id,

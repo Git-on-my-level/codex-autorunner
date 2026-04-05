@@ -3,6 +3,7 @@
 import asyncio
 import atexit
 import json
+import logging
 import os
 import signal
 import threading
@@ -38,6 +39,8 @@ from ....core.utils import resolve_executable
 from ....tickets import AgentPool
 from ....tickets.files import list_ticket_paths, read_ticket, ticket_is_done
 from ....tickets.frontmatter import generate_ticket_id
+
+logger = logging.getLogger(__name__)
 
 
 def _build_force_attestation(
@@ -477,8 +480,8 @@ def register_flow_commands(
         if health.status in {"dead", "mismatch", "invalid"}:
             try:
                 clear_worker_metadata(health.artifact_path.parent)
-            except Exception:
-                pass
+            except OSError:
+                logger.debug("Failed to clear worker metadata", exc_info=True)
         if not health.pid:
             return
         try:
@@ -492,11 +495,15 @@ def register_flow_commands(
         except PermissionError:
             # Keep stop idempotent when process ownership changed unexpectedly.
             pass
-        except Exception:
+        except OSError:
             try:
                 os.kill(health.pid, signal.SIGTERM)
-            except Exception:
-                pass
+            except OSError:
+                logger.debug(
+                    "Fallback SIGTERM to worker pid %d failed",
+                    health.pid,
+                    exc_info=True,
+                )
 
     def _ticket_flow_controller(
         engine: RuntimeContext,
@@ -580,8 +587,8 @@ def register_flow_commands(
                     shutdown_intent=shutdown_intent,
                     artifacts_root=_artifacts_root,
                 )
-            except Exception:
-                pass
+            except OSError:
+                logger.debug("Failed to write worker exit info", exc_info=True)
 
         def _signal_handler(signum: int, _frame) -> None:
             exit_code_holder[0] = -signum

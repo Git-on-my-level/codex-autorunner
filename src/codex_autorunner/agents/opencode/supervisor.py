@@ -1320,7 +1320,7 @@ class OpenCodeSupervisor:
         try:
             await client.close()
         except Exception:
-            pass
+            self._logger.debug("opencode client close failed", exc_info=True)
 
     def _build_opencode_env(self, workspace_root: Path) -> dict[str, str]:
         env = subprocess_env(base_env=self._base_env)

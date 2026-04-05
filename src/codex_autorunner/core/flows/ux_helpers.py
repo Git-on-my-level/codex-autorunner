@@ -484,7 +484,7 @@ def ensure_worker(repo_root: Path, run_id: str, is_terminal: bool = False) -> di
     if not is_terminal and health.status in {"dead", "mismatch", "invalid"}:
         try:
             clear_worker_metadata(health.artifact_path.parent)
-        except Exception:
+        except OSError:
             pass
     if health.is_alive:
         return {"status": "reused", "health": health}
@@ -495,7 +495,7 @@ def ensure_worker(repo_root: Path, run_id: str, is_terminal: bool = False) -> di
     for stream in (stdout_handle, stderr_handle):
         try:
             stream.close()
-        except Exception:
+        except OSError:
             pass
     return {
         "status": "spawned",

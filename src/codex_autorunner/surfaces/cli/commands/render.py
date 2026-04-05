@@ -122,9 +122,7 @@ def _format_serve_context_details(
     root_value = str(project_root) if project_root is not None else "<none>"
     cwd_value = str(cwd) if cwd is not None else "<inherit>"
     return (
-        f"project_context={context_value}, "
-        f"project_root={root_value}, "
-        f"cwd={cwd_value}"
+        f"project_context={context_value}, project_root={root_value}, cwd={cwd_value}"
     )
 
 

@@ -122,8 +122,8 @@ def _make_zeroclaw_harness(ctx: Any) -> AgentHarness:
             raise RuntimeError("ZeroClaw harness unavailable: binary not configured")
         try:
             ctx.zeroclaw_supervisor = supervisor
-        except Exception:
-            pass
+        except AttributeError:
+            _logger.debug("zeroclaw_supervisor cache write skipped", exc_info=True)
     return ZeroClawHarness(supervisor)
 
 
@@ -167,8 +167,8 @@ def _runtime_supervisor_cache(ctx: Any) -> dict[tuple[str, str, str], Any]:
     cache = {}
     try:
         ctx._agent_runtime_supervisors = cache
-    except Exception:
-        pass
+    except AttributeError:
+        _logger.debug("runtime supervisor cache write skipped", exc_info=True)
     return cache
 
 
@@ -218,8 +218,8 @@ def _make_hermes_harness(ctx: Any) -> AgentHarness:
         if requested_agent_id == "hermes" and requested_profile is None:
             try:
                 ctx.hermes_supervisor = supervisor
-            except Exception:
-                pass
+            except AttributeError:
+                _logger.debug("hermes_supervisor cache write skipped", exc_info=True)
     return HermesHarness(supervisor)
 
 

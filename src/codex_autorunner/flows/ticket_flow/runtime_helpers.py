@@ -249,8 +249,8 @@ def ensure_ticket_flow_worker(
         if callable(close):
             try:
                 close()
-            except Exception:
-                pass
+            except OSError:
+                logger.debug("Failed to close %s handle", key, exc_info=True)
 
 
 def stop_ticket_flow_worker(repo_root: Path, run_id: str) -> None:
@@ -258,8 +258,8 @@ def stop_ticket_flow_worker(repo_root: Path, run_id: str) -> None:
     if health.status in {"dead", "mismatch", "invalid"}:
         try:
             clear_worker_metadata(health.artifact_path.parent)
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("Failed to clear worker metadata", exc_info=True)
     if not health.pid:
         return
     try:
@@ -275,8 +275,8 @@ def stop_ticket_flow_worker(repo_root: Path, run_id: str) -> None:
     except Exception:
         try:
             os.kill(health.pid, signal.SIGTERM)
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("Fallback kill failed for pid %s", health.pid, exc_info=True)
 
 
 def reconcile_ticket_flow_run(

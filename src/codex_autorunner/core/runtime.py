@@ -1279,7 +1279,7 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
                 and explicit_backend.strip().lower() != "hermes"
             ):
                 continue
-        except Exception:
+        except (AttributeError, TypeError, KeyError):
             pass
         configured_hermes_agents.append(agent_id)
         hermes_agent_ids_seen.add(agent_id)

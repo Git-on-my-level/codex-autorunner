@@ -180,6 +180,5 @@ def register_chat_commands(
             return
 
         typer.echo(
-            "Reset requested for "
-            f"{conversation_id} at {request.get('requested_at')}."
+            f"Reset requested for {conversation_id} at {request.get('requested_at')}."
         )

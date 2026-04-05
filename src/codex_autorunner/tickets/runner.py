@@ -381,8 +381,8 @@ class TicketRunner:
                         previous_ticket_content = _truncate_text_by_bytes(
                             content, 16384
                         )
-            except Exception:
-                pass
+            except OSError:
+                _logger.debug("failed to read previous ticket content", exc_info=True)
 
         prompt = runner_prompt.build_prompt(
             ticket_path=current_path,

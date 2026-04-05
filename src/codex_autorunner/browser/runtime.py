@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -26,6 +27,8 @@ from .primitives import (
     observe_page,
     resolve_step_locator,
 )
+
+logger = logging.getLogger(__name__)
 
 PlaywrightLoader = Callable[[], Any]
 
@@ -394,8 +397,12 @@ class BrowserRuntime:
             if video_tmp_dir is not None and video_tmp_dir.exists():
                 try:
                     shutil.rmtree(video_tmp_dir, ignore_errors=True)
-                except Exception:
-                    pass
+                except OSError:
+                    logger.debug(
+                        "Failed to remove video temp dir %s",
+                        video_tmp_dir,
+                        exc_info=True,
+                    )
 
             summary_payload = {
                 "status": "ok" if run_ok else "failed",

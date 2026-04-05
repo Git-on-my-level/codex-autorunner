@@ -54,7 +54,7 @@ def _resolve_repo_root(request: Request) -> Path:
         try:
             return Path(repo_root)
         except Exception:
-            pass
+            logger.debug("Failed to convert repo_root string to Path", exc_info=True)
     return find_repo_root()
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -17,6 +18,8 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from ..core.process_termination import terminate_record
+
+logger = logging.getLogger(__name__)
 
 
 class ServeModeError(RuntimeError):
@@ -457,8 +460,8 @@ class BrowserServerSupervisor:
                     continue
                 try:
                     stream.close()
-                except Exception:
-                    pass
+                except OSError:
+                    logger.debug("Failed to close process stream", exc_info=True)
         for thread in self._watchers:
             thread.join(timeout=1.0)
 

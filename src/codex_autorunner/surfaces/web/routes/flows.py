@@ -127,14 +127,14 @@ def _rotate_corrupt_flow_db(db_path: Path, detail: str) -> Optional[Path]:
         try:
             db_path.replace(backup_path)
             backup_value = str(backup_path)
-        except Exception:
+        except OSError:
             backup_value = ""
 
     for suffix in ("-wal", "-shm"):
         sidecar = db_path.with_name(f"{db_path.name}{suffix}")
         try:
             sidecar.unlink(missing_ok=True)
-        except Exception:
+        except OSError:
             pass
 
     notice = {
@@ -146,7 +146,7 @@ def _rotate_corrupt_flow_db(db_path: Path, detail: str) -> Optional[Path]:
     }
     try:
         atomic_write(notice_path, json.dumps(notice, indent=2) + "\n")
-    except Exception:
+    except OSError:
         _logger.warning("Failed to write flow DB corruption notice at %s", notice_path)
     return backup_path if backup_value else None
 
@@ -164,7 +164,7 @@ def _evict_cached_controller(
     try:
         controller.shutdown()
     except Exception:
-        pass
+        _logger.debug("Failed to shutdown cached flow controller", exc_info=True)
 
 
 def _recover_flow_store_if_possible(
@@ -201,7 +201,7 @@ def _recover_flow_store_if_possible(
         try:
             store.close()
         except Exception:
-            pass
+            _logger.debug("Failed to close flow store during recovery", exc_info=True)
 
 
 def _flow_paths(repo_root: Path) -> tuple[Path, Path]:
@@ -466,22 +466,24 @@ def _cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
                 find_repo_root(), run_id, returncode=getattr(proc, "returncode", None)
             )
         except Exception:
-            pass
+            _logger.debug(
+                "Failed to write worker exit info for %s", run_id, exc_info=True
+            )
     if proc and proc.poll() is None:
         try:
             proc.terminate()
-        except Exception:
+        except OSError:
             pass
 
     for stream in (stdout, stderr):
         if stream and not stream.closed:
             try:
                 stream.flush()
-            except Exception:
+            except OSError:
                 pass
             try:
                 stream.close()
-            except Exception:
+            except OSError:
                 pass
 
 
@@ -1094,7 +1096,10 @@ You are the first ticket in a new ticket_flow run.
                     try:
                         store.close()
                     except Exception:
-                        pass
+                        _logger.debug(
+                            "Failed to close flow store after listing tickets",
+                            exc_info=True,
+                        )
 
         tickets = []
         for path in list_ticket_paths(ticket_dir):

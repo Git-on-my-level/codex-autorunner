@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
@@ -22,6 +23,8 @@ from .....core.utils import find_repo_root
 
 if TYPE_CHECKING:
     from typing import Any, Dict
+
+_logger = logging.getLogger(__name__)
 
 
 FILE_CHAT_STATE_NAME = draft_utils.FILE_CHAT_STATE_NAME
@@ -53,7 +56,9 @@ def _resolve_repo_root(request: Optional[Request] = None) -> Path:
             try:
                 return Path(repo_root)
             except Exception:
-                pass
+                _logger.debug(
+                    "Failed to convert repo_root string to Path", exc_info=True
+                )
     return find_repo_root()
 
 

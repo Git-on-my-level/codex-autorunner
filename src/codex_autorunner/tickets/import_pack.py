@@ -412,7 +412,7 @@ def import_ticket_pack(
         if conflicts:
             conflict_list = ", ".join([f"{idx:03d}" for idx in conflicts])
             errors.append(
-                "Ticket indices already exist in destination: " f"{conflict_list}."
+                f"Ticket indices already exist in destination: {conflict_list}."
             )
 
     width = 3
@@ -439,7 +439,9 @@ def import_ticket_pack(
                 data = dict(data)
                 data.pop("depends_on", None)
             except Exception:
-                pass
+                logger.debug(
+                    "failed to strip depends_on from frontmatter", exc_info=True
+                )
             item.warnings.append(
                 "Removed frontmatter.depends_on (CAR executes tickets in filename order)."
             )

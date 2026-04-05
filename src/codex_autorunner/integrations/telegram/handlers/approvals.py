@@ -22,6 +22,8 @@ from ..helpers import (
 from ..state import PendingApprovalRecord, TopicRouter
 from ..types import PendingApproval
 
+_logger = logging.getLogger(__name__)
+
 
 class TelegramApprovalHandlers(ChatApprovalHandlers):
     _platform = "telegram"
@@ -154,7 +156,7 @@ class TelegramApprovalHandlers(ChatApprovalHandlers):
                     reply_to=ctx.reply_to_message_id,
                 )
             except Exception:
-                pass
+                _logger.debug("approval cancel notice failed to send", exc_info=True)
             return "cancel"
         message_id = response.get("message_id") if isinstance(response, dict) else None
         if isinstance(message_id, int):

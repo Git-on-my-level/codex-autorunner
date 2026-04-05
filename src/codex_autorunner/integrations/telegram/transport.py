@@ -76,7 +76,7 @@ class TelegramMessageTransport:
             return text
         if limit <= 3:
             return text[-limit:]
-        return f"...{text[-(limit - 3):]}"
+        return f"...{text[-(limit - 3) :]}"
 
     async def _send_message_with_outbox(
         self,

@@ -64,7 +64,9 @@ def safe_list_flow_runs(
         try:
             store.close()
         except Exception:
-            pass
+            _logger.debug(
+                "Failed to close flow store after listing runs", exc_info=True
+            )
 
 
 def get_flow_record(
@@ -86,7 +88,9 @@ def get_flow_record(
         try:
             store.close()
         except Exception:
-            pass
+            _logger.debug(
+                "Failed to close flow store after getting flow record", exc_info=True
+            )
     if not record:
         raise HTTPException(status_code=404, detail=f"Flow run {run_id} not found")
     return record

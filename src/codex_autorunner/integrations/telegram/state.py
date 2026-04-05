@@ -801,11 +801,11 @@ class TelegramStateStore:
         try:
             self._close_sync()
         except Exception:
-            pass
+            logger.debug("state.__del__: close failed", exc_info=True)
         try:
             self._executor.shutdown(wait=False)
         except Exception:
-            pass
+            logger.debug("state.__del__: executor shutdown failed", exc_info=True)
 
     async def load(self) -> TelegramState:
         return await self._run(self._load_state_sync)

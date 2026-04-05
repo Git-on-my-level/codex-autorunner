@@ -123,7 +123,8 @@ async def run_opencode_prompt(
             try:
                 await config.on_turn_start(session_id, turn_id)
             except Exception:
-                pass
+                if logger is not None:
+                    logger.debug("on_turn_start callback failed", exc_info=True)
 
         stopped = False
         timed_out = False
@@ -278,7 +279,8 @@ async def run_opencode_prompt(
                 try:
                     await supervisor.mark_turn_finished(Path(config.workspace_root))
                 except Exception:
-                    pass
+                    if logger is not None:
+                        logger.debug("mark_turn_finished failed", exc_info=True)
 
         output_text = output_result.text if output_result else ""
         output_error = output_result.error if output_result else None

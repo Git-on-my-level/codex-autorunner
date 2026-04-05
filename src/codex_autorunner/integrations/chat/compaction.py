@@ -8,7 +8,7 @@ COMPACT_SEED_SUFFIX = "Continue from this context. Ask for missing info if neede
 
 def build_compact_seed_prompt(summary_text: str) -> str:
     summary = summary_text.strip() or "(no summary)"
-    return f"{COMPACT_SEED_PREFIX}\n\n" f"{summary}\n\n" f"{COMPACT_SEED_SUFFIX}"
+    return f"{COMPACT_SEED_PREFIX}\n\n{summary}\n\n{COMPACT_SEED_SUFFIX}"
 
 
 def match_pending_compact_seed(

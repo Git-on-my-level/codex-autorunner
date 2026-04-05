@@ -218,14 +218,14 @@ def rotate_corrupt_flow_db(db_path: Path, detail: str) -> Optional[Path]:
         try:
             db_path.replace(backup_path)
             backup_value = str(backup_path)
-        except Exception:
+        except OSError:
             backup_value = ""
 
     for suffix in ("-wal", "-shm"):
         sidecar = db_path.with_name(f"{db_path.name}{suffix}")
         try:
             sidecar.unlink(missing_ok=True)
-        except Exception:
+        except OSError:
             pass
 
     notice = {
@@ -237,7 +237,7 @@ def rotate_corrupt_flow_db(db_path: Path, detail: str) -> Optional[Path]:
     }
     try:
         atomic_write(notice_path, json.dumps(notice, indent=2) + "\n")
-    except Exception:
+    except OSError:
         _logger.warning("Failed to write flow DB corruption notice at %s", notice_path)
     return backup_path if backup_value else None
 
@@ -253,7 +253,7 @@ def evict_cached_controller(
     try:
         cast(Any, controller).shutdown()
     except Exception:
-        pass
+        _logger.debug("Failed to shutdown cached flow controller", exc_info=True)
 
 
 def cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
@@ -266,17 +266,17 @@ def cleanup_worker_handle(run_id: str, state: FlowRoutesState) -> None:
     if proc and proc.poll() is None:
         try:
             proc.terminate()
-        except Exception:
+        except OSError:
             pass
     for stream in (stdout, stderr):
         if stream and not stream.closed:
             try:
                 stream.flush()
-            except Exception:
+            except OSError:
                 pass
             try:
                 stream.close()
-            except Exception:
+            except OSError:
                 pass
 
 
@@ -314,4 +314,4 @@ def recover_flow_store_if_possible(
         try:
             store.close()
         except Exception:
-            pass
+            _logger.debug("Failed to close flow store during recovery", exc_info=True)

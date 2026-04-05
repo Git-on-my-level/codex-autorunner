@@ -147,7 +147,7 @@ def write_worker_exit_info(
             existing = json.loads(exit_path.read_text(encoding="utf-8"))
             if isinstance(existing, dict) and existing.get("shutdown_intent") is True:
                 existing_shutdown_intent = True
-        except Exception:
+        except (json.JSONDecodeError, ValueError, OSError):
             pass
 
     data = {
@@ -253,7 +253,7 @@ def _read_process_cmdline(pid: int) -> list[str] | None:
         try:
             raw = proc_path.read_bytes()
             return [part for part in raw.decode().split("\0") if part]
-        except Exception:
+        except OSError:
             pass
 
     try:
@@ -265,7 +265,7 @@ def _read_process_cmdline(pid: int) -> list[str] | None:
         cmd = out.decode().strip()
         if cmd:
             return cmd.split()
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         pass
 
     try:
@@ -340,8 +340,8 @@ def clear_worker_metadata(artifacts_dir: Path) -> None:
             (artifacts_dir / name).unlink()
         except FileNotFoundError:
             pass
-        except Exception:
-            pass
+        except OSError:
+            logger.debug("failed to remove %s", name, exc_info=True)
 
 
 def check_worker_health(
@@ -532,11 +532,11 @@ def spawn_flow_worker(
     except Exception:
         try:
             stdout_handle.close()
-        except Exception:
+        except OSError:
             pass
         try:
             stderr_handle.close()
-        except Exception:
+        except OSError:
             pass
         raise
 

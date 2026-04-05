@@ -271,7 +271,7 @@ def build_hub_repo_routes(
             mapping[str(path)] = repo_id
             try:
                 mapping[str(path.resolve())] = repo_id
-            except Exception:
+            except OSError:
                 pass
         return mapping
 
@@ -421,7 +421,9 @@ def build_hub_repo_routes(
                 try:
                     conn.close()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug(
+                        "Failed to close discord sqlite connection", exc_info=True
+                    )
         return bindings
 
     def _read_telegram_scope_map(
@@ -573,7 +575,9 @@ def build_hub_repo_routes(
                 try:
                     conn.close()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug(
+                        "Failed to close telegram sqlite connection", exc_info=True
+                    )
         return bindings
 
     def _read_active_pma_threads(

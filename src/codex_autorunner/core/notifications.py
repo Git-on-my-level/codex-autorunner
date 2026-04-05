@@ -476,4 +476,4 @@ class NotificationManager:
             else:
                 self.logger.warning("%s", message)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("failed to log warning", exc_info=True)

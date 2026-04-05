@@ -103,7 +103,7 @@ class TelegramOutboxManager:
 
                 conversation_id = build_topic_key(record.chat_id, record.thread_id)
             except Exception:
-                pass
+                self._logger.debug("outbox.restore: topic_key failed", exc_info=True)
             if conversation_id:
                 from ...core.request_context import set_conversation_id
 
@@ -161,7 +161,7 @@ class TelegramOutboxManager:
         try:
             conversation_id = topic_key(record.chat_id, record.thread_id)
         except Exception:
-            pass
+            self._logger.debug("outbox.enqueue: topic_key failed", exc_info=True)
         log_event(
             self._logger,
             logging.INFO,
@@ -239,7 +239,7 @@ class TelegramOutboxManager:
             try:
                 conversation_id = topic_key(record.chat_id, record.thread_id)
             except Exception:
-                pass
+                self._logger.debug("outbox.process: topic_key failed", exc_info=True)
             if record.attempts >= OUTBOX_MAX_ATTEMPTS:
                 log_event(
                     self._logger,
@@ -282,7 +282,7 @@ class TelegramOutboxManager:
         try:
             conversation_id = topic_key(record.chat_id, record.thread_id)
         except Exception:
-            pass
+            self._logger.debug("outbox.deliver: topic_key failed", exc_info=True)
         with self._conversation_context(record.chat_id, record.thread_id):
             try:
                 delivered_message_id: Optional[int] = None

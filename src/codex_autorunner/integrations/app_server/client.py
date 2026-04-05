@@ -2062,8 +2062,10 @@ class CodexAppServerClient:
                 try:
                     # Process is spawned as a session/group leader on POSIX.
                     os.killpg(process.pid, signal.SIGTERM)
-                except Exception:
-                    pass
+                except OSError:
+                    self._logger.debug(
+                        "killpg failed for pid %s", process.pid, exc_info=True
+                    )
             try:
                 os.kill(process.pid, signal.SIGTERM)
             except Exception:

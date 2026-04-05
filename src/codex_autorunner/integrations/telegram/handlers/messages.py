@@ -46,6 +46,8 @@ from ..trigger_mode import should_trigger_run
 from .commands.execution import _build_telegram_thread_orchestration_service
 from .questions import handle_custom_text_input
 
+_logger = logging.getLogger(__name__)
+
 COALESCE_LONG_MESSAGE_WINDOW_SECONDS = 6.0
 COALESCE_LONG_MESSAGE_THRESHOLD = TELEGRAM_MAX_MESSAGE_LENGTH - 256
 MEDIA_BATCH_WINDOW_SECONDS = 1.0
@@ -119,7 +121,7 @@ async def _run_with_typing_indicator(
             try:
                 await end(chat_id, thread_id)
             except Exception:
-                pass
+                _logger.debug("typing indicator end failed", exc_info=True)
 
 
 def _paused_flow_status(run_record: Any) -> str:

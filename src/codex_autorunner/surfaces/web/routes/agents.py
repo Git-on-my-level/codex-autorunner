@@ -4,6 +4,7 @@ Agent harness support routes (models + event streaming).
 
 from __future__ import annotations
 
+import logging
 from typing import Any, AsyncIterator, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -15,6 +16,8 @@ from ....core.orchestration.catalog import map_agent_capabilities
 from ....core.sse import format_sse
 from ..services.validation import normalize_agent_id
 from .shared import SSE_HEADERS
+
+_logger = logging.getLogger(__name__)
 
 
 def _normalize_path_agent_id(agent: str) -> str:
@@ -145,7 +148,7 @@ def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]
                 existing_ids.add(option.profile)
             profiles.sort(key=lambda p: p["id"])
         except Exception:
-            pass
+            _logger.debug("Failed to resolve hermes profile options", exc_info=True)
     default_profile = None
     if callable(default_getter):
         try:

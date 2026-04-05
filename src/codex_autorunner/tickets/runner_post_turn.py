@@ -93,7 +93,7 @@ def archive_dispatch_and_create_summary(
                 event_payload["ticket_key"] = ticket_instance_token(current_ticket_path)
             emit_event(FlowEventType.DIFF_UPDATED, event_payload)
         except Exception:
-            pass
+            _logger.debug("failed to emit diff_updated event", exc_info=True)
 
     return dispatch, None
 

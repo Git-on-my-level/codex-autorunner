@@ -1937,8 +1937,10 @@ async def _send_discord_turn_section(
                 caption=attachment_caption,
             )
             return
-        except Exception:
-            pass
+        except (ConnectionError, OSError, TimeoutError):
+            _logger.debug(
+                "attachment upload failed, falling back to chunks", exc_info=True
+            )
     if not chunks:
         chunks = ["(No response text returned.)"]
     for idx, chunk in enumerate(chunks, 1):

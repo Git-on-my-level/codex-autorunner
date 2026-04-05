@@ -267,12 +267,12 @@ def _acquire_cache_lock(lock_path: Path, logger: logging.Logger) -> bool:
         return False
     try:
         os.write(fd, str(os.getpid()).encode("utf-8"))
-    except Exception:
+    except OSError:
         pass
     finally:
         try:
             os.close(fd)
-        except Exception:
+        except OSError:
             pass
     return True
 

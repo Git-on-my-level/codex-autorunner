@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
 from ..tickets import AgentPool
 from .flows import FlowController
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -62,11 +65,11 @@ class RuntimeServices:
                 try:
                     resources.controller.shutdown()
                 except Exception:
-                    pass
+                    logger.debug("error shutting down flow controller", exc_info=True)
                 try:
                     await resources.agent_pool.close_all()
                 except Exception:
-                    pass
+                    logger.debug("error closing agent pool", exc_info=True)
 
             for supervisor in {self.app_server_supervisor, self.opencode_supervisor}:
                 if supervisor is None:
@@ -76,4 +79,4 @@ class RuntimeServices:
                     try:
                         await close_all()
                     except Exception:
-                        pass
+                        logger.debug("error closing supervisor", exc_info=True)

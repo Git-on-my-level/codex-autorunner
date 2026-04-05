@@ -113,7 +113,7 @@ def _resolve_agent_profile(
                     for opt in chat_hermes_profile_options(request.app.state)
                 }
             except Exception:
-                pass
+                logger.debug("Failed to resolve hermes profile options", exc_info=True)
             if resolved_profile not in hermes_valid:
                 raise HTTPException(status_code=400, detail="profile is invalid")
         elif resolved_profile not in available_profiles:
@@ -140,7 +140,9 @@ def _resolve_agent_profile(
                 opt.profile for opt in chat_hermes_profile_options(request.app.state)
             }
         except Exception:
-            pass
+            logger.debug(
+                "Failed to resolve hermes fallback profile options", exc_info=True
+            )
 
     for fallback_profile in fallback_profiles:
         if fallback_profile is not None:
@@ -372,7 +374,7 @@ async def _finalize_result(
                 (datetime.now(timezone.utc) - start_dt).total_seconds() * 1000
             )
         except Exception:
-            pass
+            logger.debug("Failed to compute PMA turn duration", exc_info=True)
 
     hub_root = request.app.state.config.root
     transcript_pointer = await _persist_transcript(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence, cast
 
@@ -34,6 +35,8 @@ from .components import (
     build_button,
 )
 from .rendering import format_discord_message
+
+_logger = logging.getLogger(__name__)
 
 BIND_PAGE_CUSTOM_ID_PREFIX = "bind_page"
 
@@ -168,8 +171,10 @@ def _list_bind_workspace_candidates(
                 continue
             seen_paths.add(normalized_path)
             candidates.append((None, None, normalized_path))
-    except Exception:
-        pass
+    except OSError:
+        _logger.debug(
+            "failed to scan root directory for workspace candidates", exc_info=True
+        )
 
     return candidates
 
@@ -729,7 +734,7 @@ async def _get_active_flow_info(
         finally:
             store.close()
     except Exception:
-        pass
+        _logger.debug("failed to query active flow info", exc_info=True)
     return None
 
 

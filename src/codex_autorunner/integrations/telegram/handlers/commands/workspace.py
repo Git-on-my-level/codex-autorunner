@@ -872,7 +872,9 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                         workspace_id,
                     )
             except Exception:
-                pass
+                self._logger.debug(
+                    "resolve_workspace: hub_supervisor lookup failed", exc_info=True
+                )
         if self._manifest_path and self._hub_root:
             try:
                 manifest = load_manifest(self._manifest_path, self._hub_root)
@@ -881,7 +883,9 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                     workspace = canonicalize_path(self._hub_root / repo.path)
                     return str(workspace), repo.id, "repo", repo.id
             except Exception:
-                pass
+                self._logger.debug(
+                    "resolve_workspace: manifest lookup failed", exc_info=True
+                )
         path = Path(arg)
         if not path.is_absolute():
             path = canonicalize_path(self._config.root / path)
@@ -3327,7 +3331,9 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                     scoping = "per-topic" if require_topics else "global (per hub)"
                     lines.append(f"PMA thread: {pma_thread_id or 'none'} ({scoping})")
                 except Exception:
-                    pass
+                    self._logger.debug(
+                        "status: pma registry lookup failed", exc_info=True
+                    )
             if hub_root:
                 try:
                     pma_dir = hub_root / ".codex-autorunner" / "pma"
@@ -3359,7 +3365,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                         f"PMA files: inbox {inbox_count}, outbox {outbox_count}"
                     )
                 except Exception:
-                    pass
+                    self._logger.debug("status: pma file count failed", exc_info=True)
         if is_pma and manifest_path and hub_root:
             try:
                 manifest = load_manifest(manifest_path, hub_root)
@@ -3398,7 +3404,9 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                         else:
                             idle_count += 1
                     except Exception:
-                        pass
+                        self._logger.debug(
+                            "status: flow store query failed for repo", exc_info=True
+                        )
                     finally:
                         store.close()
                 lines.append(
@@ -3413,7 +3421,9 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                     suffix = "" if len(paused_repos) <= 5 else "..."
                     lines.append(f"Paused repos: {preview}{suffix}")
             except Exception:
-                pass
+                self._logger.debug(
+                    "status: hub repo status aggregation failed", exc_info=True
+                )
 
         if not record.workspace_path and not is_pma:
             lines.append("Use /bind <repo_id> or /bind <path>.")
@@ -3435,7 +3445,9 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                         elif latest.status == FlowRunStatus.PAUSED:
                             lines.append(f"Active Flow: PAUSED (run {latest.id})")
                 except Exception:
-                    pass
+                    self._logger.debug(
+                        "status: flow store query failed for workspace", exc_info=True
+                    )
                 finally:
                     store.close()
 

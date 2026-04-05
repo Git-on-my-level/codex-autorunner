@@ -2,6 +2,7 @@
 Repository run control routes: start, stop, resume, reset, kill.
 """
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -16,6 +17,8 @@ from ..schemas import (
 )
 from ..services.responses import ok_response
 from ..services.validation import normalize_optional_string
+
+_logger = logging.getLogger(__name__)
 
 
 def _normalize_override(value: Optional[str], field: str) -> Optional[str]:
@@ -72,7 +75,7 @@ def build_repos_routes() -> APIRouter:
         try:
             logger.info("run/start once=%s", once)
         except Exception:
-            pass
+            _logger.debug("Failed to log run/start", exc_info=True)
         if payload:
             _apply_run_overrides(request, payload)
         try:
@@ -88,7 +91,7 @@ def build_repos_routes() -> APIRouter:
         try:
             logger.info("run/stop requested")
         except Exception:
-            pass
+            _logger.debug("Failed to log run/stop", exc_info=True)
         manager.stop()
         return {"running": manager.running}
 
@@ -100,7 +103,7 @@ def build_repos_routes() -> APIRouter:
         try:
             logger.info("run/kill requested")
         except Exception:
-            pass
+            _logger.debug("Failed to log run/kill", exc_info=True)
         manager.kill()
         with state_lock(engine.state_path):
             state = load_state(engine.state_path)
@@ -131,7 +134,7 @@ def build_repos_routes() -> APIRouter:
         try:
             logger.info("run/clear-lock requested")
         except Exception:
-            pass
+            _logger.debug("Failed to log run/clear-lock", exc_info=True)
         assessment = manager.clear_freeable_lock()
         if not assessment.freeable:
             detail = "Lock is still active; cannot clear."
@@ -148,7 +151,7 @@ def build_repos_routes() -> APIRouter:
         try:
             logger.info("run/resume once=%s", once)
         except Exception:
-            pass
+            _logger.debug("Failed to log run/resume", exc_info=True)
         try:
             manager.resume(once=once)
         except LockError as exc:
@@ -167,7 +170,7 @@ def build_repos_routes() -> APIRouter:
         try:
             logger.info("run/reset requested")
         except Exception:
-            pass
+            _logger.debug("Failed to log run/reset", exc_info=True)
         with state_lock(engine.state_path):
             current_state = load_state(engine.state_path)
             engine.lock_path.unlink(missing_ok=True)

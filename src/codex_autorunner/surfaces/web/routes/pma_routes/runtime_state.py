@@ -97,7 +97,9 @@ class PmaRuntimeState:
                 if isinstance(checker, PmaSafetyChecker):
                     return checker
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to get safety checker from supervisor", exc_info=True
+                )
 
         if self.pma_safety_checker is None or self.pma_safety_root != hub_root:
             raw = getattr(request.app.state.config, "raw", {}) if request else {}
