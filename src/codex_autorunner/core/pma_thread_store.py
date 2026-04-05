@@ -556,7 +556,15 @@ class PmaThreadStore:
     ) -> list[str]:
         running_rows = conn.execute(
             """
-            SELECT execution_id, started_at, created_at
+            SELECT
+                execution_id,
+                started_at,
+                created_at,
+                (
+                    SELECT MAX(ep.timestamp)
+                      FROM orch_event_projections AS ep
+                     WHERE ep.execution_id = orch_thread_executions.execution_id
+                ) AS last_event_at
               FROM orch_thread_executions
              WHERE thread_target_id = ?
                AND status = 'running'
@@ -589,12 +597,14 @@ class PmaThreadStore:
                 stale_execution_ids.append(execution_id)
                 continue
 
-            started_at = parse_iso_datetime(row["started_at"]) or parse_iso_datetime(
-                row["created_at"]
+            last_activity_at = (
+                parse_iso_datetime(row["last_event_at"])
+                or parse_iso_datetime(row["started_at"])
+                or parse_iso_datetime(row["created_at"])
             )
-            if started_at is None:
+            if last_activity_at is None:
                 continue
-            age_seconds = max(0, int((now_dt - started_at).total_seconds()))
+            age_seconds = max(0, int((now_dt - last_activity_at).total_seconds()))
             if age_seconds > self._stale_running_threshold_seconds:
                 stale_execution_ids.append(execution_id)
         return stale_execution_ids

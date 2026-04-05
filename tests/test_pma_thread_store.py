@@ -468,6 +468,61 @@ def test_claim_next_queued_turn_recovers_old_running_execution_when_status_turn_
     assert stale_after["finished_at"]
 
 
+def test_create_turn_keeps_old_running_execution_with_recent_activity(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(
+        tmp_path / "hub",
+        stale_running_threshold_seconds=60,
+    )
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    active_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+
+    with store._write_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_executions
+                   SET started_at = '2000-01-01T00:00:00Z',
+                       created_at = '2000-01-01T00:00:00Z'
+                 WHERE execution_id = ?
+                """,
+                (active_turn["managed_turn_id"],),
+            )
+            conn.execute(
+                """
+                INSERT INTO orch_event_projections (
+                    event_id,
+                    event_family,
+                    event_type,
+                    execution_id,
+                    timestamp,
+                    status,
+                    payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"test-activity:{active_turn['managed_turn_id']}",
+                    "turn.timeline",
+                    "output_delta",
+                    active_turn["managed_turn_id"],
+                    "2999-01-01T00:00:00Z",
+                    "recorded",
+                    "{}",
+                ),
+            )
+
+    with pytest.raises(ManagedThreadAlreadyHasRunningTurnError):
+        store.create_turn(thread["managed_thread_id"], prompt="second")
+
+    turn_after = store.get_turn(
+        thread["managed_thread_id"], active_turn["managed_turn_id"]
+    )
+    assert turn_after is not None
+    assert turn_after["status"] == "running"
+
+
 def test_recovery_does_not_interrupt_legit_queued_turn_promoted_after_newer_terminal(
     tmp_path: Path,
 ) -> None:
