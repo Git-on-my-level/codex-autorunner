@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import inspect
 import logging
 import time
 from dataclasses import dataclass, field
@@ -128,6 +127,246 @@ def _paused_flow_status(run_record: Any) -> str:
     if status is None:
         return "paused"
     return str(getattr(status, "value", status))
+
+
+async def _resolve_paused_flow_core(
+    paused: Optional[tuple[str, Any]],
+    workspace_root: Optional[Path],
+) -> Optional[PausedFlowTarget]:
+    if paused is None:
+        return None
+    run_id, run_record = paused
+    ws = workspace_root or Path(".")
+    return PausedFlowTarget(
+        flow_target=FlowTarget(
+            flow_target_id="ticket_flow",
+            flow_type="ticket_flow",
+            display_name="ticket_flow",
+            workspace_root=str(ws),
+        ),
+        run_id=run_id,
+        status=_paused_flow_status(run_record),
+        workspace_root=ws,
+    )
+
+
+async def _download_message_media(
+    handlers: Any,
+    message: TelegramMessage,
+) -> list[tuple[str, bytes]]:
+    files: list[tuple[str, bytes]] = []
+    if message.photos:
+        photos = sorted(
+            message.photos,
+            key=lambda p: (p.file_size or 0, p.width * p.height),
+            reverse=True,
+        )
+        if photos:
+            best = photos[0]
+            try:
+                file_info = await handlers._bot.get_file(best.file_id)
+                data = await handlers._bot.download_file(
+                    file_info.file_path,
+                    max_size_bytes=handlers._config.media.max_image_bytes,
+                )
+                files.append((f"photo_{best.file_id}.jpg", data))
+            except Exception as exc:
+                handlers._logger.debug("Failed to download photo: %s", exc)
+    elif message.document:
+        try:
+            file_info = await handlers._bot.get_file(message.document.file_id)
+            data = await handlers._bot.download_file(
+                file_info.file_path,
+                max_size_bytes=handlers._config.media.max_file_bytes,
+            )
+            filename = (
+                message.document.file_name or f"document_{message.document.file_id}"
+            )
+            files.append((filename, data))
+        except Exception as exc:
+            handlers._logger.debug("Failed to download document: %s", exc)
+    elif message.audio:
+        try:
+            file_info = await handlers._bot.get_file(message.audio.file_id)
+            data = await handlers._bot.download_file(
+                file_info.file_path,
+                max_size_bytes=handlers._config.media.max_file_bytes,
+            )
+            filename = message.audio.file_name or f"audio_{message.audio.file_id}"
+            files.append((filename, data))
+        except Exception as exc:
+            handlers._logger.debug("Failed to download audio: %s", exc)
+    elif message.voice:
+        try:
+            file_info = await handlers._bot.get_file(message.voice.file_id)
+            data = await handlers._bot.download_file(
+                file_info.file_path,
+                max_size_bytes=handlers._config.media.max_voice_bytes,
+            )
+            files.append((f"voice_{message.voice.file_id}.ogg", data))
+        except Exception as exc:
+            handlers._logger.debug("Failed to download voice: %s", exc)
+    return files
+
+
+async def _submit_flow_reply_core(
+    handlers: Any,
+    message: TelegramMessage,
+    paused: Optional[tuple[str, Any]],
+    workspace_root: Path,
+    reply_text: str,
+    files: Optional[list[tuple[str, bytes]]] = None,
+) -> None:
+    if paused is None:
+        return
+    run_id, run_record = paused
+    expected_media = bool(
+        message.photos or message.document or message.audio or message.voice
+    )
+    if expected_media and not files:
+        await handlers._send_message(
+            message.chat_id,
+            "Failed to download media for paused flow reply. Please retry.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        return
+    success, result = await handlers._write_user_reply_from_telegram(
+        workspace_root,
+        run_id,
+        run_record,
+        message,
+        reply_text,
+        files,
+    )
+    await handlers._send_message(
+        message.chat_id,
+        result,
+        thread_id=message.thread_id,
+        reply_to=message.message_id,
+    )
+    if success:
+        await handlers._ticket_flow_bridge.auto_resume_run(workspace_root, run_id)
+
+
+def _build_normal_message_kwargs(
+    *,
+    text_override: str,
+    placeholder_id: Optional[int],
+    record: Any,
+    notification_reply: Any,
+    handlers: Any,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "text_override": text_override,
+        "placeholder_id": placeholder_id,
+    }
+    if notification_reply is not None:
+        kwargs["record"] = dataclasses.replace(
+            record or TelegramTopicRecord(),
+            pma_enabled=True,
+            repo_id=notification_reply.repo_id or getattr(record, "repo_id", None),
+            workspace_path=(
+                notification_reply.workspace_root
+                or str(getattr(handlers, "_hub_root", None) or "")
+                or getattr(record, "workspace_path", None)
+            ),
+        )
+        kwargs["surface_key_override"] = notification_surface_key(
+            notification_reply.notification_id
+        )
+        kwargs["pma_context_prefix"] = build_notification_context_block(
+            notification_reply
+        )
+    return kwargs
+
+
+async def _submit_thread_message_core(
+    handlers: Any,
+    message: TelegramMessage,
+    runtime: Any,
+    record: Any,
+    text_override: str,
+    placeholder_id: Optional[int],
+    notification_reply: Any,
+) -> None:
+    image_candidate = select_image_candidate(message)
+    if image_candidate:
+        if not handlers._config.media.images:
+            await handlers._send_message(
+                message.chat_id,
+                "Image handling is disabled.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await handlers._handle_image_message(
+            message,
+            runtime,
+            record,
+            image_candidate,
+            text_override,
+            placeholder_id=placeholder_id,
+        )
+        return
+
+    voice_candidate = select_voice_candidate(message)
+    if voice_candidate:
+        if not handlers._config.media.voice:
+            await handlers._send_message(
+                message.chat_id,
+                "Voice transcription is disabled.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await handlers._handle_voice_message(
+            message,
+            runtime,
+            record,
+            voice_candidate,
+            text_override,
+            placeholder_id=placeholder_id,
+        )
+        return
+
+    file_candidate = select_file_candidate(message)
+    if file_candidate:
+        if not handlers._config.media.files:
+            await handlers._send_message(
+                message.chat_id,
+                "File handling is disabled.",
+                thread_id=message.thread_id,
+                reply_to=message.message_id,
+            )
+            return
+        await handlers._handle_file_message(
+            message,
+            runtime,
+            record,
+            file_candidate,
+            text_override,
+            placeholder_id=placeholder_id,
+        )
+        return
+
+    if not text_override:
+        await handlers._send_message(
+            message.chat_id,
+            "Unsupported media type.",
+            thread_id=message.thread_id,
+            reply_to=message.message_id,
+        )
+        return
+
+    normal_kwargs = _build_normal_message_kwargs(
+        text_override=text_override,
+        placeholder_id=placeholder_id,
+        record=record,
+        notification_reply=notification_reply,
+        handlers=handlers,
+    )
+    await handlers._handle_normal_message(message, runtime, **normal_kwargs)
 
 
 def _has_pending_custom_question(handlers: Any, message: TelegramMessage) -> bool:
@@ -772,80 +1011,31 @@ async def handle_message_inner(
     async def _resolve_paused_flow(
         _request: SurfaceThreadMessageRequest,
     ) -> Optional[PausedFlowTarget]:
-        if paused is None:
-            return None
-        run_id, _run_record = paused
-        return PausedFlowTarget(
-            flow_target=FlowTarget(
-                flow_target_id="ticket_flow",
-                flow_type="ticket_flow",
-                display_name="ticket_flow",
-                workspace_root=str(workspace_root or Path(".")),
-            ),
-            run_id=run_id,
-            status=_paused_flow_status(_run_record),
-            workspace_root=workspace_root or Path("."),
-        )
+        return await _resolve_paused_flow_core(paused, workspace_root)
 
     async def _submit_flow_reply(
         _request: SurfaceThreadMessageRequest, flow_target: PausedFlowTarget
     ) -> None:
-        if paused is None:
-            return
-        run_id, run_record = paused
-        success, result = await handlers._write_user_reply_from_telegram(
-            workspace_root or Path("."),
-            run_id,
-            run_record,
+        await _submit_flow_reply_core(
+            handlers,
             message,
+            paused,
+            workspace_root or Path("."),
             flow_reply_text,
         )
-        await handlers._send_message(
-            message.chat_id,
-            result,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        if success:
-            await handlers._ticket_flow_bridge.auto_resume_run(
-                workspace_root or Path("."), flow_target.run_id
-            )
 
     async def _submit_thread_message(
         _request: SurfaceThreadMessageRequest,
     ) -> None:
-        normal_message_kwargs: dict[str, Any] = {
-            "text_override": turn_text,
-            "placeholder_id": placeholder_id,
-        }
-        if notification_reply is not None:
-            try:
-                handle_normal_parameters = inspect.signature(
-                    handlers._handle_normal_message
-                ).parameters
-            except (TypeError, ValueError):
-                handle_normal_parameters = {}
-            if "record" in handle_normal_parameters:
-                normal_message_kwargs["record"] = dataclasses.replace(
-                    record or TelegramTopicRecord(),
-                    pma_enabled=True,
-                    repo_id=notification_reply.repo_id
-                    or getattr(record, "repo_id", None),
-                    workspace_path=(
-                        notification_reply.workspace_root
-                        or str(getattr(handlers, "_hub_root", None) or "")
-                        or getattr(record, "workspace_path", None)
-                    ),
-                )
-            if "surface_key_override" in handle_normal_parameters:
-                normal_message_kwargs["surface_key_override"] = (
-                    notification_surface_key(notification_reply.notification_id)
-                )
-            if "pma_context_prefix" in handle_normal_parameters:
-                normal_message_kwargs["pma_context_prefix"] = (
-                    build_notification_context_block(notification_reply)
-                )
-        await handlers._handle_normal_message(message, runtime, **normal_message_kwargs)
+        await _submit_thread_message_core(
+            handlers,
+            message,
+            runtime,
+            record,
+            text_override=turn_text,
+            placeholder_id=placeholder_id,
+            notification_reply=notification_reply,
+        )
 
     async def work() -> None:
         if notification_reply is not None:
@@ -1359,216 +1549,38 @@ async def handle_media_message(
     async def _resolve_paused_flow(
         _request: SurfaceThreadMessageRequest,
     ) -> Optional[PausedFlowTarget]:
-        if paused is None:
-            return None
-        run_id, run_record = paused
-        return PausedFlowTarget(
-            flow_target=FlowTarget(
-                flow_target_id="ticket_flow",
-                flow_type="ticket_flow",
-                display_name="ticket_flow",
-                workspace_root=str(workspace_root),
-            ),
-            run_id=run_id,
-            status=_paused_flow_status(run_record),
-            workspace_root=workspace_root,
-        )
+        return await _resolve_paused_flow_core(paused, workspace_root)
 
     async def _submit_flow_reply(
         _request: SurfaceThreadMessageRequest, flow_target: PausedFlowTarget
     ) -> None:
-        if paused is None:
-            return
-        run_id, run_record = paused
         reply_text = caption_text.strip() if isinstance(caption_text, str) else ""
         if not reply_text:
             reply_text = "Media reply attached."
-        files = []
-        expected_media = bool(
-            message.photos or message.document or message.audio or message.voice
-        )
-        if message.photos:
-            photos = sorted(
-                message.photos,
-                key=lambda p: (p.file_size or 0, p.width * p.height),
-                reverse=True,
-            )
-            if photos:
-                best = photos[0]
-                try:
-                    file_info = await handlers._bot.get_file(best.file_id)
-                    data = await handlers._bot.download_file(
-                        file_info.file_path,
-                        max_size_bytes=handlers._config.media.max_image_bytes,
-                    )
-                    filename = f"photo_{best.file_id}.jpg"
-                    files.append((filename, data))
-                except Exception as exc:
-                    handlers._logger.debug("Failed to download photo: %s", exc)
-        elif message.document:
-            try:
-                file_info = await handlers._bot.get_file(message.document.file_id)
-                data = await handlers._bot.download_file(
-                    file_info.file_path,
-                    max_size_bytes=handlers._config.media.max_file_bytes,
-                )
-                filename = (
-                    message.document.file_name or f"document_{message.document.file_id}"
-                )
-                files.append((filename, data))
-            except Exception as exc:
-                handlers._logger.debug("Failed to download document: %s", exc)
-        elif message.audio:
-            try:
-                file_info = await handlers._bot.get_file(message.audio.file_id)
-                data = await handlers._bot.download_file(
-                    file_info.file_path,
-                    max_size_bytes=handlers._config.media.max_file_bytes,
-                )
-                filename = message.audio.file_name or f"audio_{message.audio.file_id}"
-                files.append((filename, data))
-            except Exception as exc:
-                handlers._logger.debug("Failed to download audio: %s", exc)
-        elif message.voice:
-            try:
-                file_info = await handlers._bot.get_file(message.voice.file_id)
-                data = await handlers._bot.download_file(
-                    file_info.file_path,
-                    max_size_bytes=handlers._config.media.max_voice_bytes,
-                )
-                files.append((f"voice_{message.voice.file_id}.ogg", data))
-            except Exception as exc:
-                handlers._logger.debug("Failed to download voice: %s", exc)
-        if expected_media and not files:
-            await handlers._send_message(
-                message.chat_id,
-                "Failed to download media for paused flow reply. Please retry.",
-                thread_id=message.thread_id,
-                reply_to=message.message_id,
-            )
-            return
-        success, result = await handlers._write_user_reply_from_telegram(
-            workspace_root,
-            run_id,
-            run_record,
+        files = await _download_message_media(handlers, message)
+        await _submit_flow_reply_core(
+            handlers,
             message,
+            paused,
+            workspace_root,
             compose_forwarded_message_text(
                 reply_text,
                 message_forward_info(message, reply_text),
             ),
-            files,
+            files=files,
         )
-        await handlers._send_message(
-            message.chat_id,
-            result,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-        if success:
-            await handlers._ticket_flow_bridge.auto_resume_run(
-                workspace_root, flow_target.run_id
-            )
 
     async def _submit_thread_message(
         _request: SurfaceThreadMessageRequest,
     ) -> None:
-        image_candidate = select_image_candidate(message)
-        if image_candidate:
-            if not handlers._config.media.images:
-                await handlers._send_message(
-                    message.chat_id,
-                    "Image handling is disabled.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            await handlers._handle_image_message(
-                message,
-                runtime,
-                record,
-                image_candidate,
-                turn_caption_text,
-                placeholder_id=placeholder_id,
-            )
-            return
-
-        voice_candidate = select_voice_candidate(message)
-        if voice_candidate:
-            if not handlers._config.media.voice:
-                await handlers._send_message(
-                    message.chat_id,
-                    "Voice transcription is disabled.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            await handlers._handle_voice_message(
-                message,
-                runtime,
-                record,
-                voice_candidate,
-                turn_caption_text,
-                placeholder_id=placeholder_id,
-            )
-            return
-
-        file_candidate = select_file_candidate(message)
-        if file_candidate:
-            if not handlers._config.media.files:
-                await handlers._send_message(
-                    message.chat_id,
-                    "File handling is disabled.",
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-                return
-            await handlers._handle_file_message(
-                message,
-                runtime,
-                record,
-                file_candidate,
-                turn_caption_text,
-                placeholder_id=placeholder_id,
-            )
-            return
-
-        if turn_caption_text:
-            await handlers._handle_normal_message(
-                message,
-                runtime,
-                text_override=turn_caption_text,
-                record=(
-                    dataclasses.replace(
-                        record,
-                        pma_enabled=True,
-                        repo_id=notification_reply.repo_id or record.repo_id,
-                        workspace_path=(
-                            notification_reply.workspace_root
-                            or str(getattr(handlers, "_hub_root", None) or "")
-                            or record.workspace_path
-                        ),
-                    )
-                    if notification_reply is not None
-                    else record
-                ),
-                placeholder_id=placeholder_id,
-                surface_key_override=(
-                    notification_surface_key(notification_reply.notification_id)
-                    if notification_reply is not None
-                    else None
-                ),
-                pma_context_prefix=(
-                    build_notification_context_block(notification_reply)
-                    if notification_reply is not None
-                    else None
-                ),
-            )
-            return
-        await handlers._send_message(
-            message.chat_id,
-            "Unsupported media type.",
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
+        await _submit_thread_message_core(
+            handlers,
+            message,
+            runtime,
+            record,
+            text_override=turn_caption_text,
+            placeholder_id=placeholder_id,
+            notification_reply=notification_reply,
         )
 
     if notification_reply is not None:
