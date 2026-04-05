@@ -18,6 +18,9 @@ _DISCORD_SERVICE_PATH = Path("src/codex_autorunner/integrations/discord/service.
 _DISCORD_CAR_DISPATCH_PATH = Path(
     "src/codex_autorunner/integrations/discord/car_command_dispatch.py"
 )
+_DISCORD_INTERACTION_DISPATCH_PATH = Path(
+    "src/codex_autorunner/integrations/discord/interaction_dispatch.py"
+)
 _DISCORD_COMMANDS_PATH = Path("src/codex_autorunner/integrations/discord/commands.py")
 _TELEGRAM_TRIGGER_MODE_PATH = Path(
     "src/codex_autorunner/integrations/telegram/trigger_mode.py"
@@ -70,6 +73,12 @@ def run_parity_checks(
             repo_relative_path=_DISCORD_CAR_DISPATCH_PATH,
         )
     )
+    discord_interaction_dispatch_text = _read_text(
+        _resolve_source_path(
+            repo_root=repo_root,
+            repo_relative_path=_DISCORD_INTERACTION_DISPATCH_PATH,
+        )
+    )
     telegram_trigger_mode_text = _read_text(source_paths["telegram_trigger_mode"])
     telegram_messages_text = _read_text(source_paths["telegram_messages"])
     discord_commands_text = _read_text(
@@ -87,6 +96,7 @@ def run_parity_checks(
 
     discord_service_ast = _parse_module(discord_service_text)
     discord_car_dispatch_ast = _parse_module(discord_car_dispatch_text)
+    discord_interaction_dispatch_ast = _parse_module(discord_interaction_dispatch_text)
     telegram_trigger_mode_ast = _parse_module(telegram_trigger_mode_text)
     telegram_messages_ast = _parse_module(telegram_messages_text)
     discord_commands_ast = _parse_module(discord_commands_text)
@@ -108,12 +118,15 @@ def run_parity_checks(
         _check_discord_known_commands_not_in_generic_fallback(
             discord_service_ast=discord_service_ast,
             discord_car_dispatch_ast=discord_car_dispatch_ast,
+            discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
         ),
         _check_discord_canonicalize_command_ingress_usage(
             discord_service_ast=discord_service_ast,
+            discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
         ),
         _check_discord_interaction_component_guard_paths(
             discord_service_ast=discord_service_ast,
+            discord_interaction_dispatch_ast=discord_interaction_dispatch_ast,
         ),
         _check_shared_plain_text_turn_policy_usage(
             discord_service_ast=discord_service_ast,
@@ -518,12 +531,19 @@ def _check_discord_known_commands_not_in_generic_fallback(
     *,
     discord_service_ast: ast.Module | None,
     discord_car_dispatch_ast: ast.Module | None,
+    discord_interaction_dispatch_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
     normalized_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "handle_normalized_interaction",
+    ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_normalized_interaction",
     )
     interaction_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "handle_interaction",
+    ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_interaction",
     )
@@ -551,6 +571,10 @@ def _check_discord_known_commands_not_in_generic_fallback(
         ),
         "generic_fallback_present": _module_has_string_literal(
             discord_service_ast,
+            exact="Command not implemented yet for Discord.",
+        )
+        or _module_has_string_literal(
+            discord_interaction_dispatch_ast,
             exact="Command not implemented yet for Discord.",
         ),
         "car_specific_fallback_present": _module_has_string_literal(
@@ -589,19 +613,35 @@ def _check_discord_known_commands_not_in_generic_fallback(
 def _check_discord_canonicalize_command_ingress_usage(
     *,
     discord_service_ast: ast.Module | None,
+    discord_interaction_dispatch_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
     normalized_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "handle_normalized_interaction",
+    ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_normalized_interaction",
     )
     interaction_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "handle_interaction",
+    ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_interaction",
     )
 
+    source_ast = (
+        discord_interaction_dispatch_ast
+        if discord_interaction_dispatch_ast is not None
+        and _find_functions_by_name(
+            discord_interaction_dispatch_ast, "handle_normalized_interaction"
+        )
+        else discord_service_ast
+    )
+
     checks = {
         "import_present": _module_imports_name(
-            discord_service_ast,
+            source_ast,
             module_suffix="integrations.chat.command_ingress",
             name="canonicalize_command_ingress",
         ),
@@ -710,12 +750,19 @@ def _check_shared_plain_text_turn_policy_usage(
 def _check_discord_interaction_component_guard_paths(
     *,
     discord_service_ast: ast.Module | None,
+    discord_interaction_dispatch_ast: ast.Module | None = None,
 ) -> ParityCheckResult:
     normalized_interaction_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "handle_normalized_interaction",
+    ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_normalized_interaction",
     )
     legacy_interaction_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "handle_interaction",
+    ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_interaction",
     )
@@ -724,10 +771,16 @@ def _check_discord_interaction_component_guard_paths(
     )
 
     normalized_component_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "handle_component_interaction",
+    ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_component_interaction_normalized",
     )
     legacy_component_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "_handle_component_from_payload",
+    ) or _find_functions_by_name(
         discord_service_ast,
         "_handle_component_interaction",
     )

@@ -6,7 +6,6 @@ import hashlib
 import inspect
 import logging
 import os
-import sqlite3
 import subprocess
 import time
 import uuid
@@ -34,10 +33,6 @@ from ...agents.registry import (
     normalize_agent_capabilities,
 )
 from ...bootstrap import seed_repo_files
-from ...core.chat_bindings import (
-    preferred_non_pma_chat_notification_source_for_workspace,
-    preferred_non_pma_chat_notification_sources_by_workspace,
-)
 from ...core.config import (
     ConfigError,
     ensure_hub_config_at,
@@ -60,31 +55,20 @@ from ...core.filebox_retention import (
     resolve_filebox_retention_policy,
 )
 from ...core.flows import (
-    FLOW_ACTIONS_WITH_RUN_PICKER,
     FlowRunRecord,
     FlowRunStatus,
     FlowStore,
-    flow_action_label,
     flow_run_duration_seconds,
     format_flow_duration,
-    list_unseen_ticket_flow_dispatches,
 )
 from ...core.flows.hub_overview import build_hub_flow_overview_entries
-from ...core.flows.reconciler import reconcile_flow_run
 from ...core.flows.surface_defaults import should_route_flow_read_to_hub_overview
 from ...core.flows.ux_helpers import (
-    GitHubServiceProtocol,
     build_flow_status_snapshot,
     ensure_worker,
-    format_ticket_flow_status_lines,
-    issue_md_path,
-    resolve_ticket_flow_archive_mode,
-    seed_issue_from_github,
-    seed_issue_from_text,
     select_default_ticket_flow_run,
     select_ticket_flow_run_record,
     summarize_flow_freshness,
-    ticket_flow_archive_requires_force,
     ticket_progress,
 )
 from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
@@ -99,7 +83,6 @@ from ...core.pma_notification_store import PmaNotificationStore
 from ...core.state_roots import resolve_global_state_root
 from ...core.ticket_flow_summary import (
     build_ticket_flow_display,
-    format_ticket_flow_summary_lines,
 )
 from ...core.update import (  # noqa: F401 - kept for test monkeypatching
     UpdateInProgressError,
@@ -114,7 +97,6 @@ from ...core.update import (  # noqa: F401 - kept for test monkeypatching
 from ...core.update_paths import resolve_update_paths  # noqa: F401
 from ...core.update_targets import get_update_target_label  # noqa: F401
 from ...core.utils import (
-    atomic_write,
     canonicalize_path,
     is_within,
 )
@@ -154,7 +136,6 @@ from ...integrations.chat.command_diagnostics import (
     ActiveFlowInfo,
     build_status_text,
 )
-from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -185,10 +166,6 @@ from ...integrations.chat.models import (
     ChatMessageEvent,
     ChatReplyInfo,
 )
-from ...integrations.chat.pause_notifications import (
-    format_pause_notification_source,
-    format_pause_notification_text,
-)
 from ...integrations.chat.picker_filter import (
     filter_picker_items,
     resolve_picker_query,
@@ -210,10 +187,6 @@ from ...integrations.chat.update_notifier import (  # noqa: F401 - kept for test
     mark_update_status_notified,
 )
 from ...integrations.github.context_injection import maybe_inject_github_context
-from ...integrations.github.service import (
-    GitHubError,
-    GitHubService,
-)
 from ...manifest import load_manifest
 from ...tickets.files import (
     list_ticket_paths,
@@ -222,7 +195,6 @@ from ...tickets.files import (
     safe_relpath,
 )
 from ...tickets.frontmatter import parse_markdown_frontmatter
-from ...tickets.outbox import resolve_outbox_paths
 from ...voice import VoiceConfig, VoiceService, VoiceServiceError
 from ...voice.provider_catalog import normalize_voice_provider
 from ...voice.service import VoiceTransientError
@@ -260,37 +232,51 @@ from .collaboration_helpers import (
 from .command_registry import sync_commands
 from .commands import build_application_commands
 from .components import (
-    DISCORD_BUTTON_STYLE_DANGER,
     DISCORD_BUTTON_STYLE_SUCCESS,
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
     build_action_row,
     build_bind_picker,
     build_button,
-    build_flow_runs_picker,
-    build_flow_status_buttons,
     build_model_effort_picker,
     build_queue_notice_buttons,
     build_ticket_filter_picker,
     build_ticket_picker,
 )
 from .config import DiscordBotConfig
-from .errors import DiscordAPIError, DiscordTransientError
+from .errors import DiscordAPIError
+from .flow_commands import (
+    build_flow_archive_confirmation_components,
+    flow_archive_prompt_text,
+    handle_flow_archive,
+    handle_flow_button,
+    handle_flow_issue,
+    handle_flow_plan,
+    handle_flow_recover,
+    handle_flow_reply,
+    handle_flow_restart,
+    handle_flow_resume,
+    handle_flow_runs,
+    handle_flow_start,
+    handle_flow_status,
+    handle_flow_stop,
+    handle_tickets,
+    prompt_flow_action_picker,
+    resolve_flow_run_input,
+    write_user_reply,
+)
+from .flow_watchers import (
+    _scan_and_enqueue_pause_notifications as _scan_and_enqueue_pause_notifications_impl,
+)
+from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
-from .interactions import (
-    extract_autocomplete_command_context,
-    extract_channel_id,
-    extract_command_path_and_options,
-    extract_component_custom_id,
-    extract_component_values,
-    extract_guild_id,
-    extract_interaction_id,
-    extract_interaction_token,
-    extract_modal_custom_id,
-    extract_modal_values,
-    extract_user_id,
-    is_autocomplete_interaction,
-    is_component_interaction,
-    is_modal_submit_interaction,
+from .interaction_dispatch import (
+    handle_component_interaction as _dispatch_component_interaction,
+)
+from .interaction_dispatch import (
+    handle_interaction as _dispatch_interaction,
+)
+from .interaction_dispatch import (
+    handle_normalized_interaction as _dispatch_normalized_interaction,
 )
 from .message_turns import (
     DiscordMessageTurnResult,
@@ -315,11 +301,7 @@ from .rest import DiscordRestClient
 from .state import DiscordStateStore, OutboxRecord
 
 DISCORD_EPHEMERAL_FLAG = 64
-PAUSE_SCAN_INTERVAL_SECONDS = 5.0
-TERMINAL_SCAN_INTERVAL_SECONDS = 5.0
 CHAT_QUEUE_RESET_POLL_INTERVAL_SECONDS = 2.0
-FLOW_RUNS_DEFAULT_LIMIT = 5
-FLOW_RUNS_MAX_LIMIT = DISCORD_SELECT_OPTION_MAX_OPTIONS
 DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
 DISCORD_TURN_PROGRESS_MAX_ACTIONS = 12
@@ -339,7 +321,6 @@ DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
 MODEL_SEARCH_FETCH_LIMIT = 200
 SESSION_RESUME_SELECT_ID = "session_resume_select"
 AGENT_PROFILE_SELECT_ID = "agent_profile_select"
-FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
 UPDATE_TARGET_SELECT_ID = "update_target_select"
 UPDATE_CONFIRM_PREFIX = "update_confirm"
 UPDATE_CANCEL_PREFIX = "update_cancel"
@@ -404,18 +385,6 @@ def _opencode_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]
     if not idle_ttl_seconds or idle_ttl_seconds <= 0:
         return None
     return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
-
-
-def _flow_run_matches_action(record: FlowRunRecord, action: str) -> bool:
-    if action == "resume":
-        return record.status == FlowRunStatus.PAUSED
-    if action == "reply":
-        return record.status == FlowRunStatus.PAUSED
-    if action == "stop":
-        return not record.status.is_terminal()
-    if action == "recover":
-        return not record.status.is_terminal()
-    return True
 
 
 def _truncate_picker_text(text: str, *, limit: int) -> str:
@@ -1280,196 +1249,7 @@ class DiscordBotService:
     async def _handle_normalized_interaction(
         self, event: ChatInteractionEvent, context: DispatchContext
     ) -> None:
-        import json
-
-        payload_str = event.payload or "{}"
-        try:
-            payload_data = json.loads(payload_str)
-        except json.JSONDecodeError:
-            payload_data = {}
-
-        interaction_id = payload_data.get(
-            "_discord_interaction_id", event.interaction.interaction_id
-        )
-        interaction_token = payload_data.get("_discord_token")
-        channel_id = context.chat_id
-
-        if not interaction_id or not interaction_token or not channel_id:
-            self._logger.warning(
-                "handle_normalized_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-                bool(interaction_id),
-                bool(interaction_token),
-                bool(channel_id),
-            )
-            return
-
-        policy_result = self._evaluate_interaction_collaboration_policy(
-            channel_id=context.chat_id,
-            guild_id=context.thread_id,
-            user_id=context.user_id,
-        )
-        if not policy_result.command_allowed:
-            self._log_collaboration_policy_result(
-                channel_id=context.chat_id,
-                guild_id=context.thread_id,
-                user_id=context.user_id,
-                interaction_id=interaction_id,
-                result=policy_result,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This Discord command is not authorized for this channel/user/guild.",
-            )
-            return
-
-        if payload_data.get("type") == "component":
-            custom_id = payload_data.get("component_id")
-            if not custom_id:
-                self._logger.debug(
-                    "handle_normalized_interaction: missing component_id (interaction_id=%s)",
-                    interaction_id,
-                )
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "I could not identify this interaction action. Please retry.",
-                )
-                return
-            await self._handle_component_interaction_normalized(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                channel_id=channel_id,
-                custom_id=custom_id,
-                values=payload_data.get("values"),
-                guild_id=payload_data.get("guild_id"),
-                user_id=event.from_user_id,
-                message_id=context.message_id,
-            )
-            return
-
-        if payload_data.get("type") == "modal_submit":
-            custom_id_raw = payload_data.get("custom_id")
-            modal_values_raw = payload_data.get("values")
-            custom_id = custom_id_raw if isinstance(custom_id_raw, str) else ""
-            modal_values = (
-                modal_values_raw if isinstance(modal_values_raw, dict) else {}
-            )
-            await self._handle_ticket_modal_submit(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                custom_id=custom_id,
-                values=modal_values,
-            )
-            return
-
-        if payload_data.get("type") == "autocomplete":
-            command_raw = payload_data.get("command")
-            command_path = (
-                tuple(part for part in str(command_raw).split(":") if part)
-                if isinstance(command_raw, str)
-                else ()
-            )
-            autocomplete_payload = payload_data.get("autocomplete")
-            focused_name: Optional[str] = None
-            focused_value = ""
-            if isinstance(autocomplete_payload, dict):
-                focused_name_raw = autocomplete_payload.get("name")
-                focused_value_raw = autocomplete_payload.get("value")
-                if isinstance(focused_name_raw, str) and focused_name_raw.strip():
-                    focused_name = focused_name_raw.strip()
-                if isinstance(focused_value_raw, str):
-                    focused_value = focused_value_raw
-            options = (
-                payload_data.get("options")
-                if isinstance(payload_data.get("options"), dict)
-                else {}
-            )
-            await self._handle_command_autocomplete(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                command_path=command_path,
-                options=options,
-                focused_name=focused_name,
-                focused_value=focused_value,
-            )
-            return
-
-        ingress = canonicalize_command_ingress(
-            command=payload_data.get("command"),
-            options=payload_data.get("options"),
-        )
-        command = ingress.command if ingress is not None else ""
-        guild_id = payload_data.get("guild_id")
-
-        if ingress is None:
-            self._logger.warning(
-                "handle_normalized_interaction: failed to canonicalize command ingress (payload=%s)",
-                payload_data,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "I could not parse this interaction. Please retry the command.",
-            )
-            return
-
-        ingress = replace(
-            ingress,
-            command_path=self._normalize_discord_command_path(ingress.command_path),
-        )
-        await self._prepare_command_interaction(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            command_path=ingress.command_path,
-            timing="dispatch",
-        )
-
-        try:
-            if ingress.command_path[:1] == ("car",):
-                await self._handle_car_command(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    guild_id=context.thread_id,
-                    user_id=event.from_user_id,
-                    command_path=ingress.command_path,
-                    options=ingress.options,
-                )
-            elif ingress.command_path[:1] == ("pma",):
-                await self._handle_pma_command_from_normalized(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                    command_path=ingress.command_path,
-                    options=ingress.options,
-                )
-            else:
-                await self._respond_ephemeral(
-                    interaction_id,
-                    interaction_token,
-                    "Command not implemented yet for Discord.",
-                )
-        except DiscordTransientError as exc:
-            user_msg = exc.user_message or "An error occurred. Please try again later."
-            await self._respond_ephemeral(interaction_id, interaction_token, user_msg)
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.interaction.unhandled_error",
-                command=command,
-                channel_id=channel_id,
-                exc=exc,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "An unexpected error occurred. Please try again later.",
-            )
+        await _dispatch_normalized_interaction(self, event, context)
 
     async def _handle_message_event(
         self,
@@ -3138,47 +2918,13 @@ class DiscordBotService:
         action: str,
         deferred: bool = False,
     ) -> None:
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            runs = store.list_flow_runs(flow_type="ticket_flow")
-        except (sqlite3.Error, OSError) as exc:
-            raise DiscordTransientError(
-                f"Failed to query flow runs: {exc}",
-                user_message="Unable to query flow database. Please try again later.",
-            ) from None
-        finally:
-            store.close()
-
-        filtered = [run for run in runs if _flow_run_matches_action(run, action)]
-        if not filtered:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=f"No ticket_flow runs available for {flow_action_label(action)}.",
-            )
-            return
-        run_tuples = [(record.id, record.status.value) for record in filtered]
-        custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
-        prompt = f"Select a run to {flow_action_label(action)}:"
-        await self._send_or_respond_with_components_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        await prompt_flow_action_picker(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action=action,
             deferred=deferred,
-            text=prompt,
-            components=[
-                build_flow_runs_picker(
-                    run_tuples,
-                    custom_id=custom_id,
-                    placeholder=f"Select run to {flow_action_label(action)}...",
-                )
-            ],
         )
 
     async def _resolve_flow_run_input(
@@ -3191,84 +2937,19 @@ class DiscordBotService:
         run_id_opt: Any,
         deferred: bool = False,
     ) -> Optional[str]:
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()):
-            if action == "status":
-                return ""
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action=action,
-                deferred=deferred,
-            )
-            return None
-
-        run_id_value = run_id_opt.strip()
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError):
-            return run_id_value
-        try:
-            runs = store.list_flow_runs(flow_type="ticket_flow")
-        except (sqlite3.Error, OSError):
-            return run_id_value
-        finally:
-            store.close()
-
-        matching_runs = [run for run in runs if _flow_run_matches_action(run, action)]
-        if not matching_runs:
-            return run_id_value
-
-        items = [(record.id, record.status.value) for record in matching_runs]
-        search_items = [(record.id, record.id) for record in matching_runs]
-        aliases = {record.id: (record.status.value,) for record in matching_runs}
-        custom_id = f"{FLOW_ACTION_SELECT_PREFIX}:{action}"
-
-        async def _prompt_run_matches(
-            query_text: str,
-            filtered_search_items: list[tuple[str, str]],
-        ) -> None:
-            status_by_run_id = {run_id: status for run_id, status in items}
-            filtered_items = [
-                (run_id, status_by_run_id.get(run_id, ""))
-                for run_id, _label in filtered_search_items
-            ]
-            prompt = (
-                f"Matched {len(filtered_items)} runs for `{query_text}`. "
-                f"Select a run to {flow_action_label(action)}:"
-            )
-            await self._send_or_respond_with_components_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=prompt,
-                components=[
-                    build_flow_runs_picker(
-                        filtered_items,
-                        custom_id=custom_id,
-                        placeholder=f"Select run to {flow_action_label(action)}...",
-                    )
-                ],
-            )
-
-        resolved_run_id = await self._resolve_picker_query_or_prompt(
-            query=run_id_value,
-            items=search_items,
-            limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
-            aliases=aliases,
-            prompt_filtered_items=_prompt_run_matches,
+        return await resolve_flow_run_input(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            action=action,
+            run_id_opt=run_id_opt,
+            deferred=deferred,
         )
-        if resolved_run_id is None:
-            return None
-        return resolved_run_id
 
     @staticmethod
     def _flow_archive_prompt_text(record: FlowRunRecord) -> str:
-        return (
-            f"Run {record.id} is {record.status.value}. "
-            "Archiving it will reset the live tickets/contextspace state and move the "
-            "current run artifacts into the archive. Archive it anyway?"
-        )
+        return flow_archive_prompt_text(record)
 
     @staticmethod
     def _build_flow_archive_confirmation_components(
@@ -3276,22 +2957,10 @@ class DiscordBotService:
         *,
         prompt_variant: bool,
     ) -> list[dict[str, Any]]:
-        confirm_action = (
-            "archive_confirm_prompt" if prompt_variant else "archive_confirm"
+        return build_flow_archive_confirmation_components(
+            run_id,
+            prompt_variant=prompt_variant,
         )
-        cancel_action = "archive_cancel_prompt" if prompt_variant else "archive_cancel"
-        return [
-            build_action_row(
-                [
-                    build_button(
-                        "Archive now",
-                        f"flow:{run_id}:{confirm_action}",
-                        style=DISCORD_BUTTON_STYLE_DANGER,
-                    ),
-                    build_button("Cancel", f"flow:{run_id}:{cancel_action}"),
-                ]
-            )
-        ]
 
     async def _run_agent_turn_for_message(
         self,
@@ -3692,17 +3361,10 @@ class DiscordBotService:
                 await supervisor.close_all()
 
     async def _watch_ticket_flow_pauses(self) -> None:
-        while True:
-            try:
-                await self._scan_and_enqueue_pause_notifications()
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.pause_watch.scan_failed",
-                    exc=exc,
-                )
-            await asyncio.sleep(PAUSE_SCAN_INTERVAL_SECONDS)
+        await watch_ticket_flow_pauses(self)
+
+    async def _scan_and_enqueue_pause_notifications(self) -> None:
+        await _scan_and_enqueue_pause_notifications_impl(self)
 
     async def _run_chat_queue_reset_loop(self) -> None:
         while True:
@@ -3739,337 +3401,8 @@ class DiscordBotService:
                 cancelled_active=result.get("cancelled_active"),
             )
 
-    async def _scan_and_enqueue_pause_notifications(self) -> None:
-        bindings = await self._store.list_bindings()
-        preferred_sources = self._preferred_bound_sources_by_workspace()
-        for binding in bindings:
-            channel_id = binding.get("channel_id")
-            workspace_raw = binding.get("workspace_path")
-            if not isinstance(channel_id, str) or not isinstance(workspace_raw, str):
-                continue
-            workspace_root = canonicalize_path(Path(workspace_raw))
-            preferred_source = preferred_sources.get(str(workspace_root))
-            if preferred_source is None:
-                preferred_source = self._preferred_bound_source_for_workspace(
-                    workspace_root
-                )
-            if preferred_source == "telegram":
-                continue
-            run_mirror = self._flow_run_mirror(workspace_root)
-            snapshots = await asyncio.to_thread(
-                list_unseen_ticket_flow_dispatches,
-                workspace_root,
-                last_run_id=binding.get("last_dispatch_run_id"),
-                last_dispatch_seq=binding.get("last_dispatch_seq"),
-            )
-            if not snapshots:
-                continue
-
-            for snapshot in snapshots:
-                content = self._format_ticket_flow_dispatch_notification(
-                    run_id=snapshot.run_id,
-                    dispatch_seq=snapshot.dispatch_seq,
-                    content=snapshot.dispatch_markdown,
-                    source=self._format_pause_notification_source(
-                        workspace_root=workspace_root,
-                        repo_id=binding.get("repo_id"),
-                    ),
-                    allow_resume_hint=snapshot.allow_resume_hint,
-                    is_handoff=snapshot.is_handoff,
-                )
-                chunks = chunk_discord_message(
-                    content,
-                    max_len=self._config.max_message_length,
-                    with_numbering=False,
-                )
-                if not chunks:
-                    chunks = ["(dispatch notification had no content)"]
-
-                record_prefix = "pause" if snapshot.is_handoff else "dispatch"
-                event_type = (
-                    "flow_pause_dispatch_notice"
-                    if snapshot.is_handoff
-                    else "flow_dispatch_notice"
-                )
-                enqueued = True
-                for index, chunk in enumerate(chunks, start=1):
-                    record_id = (
-                        f"{record_prefix}:{channel_id}:{snapshot.run_id}:"
-                        f"{snapshot.dispatch_seq}:{index}"
-                    )
-                    try:
-                        await self._store.enqueue_outbox(
-                            OutboxRecord(
-                                record_id=record_id,
-                                channel_id=channel_id,
-                                message_id=None,
-                                operation="send",
-                                payload_json={"content": chunk},
-                            )
-                        )
-                        run_mirror.mirror_outbound(
-                            run_id=snapshot.run_id,
-                            platform="discord",
-                            event_type=event_type,
-                            kind="dispatch",
-                            actor="car",
-                            text=chunk,
-                            chat_id=channel_id,
-                            thread_id=binding.get("guild_id"),
-                            message_id=record_id,
-                            meta={
-                                "dispatch_seq": snapshot.dispatch_seq,
-                                "chunk_index": index,
-                                "mode": snapshot.mode,
-                            },
-                        )
-                    except Exception as exc:
-                        enqueued = False
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "discord.dispatch_watch.enqueue_failed",
-                            exc=exc,
-                            channel_id=channel_id,
-                            run_id=snapshot.run_id,
-                            dispatch_seq=snapshot.dispatch_seq,
-                            mode=snapshot.mode,
-                        )
-                        break
-
-                if not enqueued:
-                    break
-
-                await self._store.mark_dispatch_seen(
-                    channel_id=channel_id,
-                    run_id=snapshot.run_id,
-                    dispatch_seq=snapshot.dispatch_seq,
-                )
-                if snapshot.is_handoff:
-                    await self._store.mark_pause_dispatch_seen(
-                        channel_id=channel_id,
-                        run_id=snapshot.run_id,
-                        dispatch_seq=snapshot.dispatch_seq,
-                    )
-                log_event(
-                    self._logger,
-                    logging.INFO,
-                    "discord.dispatch_watch.notified",
-                    channel_id=channel_id,
-                    run_id=snapshot.run_id,
-                    dispatch_seq=snapshot.dispatch_seq,
-                    mode=snapshot.mode,
-                    chunk_count=len(chunks),
-                )
-
-    def _format_pause_notification_source(
-        self, *, workspace_root: Optional[Path], repo_id: Optional[str]
-    ) -> str:
-        return format_pause_notification_source(
-            workspace_root=workspace_root,
-            repo_id=repo_id,
-            hub_root=self._config.root,
-            manifest_path=self._manifest_path,
-            logger=self._logger,
-            debug_label="discord.pause_watch.manifest_label_failed",
-        )
-
-    def _format_ticket_flow_dispatch_notification(
-        self,
-        *,
-        run_id: str,
-        dispatch_seq: str,
-        content: str,
-        source: Optional[str],
-        allow_resume_hint: bool,
-        is_handoff: bool,
-    ) -> str:
-        if is_handoff:
-            return format_pause_notification_text(
-                run_id=run_id,
-                dispatch_seq=dispatch_seq,
-                content=content,
-                source=source,
-                resume_hint="`/flow resume`" if allow_resume_hint else "",
-            )
-        body = content.strip() or "(no dispatch message)"
-        header_lines = [
-            f"Ticket flow dispatch (run {run_id}). Dispatch #{dispatch_seq}:"
-        ]
-        if isinstance(source, str) and source.strip():
-            header_lines.append(f"Source: {source.strip()}")
-        return "\n\n".join(("\n".join(header_lines), body))
-
-    def _preferred_bound_source_for_workspace(self, workspace_root: Path) -> str | None:
-        raw_config = self._hub_raw_config_cache
-        if raw_config is None:
-            try:
-                raw_config = load_hub_config(self._config.root).raw
-            except Exception:
-                raw_config = {}
-            self._hub_raw_config_cache = raw_config
-        try:
-            return preferred_non_pma_chat_notification_source_for_workspace(
-                hub_root=self._config.root,
-                raw_config=raw_config,
-                workspace_root=workspace_root,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.pause_watch.route_lookup_failed",
-                exc=exc,
-                workspace_root=str(workspace_root),
-            )
-            return None
-
-    def _preferred_bound_sources_by_workspace(self) -> dict[str, str]:
-        raw_config = self._hub_raw_config_cache
-        if raw_config is None:
-            try:
-                raw_config = load_hub_config(self._config.root).raw
-            except Exception:
-                raw_config = {}
-            self._hub_raw_config_cache = raw_config
-        try:
-            return preferred_non_pma_chat_notification_sources_by_workspace(
-                hub_root=self._config.root,
-                raw_config=raw_config,
-            )
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.pause_watch.route_lookup_failed",
-                exc=exc,
-            )
-            return {}
-
     async def _watch_ticket_flow_terminals(self) -> None:
-        while True:
-            try:
-                await self._scan_and_enqueue_terminal_notifications()
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.terminal_watch.scan_failed",
-                    exc=exc,
-                )
-            await asyncio.sleep(TERMINAL_SCAN_INTERVAL_SECONDS)
-
-    async def _scan_and_enqueue_terminal_notifications(self) -> None:
-        bindings = await self._store.list_bindings()
-        for binding in bindings:
-            channel_id = binding.get("channel_id")
-            workspace_raw = binding.get("workspace_path")
-            if not isinstance(channel_id, str) or not isinstance(workspace_raw, str):
-                continue
-            workspace_root = canonicalize_path(Path(workspace_raw))
-            terminal_run = await asyncio.to_thread(
-                self._load_latest_terminal_ticket_flow_run, workspace_root
-            )
-            if terminal_run is None:
-                continue
-            run_id, status, error_message = terminal_run
-            if binding.get("last_terminal_run_id") == run_id:
-                continue
-            message = self._format_terminal_notification(
-                run_id=run_id, status=status, error_message=error_message
-            )
-            record_id = f"terminal:{channel_id}:{run_id}"
-            try:
-                await self._store.enqueue_outbox(
-                    OutboxRecord(
-                        record_id=record_id,
-                        channel_id=channel_id,
-                        message_id=None,
-                        operation="send",
-                        payload_json={"content": message},
-                    )
-                )
-                run_mirror = self._flow_run_mirror(workspace_root)
-                run_mirror.mirror_outbound(
-                    run_id=run_id,
-                    platform="discord",
-                    event_type="flow_terminal_notice",
-                    kind="notification",
-                    actor="car",
-                    text=message,
-                    chat_id=channel_id,
-                    message_id=record_id,
-                    meta={"status": status},
-                )
-            except Exception as exc:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "discord.terminal_watch.enqueue_failed",
-                    exc=exc,
-                    channel_id=channel_id,
-                    run_id=run_id,
-                )
-                continue
-            await self._store.mark_terminal_run_seen(
-                channel_id=channel_id, run_id=run_id
-            )
-            log_event(
-                self._logger,
-                logging.INFO,
-                "discord.terminal_watch.notified",
-                channel_id=channel_id,
-                run_id=run_id,
-                status=status,
-            )
-
-    def _load_latest_terminal_ticket_flow_run(
-        self, workspace_root: Path
-    ) -> Optional[tuple[str, str, Optional[str]]]:
-        db_path = workspace_root / ".codex-autorunner" / "flows.db"
-        if not db_path.exists():
-            return None
-        config = load_repo_config(workspace_root)
-        terminal_statuses = (
-            FlowRunStatus.COMPLETED,
-            FlowRunStatus.FAILED,
-            FlowRunStatus.STOPPED,
-        )
-        latest_run: Optional[FlowRunRecord] = None
-        with FlowStore(db_path, durable=config.durable_writes) as store:
-            for status in terminal_statuses:
-                runs = store.list_flow_runs(flow_type="ticket_flow", status=status)
-                for run in runs:
-                    if latest_run is None:
-                        latest_run = run
-                    elif run.finished_at and latest_run.finished_at:
-                        if run.finished_at > latest_run.finished_at:
-                            latest_run = run
-                    elif run.created_at > latest_run.created_at:
-                        latest_run = run
-        if latest_run is None:
-            return None
-        return (latest_run.id, latest_run.status.value, latest_run.error_message)
-
-    def _format_terminal_notification(
-        self, *, run_id: str, status: str, error_message: Optional[str]
-    ) -> str:
-        if status == FlowRunStatus.COMPLETED.value:
-            return f"Ticket flow completed successfully (run {run_id})."
-        elif status == FlowRunStatus.FAILED.value:
-            error_text = self._truncate_error(error_message)
-            return f"Ticket flow failed (run {run_id}). Error: {error_text}"
-        elif status == FlowRunStatus.STOPPED.value:
-            return f"Ticket flow stopped (run {run_id})."
-        return f"Ticket flow ended (run {run_id}, status: {status})."
-
-    def _truncate_error(self, error_message: Optional[str], limit: int = 200) -> str:
-        if not error_message:
-            return "Unknown error"
-        normalized = " ".join(error_message.split())
-        if len(normalized) > limit:
-            return f"{normalized[: limit - 3]}..."
-        return normalized
+        await watch_ticket_flow_terminals(self)
 
     async def _send_channel_message(
         self, channel_id: str, payload: dict[str, Any]
@@ -4373,168 +3706,12 @@ class DiscordBotService:
         return None
 
     async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
-        if is_modal_submit_interaction(interaction_payload):
-            await self._handle_modal_submit_interaction(interaction_payload)
-            return
-        if is_component_interaction(interaction_payload):
-            await self._handle_component_interaction(interaction_payload)
-            return
-        if is_autocomplete_interaction(interaction_payload):
-            await self._handle_autocomplete_interaction(interaction_payload)
-            return
-
-        interaction_id = extract_interaction_id(interaction_payload)
-        interaction_token = extract_interaction_token(interaction_payload)
-        channel_id = extract_channel_id(interaction_payload)
-        guild_id = extract_guild_id(interaction_payload)
-
-        if not interaction_id or not interaction_token or not channel_id:
-            self._logger.warning(
-                "handle_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-                bool(interaction_id),
-                bool(interaction_token),
-                bool(channel_id),
-            )
-            return
-
-        policy_result = self._evaluate_interaction_collaboration_policy(
-            channel_id=channel_id,
-            guild_id=guild_id,
-            user_id=extract_user_id(interaction_payload),
-        )
-        if not policy_result.command_allowed:
-            self._log_collaboration_policy_result(
-                channel_id=channel_id,
-                guild_id=guild_id,
-                user_id=extract_user_id(interaction_payload),
-                interaction_id=interaction_id,
-                result=policy_result,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This Discord command is not authorized for this channel/user/guild.",
-            )
-            return
-
-        command_path, options = extract_command_path_and_options(interaction_payload)
-        ingress = canonicalize_command_ingress(
-            command_path=command_path,
-            options=options,
-        )
-        if ingress is None:
-            self._logger.warning(
-                "handle_interaction: failed to canonicalize command ingress (command_path=%s, options=%s)",
-                command_path,
-                options,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "I could not parse this interaction. Please retry the command.",
-            )
-            return
-
-        ingress = replace(
-            ingress,
-            command_path=self._normalize_discord_command_path(ingress.command_path),
-        )
-        await self._prepare_command_interaction(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            command_path=ingress.command_path,
-            timing="dispatch",
-        )
-
-        try:
-            if ingress.command_path[:1] == ("car",):
-                await self._handle_car_command(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                    user_id=extract_user_id(interaction_payload),
-                    command_path=ingress.command_path,
-                    options=ingress.options,
-                )
-                return
-
-            if ingress.command_path[:1] == ("pma",):
-                await self._handle_pma_command(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                    command_path=ingress.command_path,
-                    options=ingress.options,
-                )
-                return
-
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Command not implemented yet for Discord.",
-            )
-        except DiscordTransientError as exc:
-            user_msg = exc.user_message or "An error occurred. Please try again later."
-            await self._respond_ephemeral(interaction_id, interaction_token, user_msg)
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.interaction.unhandled_error",
-                command_path=ingress.command,
-                channel_id=channel_id,
-                exc=exc,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "An unexpected error occurred. Please try again later.",
-            )
+        await _dispatch_interaction(self, interaction_payload)
 
     async def _handle_autocomplete_interaction(
         self, interaction_payload: dict[str, Any]
     ) -> None:
-        interaction_id = extract_interaction_id(interaction_payload)
-        interaction_token = extract_interaction_token(interaction_payload)
-        channel_id = extract_channel_id(interaction_payload)
-
-        if not interaction_id or not interaction_token or not channel_id:
-            self._logger.warning(
-                "handle_autocomplete_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-                bool(interaction_id),
-                bool(interaction_token),
-                bool(channel_id),
-            )
-            return
-
-        policy_result = self._evaluate_interaction_collaboration_policy(
-            channel_id=channel_id,
-            guild_id=extract_guild_id(interaction_payload),
-            user_id=extract_user_id(interaction_payload),
-        )
-        if not policy_result.command_allowed:
-            await self._respond_autocomplete(
-                interaction_id, interaction_token, choices=[]
-            )
-            return
-
-        (
-            command_path,
-            options,
-            focused_name,
-            focused_value,
-        ) = extract_autocomplete_command_context(interaction_payload)
-        await self._handle_command_autocomplete(
-            interaction_id,
-            interaction_token,
-            channel_id=channel_id,
-            command_path=command_path,
-            options=options,
-            focused_name=focused_name,
-            focused_value=focused_value,
-        )
+        await _dispatch_interaction(self, interaction_payload)
 
     async def _handle_bind(
         self,
@@ -4986,25 +4163,13 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        status_filter = self._pending_ticket_filters.get(channel_id, "all")
-        normalized_filter = status_filter.strip().lower() if status_filter else "all"
-        if normalized_filter not in {"all", "open", "done"}:
-            normalized_filter = "all"
-        self._pending_ticket_filters[channel_id] = normalized_filter
-        search_query = self._normalize_search_query(options.get("search"))
-        if search_query:
-            self._pending_ticket_search_queries[channel_id] = search_query
-        else:
-            self._pending_ticket_search_queries.pop(channel_id, None)
-        await self._respond_with_components(
+        await handle_tickets(
+            self,
             interaction_id,
             interaction_token,
-            self._ticket_prompt_text(search_query=search_query),
-            self._build_ticket_components(
-                workspace_root,
-                status_filter=normalized_filter,
-                search_query=search_query,
-            ),
+            channel_id=channel_id,
+            workspace_root=workspace_root,
+            options=options,
         )
 
     def _resolve_workspace_from_token(
@@ -5875,56 +5040,7 @@ class DiscordBotService:
     async def _handle_modal_submit_interaction(
         self, interaction_payload: dict[str, Any]
     ) -> None:
-        interaction_id = extract_interaction_id(interaction_payload)
-        interaction_token = extract_interaction_token(interaction_payload)
-        channel_id = extract_channel_id(interaction_payload)
-
-        if not interaction_id or not interaction_token or not channel_id:
-            self._logger.warning(
-                "handle_modal_submit_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-                bool(interaction_id),
-                bool(interaction_token),
-                bool(channel_id),
-            )
-            return
-
-        policy_result = self._evaluate_interaction_collaboration_policy(
-            channel_id=channel_id,
-            guild_id=extract_guild_id(interaction_payload),
-            user_id=extract_user_id(interaction_payload),
-        )
-        if not policy_result.command_allowed:
-            self._log_collaboration_policy_result(
-                channel_id=channel_id,
-                guild_id=extract_guild_id(interaction_payload),
-                user_id=extract_user_id(interaction_payload),
-                interaction_id=interaction_id,
-                result=policy_result,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This Discord interaction is not authorized.",
-            )
-            return
-
-        custom_id = extract_modal_custom_id(interaction_payload)
-        if not custom_id:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "I could not identify this modal submission. Please retry.",
-            )
-            return
-
-        values = extract_modal_values(interaction_payload)
-        await self._handle_ticket_modal_submit(
-            interaction_id,
-            interaction_token,
-            channel_id=channel_id,
-            custom_id=custom_id,
-            values=values,
-        )
+        await _dispatch_interaction(self, interaction_payload)
 
     async def _handle_ticket_modal_submit(
         self,
@@ -7080,88 +6196,6 @@ class DiscordBotService:
             if callable(close):
                 close()
 
-    @staticmethod
-    def _select_default_status_run(
-        records: list[FlowRunRecord],
-    ) -> Optional[FlowRunRecord]:
-        if not records:
-            return None
-        return select_ticket_flow_run_record(records, selection="authoritative")
-
-    @staticmethod
-    def _build_historical_runs_picker(
-        runs: list[FlowRunRecord],
-    ) -> list[dict[str, Any]]:
-        if not runs:
-            return []
-        run_tuples = [(run.id, run.status.value) for run in runs]
-        return [
-            build_flow_runs_picker(
-                run_tuples,
-                placeholder="Select a historical run...",
-            )
-        ]
-
-    @staticmethod
-    def _build_flow_status_components(
-        record: FlowRunRecord,
-        runs: list[FlowRunRecord],
-    ) -> list[dict[str, Any]]:
-        components = build_flow_status_buttons(
-            record.id,
-            record.status.value,
-            include_refresh=True,
-        )
-        run_tuples = [(run.id, run.status.value) for run in runs]
-        if len(run_tuples) > 1:
-            components.append(
-                build_flow_runs_picker(
-                    run_tuples,
-                    placeholder="Select another run...",
-                    current_run_id=record.id,
-                )
-            )
-        return components
-
-    @staticmethod
-    def _format_flow_status_response_text(
-        record: FlowRunRecord,
-        snapshot: dict[str, Any],
-    ) -> str:
-        return "\n".join(format_ticket_flow_status_lines(record, snapshot))
-
-    def _build_flow_status_message(
-        self,
-        *,
-        record: FlowRunRecord,
-        runs: list[FlowRunRecord],
-        snapshot: dict[str, Any],
-        prefix: Optional[str] = None,
-    ) -> tuple[str, list[dict[str, Any]]]:
-        response_text = self._format_flow_status_response_text(record, snapshot)
-        if isinstance(prefix, str) and prefix.strip():
-            response_text = f"{prefix.strip()}\n\n{response_text}"
-        return response_text, self._build_flow_status_components(record, runs)
-
-    @staticmethod
-    def _build_flow_status_summary_fallback(
-        workspace_root: Path,
-    ) -> Optional[str]:
-        progress = ticket_progress(workspace_root)
-        if int(progress.get("total", 0)) <= 0:
-            return None
-        display = build_ticket_flow_display(
-            status=None,
-            done_count=int(progress.get("done", 0)),
-            total_count=int(progress.get("total", 0)),
-            run_id=None,
-        )
-        summary: Mapping[str, Any] = {**display, "current_step": None}
-        lines = format_ticket_flow_summary_lines(summary)
-        if not lines:
-            return None
-        return "\n".join(lines)
-
     async def _handle_flow_status(
         self,
         interaction_id: str,
@@ -7173,233 +6207,16 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         update_message: bool = False,
     ) -> None:
-        deferred_public = False
-        if not update_message:
-            deferred_public = await self._defer_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        run_id_opt = await self._resolve_flow_run_input(
+        await handle_flow_status(
+            self,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
-            action="status",
-            run_id_opt=options.get("run_id"),
-            deferred=deferred_public,
+            options=options,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            update_message=update_message,
         )
-        if run_id_opt is None:
-            return
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            record: Optional[FlowRunRecord]
-            runs: list[FlowRunRecord] = []
-            if isinstance(run_id_opt, str) and run_id_opt.strip():
-                try:
-                    record = self._resolve_flow_run_by_id(
-                        store, run_id=run_id_opt.strip()
-                    )
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        run_id=run_id_opt.strip(),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow run: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-            else:
-                try:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        workspace_root=str(workspace_root),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow runs: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-                record = self._select_default_status_run(runs)
-            explicit_run_requested = isinstance(run_id_opt, str) and bool(
-                run_id_opt.strip()
-            )
-            if record is None:
-                if runs and not explicit_run_requested:
-                    content = (
-                        "No ticket_flow run found.\n\n"
-                        "Use the picker below to inspect historical runs."
-                    )
-                    components = self._build_historical_runs_picker(runs)
-                    if update_message:
-                        await self._update_component_message(
-                            interaction_id=interaction_id,
-                            interaction_token=interaction_token,
-                            text=content,
-                            components=components,
-                        )
-                    else:
-                        await self._respond_with_components_public(
-                            interaction_id,
-                            interaction_token,
-                            content,
-                            components,
-                        )
-                    return
-                if not explicit_run_requested:
-                    summary_text = self._build_flow_status_summary_fallback(
-                        workspace_root
-                    )
-                    if summary_text:
-                        if update_message:
-                            await self._update_component_message(
-                                interaction_id=interaction_id,
-                                interaction_token=interaction_token,
-                                text=summary_text,
-                                components=[],
-                            )
-                        else:
-                            await self._send_or_respond_with_components_public(
-                                interaction_id=interaction_id,
-                                interaction_token=interaction_token,
-                                deferred=deferred_public,
-                                text=summary_text,
-                                components=[],
-                            )
-                        return
-                message = (
-                    f"Ticket_flow run {run_id_opt.strip()} not found."
-                    if explicit_run_requested
-                    else "No ticket_flow runs found."
-                )
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred_public,
-                    text=message,
-                )
-                return
-            try:
-                record, _updated, locked = reconcile_flow_run(
-                    workspace_root, record, store
-                )
-                if locked:
-                    await self._send_or_respond_ephemeral(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        deferred=deferred_public,
-                        text=f"Run {record.id} is locked for reconcile; try again.",
-                    )
-                    return
-            except (sqlite3.Error, OSError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.reconcile_failed",
-                    exc=exc,
-                    run_id=record.id,
-                )
-                raise DiscordTransientError(
-                    f"Failed to reconcile flow run: {exc}",
-                    user_message="Unable to reconcile flow run. Please try again later.",
-                ) from None
-            try:
-                snapshot = build_flow_status_snapshot(workspace_root, record, store)
-            except (sqlite3.Error, OSError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.snapshot_failed",
-                    exc=exc,
-                    run_id=record.id,
-                )
-                raise DiscordTransientError(
-                    f"Failed to build flow snapshot: {exc}",
-                    user_message="Unable to build flow snapshot. Please try again later.",
-                ) from None
-        finally:
-            store.close()
-
-        response_text, status_buttons = self._build_flow_status_message(
-            record=record,
-            runs=runs,
-            snapshot=snapshot,
-        )
-        run_mirror = self._flow_run_mirror(workspace_root)
-        run_mirror.mirror_inbound(
-            run_id=record.id,
-            platform="discord",
-            event_type="flow_status_command",
-            kind="command",
-            actor="user",
-            text="/flow status",
-            chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
-            meta={"interaction_token": interaction_token},
-        )
-        response_type = "component_update" if update_message else "channel"
-        run_mirror.mirror_outbound(
-            run_id=record.id,
-            platform="discord",
-            event_type="flow_status_notice",
-            kind="notice",
-            actor="car",
-            text=response_text,
-            chat_id=channel_id,
-            thread_id=guild_id,
-            meta={"response_type": response_type},
-        )
-        if status_buttons:
-            if update_message:
-                await self._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text=response_text,
-                    components=status_buttons,
-                )
-            else:
-                await self._send_or_respond_with_components_public(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred_public,
-                    text=response_text,
-                    components=status_buttons,
-                )
-        else:
-            if update_message:
-                await self._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text=response_text,
-                    components=[],
-                )
-            else:
-                await self._send_or_respond_public(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred_public,
-                    text=response_text,
-                )
 
     async def _handle_flow_runs(
         self,
@@ -7409,68 +6226,12 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        raw_limit = options.get("limit")
-        limit = FLOW_RUNS_DEFAULT_LIMIT
-        if isinstance(raw_limit, int):
-            limit = raw_limit
-        limit = max(1, min(limit, FLOW_RUNS_MAX_LIMIT))
-
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            try:
-                runs = store.list_flow_runs(flow_type="ticket_flow")[:limit]
-            except (sqlite3.Error, OSError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.query_failed",
-                    exc=exc,
-                    workspace_root=str(workspace_root),
-                )
-                raise DiscordTransientError(
-                    f"Failed to query flow runs: {exc}",
-                    user_message="Unable to query flow database. Please try again later.",
-                ) from None
-        finally:
-            store.close()
-
-        if not runs:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="No ticket_flow runs found.",
-            )
-            return
-
-        run_tuples = [(record.id, record.status.value) for record in runs]
-        components = [build_flow_runs_picker(run_tuples)]
-        lines = [f"Recent ticket_flow runs (limit={limit}):"]
-        for record in runs:
-            lines.append(f"- {record.id} [{record.status.value}]")
-        await self._send_or_respond_with_components_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text="\n".join(lines),
-            components=components,
+        await handle_flow_runs(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
         )
 
     async def _handle_flow_issue(
@@ -7483,65 +6244,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        _ = channel_id, guild_id
-        issue_ref = options.get("issue_ref")
-        if not isinstance(issue_ref, str) or not issue_ref.strip():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Provide an issue reference: `/flow issue issue_ref:<issue#|url>`",
-            )
-            return
-        issue_ref = issue_ref.strip()
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        try:
-
-            def _seed_issue() -> Any:
-                seeded = seed_issue_from_github(
-                    workspace_root,
-                    issue_ref,
-                    github_service_factory=lambda repo_root: cast(
-                        GitHubServiceProtocol, GitHubService(repo_root)
-                    ),
-                )
-                atomic_write(issue_md_path(workspace_root), seeded.content)
-                return seeded
-
-            seed = await asyncio.to_thread(
-                _seed_issue,
-            )
-        except GitHubError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=f"GitHub error: {exc}",
-            )
-            return
-        except RuntimeError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=str(exc),
-            )
-            return
-        except Exception as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=f"Failed to fetch issue: {exc}",
-            )
-            return
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=f"Seeded ISSUE.md from GitHub issue {seed.issue_number}.",
+        await handle_flow_issue(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
+            channel_id=channel_id,
+            guild_id=guild_id,
         )
 
     async def _handle_flow_plan(
@@ -7554,21 +6264,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        _ = channel_id, guild_id
-        plan_text = options.get("text")
-        if not isinstance(plan_text, str) or not plan_text.strip():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Provide a plan: `/flow plan text:<plan>`",
-            )
-            return
-        content = seed_issue_from_text(plan_text.strip())
-        atomic_write(issue_md_path(workspace_root), content)
-        await self._respond_ephemeral(
+        await handle_flow_plan(
+            self,
             interaction_id,
             interaction_token,
-            "Seeded ISSUE.md from your plan.",
+            workspace_root=workspace_root,
+            options=options,
+            channel_id=channel_id,
+            guild_id=guild_id,
         )
 
     async def _handle_flow_start(
@@ -7580,292 +6283,14 @@ class DiscordBotService:
         options: dict[str, Any],
         deferred_public: Optional[bool] = None,
     ) -> None:
-        force_new = bool(options.get("force_new"))
-        restart_from = options.get("restart_from")
-        flow_service = self._ticket_flow_orchestration_service(workspace_root)
-        if deferred_public is None:
-            deferred_public = await self._defer_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            try:
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-            except (sqlite3.Error, OSError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.query_failed",
-                    exc=exc,
-                    workspace_root=str(workspace_root),
-                )
-                raise DiscordTransientError(
-                    f"Failed to query flow runs: {exc}",
-                    user_message="Unable to query flow database. Please try again later.",
-                ) from None
-        finally:
-            store.close()
-
-        if not force_new:
-            active_or_paused = next(
-                (
-                    record
-                    for record in runs
-                    if record.status in {FlowRunStatus.RUNNING, FlowRunStatus.PAUSED}
-                ),
-                None,
-            )
-            if active_or_paused is not None:
-                flow_service.ensure_flow_run_worker(
-                    active_or_paused.id,
-                    is_terminal=active_or_paused.status.is_terminal(),
-                )
-                try:
-                    store = self._open_flow_store(workspace_root)
-                except (sqlite3.Error, OSError, RuntimeError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.store_open_failed",
-                        workspace_root=str(workspace_root),
-                        exc=exc,
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to open flow database: {exc}",
-                        user_message="Unable to access flow database. Please try again later.",
-                    ) from None
-                try:
-                    try:
-                        record = self._resolve_flow_run_by_id(
-                            store, run_id=active_or_paused.id
-                        )
-                        runs = store.list_flow_runs(flow_type="ticket_flow")
-                    except (sqlite3.Error, OSError) as exc:
-                        log_event(
-                            self._logger,
-                            logging.ERROR,
-                            "discord.flow.query_failed",
-                            exc=exc,
-                            run_id=active_or_paused.id,
-                        )
-                        raise DiscordTransientError(
-                            f"Failed to query flow run: {exc}",
-                            user_message="Unable to query flow database. Please try again later.",
-                        ) from None
-                    if record is None:
-                        await self._send_or_respond_public(
-                            interaction_id=interaction_id,
-                            interaction_token=interaction_token,
-                            deferred=deferred_public,
-                            text=(
-                                "Reusing ticket_flow run "
-                                f"{active_or_paused.id} ({active_or_paused.status.value})."
-                            ),
-                        )
-                        return
-                    try:
-                        record, _updated, locked = reconcile_flow_run(
-                            workspace_root, record, store
-                        )
-                        if locked:
-                            await self._send_or_respond_ephemeral(
-                                interaction_id=interaction_id,
-                                interaction_token=interaction_token,
-                                deferred=deferred_public,
-                                text=f"Run {record.id} is locked for reconcile; try again.",
-                            )
-                            return
-                    except (sqlite3.Error, OSError) as exc:
-                        log_event(
-                            self._logger,
-                            logging.ERROR,
-                            "discord.flow.reconcile_failed",
-                            exc=exc,
-                            run_id=record.id,
-                        )
-                        raise DiscordTransientError(
-                            f"Failed to reconcile flow run: {exc}",
-                            user_message="Unable to reconcile flow run. Please try again later.",
-                        ) from None
-                    try:
-                        snapshot = build_flow_status_snapshot(
-                            workspace_root, record, store
-                        )
-                    except (sqlite3.Error, OSError) as exc:
-                        log_event(
-                            self._logger,
-                            logging.ERROR,
-                            "discord.flow.snapshot_failed",
-                            exc=exc,
-                            run_id=record.id,
-                        )
-                        raise DiscordTransientError(
-                            f"Failed to build flow snapshot: {exc}",
-                            user_message="Unable to build flow snapshot. Please try again later.",
-                        ) from None
-                finally:
-                    store.close()
-                response_text, status_buttons = self._build_flow_status_message(
-                    record=record,
-                    runs=runs,
-                    snapshot=snapshot,
-                    prefix=(
-                        f"Reusing ticket_flow run {record.id} ({record.status.value})."
-                    ),
-                )
-                if status_buttons:
-                    await self._send_or_respond_with_components_public(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        deferred=deferred_public,
-                        text=response_text,
-                        components=status_buttons,
-                    )
-                else:
-                    await self._send_or_respond_public(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        deferred=deferred_public,
-                        text=response_text,
-                    )
-                return
-
-        metadata: dict[str, Any] = {"origin": "discord", "force_new": force_new}
-        if isinstance(restart_from, str) and restart_from.strip():
-            metadata["restart_from"] = restart_from.strip()
-
-        try:
-            started = await flow_service.start_flow_run(
-                "ticket_flow",
-                input_data={},
-                metadata=metadata,
-            )
-        except ValueError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred_public,
-                text=str(exc),
-            )
-            return
-
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            try:
-                record = self._resolve_flow_run_by_id(store, run_id=started.run_id)
-                runs = store.list_flow_runs(flow_type="ticket_flow")
-            except (sqlite3.Error, OSError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.query_failed",
-                    exc=exc,
-                    run_id=started.run_id,
-                )
-                raise DiscordTransientError(
-                    f"Failed to query flow run: {exc}",
-                    user_message="Unable to query flow database. Please try again later.",
-                ) from None
-            if record is None:
-                prefix = "Started new" if force_new else "Started"
-                await self._send_or_respond_public(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred_public,
-                    text=f"{prefix} ticket_flow run {started.run_id}.",
-                )
-                return
-            try:
-                record, _updated, locked = reconcile_flow_run(
-                    workspace_root, record, store
-                )
-                if locked:
-                    await self._send_or_respond_ephemeral(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        deferred=deferred_public,
-                        text=f"Run {record.id} is locked for reconcile; try again.",
-                    )
-                    return
-            except (sqlite3.Error, OSError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.reconcile_failed",
-                    exc=exc,
-                    run_id=record.id,
-                )
-                raise DiscordTransientError(
-                    f"Failed to reconcile flow run: {exc}",
-                    user_message="Unable to reconcile flow run. Please try again later.",
-                ) from None
-            try:
-                snapshot = build_flow_status_snapshot(workspace_root, record, store)
-            except (sqlite3.Error, OSError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.snapshot_failed",
-                    exc=exc,
-                    run_id=record.id,
-                )
-                raise DiscordTransientError(
-                    f"Failed to build flow snapshot: {exc}",
-                    user_message="Unable to build flow snapshot. Please try again later.",
-                ) from None
-        finally:
-            store.close()
-
-        prefix = "Started new" if force_new else "Started"
-        response_text, status_buttons = self._build_flow_status_message(
-            record=record,
-            runs=runs,
-            snapshot=snapshot,
-            prefix=f"{prefix} ticket_flow run {record.id}.",
+        await handle_flow_start(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
+            deferred_public=deferred_public,
         )
-        if status_buttons:
-            await self._send_or_respond_with_components_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred_public,
-                text=response_text,
-                components=status_buttons,
-            )
-        else:
-            await self._send_or_respond_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred_public,
-                text=response_text,
-            )
 
     async def _handle_flow_restart(
         self,
@@ -7876,120 +6301,12 @@ class DiscordBotService:
         options: dict[str, Any],
         deferred_public: Optional[bool] = None,
     ) -> None:
-        if deferred_public is None:
-            deferred_public = await self._defer_public(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-        run_id_opt = await self._resolve_flow_run_input(
+        await handle_flow_restart(
+            self,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
-            action="restart",
-            run_id_opt=options.get("run_id"),
-            deferred=deferred_public,
-        )
-        if run_id_opt is None:
-            return
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            target: Optional[FlowRunRecord] = None
-            if isinstance(run_id_opt, str) and run_id_opt.strip():
-                try:
-                    target = self._resolve_flow_run_by_id(
-                        store, run_id=run_id_opt.strip()
-                    )
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        run_id=run_id_opt.strip(),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow run: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-            else:
-                try:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        workspace_root=str(workspace_root),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow runs: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-                target = select_ticket_flow_run_record(runs, selection="active")
-        finally:
-            store.close()
-
-        if isinstance(run_id_opt, str) and run_id_opt.strip() and target is None:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred_public,
-                text=f"No ticket_flow run found for run_id {run_id_opt.strip()}.",
-            )
-            return
-
-        flow_service = self._ticket_flow_orchestration_service(workspace_root)
-        if target is not None and target.status.is_active():
-            try:
-                await flow_service.stop_flow_run(target.id)
-            except ValueError as exc:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred_public,
-                    text=str(exc),
-                )
-                return
-            latest = await flow_service.wait_for_flow_run_terminal(target.id)
-            if latest is None or latest.status not in {
-                "completed",
-                "stopped",
-                "failed",
-            }:
-                status_value = latest.status if latest is not None else "unknown"
-                await self._send_or_respond_public(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred_public,
-                    text=(
-                        f"Run {target.id} is still active ({status_value}); "
-                        "restart aborted to avoid concurrent workers. Try again after it stops."
-                    ),
-                )
-                return
-
-        await self._handle_flow_start(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            options={
-                "force_new": True,
-                "restart_from": target.id if target is not None else None,
-            },
+            options=options,
             deferred_public=deferred_public,
         )
 
@@ -8001,98 +6318,13 @@ class DiscordBotService:
         workspace_root: Path,
         options: dict[str, Any],
     ) -> None:
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        run_id_opt = await self._resolve_flow_run_input(
+        await handle_flow_recover(
+            self,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
-            action="recover",
-            run_id_opt=options.get("run_id"),
-            deferred=deferred,
+            options=options,
         )
-        if run_id_opt is None:
-            return
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            target: Optional[FlowRunRecord] = None
-            if isinstance(run_id_opt, str) and run_id_opt.strip():
-                try:
-                    target = self._resolve_flow_run_by_id(
-                        store, run_id=run_id_opt.strip()
-                    )
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        run_id=run_id_opt.strip(),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow run: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-            else:
-                try:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        workspace_root=str(workspace_root),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow runs: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-                target = select_ticket_flow_run_record(runs, selection="active")
-
-            if target is None:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text="No active ticket_flow run found.",
-                )
-                return
-
-            flow_service = self._ticket_flow_orchestration_service(workspace_root)
-            target_run, updated, locked = flow_service.reconcile_flow_run(target.id)
-            if locked:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=f"Run {target_run.run_id} is locked for reconcile; try again.",
-                )
-                return
-            verdict = "Recovered" if updated else "No changes needed"
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=f"{verdict} for run {target_run.run_id} ({target_run.status}).",
-            )
-        finally:
-            store.close()
 
     async def _handle_flow_resume(
         self,
@@ -8104,120 +6336,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        run_id_opt = await self._resolve_flow_run_input(
+        await handle_flow_resume(
+            self,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
-            action="resume",
-            run_id_opt=options.get("run_id"),
-            deferred=deferred,
-        )
-        if run_id_opt is None:
-            return
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            if isinstance(run_id_opt, str) and run_id_opt.strip():
-                try:
-                    target = self._resolve_flow_run_by_id(
-                        store, run_id=run_id_opt.strip()
-                    )
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        run_id=run_id_opt.strip(),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow run: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-            else:
-                try:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        workspace_root=str(workspace_root),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow runs: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-                target = select_ticket_flow_run_record(runs, selection="paused")
-        finally:
-            store.close()
-
-        if target is None:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="No paused ticket_flow run found to resume.",
-            )
-            return
-
-        run_mirror = self._flow_run_mirror(workspace_root)
-        run_mirror.mirror_inbound(
-            run_id=target.id,
-            platform="discord",
-            event_type="flow_resume_command",
-            kind="command",
-            actor="user",
-            text="/flow resume",
-            chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
-        )
-        flow_service = self._ticket_flow_orchestration_service(workspace_root)
-        try:
-            updated = await flow_service.resume_flow_run(target.id)
-        except ValueError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=str(exc),
-            )
-            return
-
-        outbound_text = f"Resumed run {updated.run_id}."
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=outbound_text,
-        )
-        run_mirror.mirror_outbound(
-            run_id=updated.run_id,
-            platform="discord",
-            event_type="flow_resume_notice",
-            kind="notice",
-            actor="car",
-            text=outbound_text,
-            chat_id=channel_id,
-            thread_id=guild_id,
+            options=options,
+            channel_id=channel_id,
+            guild_id=guild_id,
         )
 
     async def _handle_flow_stop(
@@ -8230,121 +6356,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        run_id_opt = await self._resolve_flow_run_input(
+        await handle_flow_stop(
+            self,
             interaction_id,
             interaction_token,
             workspace_root=workspace_root,
-            action="stop",
-            run_id_opt=options.get("run_id"),
-            deferred=deferred,
-        )
-        if run_id_opt is None:
-            return
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            if isinstance(run_id_opt, str) and run_id_opt.strip():
-                try:
-                    target = self._resolve_flow_run_by_id(
-                        store, run_id=run_id_opt.strip()
-                    )
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        run_id=run_id_opt.strip(),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow run: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-            else:
-                try:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        workspace_root=str(workspace_root),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow runs: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-                target = select_ticket_flow_run_record(runs, selection="non_terminal")
-        finally:
-            store.close()
-
-        if target is None:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="No active ticket_flow run found to stop.",
-            )
-            return
-
-        run_mirror = self._flow_run_mirror(workspace_root)
-        run_mirror.mirror_inbound(
-            run_id=target.id,
-            platform="discord",
-            event_type="flow_stop_command",
-            kind="command",
-            actor="user",
-            text="/flow stop",
-            chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
-        )
-        flow_service = self._ticket_flow_orchestration_service(workspace_root)
-        try:
-            updated = await flow_service.stop_flow_run(target.id)
-        except ValueError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=str(exc),
-            )
-            return
-
-        outbound_text = f"Stop requested for run {updated.run_id} ({updated.status})."
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=outbound_text,
-        )
-        run_mirror.mirror_outbound(
-            run_id=updated.run_id,
-            platform="discord",
-            event_type="flow_stop_notice",
-            kind="notice",
-            actor="car",
-            text=outbound_text,
-            chat_id=channel_id,
-            thread_id=guild_id,
-            meta={"status": updated.status},
+            options=options,
+            channel_id=channel_id,
+            guild_id=guild_id,
         )
 
     async def _handle_flow_archive(
@@ -8357,157 +6376,14 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        confirmed = bool(options.get("confirmed"))
-        run_id_opt = options.get("run_id")
-        if isinstance(run_id_opt, str) and run_id_opt.strip():
-            run_id_opt = await self._resolve_flow_run_input(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="archive",
-                run_id_opt=run_id_opt,
-            )
-            if run_id_opt is None:
-                return
-        else:
-            run_id_opt = ""
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            if isinstance(run_id_opt, str) and run_id_opt.strip():
-                try:
-                    target = self._resolve_flow_run_by_id(
-                        store, run_id=run_id_opt.strip()
-                    )
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        run_id=run_id_opt.strip(),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow run: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-            else:
-                try:
-                    target = select_default_ticket_flow_run(store)
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        workspace_root=str(workspace_root),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow runs: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-        finally:
-            store.close()
-
-        if target is None:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No ticket_flow run found to archive.",
-            )
-            return
-
-        archive_mode = resolve_ticket_flow_archive_mode(target)
-        if archive_mode == "blocked":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    f"Run {target.id} is {target.status.value}. "
-                    "Stop or pause it before archiving."
-                ),
-            )
-            return
-
-        if archive_mode == "confirm" and not confirmed:
-            await self._respond_with_components(
-                interaction_id,
-                interaction_token,
-                self._flow_archive_prompt_text(target),
-                self._build_flow_archive_confirmation_components(
-                    target.id,
-                    prompt_variant=True,
-                ),
-            )
-            return
-
-        run_mirror = self._flow_run_mirror(workspace_root)
-        run_mirror.mirror_inbound(
-            run_id=target.id,
-            platform="discord",
-            event_type="flow_archive_command",
-            kind="command",
-            actor="user",
-            text="/flow archive",
-            chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
-        )
-        flow_service = self._ticket_flow_orchestration_service(workspace_root)
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        try:
-            summary = await asyncio.to_thread(
-                flow_service.archive_flow_run,
-                target.id,
-                force=ticket_flow_archive_requires_force(target),
-                delete_run=True,
-            )
-        except KeyError:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=(
-                    f"Run {target.id} no longer exists. "
-                    "Use /flow status or /flow runs to inspect historical runs."
-                ),
-            )
-            return
-        except ValueError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=str(exc),
-            )
-            return
-
-        outbound_text = (
-            f"Archived run {summary['run_id']} "
-            f"(tickets={summary['archived_tickets']}, "
-            f"runs_archived={summary['archived_runs']}, "
-            f"contextspace={summary['archived_contextspace']})."
-        )
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=outbound_text,
+        await handle_flow_archive(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
+            channel_id=channel_id,
+            guild_id=guild_id,
         )
 
     async def _handle_flow_reply(
@@ -8521,183 +6397,24 @@ class DiscordBotService:
         guild_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> None:
-        text = options.get("text")
-        if not isinstance(text, str) or not text.strip():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Missing required option: text",
-            )
-            return
-
-        deferred = await self._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-        )
-        run_id_opt = options.get("run_id")
-        if not (isinstance(run_id_opt, str) and run_id_opt.strip()) and channel_id:
-            pending_key = self._pending_interaction_scope_key(
-                channel_id=channel_id,
-                user_id=user_id,
-            )
-            self._pending_flow_reply_text[pending_key] = text.strip()
-            await self._prompt_flow_action_picker(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="reply",
-                deferred=deferred,
-            )
-            return
-        if isinstance(run_id_opt, str) and run_id_opt.strip():
-            run_id_opt = await self._resolve_flow_run_input(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                action="reply",
-                run_id_opt=run_id_opt,
-                deferred=deferred,
-            )
-            if run_id_opt is None:
-                return
-        try:
-            store = self._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.flow.store_open_failed",
-                workspace_root=str(workspace_root),
-                exc=exc,
-            )
-            raise DiscordTransientError(
-                f"Failed to open flow database: {exc}",
-                user_message="Unable to access flow database. Please try again later.",
-            ) from None
-        try:
-            if isinstance(run_id_opt, str) and run_id_opt.strip():
-                try:
-                    target = self._resolve_flow_run_by_id(
-                        store, run_id=run_id_opt.strip()
-                    )
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        run_id=run_id_opt.strip(),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow run: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-                if target and target.status != FlowRunStatus.PAUSED:
-                    target = None
-            else:
-                try:
-                    runs = store.list_flow_runs(flow_type="ticket_flow")
-                except (sqlite3.Error, OSError) as exc:
-                    log_event(
-                        self._logger,
-                        logging.ERROR,
-                        "discord.flow.query_failed",
-                        exc=exc,
-                        workspace_root=str(workspace_root),
-                    )
-                    raise DiscordTransientError(
-                        f"Failed to query flow runs: {exc}",
-                        user_message="Unable to query flow database. Please try again later.",
-                    ) from None
-                target = next(
-                    (
-                        record
-                        for record in runs
-                        if record.status == FlowRunStatus.PAUSED
-                    ),
-                    None,
-                )
-        finally:
-            store.close()
-
-        if target is None:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text="No paused ticket_flow run found for reply.",
-            )
-            return
-
-        run_mirror = self._flow_run_mirror(workspace_root)
-        run_mirror.mirror_inbound(
-            run_id=target.id,
-            platform="discord",
-            event_type="flow_reply_command",
-            kind="command",
-            actor="user",
-            text=text,
-            chat_id=channel_id,
-            thread_id=guild_id,
-            message_id=interaction_id,
-        )
-        reply_path = self._write_user_reply(workspace_root, target, text)
-
-        flow_service = self._ticket_flow_orchestration_service(workspace_root)
-        try:
-            updated = await flow_service.resume_flow_run(target.id)
-        except ValueError as exc:
-            await self._send_or_respond_ephemeral(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                deferred=deferred,
-                text=str(exc),
-            )
-            return
-
-        outbound_text = (
-            f"Reply saved to {reply_path.name} and resumed run {updated.run_id}."
-        )
-        await self._send_or_respond_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            deferred=deferred,
-            text=outbound_text,
-        )
-        run_mirror.mirror_outbound(
-            run_id=updated.run_id,
-            platform="discord",
-            event_type="flow_reply_notice",
-            kind="notice",
-            actor="car",
-            text=outbound_text,
-            chat_id=channel_id,
-            thread_id=guild_id,
+        await handle_flow_reply(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            options=options,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            user_id=user_id,
         )
 
     def _write_user_reply(
         self,
         workspace_root: Path,
-        record: FlowRunRecord,
+        record: Any,
         text: str,
     ) -> Path:
-        run_paths = resolve_outbox_paths(
-            workspace_root=workspace_root,
-            run_id=record.id,
-        )
-        try:
-            run_paths.run_dir.mkdir(parents=True, exist_ok=True)
-            reply_path = run_paths.run_dir / "USER_REPLY.md"
-            reply_path.write_text(text.strip() + "\n", encoding="utf-8")
-            return reply_path
-        except OSError as exc:
-            self._logger.error(
-                "Failed to write user reply (run_id=%s, path=%s): %s",
-                record.id,
-                run_paths.run_dir,
-                exc,
-            )
-            raise
+        return write_user_reply(self, workspace_root, record, text)
 
     def _format_file_size(self, size: int) -> str:
         if size < 1024:
@@ -9383,479 +7100,7 @@ class DiscordBotService:
     async def _handle_component_interaction(
         self, interaction_payload: dict[str, Any]
     ) -> None:
-        interaction_id = extract_interaction_id(interaction_payload)
-        interaction_token = extract_interaction_token(interaction_payload)
-        channel_id = extract_channel_id(interaction_payload)
-        user_id = extract_user_id(interaction_payload)
-
-        if not interaction_id or not interaction_token or not channel_id:
-            self._logger.warning(
-                "handle_component_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-                bool(interaction_id),
-                bool(interaction_token),
-                bool(channel_id),
-            )
-            return
-
-        policy_result = self._evaluate_interaction_collaboration_policy(
-            channel_id=channel_id,
-            guild_id=extract_guild_id(interaction_payload),
-            user_id=user_id,
-        )
-        if not policy_result.command_allowed:
-            self._log_collaboration_policy_result(
-                channel_id=channel_id,
-                guild_id=extract_guild_id(interaction_payload),
-                user_id=user_id,
-                interaction_id=interaction_id,
-                result=policy_result,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "This Discord interaction is not authorized.",
-            )
-            return
-
-        custom_id = extract_component_custom_id(interaction_payload)
-        if not custom_id:
-            self._logger.debug(
-                "handle_component_interaction: missing custom_id (interaction_id=%s)",
-                interaction_id,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "I could not identify this interaction action. Please retry.",
-            )
-            return
-
-        interaction_message_id: Optional[str] = None
-        interaction_message = interaction_payload.get("message")
-        if isinstance(interaction_message, dict):
-            message_id_raw = interaction_message.get("id")
-            if isinstance(message_id_raw, str) and message_id_raw.strip():
-                interaction_message_id = message_id_raw.strip()
-
-        try:
-            if custom_id == TICKETS_FILTER_SELECT_ID:
-                values = extract_component_values(interaction_payload)
-                await self._handle_ticket_filter_component(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    values=values,
-                )
-                return
-
-            if custom_id == TICKETS_SELECT_ID:
-                values = extract_component_values(interaction_payload)
-                await self._handle_ticket_select_component(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    values=values,
-                )
-                return
-
-            if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
-                page_token = custom_id.split(":", 1)[1].strip()
-                await self._handle_bind_page_component(
-                    interaction_id,
-                    interaction_token,
-                    page_token=page_token,
-                )
-                return
-
-            if custom_id == "bind_select":
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a repository and try again.",
-                    )
-                    return
-                await self._handle_bind_selection(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    guild_id=extract_guild_id(interaction_payload),
-                    selected_workspace_value=values[0],
-                )
-                return
-
-            if custom_id == "flow_runs_select":
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a run and try again.",
-                    )
-                    return
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root:
-                    await self._handle_flow_status(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": values[0]},
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                    )
-                return
-
-            if custom_id == "agent_select":
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select an agent and try again.",
-                    )
-                    return
-                await self._handle_car_agent(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    options={"name": values[0]},
-                )
-                return
-
-            if custom_id == AGENT_PROFILE_SELECT_ID:
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a Hermes profile and try again.",
-                    )
-                    return
-                await self._handle_agent_profile_picker_selection(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    selected_profile=values[0],
-                )
-                return
-
-            if custom_id == "model_select":
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a model and try again.",
-                    )
-                    return
-                await self._handle_model_picker_selection(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    selected_model=values[0],
-                )
-                return
-
-            if custom_id == MODEL_EFFORT_SELECT_ID:
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select reasoning effort and try again.",
-                    )
-                    return
-                await self._handle_model_effort_selection(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    selected_effort=values[0],
-                )
-                return
-
-            if custom_id == SESSION_RESUME_SELECT_ID:
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a thread and try again.",
-                    )
-                    return
-                await self._handle_car_resume(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    options={"thread_id": values[0]},
-                )
-                return
-
-            if custom_id == UPDATE_TARGET_SELECT_ID:
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select an update target and try again.",
-                    )
-                    return
-                await self._handle_car_update(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    options={"target": values[0]},
-                    response_mode="component",
-                )
-                return
-
-            if custom_id.startswith(f"{UPDATE_CONFIRM_PREFIX}:"):
-                raw_target = custom_id.split(":", 1)[1].strip()
-                if not raw_target:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select an update target and try again.",
-                    )
-                    return
-                await self._handle_car_update(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    options={"target": raw_target, "confirmed": True},
-                    response_mode="component",
-                )
-                return
-
-            if custom_id.startswith(f"{UPDATE_CANCEL_PREFIX}:"):
-                await self._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text="Update cancelled.",
-                    components=[],
-                )
-                return
-
-            if custom_id == REVIEW_COMMIT_SELECT_ID:
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a commit and try again.",
-                    )
-                    return
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                )
-                if workspace_root:
-                    await self._handle_car_review(
-                        interaction_id,
-                        interaction_token,
-                        channel_id=channel_id,
-                        workspace_root=workspace_root,
-                        options={"target": f"commit {values[0]}"},
-                    )
-                return
-
-            if custom_id.startswith(f"{FLOW_ACTION_SELECT_PREFIX}:"):
-                action = custom_id.split(":", 1)[1].strip().lower()
-                values = extract_component_values(interaction_payload)
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a run and try again.",
-                    )
-                    return
-                if action not in FLOW_ACTIONS_WITH_RUN_PICKER:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        f"Unknown flow action picker: {action}",
-                    )
-                    return
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                )
-                if not workspace_root:
-                    return
-                run_id = values[0]
-                if action == "status":
-                    await self._handle_flow_status(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                    )
-                    return
-                if action == "restart":
-                    await self._handle_flow_restart(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                    )
-                    return
-                if action == "resume":
-                    await self._handle_flow_resume(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                    )
-                    return
-                if action == "stop":
-                    await self._handle_flow_stop(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                    )
-                    return
-                if action == "archive":
-                    await self._handle_flow_archive(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                    )
-                    return
-                if action == "recover":
-                    await self._handle_flow_recover(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                    )
-                    return
-                if action == "reply":
-                    pending_key = self._pending_interaction_scope_key(
-                        channel_id=channel_id,
-                        user_id=user_id,
-                    )
-                    pending_text = self._pending_flow_reply_text.pop(pending_key, None)
-                    if not isinstance(pending_text, str) or not pending_text.strip():
-                        await self._respond_ephemeral(
-                            interaction_id,
-                            interaction_token,
-                            "Reply selection expired. Re-run `/flow reply text:<...>`.",
-                        )
-                        return
-                    await self._handle_flow_reply(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id, "text": pending_text},
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                        user_id=user_id,
-                    )
-                    return
-                return
-
-            if custom_id.startswith("flow:"):
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root:
-                    await self._handle_flow_button(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        custom_id=custom_id,
-                        channel_id=channel_id,
-                        guild_id=extract_guild_id(interaction_payload),
-                    )
-                return
-
-            if custom_id.startswith("approval:"):
-                await self._handle_approval_component(
-                    interaction_id,
-                    interaction_token,
-                    custom_id=custom_id,
-                )
-                return
-
-            if custom_id.startswith("queue_cancel:"):
-                await self._handle_queue_cancel_button(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    custom_id=custom_id,
-                    message_id=interaction_message_id,
-                    guild_id=extract_guild_id(interaction_payload),
-                )
-                return
-
-            if custom_id.startswith("queue_interrupt_send:"):
-                await self._handle_queue_interrupt_send_button(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    custom_id=custom_id,
-                    message_id=interaction_message_id,
-                    guild_id=extract_guild_id(interaction_payload),
-                    user_id=user_id,
-                )
-                return
-
-            if custom_id == "cancel_turn":
-                await self._handle_cancel_turn_button(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    message_id=interaction_message_id,
-                    custom_id=custom_id,
-                )
-                return
-
-            if custom_id == "continue_turn":
-                await self._handle_continue_turn_button(
-                    interaction_id,
-                    interaction_token,
-                )
-                return
-
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Unknown component: {custom_id}",
-            )
-        except DiscordTransientError as exc:
-            user_msg = exc.user_message or "An error occurred. Please try again later."
-            await self._respond_ephemeral(interaction_id, interaction_token, user_msg)
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.component.unhandled_error",
-                custom_id=custom_id,
-                channel_id=channel_id,
-                exc=exc,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "An unexpected error occurred. Please try again later.",
-            )
+        await _dispatch_interaction(self, interaction_payload)
 
     async def _handle_component_interaction_normalized(
         self,
@@ -9869,413 +7114,17 @@ class DiscordBotService:
         user_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> None:
-        try:
-            if custom_id == TICKETS_FILTER_SELECT_ID:
-                await self._handle_ticket_filter_component(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    values=values,
-                )
-                return
-
-            if custom_id == TICKETS_SELECT_ID:
-                await self._handle_ticket_select_component(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    values=values,
-                )
-                return
-
-            if custom_id.startswith(f"{BIND_PAGE_CUSTOM_ID_PREFIX}:"):
-                page_token = custom_id.split(":", 1)[1].strip()
-                await self._handle_bind_page_component(
-                    interaction_id,
-                    interaction_token,
-                    page_token=page_token,
-                )
-                return
-
-            if custom_id == "bind_select":
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a repository and try again.",
-                    )
-                    return
-                await self._handle_bind_selection(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                    selected_workspace_value=values[0],
-                )
-                return
-
-            if custom_id == "flow_runs_select":
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a run and try again.",
-                    )
-                    return
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root:
-                    await self._handle_flow_status(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": values[0]},
-                        channel_id=channel_id,
-                        guild_id=guild_id,
-                    )
-                return
-
-            if custom_id == "agent_select":
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select an agent and try again.",
-                    )
-                    return
-                await self._handle_car_agent(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    options={"name": values[0]},
-                )
-                return
-
-            if custom_id == AGENT_PROFILE_SELECT_ID:
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a Hermes profile and try again.",
-                    )
-                    return
-                await self._handle_agent_profile_picker_selection(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    selected_profile=values[0],
-                )
-                return
-
-            if custom_id == "model_select":
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a model and try again.",
-                    )
-                    return
-                await self._handle_model_picker_selection(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    selected_model=values[0],
-                )
-                return
-
-            if custom_id == MODEL_EFFORT_SELECT_ID:
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select reasoning effort and try again.",
-                    )
-                    return
-                await self._handle_model_effort_selection(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    selected_effort=values[0],
-                )
-                return
-
-            if custom_id == SESSION_RESUME_SELECT_ID:
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a thread and try again.",
-                    )
-                    return
-                await self._handle_car_resume(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    options={"thread_id": values[0]},
-                )
-                return
-
-            if custom_id == UPDATE_TARGET_SELECT_ID:
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select an update target and try again.",
-                    )
-                    return
-                await self._handle_car_update(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    options={"target": values[0]},
-                    response_mode="component",
-                )
-                return
-
-            if custom_id.startswith(f"{UPDATE_CONFIRM_PREFIX}:"):
-                raw_target = custom_id.split(":", 1)[1].strip()
-                if not raw_target:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select an update target and try again.",
-                    )
-                    return
-                await self._handle_car_update(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    options={"target": raw_target, "confirmed": True},
-                    response_mode="component",
-                )
-                return
-
-            if custom_id.startswith(f"{UPDATE_CANCEL_PREFIX}:"):
-                await self._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text="Update cancelled.",
-                    components=[],
-                )
-                return
-
-            if custom_id == REVIEW_COMMIT_SELECT_ID:
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a commit and try again.",
-                    )
-                    return
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                )
-                if workspace_root:
-                    await self._handle_car_review(
-                        interaction_id,
-                        interaction_token,
-                        channel_id=channel_id,
-                        workspace_root=workspace_root,
-                        options={"target": f"commit {values[0]}"},
-                    )
-                return
-
-            if custom_id.startswith(f"{FLOW_ACTION_SELECT_PREFIX}:"):
-                action = custom_id.split(":", 1)[1].strip().lower()
-                if not values:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        "Please select a run and try again.",
-                    )
-                    return
-                if action not in FLOW_ACTIONS_WITH_RUN_PICKER:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        f"Unknown flow action picker: {action}",
-                    )
-                    return
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                )
-                if not workspace_root:
-                    return
-                run_id = values[0]
-                if action == "status":
-                    await self._handle_flow_status(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                        channel_id=channel_id,
-                        guild_id=guild_id,
-                    )
-                    return
-                if action == "restart":
-                    await self._handle_flow_restart(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                    )
-                    return
-                if action == "resume":
-                    await self._handle_flow_resume(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                        channel_id=channel_id,
-                        guild_id=guild_id,
-                    )
-                    return
-                if action == "stop":
-                    await self._handle_flow_stop(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                        channel_id=channel_id,
-                        guild_id=guild_id,
-                    )
-                    return
-                if action == "archive":
-                    await self._handle_flow_archive(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                        channel_id=channel_id,
-                        guild_id=guild_id,
-                    )
-                    return
-                if action == "recover":
-                    await self._handle_flow_recover(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id},
-                    )
-                    return
-                if action == "reply":
-                    pending_key = self._pending_interaction_scope_key(
-                        channel_id=channel_id,
-                        user_id=user_id,
-                    )
-                    pending_text = self._pending_flow_reply_text.pop(pending_key, None)
-                    if not isinstance(pending_text, str) or not pending_text.strip():
-                        await self._respond_ephemeral(
-                            interaction_id,
-                            interaction_token,
-                            "Reply selection expired. Re-run `/flow reply text:<...>`.",
-                        )
-                        return
-                    await self._handle_flow_reply(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        options={"run_id": run_id, "text": pending_text},
-                        channel_id=channel_id,
-                        guild_id=guild_id,
-                        user_id=user_id,
-                    )
-                    return
-                return
-
-            if custom_id.startswith("flow:"):
-                workspace_root = await self._require_bound_workspace(
-                    interaction_id, interaction_token, channel_id=channel_id
-                )
-                if workspace_root:
-                    await self._handle_flow_button(
-                        interaction_id,
-                        interaction_token,
-                        workspace_root=workspace_root,
-                        custom_id=custom_id,
-                        channel_id=channel_id,
-                        guild_id=guild_id,
-                    )
-                return
-
-            if custom_id.startswith("approval:"):
-                await self._handle_approval_component(
-                    interaction_id,
-                    interaction_token,
-                    custom_id=custom_id,
-                )
-                return
-
-            if custom_id.startswith("queue_cancel:"):
-                await self._handle_queue_cancel_button(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    custom_id=custom_id,
-                    message_id=message_id,
-                    guild_id=guild_id,
-                )
-                return
-
-            if custom_id.startswith("queue_interrupt_send:"):
-                await self._handle_queue_interrupt_send_button(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    custom_id=custom_id,
-                    message_id=message_id,
-                    guild_id=guild_id,
-                    user_id=user_id,
-                )
-                return
-
-            if custom_id == "cancel_turn":
-                await self._handle_cancel_turn_button(
-                    interaction_id,
-                    interaction_token,
-                    channel_id=channel_id,
-                    user_id=user_id,
-                    message_id=message_id,
-                    custom_id=custom_id,
-                )
-                return
-
-            if custom_id == "continue_turn":
-                await self._handle_continue_turn_button(
-                    interaction_id,
-                    interaction_token,
-                )
-                return
-
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Unknown component: {custom_id}",
-            )
-        except DiscordTransientError as exc:
-            user_msg = exc.user_message or "An error occurred. Please try again later."
-            await self._respond_ephemeral(interaction_id, interaction_token, user_msg)
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.ERROR,
-                "discord.component.normalized.unhandled_error",
-                custom_id=custom_id,
-                channel_id=channel_id,
-                exc=exc,
-            )
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "An unexpected error occurred. Please try again later.",
-            )
+        await _dispatch_component_interaction(
+            self,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            channel_id=channel_id,
+            custom_id=custom_id,
+            values=values,
+            guild_id=guild_id,
+            user_id=user_id,
+            message_id=message_id,
+        )
 
     async def _bind_to_workspace_candidate(
         self,
@@ -10417,227 +7266,15 @@ class DiscordBotService:
         channel_id: Optional[str] = None,
         guild_id: Optional[str] = None,
     ) -> None:
-        parts = custom_id.split(":")
-        if len(parts) < 3:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Invalid button action: {custom_id}",
-            )
-            return
-
-        run_id = parts[1]
-        action = parts[2]
-        flow_service = self._ticket_flow_orchestration_service(workspace_root)
-
-        if action == "resume":
-            try:
-                updated = await flow_service.resume_flow_run(run_id)
-            except (KeyError, ValueError) as exc:
-                await self._respond_ephemeral(
-                    interaction_id, interaction_token, str(exc)
-                )
-                return
-
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Resumed run {updated.run_id}.",
-            )
-        elif action == "stop":
-            try:
-                updated = await flow_service.stop_flow_run(run_id)
-            except (KeyError, ValueError) as exc:
-                await self._respond_ephemeral(
-                    interaction_id, interaction_token, str(exc)
-                )
-                return
-
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Stop requested for run {updated.run_id} ({updated.status}).",
-            )
-        elif action in {
-            "archive",
-            "archive_confirm",
-            "archive_cancel",
-            "archive_confirm_prompt",
-            "archive_cancel_prompt",
-        }:
-            if action == "archive_cancel":
-                await self._handle_flow_status(
-                    interaction_id,
-                    interaction_token,
-                    workspace_root=workspace_root,
-                    options={"run_id": run_id},
-                    channel_id=channel_id,
-                    guild_id=guild_id,
-                    update_message=True,
-                )
-                return
-            if action == "archive_cancel_prompt":
-                await self._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text="Archive cancelled.",
-                    components=[],
-                )
-                return
-
-            try:
-                store = self._open_flow_store(workspace_root)
-            except (sqlite3.Error, OSError, RuntimeError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.store_open_failed",
-                    workspace_root=str(workspace_root),
-                    exc=exc,
-                )
-                raise DiscordTransientError(
-                    f"Failed to open flow database: {exc}",
-                    user_message="Unable to access flow database. Please try again later.",
-                ) from None
-            try:
-                target = self._resolve_flow_run_by_id(store, run_id=run_id)
-            except (sqlite3.Error, OSError) as exc:
-                log_event(
-                    self._logger,
-                    logging.ERROR,
-                    "discord.flow.query_failed",
-                    exc=exc,
-                    run_id=run_id,
-                )
-                raise DiscordTransientError(
-                    f"Failed to query flow run: {exc}",
-                    user_message="Unable to query flow database. Please try again later.",
-                ) from None
-            finally:
-                store.close()
-
-            if target is None:
-                stale_text = (
-                    f"Run {run_id} no longer exists. "
-                    "Use /flow status or /flow runs to inspect historical runs."
-                )
-                await self._respond_ephemeral(
-                    interaction_id, interaction_token, stale_text
-                )
-                return
-
-            archive_mode = resolve_ticket_flow_archive_mode(target)
-            blocked_text = f"Run {target.id} is {target.status.value}. Stop or pause it before archiving."
-            if archive_mode == "blocked":
-                if action.endswith("_prompt"):
-                    await self._update_component_message(
-                        interaction_id=interaction_id,
-                        interaction_token=interaction_token,
-                        text=blocked_text,
-                        components=[],
-                    )
-                else:
-                    await self._respond_ephemeral(
-                        interaction_id,
-                        interaction_token,
-                        blocked_text,
-                    )
-                return
-
-            if action == "archive" and archive_mode == "confirm":
-                await self._update_component_message(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    text=self._flow_archive_prompt_text(target),
-                    components=self._build_flow_archive_confirmation_components(
-                        target.id,
-                        prompt_variant=False,
-                    ),
-                )
-                return
-
-            deferred = await self._defer_component_update(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-            )
-            try:
-                summary = await asyncio.to_thread(
-                    flow_service.archive_flow_run,
-                    run_id,
-                    force=ticket_flow_archive_requires_force(target),
-                    delete_run=True,
-                )
-            except KeyError:
-                stale_text = (
-                    f"Run {run_id} no longer exists. "
-                    "Use /flow status or /flow runs to inspect historical runs."
-                )
-                if deferred:
-                    updated = await self._edit_original_component_message(
-                        interaction_token=interaction_token,
-                        text=stale_text,
-                        components=[],
-                    )
-                    if updated:
-                        return
-                await self._respond_ephemeral(
-                    interaction_id, interaction_token, stale_text
-                )
-                return
-            except ValueError as exc:
-                await self._send_or_respond_ephemeral(
-                    interaction_id=interaction_id,
-                    interaction_token=interaction_token,
-                    deferred=deferred,
-                    text=str(exc),
-                )
-                return
-
-            archived_text = (
-                f"Archived run {summary['run_id']} "
-                f"(tickets={summary['archived_tickets']}, "
-                f"runs_archived={summary['archived_runs']}, "
-                f"contextspace={summary['archived_contextspace']}).\n\n"
-                "Use /flow status or /flow runs to inspect historical runs."
-            )
-            if deferred:
-                updated = await self._edit_original_component_message(
-                    interaction_token=interaction_token,
-                    text=archived_text,
-                    components=[],
-                )
-                if updated:
-                    return
-            await self._update_component_message(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                text=archived_text,
-                components=[],
-            )
-        elif action == "restart":
-            await self._handle_flow_restart(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                options={"run_id": run_id},
-                deferred_public=False,
-            )
-        elif action == "refresh":
-            await self._handle_flow_status(
-                interaction_id,
-                interaction_token,
-                workspace_root=workspace_root,
-                options={"run_id": run_id},
-                channel_id=channel_id,
-                guild_id=guild_id,
-                update_message=True,
-            )
-        else:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Unknown action: {action}",
-            )
+        await handle_flow_button(
+            self,
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            custom_id=custom_id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+        )
 
     async def _handle_car_reset(
         self,

@@ -728,7 +728,7 @@ async def test_flow_refresh_button_updates_existing_status_message(
         )
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.reconcile_flow_run",
+        "codex_autorunner.integrations.discord.flow_commands.reconcile_flow_run",
         _fake_reconcile,
     )
 
@@ -783,7 +783,7 @@ async def test_flow_issue_seeds_issue_md(
     )
 
     monkeypatch.setattr(
-        "codex_autorunner.integrations.discord.service.seed_issue_from_github",
+        "codex_autorunner.integrations.discord.flow_commands.seed_issue_from_github",
         lambda *_args, **_kwargs: SimpleNamespace(
             content="# Issue 123\n\nDetails",
             issue_number=123,

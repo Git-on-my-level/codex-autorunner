@@ -285,6 +285,9 @@ def test_cross_surface_parity_report(hub_env) -> None:
     discord_dispatch_path = Path(
         "src/codex_autorunner/integrations/discord/car_command_dispatch.py"
     )
+    discord_interaction_dispatch_path = Path(
+        "src/codex_autorunner/integrations/discord/interaction_dispatch.py"
+    )
     discord_commands_text = (
         discord_commands_path.read_text(encoding="utf-8")
         if discord_commands_path.exists()
@@ -298,6 +301,11 @@ def test_cross_surface_parity_report(hub_env) -> None:
     discord_dispatch_text = (
         discord_dispatch_path.read_text(encoding="utf-8")
         if discord_dispatch_path.exists()
+        else ""
+    )
+    discord_interaction_dispatch_text = (
+        discord_interaction_dispatch_path.read_text(encoding="utf-8")
+        if discord_interaction_dispatch_path.exists()
         else ""
     )
 
@@ -341,10 +349,13 @@ def test_cross_surface_parity_report(hub_env) -> None:
         )
     )
 
+    _combined_discord_text = (
+        discord_service_text + "\n" + discord_interaction_dispatch_text
+    )
     discord_shared_command_ingress = (
         "integrations.chat.command_ingress import canonicalize_command_ingress"
-        in discord_service_text
-        and discord_service_text.count("canonicalize_command_ingress(") >= 2
+        in _combined_discord_text
+        and _combined_discord_text.count("canonicalize_command_ingress(") >= 2
     )
     checks.append(
         ParityCheck(
