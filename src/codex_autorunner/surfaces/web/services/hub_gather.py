@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import copy
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -29,10 +33,73 @@ from ....core.pma_context import (
     build_pma_action_queue,
     enrich_pma_file_inbox_entry,
 )
+from ....core.pma_thread_store import default_pma_threads_db_path
 from ....tickets.files import safe_relpath
 from ....tickets.models import Dispatch
 from ....tickets.outbox import parse_dispatch, resolve_outbox_paths
 from ..app_state import HubAppContext
+
+_HUB_SNAPSHOT_CACHE_TTL_SECONDS = 2.0
+_hub_snapshot_cache_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class _HubSnapshotCacheEntry:
+    fingerprint: tuple[Any, ...]
+    expires_at: float
+    snapshot: dict[str, Any]
+
+
+_hub_snapshot_cache: dict[tuple[int, str], _HubSnapshotCacheEntry] = {}
+
+
+def _path_stat_fingerprint(path: Path) -> tuple[bool, Optional[int], Optional[int]]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return (False, None, None)
+    return (True, int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _hub_snapshot_fingerprint(
+    context: HubAppContext,
+    *,
+    limit: int,
+    scope_key: Optional[str],
+    requested: set[str],
+) -> tuple[Any, ...]:
+    config_root = getattr(getattr(context, "config", None), "root", None)
+    root_path = config_root if isinstance(config_root, Path) else None
+    supervisor_state = getattr(getattr(context, "supervisor", None), "state", None)
+    fingerprint: list[Any] = [
+        tuple(sorted(requested)),
+        int(limit),
+        scope_key or "",
+        getattr(supervisor_state, "last_scan_at", None),
+    ]
+    if root_path is not None:
+        fingerprint.extend(
+            [
+                str(root_path),
+                _path_stat_fingerprint(root_path / ".codex-autorunner"),
+                _path_stat_fingerprint(root_path / ".codex-autorunner" / "filebox"),
+                _path_stat_fingerprint(default_pma_threads_db_path(root_path)),
+            ]
+        )
+    return tuple(fingerprint)
+
+
+def invalidate_hub_message_snapshot_cache(
+    context: Optional[HubAppContext] = None,
+) -> None:
+    with _hub_snapshot_cache_lock:
+        if context is None:
+            _hub_snapshot_cache.clear()
+            return
+        context_id = id(context)
+        stale_keys = [key for key in _hub_snapshot_cache if key[0] == context_id]
+        for key in stale_keys:
+            _hub_snapshot_cache.pop(key, None)
 
 
 def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[dict]:
@@ -153,6 +220,22 @@ def gather_hub_message_snapshot(
         if sections is not None
         else {"inbox", "pma_threads", "pma_files_detail", "automation", "action_queue"}
     )
+    cache_key = (id(context), "|".join(sorted(requested)))
+    fingerprint = _hub_snapshot_fingerprint(
+        context,
+        limit=limit,
+        scope_key=scope_key,
+        requested=requested,
+    )
+    now = time.monotonic()
+    with _hub_snapshot_cache_lock:
+        cached = _hub_snapshot_cache.get(cache_key)
+        if (
+            cached is not None
+            and cached.expires_at > now
+            and cached.fingerprint == fingerprint
+        ):
+            return copy.deepcopy(cached.snapshot)
     include_action_queue = bool(requested & {"inbox", "action_queue"})
     pma_config = getattr(getattr(context, "config", None), "pma", None)
     stale_threshold_seconds = resolve_stale_threshold_seconds(
@@ -397,4 +480,16 @@ def gather_hub_message_snapshot(
         snapshot["automation"] = automation
     if "action_queue" in requested:
         snapshot["action_queue"] = filtered_action_queue
+    store_fingerprint = _hub_snapshot_fingerprint(
+        context,
+        limit=limit,
+        scope_key=scope_key,
+        requested=requested,
+    )
+    with _hub_snapshot_cache_lock:
+        _hub_snapshot_cache[cache_key] = _HubSnapshotCacheEntry(
+            fingerprint=store_fingerprint,
+            expires_at=now + _HUB_SNAPSHOT_CACHE_TTL_SECONDS,
+            snapshot=copy.deepcopy(snapshot),
+        )
     return snapshot
