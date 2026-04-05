@@ -1356,14 +1356,14 @@ async def test_service_bind_then_status_updates_and_reads_store(tmp_path: Path) 
         assert binding is not None
         assert binding["workspace_path"] == str(workspace.resolve())
 
-        assert len(rest.interaction_responses) == 2
+        assert len(rest.interaction_responses) >= 1
         bind_payload = rest.interaction_responses[0]["payload"]
-        status_payload = rest.interaction_responses[1]["payload"]
+        assert bind_payload["type"] == 5
         assert bind_payload["data"]["flags"] == 64
-        assert status_payload["type"] == 5
-        assert "bound this channel" in bind_payload["data"]["content"].lower()
-        assert len(rest.followup_messages) == 1
-        status_content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert len(rest.followup_messages) == 2
+        bind_content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "bound this channel" in bind_content
+        status_content = rest.followup_messages[1]["payload"]["content"].lower()
         assert "channel is bound" in status_content
         assert "policy mode:" in status_content
     finally:
@@ -1421,8 +1421,10 @@ async def test_service_status_reports_effective_collaboration_policy(
 
     try:
         await service.run_forever()
-        assert rest.interaction_responses[1]["payload"]["type"] == 5
-        status_payload = rest.followup_messages[0]["payload"]["content"]
+        assert len(rest.interaction_responses) >= 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 2
+        status_payload = rest.followup_messages[1]["payload"]["content"]
         lowered = status_payload.lower()
         assert "policy mode: active" in lowered
         assert "policy plain-text trigger: mentions" in lowered
@@ -1525,14 +1527,17 @@ async def test_service_bind_picker_prioritizes_recent_worktrees_when_truncated(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        content = payload["data"]["content"]
+        assert payload["type"] == 5
+        assert len(rest.followup_messages) == 1
+        followup = rest.followup_messages[0]["payload"]
+        content = followup["content"]
         assert "page 1/2" in content
-        menu = payload["data"]["components"][0]["components"][0]
+        menu = followup["components"][0]["components"][0]
         values = [option["value"] for option in menu["options"]]
         assert len(values) == 25
         assert "base-00--new-worktree" in values
         assert "base-00" not in values
-        nav = payload["data"]["components"][1]["components"]
+        nav = followup["components"][1]["components"]
         assert [button["label"] for button in nav] == ["Prev", "Page 1/2", "Next"]
         assert nav[0]["disabled"] is True
         assert nav[1]["disabled"] is True
@@ -1616,8 +1621,10 @@ async def test_service_routes_bind_page_component_interaction(tmp_path: Path) ->
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 7
-        menu = payload["data"]["components"][0]["components"][0]
+        assert payload["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        edited_payload = rest.edited_original_interaction_responses[0]["payload"]
+        menu = edited_payload["components"][0]["components"][0]
         values = [option["value"] for option in menu["options"]]
         assert values == [f"repo-{index:02d}" for index in range(25, 30)]
     finally:
@@ -1790,10 +1797,12 @@ async def test_service_bind_partial_workspace_value_returns_filtered_picker(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 4
-        content = payload["data"]["content"].lower()
+        assert payload["type"] == 5
+        assert len(rest.followup_messages) == 1
+        followup = rest.followup_messages[0]["payload"]
+        content = followup["content"].lower()
         assert "matched 1 workspaces" in content
-        menu = payload["data"]["components"][0]["components"][0]
+        menu = followup["components"][0]["components"][0]
         option = menu["options"][0]
         assert option["label"] == "stablecoin-engine"
         assert option["value"] == "stablecoin-engine"
@@ -1838,10 +1847,12 @@ async def test_service_bind_partial_workspace_value_returns_path_candidate_picke
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 4
-        content = payload["data"]["content"].lower()
+        assert payload["type"] == 5
+        assert len(rest.followup_messages) == 1
+        followup = rest.followup_messages[0]["payload"]
+        content = followup["content"].lower()
         assert "matched 1 workspaces" in content
-        menu = payload["data"]["components"][0]["components"][0]
+        menu = followup["components"][0]["components"][0]
         option = menu["options"][0]
         assert option["label"] == "engine-room"
         assert option["value"] == workspace_autocomplete_value(
@@ -1926,7 +1937,9 @@ async def test_service_routes_bind_picker_component_interaction_for_path_candida
         assert binding["workspace_path"] == str(workspace.resolve())
 
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "bound this channel to workspace" in content
     finally:
         await store.close()
@@ -2397,7 +2410,9 @@ async def test_service_routes_bind_picker_component_interaction(tmp_path: Path) 
         assert binding["workspace_path"] == str(workspace.resolve())
 
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 6
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "bound this channel to: repo-1" in content
     finally:
         await store.close()
@@ -2799,7 +2814,7 @@ async def test_service_falls_back_to_followup_when_initial_response_fails(
         assert len(rest.followup_messages) == 1
         payload = rest.followup_messages[0]["payload"]
         assert payload["flags"] == 64
-        assert "not bound" in payload["content"].lower()
+        assert "did not acknowledge" in payload["content"].lower()
     finally:
         await store.close()
 
@@ -4285,7 +4300,9 @@ async def test_component_flow_reply_pending_state_is_user_scoped(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        content = rest.interaction_responses[0]["payload"]["data"]["content"].lower()
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "reply selection expired" in content
         assert (
             service._pending_flow_reply_text["channel-1:user-2"] == "reply from user2"
@@ -4578,6 +4595,84 @@ async def test_car_update_without_target_returns_picker(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_car_update_without_target_aborts_when_required_preflight_fails(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="update", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _skip_prepare_command_interaction(**_kwargs: Any) -> bool:
+        return False
+
+    service._prepare_command_interaction = (  # type: ignore[assignment]
+        _skip_prepare_command_interaction
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        payload = rest.interaction_responses[0]["payload"]
+        assert payload["type"] == 4
+        data = payload.get("data") or {}
+        content = str(data.get("content", ""))
+        assert "did not acknowledge" in content.lower()
+        assert rest.followup_messages == []
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_without_target_uses_fallback_picker_on_definition_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="update", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    def _raise_available_update_target_definitions(
+        **_kwargs: Any,
+    ) -> tuple[object, ...]:
+        raise RuntimeError("failed to resolve update target definitions")
+
+    monkeypatch.setattr(
+        discord_service_module,
+        "_available_update_target_definitions",
+        _raise_available_update_target_definitions,
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.followup_messages) == 1
+        data = rest.followup_messages[0]["payload"]
+        components = data.get("components") or []
+        assert components
+        menu = components[0]["components"][0]
+        assert menu["custom_id"] == "update_target_select"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_send_channel_message_safe_collapses_local_file_links(
     tmp_path: Path,
 ) -> None:
@@ -4651,7 +4746,9 @@ async def test_car_tickets_returns_ticket_picker_components(tmp_path: Path) -> N
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
-        data = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        data = rest.followup_messages[0]["payload"]
         assert data["content"] == "Select a ticket to view or edit."
         components = data.get("components") or []
         assert [row["components"][0]["custom_id"] for row in components] == [
@@ -4696,7 +4793,9 @@ async def test_car_tickets_preserves_long_ticket_paths_via_picker_token(
 
     try:
         await service.run_forever()
-        picker_data = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        picker_data = rest.followup_messages[0]["payload"]
         picker_options = picker_data["components"][1]["components"][0]["options"]
         assert len(picker_options) == 1
         option_value = picker_options[0]["value"]
@@ -4776,13 +4875,18 @@ async def test_car_tickets_search_filters_picker_and_persists_across_filter_chan
 
     try:
         await service.run_forever()
-        initial_data = rest.interaction_responses[0]["payload"]["data"]
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        initial_data = rest.followup_messages[0]["payload"]
         initial_options = initial_data["components"][1]["components"][0]["options"]
         assert [option["value"] for option in initial_options] == [
             ".codex-autorunner/tickets/TICKET-002.md"
         ]
 
-        filtered_data = rest.interaction_responses[1]["payload"]["data"]
+        assert len(rest.interaction_responses) == 2
+        assert rest.interaction_responses[1]["payload"]["type"] == 6
+        assert len(rest.edited_original_interaction_responses) == 1
+        filtered_data = rest.edited_original_interaction_responses[0]["payload"]
         assert "Search: `beta`" in filtered_data["content"]
         filtered_options = filtered_data["components"][1]["components"][0]["options"]
         assert [option["value"] for option in filtered_options] == [
@@ -5807,10 +5911,11 @@ async def test_public_flow_commands_keep_private_preflight_errors_ephemeral(
         await service.run_forever()
         assert len(rest.interaction_responses) == 1
         payload = rest.interaction_responses[0]["payload"]
-        assert payload["type"] == 4
-        assert payload["data"]["flags"] == 64
-        assert expected_text in payload["data"]["content"].lower()
-        assert rest.followup_messages == []
+        assert payload["type"] == 5
+        assert len(rest.followup_messages) == 1
+        followup = rest.followup_messages[0]["payload"]
+        assert followup["flags"] == 64
+        assert expected_text in followup["content"].lower()
     finally:
         await store.close()
 
@@ -6702,8 +6807,8 @@ async def test_car_command_raises_on_invalid_workspace(
     try:
         await service.run_forever()
         assert len(rest.interaction_responses) >= 1
-        last_response = rest.interaction_responses[-1]
-        content = last_response["payload"]["data"]["content"].lower()
+        assert len(rest.followup_messages) >= 1
+        content = rest.followup_messages[-1]["payload"]["content"].lower()
         assert "workspace path does not exist" in content
     finally:
         await store.close()
