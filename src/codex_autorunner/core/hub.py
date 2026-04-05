@@ -19,7 +19,6 @@ from ..manifest import (
     Manifest,
     ManifestAgentWorkspace,
     ManifestRepo,
-    ensure_unique_repo_id,
     load_manifest,
     normalize_manifest_destination,
     sanitize_repo_id,
@@ -69,6 +68,7 @@ from .hub_lifecycle import (
     LifecycleEventProcessor,
     LifecycleRetryPolicy,
 )
+from .hub_repo_manager import RepoManager
 from .lifecycle_events import (
     LifecycleEvent,
     LifecycleEventEmitter,
@@ -97,7 +97,6 @@ logger = logging.getLogger("codex_autorunner.hub")
 
 _GIT_FETCH_TIMEOUT_SECONDS = 120
 _GIT_PULL_TIMEOUT_SECONDS = 120
-_GIT_CLONE_TIMEOUT_SECONDS = 300
 _GIT_WORKTREE_TIMEOUT_SECONDS = 120
 _GIT_PUSH_DELETE_TIMEOUT_SECONDS = 120
 _DOCKER_INSPECT_TIMEOUT_SECONDS = 15
@@ -609,6 +608,15 @@ class HubSupervisor:
         self._pma_automation_store: Optional[PmaAutomationStore] = None
         self._pma_lane_worker_starter: Optional[Callable[[str], None]] = None
         self._scm_poll_processor = scm_poll_processor
+        self._repo_manager = RepoManager(
+            hub_config,
+            on_invalidate_cache=self._invalidate_list_cache,
+            on_snapshot_for_repo=self._snapshot_for_repo,
+            on_stop_runner=self._stop_runner_and_wait_for_exit,
+            on_cleanup_worktree=self.cleanup_worktree,
+            on_list_repos=self.list_repos,
+            runners=self._runners,
+        )
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
         self._start_lifecycle_event_processor()
@@ -954,16 +962,7 @@ class HubSupervisor:
         return self._snapshot_for_repo(repo_id)
 
     def init_repo(self, repo_id: str) -> RepoSnapshot:
-        self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        repo = manifest.get(repo_id)
-        if not repo:
-            raise ValueError(f"Repo {repo_id} not found in manifest")
-        repo_path = (self.hub_config.root / repo.path).resolve()
-        if not repo_path.exists():
-            raise ValueError(f"Repo {repo_id} missing on disk")
-        seed_repo_files(repo_path, force=False, git_required=False)
-        return self._snapshot_for_repo(repo_id)
+        return self._repo_manager.init_repo(repo_id)
 
     def sync_main(self, repo_id: str) -> RepoSnapshot:
         self._invalidate_list_cache()
@@ -1042,61 +1041,9 @@ class HubSupervisor:
         git_init: bool = True,
         force: bool = False,
     ) -> RepoSnapshot:
-        self._invalidate_list_cache()
-        display_name = repo_id
-        safe_repo_id = sanitize_repo_id(repo_id)
-        base_dir = self.hub_config.repos_root
-        target = repo_path if repo_path is not None else Path(safe_repo_id)
-        if not target.is_absolute():
-            target = (base_dir / target).resolve()
-        else:
-            target = target.resolve()
-
-        try:
-            target.relative_to(base_dir)
-        except ValueError as exc:
-            raise ValueError(
-                f"Repo path must live under repos_root ({base_dir})"
-            ) from exc
-
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        existing = manifest.get(safe_repo_id)
-        if existing:
-            existing_path = (self.hub_config.root / existing.path).resolve()
-            if existing_path != target:
-                raise ValueError(
-                    f"Repo id {safe_repo_id} already exists at {existing.path}; choose a different id"
-                )
-
-        if target.exists() and not force:
-            raise ValueError(f"Repo path already exists: {target}")
-
-        target.mkdir(parents=True, exist_ok=True)
-
-        if git_init and not (target / ".git").exists():
-            try:
-                proc = run_git(["init"], target, check=False)
-            except GitError as exc:
-                raise ValueError(f"git init failed: {exc}") from exc
-            if proc.returncode != 0:
-                raise ValueError(f"git init failed: {_git_failure_detail(proc)}")
-        if git_init and not (target / ".git").exists():
-            raise ValueError(f"git init failed for {target}")
-
-        seed_repo_files(target, force=force)
-        existing_ids = {repo.id for repo in manifest.repos}
-        if safe_repo_id in existing_ids and not existing:
-            safe_repo_id = ensure_unique_repo_id(safe_repo_id, existing_ids)
-        manifest.ensure_repo(
-            self.hub_config.root,
-            target,
-            repo_id=safe_repo_id,
-            display_name=display_name,
-            kind="base",
+        return self._repo_manager.create_repo(
+            repo_id, repo_path=repo_path, git_init=git_init, force=force
         )
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-
-        return self._snapshot_for_repo(safe_repo_id)
 
     def clone_repo(
         self,
@@ -1106,68 +1053,9 @@ class HubSupervisor:
         repo_path: Optional[Path] = None,
         force: bool = False,
     ) -> RepoSnapshot:
-        self._invalidate_list_cache()
-        git_url = (git_url or "").strip()
-        if not git_url:
-            raise ValueError("git_url is required")
-        inferred_name = (repo_id or "").strip() or _repo_id_from_url(git_url)
-        if not inferred_name:
-            raise ValueError("Unable to infer repo id from git_url")
-        display_name = inferred_name
-        safe_repo_id = sanitize_repo_id(inferred_name)
-        base_dir = self.hub_config.repos_root
-        target = repo_path if repo_path is not None else Path(safe_repo_id)
-        if not target.is_absolute():
-            target = (base_dir / target).resolve()
-        else:
-            target = target.resolve()
-
-        try:
-            target.relative_to(base_dir)
-        except ValueError as exc:
-            raise ValueError(
-                f"Repo path must live under repos_root ({base_dir})"
-            ) from exc
-
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        existing = manifest.get(safe_repo_id)
-        if existing:
-            existing_path = (self.hub_config.root / existing.path).resolve()
-            if existing_path != target:
-                raise ValueError(
-                    f"Repo id {safe_repo_id} already exists at {existing.path}; choose a different id"
-                )
-
-        if target.exists() and not force:
-            raise ValueError(f"Repo path already exists: {target}")
-
-        target.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            proc = run_git(
-                ["clone", git_url, str(target)],
-                target.parent,
-                check=False,
-                timeout_seconds=_GIT_CLONE_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git clone failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git clone failed: {_git_failure_detail(proc)}")
-
-        seed_repo_files(target, force=False, git_required=False)
-        existing_ids = {repo.id for repo in manifest.repos}
-        if safe_repo_id in existing_ids and not existing:
-            safe_repo_id = ensure_unique_repo_id(safe_repo_id, existing_ids)
-        manifest.ensure_repo(
-            self.hub_config.root,
-            target,
-            repo_id=safe_repo_id,
-            display_name=display_name,
-            kind="base",
+        return self._repo_manager.clone_repo(
+            git_url=git_url, repo_id=repo_id, repo_path=repo_path, force=force
         )
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        return self._snapshot_for_repo(safe_repo_id)
 
     def create_worktree(
         self,
@@ -2361,74 +2249,13 @@ class HubSupervisor:
         delete_worktrees: bool = False,
         force_attestation: Optional[Mapping[str, object]] = None,
     ) -> None:
-        self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        repo = manifest.get(repo_id)
-        if not repo:
-            raise ValueError(f"Repo {repo_id} not found in manifest")
-        enforce_force_attestation(
+        self._repo_manager.remove_repo(
+            repo_id,
             force=force,
+            delete_dir=delete_dir,
+            delete_worktrees=delete_worktrees,
             force_attestation=force_attestation,
-            logger=logger,
-            action="hub.remove_repo",
         )
-
-        if repo.kind == "worktree":
-            self.cleanup_worktree(
-                worktree_repo_id=repo_id,
-                force=force,
-                force_attestation=force_attestation,
-            )
-            return
-
-        worktrees = [
-            r
-            for r in manifest.repos
-            if r.kind == "worktree" and r.worktree_of == repo_id
-        ]
-        if worktrees and not delete_worktrees:
-            ids = ", ".join(r.id for r in worktrees)
-            raise ValueError(f"Repo {repo_id} has worktrees: {ids}")
-        if worktrees and delete_worktrees:
-            for worktree in worktrees:
-                self.cleanup_worktree(
-                    worktree_repo_id=worktree.id,
-                    force=force,
-                    force_attestation=force_attestation,
-                )
-            manifest = load_manifest(
-                self.hub_config.manifest_path, self.hub_config.root
-            )
-            repo = manifest.get(repo_id)
-            if not repo:
-                raise ValueError(f"Repo {repo_id} missing after worktree cleanup")
-
-        repo_root = (self.hub_config.root / repo.path).resolve()
-        if repo_root.exists() and git_available(repo_root):
-            if not git_is_clean(repo_root) and not force:
-                raise ValueError("Repo has uncommitted changes; use force to remove")
-            upstream = git_upstream_status(repo_root)
-            if (
-                upstream
-                and upstream.get("has_upstream")
-                and upstream.get("ahead", 0) > 0
-                and not force
-            ):
-                raise ValueError("Repo has unpushed commits; use force to remove")
-
-        self._stop_runner_and_wait_for_exit(
-            repo_id=repo_id,
-            repo_path=repo_root,
-        )
-        self._runners.pop(repo_id, None)
-
-        if delete_dir and repo_root.exists():
-            shutil.rmtree(repo_root)
-
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        manifest.repos = [r for r in manifest.repos if r.id != repo_id]
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self.list_repos(use_cache=False)
 
     def _ensure_runner(
         self, repo_id: str, allow_uninitialized: bool = False
@@ -3507,12 +3334,3 @@ class HubSupervisor:
         if runner_state and runner_state.status == "error":
             return RepoStatus.ERROR
         return RepoStatus.IDLE
-
-
-def _repo_id_from_url(url: str) -> str:
-    name = (url or "").rstrip("/").split("/")[-1]
-    if ":" in name:
-        name = name.split(":")[-1]
-    if name.endswith(".git"):
-        name = name[: -len(".git")]
-    return name.strip()
