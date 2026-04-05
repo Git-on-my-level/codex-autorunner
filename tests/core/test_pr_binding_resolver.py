@@ -6,6 +6,7 @@ from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_binding_resolver import resolve_binding_for_scm_event
 from codex_autorunner.core.scm_events import ScmEvent
+from codex_autorunner.core.sqlite_utils import open_sqlite
 
 
 def _make_event(
@@ -61,6 +62,30 @@ def _create_repo_thread(
         metadata={"head_branch": head_branch},
     )
     return str(created["managed_thread_id"])
+
+
+def _create_terminal_repo_thread(
+    hub_root: Path,
+    *,
+    repo_id: str = "repo-1",
+    head_branch: str = "feature/login",
+    archive: bool = False,
+) -> str:
+    workspace_root = hub_root / "worktrees" / head_branch.replace("/", "-")
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    store = PmaThreadStore(hub_root)
+    created = store.create_thread(
+        "codex",
+        workspace_root,
+        repo_id=repo_id,
+        metadata={"head_branch": head_branch},
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    turn = store.create_turn(managed_thread_id, prompt="create pr")
+    assert store.mark_turn_finished(turn["managed_turn_id"], status="ok") is True
+    if archive:
+        store.archive_thread(managed_thread_id)
+    return managed_thread_id
 
 
 def test_resolve_binding_for_pr_event_creates_binding_and_attaches_matching_thread(
@@ -152,3 +177,59 @@ def test_resolve_binding_for_closed_or_merged_pr_updates_existing_binding_state(
     assert merged.pr_state == "merged"
     assert merged.closed_at is not None
     assert merged.thread_target_id == thread_target_id
+
+
+def test_resolve_binding_for_pr_event_attaches_recent_archived_matching_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    thread_target_id = _create_terminal_repo_thread(hub_root, archive=True)
+
+    binding = resolve_binding_for_scm_event(hub_root, _make_event())
+
+    assert binding is not None
+    assert binding.thread_target_id == thread_target_id
+
+
+def test_resolve_binding_for_pr_event_ignores_stale_archived_matching_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    thread_target_id = _create_terminal_repo_thread(hub_root, archive=True)
+
+    with open_sqlite(PmaThreadStore(hub_root).path) as legacy_conn:
+        with legacy_conn:
+            legacy_conn.execute(
+                """
+                UPDATE pma_managed_threads
+                   SET updated_at = ?,
+                       status_updated_at = ?
+                 WHERE managed_thread_id = ?
+                """,
+                (
+                    "2025-01-01T00:00:00Z",
+                    "2025-01-01T00:00:00Z",
+                    thread_target_id,
+                ),
+            )
+
+    with open_orchestration_sqlite(hub_root) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET updated_at = ?,
+                       status_updated_at = ?
+                 WHERE thread_target_id = ?
+                """,
+                (
+                    "2025-01-01T00:00:00Z",
+                    "2025-01-01T00:00:00Z",
+                    thread_target_id,
+                ),
+            )
+
+    binding = resolve_binding_for_scm_event(hub_root, _make_event())
+
+    assert binding is not None
+    assert binding.thread_target_id is None
