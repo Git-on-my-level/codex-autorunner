@@ -4,16 +4,13 @@ import enum
 import importlib
 import json
 import logging
-import re
 import shutil
 import sqlite3
-import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from ..bootstrap import seed_repo_files
 from ..discovery import DiscoveryRecord, discover_and_init
 from ..manifest import (
     Manifest,
@@ -26,33 +23,21 @@ from ..manifest import (
 )
 from ..tickets.outbox import set_lifecycle_emitter
 from .archive import (
-    ArchiveProfile,
     archive_workspace_for_fresh_start,
-    archive_workspace_managed_threads,
-    archive_worktree_snapshot,
-    build_snapshot_id,
     dirty_car_state_paths,
-    resolve_worktree_archive_intent,
 )
 from .archive_retention import resolve_worktree_archive_retention_policy
-from .chat_bindings import repo_has_active_non_pma_chat_binding
 from .config import (
-    ConfigError,
     HubConfig,
     RepoConfig,
     derive_repo_config,
     load_hub_config,
-    load_repo_config,
 )
 from .destinations import (
-    DockerDestination,
-    default_car_docker_container_name,
     default_local_destination,
     resolve_effective_agent_workspace_destination,
     resolve_effective_repo_destination,
 )
-from .flows import FlowRunStatus, FlowStore, archive_flow_run_artifacts
-from .force_attestation import enforce_force_attestation
 from .git_utils import (
     GitError,
     git_available,
@@ -69,6 +54,7 @@ from .hub_lifecycle import (
     LifecycleRetryPolicy,
 )
 from .hub_repo_manager import RepoManager
+from .hub_worktree_manager import WorktreeManager
 from .lifecycle_events import (
     LifecycleEvent,
     LifecycleEventEmitter,
@@ -91,18 +77,12 @@ from .runtime import RuntimeContext
 from .state import RunnerState, load_state, now_iso
 from .state_roots import resolve_hub_agent_workspace_root
 from .types import AppServerSupervisorFactory, BackendFactory
-from .utils import atomic_write, is_within, subprocess_env
+from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.hub")
 
 _GIT_FETCH_TIMEOUT_SECONDS = 120
 _GIT_PULL_TIMEOUT_SECONDS = 120
-_GIT_WORKTREE_TIMEOUT_SECONDS = 120
-_GIT_PUSH_DELETE_TIMEOUT_SECONDS = 120
-_DOCKER_INSPECT_TIMEOUT_SECONDS = 15
-_DOCKER_STOP_TIMEOUT_SECONDS = 15
-_DOCKER_RM_TIMEOUT_SECONDS = 30
-_WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS = 600
 
 BackendFactoryBuilder = Callable[[Path, RepoConfig], BackendFactory]
 AppServerSupervisorFactoryBuilder = Callable[[RepoConfig], AppServerSupervisorFactory]
@@ -617,6 +597,16 @@ class HubSupervisor:
             on_list_repos=self.list_repos,
             runners=self._runners,
         )
+        self._worktree_manager = WorktreeManager(
+            hub_config,
+            on_invalidate_cache=self._invalidate_list_cache,
+            on_snapshot_for_repo=self._snapshot_for_repo,
+            on_stop_runner=self._stop_runner_and_wait_for_exit,
+            on_archive_repo_state=self.archive_repo_state,
+            on_base_repo_paths=self._base_repo_paths,
+            on_collect_unbound_repo_threads=self._collect_unbound_repo_threads,
+            on_archive_unbound_repo_threads=self._archive_unbound_repo_threads,
+        )
         self._wire_outbox_lifecycle()
         self._reconcile_startup()
         self._start_lifecycle_event_processor()
@@ -1065,133 +1055,12 @@ class HubSupervisor:
         force: bool = False,
         start_point: Optional[str] = None,
     ) -> RepoSnapshot:
-        self._invalidate_list_cache()
-        """
-        Create a git worktree under hub.worktrees_root and register it as a hub repo entry.
-        Worktrees are treated as full repos (own .codex-autorunner docs/state).
-        """
-        branch = (branch or "").strip()
-        if not branch:
-            raise ValueError("branch is required")
-
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        base = manifest.get(base_repo_id)
-        if not base or base.kind != "base":
-            raise ValueError(f"Base repo not found: {base_repo_id}")
-        base_path = (self.hub_config.root / base.path).resolve()
-        if not base_path.exists():
-            raise ValueError(f"Base repo missing on disk: {base_repo_id}")
-
-        self.hub_config.worktrees_root.mkdir(parents=True, exist_ok=True)
-        worktrees_root = self.hub_config.worktrees_root.resolve()
-        safe_branch = re.sub(r"[^a-zA-Z0-9._/-]+", "-", branch).strip("-") or "work"
-        repo_id = f"{base_repo_id}--{safe_branch.replace('/', '-')}"
-        if manifest.get(repo_id) and not force:
-            raise ValueError(f"Worktree repo already exists: {repo_id}")
-        worktree_path = (worktrees_root / repo_id).resolve()
-        if not is_within(root=worktrees_root, target=worktree_path):
-            raise ValueError(
-                "Worktree path escapes worktrees_root: "
-                f"{worktree_path} (root={worktrees_root})"
-            )
-        if worktree_path.exists() and not force:
-            raise ValueError(f"Worktree path already exists: {worktree_path}")
-
-        # Create the worktree (branch may or may not exist locally).
-        worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        explicit_start_ref = (
-            start_point.strip() if start_point and start_point.strip() else None
-        )
-        effective_start_ref = explicit_start_ref
-
-        if explicit_start_ref is None or explicit_start_ref.startswith("origin/"):
-            try:
-                fetch_proc = run_git(
-                    ["fetch", "--prune", "origin"],
-                    base_path,
-                    check=False,
-                    timeout_seconds=_GIT_FETCH_TIMEOUT_SECONDS,
-                )
-            except GitError as exc:
-                raise ValueError(
-                    "Unable to refresh origin before creating worktree: %s" % exc
-                ) from exc
-            if fetch_proc.returncode != 0:
-                raise ValueError(
-                    "Unable to refresh origin before creating worktree: %s"
-                    % _git_failure_detail(fetch_proc)
-                )
-
-        if effective_start_ref is None:
-            default_branch = git_default_branch(base_path)
-            if not default_branch:
-                raise ValueError("Unable to resolve origin default branch")
-            effective_start_ref = f"origin/{default_branch}"
-
-        assert effective_start_ref is not None
-        start_sha = _resolve_ref_sha(base_path, effective_start_ref)
-        try:
-            exists = run_git(
-                ["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
-                base_path,
-                check=False,
-            )
-        except GitError as exc:
-            raise ValueError(f"git worktree add failed: {exc}") from exc
-        try:
-            if exists.returncode == 0:
-                branch_sha = _resolve_ref_sha(base_path, f"refs/heads/{branch}")
-                if branch_sha != start_sha:
-                    raise ValueError(
-                        "Branch %r already exists and points to %s, but %s resolves to %s. "
-                        "Use a different branch name or realign the existing branch first."
-                        % (
-                            branch,
-                            branch_sha[:12],
-                            effective_start_ref,
-                            start_sha[:12],
-                        )
-                    )
-                proc = run_git(
-                    ["worktree", "add", str(worktree_path), branch],
-                    base_path,
-                    check=False,
-                    timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
-                )
-            else:
-                cmd = [
-                    "worktree",
-                    "add",
-                    "-b",
-                    branch,
-                    str(worktree_path),
-                    effective_start_ref,
-                ]
-                proc = run_git(
-                    cmd,
-                    base_path,
-                    check=False,
-                    timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
-                )
-        except GitError as exc:
-            raise ValueError(f"git worktree add failed: {exc}") from exc
-        if proc.returncode != 0:
-            raise ValueError(f"git worktree add failed: {_git_failure_detail(proc)}")
-
-        seed_repo_files(worktree_path, force=force, git_required=False)
-        manifest.ensure_repo(
-            self.hub_config.root,
-            worktree_path,
-            repo_id=repo_id,
-            kind="worktree",
-            worktree_of=base_repo_id,
+        return self._worktree_manager.create_worktree(
+            base_repo_id=base_repo_id,
             branch=branch,
+            force=force,
+            start_point=start_point,
         )
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self._run_worktree_setup_commands(
-            worktree_path, base.worktree_setup_commands, base_repo_id=base_repo_id
-        )
-        return self._snapshot_for_repo(repo_id)
 
     def set_worktree_setup_commands(
         self, repo_id: str, commands: List[str]
@@ -1264,93 +1133,12 @@ class HubSupervisor:
         if not commands:
             return 0
 
-        self._run_worktree_setup_commands(
+        self._worktree_manager._run_worktree_setup_commands(
             execution_root,
             commands,
             base_repo_id=base_snapshot.id,
         )
         return len(commands)
-
-    def _archive_worktree_snapshot(
-        self,
-        *,
-        worktree_repo_id: str,
-        archive_note: Optional[str] = None,
-        force: bool = False,
-        archive_profile: Optional[str] = None,
-        cleanup: bool = False,
-    ):
-        from .archive import ArchiveResult
-
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(worktree_repo_id)
-        if not entry or entry.kind != "worktree":
-            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
-        if not entry.worktree_of:
-            raise ValueError("Worktree repo is missing worktree_of metadata")
-        base = manifest.get(entry.worktree_of)
-        if not base or base.kind != "base":
-            raise ValueError(f"Base repo not found: {entry.worktree_of}")
-
-        base_path = (self.hub_config.root / base.path).resolve()
-        worktree_path = (self.hub_config.root / entry.path).resolve()
-
-        if not worktree_path.exists():
-            raise ValueError(f"Worktree path does not exist: {worktree_path}")
-
-        self._stop_runner_and_wait_for_exit(
-            repo_id=worktree_repo_id,
-            repo_path=worktree_path,
-        )
-
-        branch_name = entry.branch or git_branch(worktree_path) or "unknown"
-        head_sha = git_head_sha(worktree_path) or "unknown"
-        snapshot_id = build_snapshot_id(branch_name, head_sha)
-        logger.info(
-            "Hub archive worktree start id=%s snapshot_id=%s",
-            worktree_repo_id,
-            snapshot_id,
-        )
-        profile = cast(
-            ArchiveProfile,
-            archive_profile or self.hub_config.pma.worktree_archive_profile,
-        )
-        intent = resolve_worktree_archive_intent(profile=profile, cleanup=cleanup)
-        retention_policy = resolve_worktree_archive_retention_policy(
-            self.hub_config.pma
-        )
-        try:
-            result: ArchiveResult = archive_worktree_snapshot(
-                base_repo_root=base_path,
-                base_repo_id=base.id,
-                worktree_repo_root=worktree_path,
-                worktree_repo_id=worktree_repo_id,
-                branch=branch_name,
-                worktree_of=entry.worktree_of,
-                note=archive_note,
-                snapshot_id=snapshot_id,
-                head_sha=head_sha,
-                source_path=entry.path,
-                intent=intent,
-                retention_policy=retention_policy,
-            )
-        except Exception as exc:
-            logger.exception(
-                "Hub archive worktree failed id=%s snapshot_id=%s",
-                worktree_repo_id,
-                snapshot_id,
-            )
-            if not force:
-                raise ValueError(f"Worktree archive failed: {exc}") from exc
-            return None
-        else:
-            logger.info(
-                "Hub archive worktree complete id=%s snapshot_id=%s status=%s",
-                worktree_repo_id,
-                result.snapshot_id,
-                result.status,
-            )
-            return result
 
     def _archive_bound_pma_threads(
         self,
@@ -1358,12 +1146,9 @@ class HubSupervisor:
         worktree_repo_id: str,
         worktree_path: Path,
     ) -> list[str]:
-        return list(
-            archive_workspace_managed_threads(
-                hub_root=self.hub_config.root,
-                worktree_repo_id=worktree_repo_id,
-                worktree_path=worktree_path,
-            )
+        return self._worktree_manager._archive_bound_pma_threads(
+            worktree_repo_id=worktree_repo_id,
+            worktree_path=worktree_path,
         )
 
     def _bound_thread_target_ids(self) -> set[str]:
@@ -1473,210 +1258,6 @@ class HubSupervisor:
             if thread_ids
         }
 
-    def _ensure_worktree_clean_for_archive(
-        self, *, worktree_repo_id: str, worktree_path: Path
-    ) -> None:
-        if not worktree_path.exists():
-            return
-        if git_available(worktree_path) and not git_is_clean(worktree_path):
-            raise ValueError(
-                f"Worktree {worktree_repo_id} has uncommitted changes; commit or stash before archiving"
-            )
-
-    def _run_docker_command(
-        self, args: List[str], *, timeout_seconds: Optional[float] = None
-    ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["docker", *[str(part) for part in args]],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=subprocess_env(),
-            timeout=timeout_seconds,
-        )
-
-    def _cleanup_worktree_docker_container(
-        self,
-        *,
-        worktree_repo_id: str,
-        worktree_path: Path,
-        destination: DockerDestination,
-    ) -> Dict[str, object]:
-        explicit_name = bool(destination.container_name)
-        container_name = (
-            destination.container_name
-            or default_car_docker_container_name(worktree_path.resolve())
-        )
-        if explicit_name:
-            message = (
-                "Skipping docker container cleanup for explicit container_name "
-                "(treated as shared)"
-            )
-            logger.info(
-                "Hub cleanup worktree docker skipped id=%s container=%s reason=%s",
-                worktree_repo_id,
-                container_name,
-                message,
-            )
-            return {
-                "status": "skipped_explicit",
-                "container_name": container_name,
-                "managed": False,
-                "message": message,
-            }
-
-        try:
-            inspect_proc = self._run_docker_command(
-                ["inspect", "--format", "{{.State.Running}}", container_name],
-                timeout_seconds=_DOCKER_INSPECT_TIMEOUT_SECONDS,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            message = f"docker inspect failed: {exc}"
-            logger.warning(
-                "Hub cleanup worktree docker inspect failed id=%s container=%s: %s",
-                worktree_repo_id,
-                container_name,
-                exc,
-            )
-            return {
-                "status": "error",
-                "container_name": container_name,
-                "managed": True,
-                "message": message,
-            }
-        if inspect_proc.returncode != 0:
-            inspect_detail = (inspect_proc.stderr or inspect_proc.stdout or "").strip()
-            inspect_detail_lower = inspect_detail.lower()
-            if (
-                "no such object" in inspect_detail_lower
-                or "no such container" in inspect_detail_lower
-            ):
-                logger.info(
-                    "Hub cleanup worktree docker container missing id=%s container=%s",
-                    worktree_repo_id,
-                    container_name,
-                )
-                return {
-                    "status": "not_found",
-                    "container_name": container_name,
-                    "managed": True,
-                    "message": "container not found",
-                }
-            message = f"docker inspect failed: {inspect_detail or 'unknown error'}"
-            logger.warning(
-                "Hub cleanup worktree docker inspect failed id=%s container=%s: %s",
-                worktree_repo_id,
-                container_name,
-                inspect_detail,
-            )
-            return {
-                "status": "error",
-                "container_name": container_name,
-                "managed": True,
-                "message": message,
-            }
-
-        running = (inspect_proc.stdout or "").strip().lower() == "true"
-        if running:
-            try:
-                stop_proc = self._run_docker_command(
-                    ["stop", "-t", "10", container_name],
-                    timeout_seconds=_DOCKER_STOP_TIMEOUT_SECONDS,
-                )
-            except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-                message = f"docker stop failed: {exc}"
-                logger.warning(
-                    "Hub cleanup worktree docker stop failed id=%s container=%s: %s",
-                    worktree_repo_id,
-                    container_name,
-                    exc,
-                )
-                return {
-                    "status": "error",
-                    "container_name": container_name,
-                    "managed": True,
-                    "message": message,
-                }
-            if stop_proc.returncode != 0:
-                stop_detail = (stop_proc.stderr or stop_proc.stdout or "").strip()
-                message = f"docker stop failed: {stop_detail or 'unknown error'}"
-                logger.warning(
-                    "Hub cleanup worktree docker stop failed id=%s container=%s: %s",
-                    worktree_repo_id,
-                    container_name,
-                    stop_detail,
-                )
-                return {
-                    "status": "error",
-                    "container_name": container_name,
-                    "managed": True,
-                    "message": message,
-                }
-
-        try:
-            rm_proc = self._run_docker_command(
-                ["rm", container_name],
-                timeout_seconds=_DOCKER_RM_TIMEOUT_SECONDS,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            message = f"docker rm failed: {exc}"
-            logger.warning(
-                "Hub cleanup worktree docker remove failed id=%s container=%s: %s",
-                worktree_repo_id,
-                container_name,
-                exc,
-            )
-            return {
-                "status": "error",
-                "container_name": container_name,
-                "managed": True,
-                "message": message,
-            }
-
-        if rm_proc.returncode != 0:
-            rm_detail = (rm_proc.stderr or rm_proc.stdout or "").strip()
-            rm_detail_lower = rm_detail.lower()
-            if (
-                "no such object" in rm_detail_lower
-                or "no such container" in rm_detail_lower
-            ):
-                logger.info(
-                    "Hub cleanup worktree docker container already removed id=%s container=%s",
-                    worktree_repo_id,
-                    container_name,
-                )
-                return {
-                    "status": "not_found",
-                    "container_name": container_name,
-                    "managed": True,
-                    "message": "container not found",
-                }
-            message = f"docker rm failed: {rm_detail or 'unknown error'}"
-            logger.warning(
-                "Hub cleanup worktree docker remove failed id=%s container=%s: %s",
-                worktree_repo_id,
-                container_name,
-                rm_detail,
-            )
-            return {
-                "status": "error",
-                "container_name": container_name,
-                "managed": True,
-                "message": message,
-            }
-
-        logger.info(
-            "Hub cleanup worktree docker removed id=%s container=%s",
-            worktree_repo_id,
-            container_name,
-        )
-        return {
-            "status": "removed",
-            "container_name": container_name,
-            "managed": True,
-            "message": "container stopped and removed",
-        }
-
     def cleanup_worktree(
         self,
         *,
@@ -1690,148 +1271,16 @@ class HubSupervisor:
         force_attestation: Optional[Mapping[str, object]] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        if self.hub_config.pma.cleanup_require_archive and not archive:
-            raise ValueError(
-                "Worktree cleanup requires archiving per PMA policy "
-                "(pma.cleanup_require_archive is enabled). "
-                "Use archive=True or omit the --no-archive flag."
-            )
-        enforce_force_attestation(
-            force=force or force_archive,
-            force_attestation=force_attestation,
-            logger=logger,
-            action="hub.cleanup_worktree",
-        )
-        self._invalidate_list_cache()
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(worktree_repo_id)
-        if not entry or entry.kind != "worktree":
-            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
-        if not entry.worktree_of:
-            raise ValueError("Worktree repo is missing worktree_of metadata")
-        base = manifest.get(entry.worktree_of)
-        if not base or base.kind != "base":
-            raise ValueError(f"Base repo not found: {entry.worktree_of}")
-
-        base_path = (self.hub_config.root / base.path).resolve()
-        worktree_path = (self.hub_config.root / entry.path).resolve()
-        branch_name = entry.branch or "unknown"
-        try:
-            has_active_chat_binding = self._has_active_chat_binding(worktree_repo_id)
-        except Exception as exc:
-            if not force:
-                raise ValueError(
-                    "Unable to verify active chat bindings for "
-                    f"{worktree_repo_id} (branch={branch_name}); refusing cleanup. "
-                    "Re-run with --force to proceed."
-                ) from exc
-            logger.warning(
-                "Proceeding with forced worktree cleanup despite chat-binding "
-                "lookup failure for repo %s",
-                worktree_repo_id,
-                exc_info=exc,
-            )
-            has_active_chat_binding = False
-        if has_active_chat_binding and not force:
-            raise ValueError(
-                f"Refusing to clean up chat-bound worktree {worktree_repo_id} "
-                f"(branch={branch_name}). This worktree is bound to a chat. "
-                "Re-run with --force to proceed."
-            )
-
-        self._stop_runner_and_wait_for_exit(
-            repo_id=worktree_repo_id,
-            repo_path=worktree_path,
-        )
-
-        if archive:
-            self._ensure_worktree_clean_for_archive(
-                worktree_repo_id=worktree_repo_id,
-                worktree_path=worktree_path,
-            )
-            self._archive_worktree_snapshot(
-                worktree_repo_id=worktree_repo_id,
-                archive_note=archive_note,
-                force=force_archive,
-                archive_profile=archive_profile,
-                cleanup=True,
-            )
-
-        repos_by_id = {repo.id: repo for repo in manifest.repos}
-        effective_destination = resolve_effective_repo_destination(entry, repos_by_id)
-        docker_cleanup: Dict[str, object] = {
-            "status": "not_applicable",
-            "message": "effective destination is not docker",
-        }
-        if isinstance(effective_destination.destination, DockerDestination):
-            docker_cleanup = self._cleanup_worktree_docker_container(
-                worktree_repo_id=worktree_repo_id,
-                worktree_path=worktree_path,
-                destination=effective_destination.destination,
-            )
-
-        # Remove worktree from base repo.
-        try:
-            proc = run_git(
-                ["worktree", "remove", "--force", str(worktree_path)],
-                base_path,
-                check=False,
-                timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git worktree remove failed: {exc}") from exc
-        if proc.returncode != 0:
-            detail = _git_failure_detail(proc)
-            detail_lower = detail.lower()
-            # If the worktree is already gone (deleted via UI/Hub), continue cleanup.
-            if "not a working tree" not in detail_lower:
-                raise ValueError(f"git worktree remove failed: {detail}")
-        try:
-            proc = run_git(["worktree", "prune"], base_path, check=False)
-            if proc.returncode != 0:
-                logger.warning(
-                    "git worktree prune failed: %s", _git_failure_detail(proc)
-                )
-        except GitError as exc:
-            logger.warning("git worktree prune failed: %s", exc)
-
-        if delete_branch and entry.branch:
-            try:
-                proc = run_git(["branch", "-D", entry.branch], base_path, check=False)
-                if proc.returncode != 0:
-                    logger.warning(
-                        "git branch delete failed: %s", _git_failure_detail(proc)
-                    )
-            except GitError as exc:
-                logger.warning("git branch delete failed: %s", exc)
-        if delete_remote and entry.branch:
-            try:
-                proc = run_git(
-                    ["push", "origin", "--delete", entry.branch],
-                    base_path,
-                    check=False,
-                    timeout_seconds=_GIT_PUSH_DELETE_TIMEOUT_SECONDS,
-                )
-                if proc.returncode != 0:
-                    logger.warning(
-                        "git push delete failed: %s", _git_failure_detail(proc)
-                    )
-            except GitError as exc:
-                logger.warning("git push delete failed: %s", exc)
-
-        manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
-        save_manifest(self.hub_config.manifest_path, manifest, self.hub_config.root)
-        self._archive_bound_pma_threads(
+        return self._worktree_manager.cleanup_worktree(
             worktree_repo_id=worktree_repo_id,
-            worktree_path=worktree_path,
-        )
-        return {"status": "ok", "docker_cleanup": docker_cleanup}
-
-    def _has_active_chat_binding(self, repo_id: str) -> bool:
-        return repo_has_active_non_pma_chat_binding(
-            hub_root=self.hub_config.root,
-            raw_config=self.hub_config.raw,
-            repo_id=repo_id,
+            delete_branch=delete_branch,
+            delete_remote=delete_remote,
+            archive=archive,
+            force_archive=force_archive,
+            archive_note=archive_note,
+            force=force,
+            force_attestation=force_attestation,
+            archive_profile=archive_profile,
         )
 
     def archive_worktree(
@@ -1841,44 +1290,11 @@ class HubSupervisor:
         archive_note: Optional[str] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(worktree_repo_id)
-        if not entry or entry.kind != "worktree":
-            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
-        if not entry.worktree_of:
-            raise ValueError("Worktree repo is missing worktree_of metadata")
-        worktree_path = (self.hub_config.root / entry.path).resolve()
-
-        if not worktree_path.exists():
-            raise ValueError(f"Worktree path does not exist: {worktree_path}")
-
-        self._ensure_worktree_clean_for_archive(
-            worktree_repo_id=worktree_repo_id,
-            worktree_path=worktree_path,
-        )
-
-        result = self._archive_worktree_snapshot(
+        return self._worktree_manager.archive_worktree(
             worktree_repo_id=worktree_repo_id,
             archive_note=archive_note,
-            force=False,
             archive_profile=archive_profile,
         )
-        self._archive_bound_pma_threads(
-            worktree_repo_id=worktree_repo_id,
-            worktree_path=worktree_path,
-        )
-        if result is None:
-            raise ValueError("Archive failed unexpectedly")
-        return {
-            "snapshot_id": result.snapshot_id,
-            "snapshot_path": str(result.snapshot_path),
-            "meta_path": str(result.meta_path),
-            "status": result.status,
-            "file_count": result.file_count,
-            "total_bytes": result.total_bytes,
-            "flow_run_count": result.flow_run_count,
-            "latest_flow_run_id": result.latest_flow_run_id,
-        }
 
     def archive_repo_state(
         self,
@@ -1954,12 +1370,8 @@ class HubSupervisor:
         archive_note: Optional[str] = None,
         archive_profile: Optional[str] = None,
     ) -> Dict[str, object]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        entry = manifest.get(worktree_repo_id)
-        if not entry or entry.kind != "worktree":
-            raise ValueError(f"Worktree repo not found: {worktree_repo_id}")
-        return self.archive_repo_state(
-            repo_id=worktree_repo_id,
+        return self._worktree_manager.archive_worktree_state(
+            worktree_repo_id=worktree_repo_id,
             archive_note=archive_note,
             archive_profile=archive_profile,
         )
@@ -2052,164 +1464,7 @@ class HubSupervisor:
         }
 
     def cleanup_all(self, *, dry_run: bool = False) -> Dict[str, object]:
-        manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
-        unbound_threads_by_repo = self._collect_unbound_repo_threads(manifest=manifest)
-
-        threads_by_repo: list[dict[str, object]] = []
-        total_thread_count = 0
-        for repo_id, thread_ids in sorted(unbound_threads_by_repo.items()):
-            count = len(thread_ids)
-            if count == 0:
-                continue
-            total_thread_count += count
-            threads_by_repo.append({"repo_id": repo_id, "count": count})
-
-        if not dry_run:
-            for repo_id in self._base_repo_paths(manifest).keys():
-                self._archive_unbound_repo_threads(
-                    repo_id=repo_id,
-                    unbound_threads_by_repo=unbound_threads_by_repo,
-                )
-
-        worktree_items: list[dict[str, str]] = []
-        worktree_errors: list[dict[str, str]] = []
-        for entry in manifest.repos:
-            if entry.kind != "worktree":
-                continue
-            if not entry.worktree_of:
-                continue
-            try:
-                if self._has_active_chat_binding(entry.id):
-                    continue
-            except Exception as exc:
-                logger.warning(
-                    "cleanup_all: chat binding check failed for %s",
-                    entry.id,
-                    exc_info=exc,
-                )
-                continue
-            worktree_path = (self.hub_config.root / entry.path).resolve()
-            if not worktree_path.exists():
-                continue
-            if git_available(worktree_path):
-                try:
-                    if not git_is_clean(worktree_path):
-                        continue
-                except Exception:
-                    continue
-            branch_name = entry.branch or git_branch(worktree_path) or "unknown"
-            if dry_run:
-                worktree_items.append({"id": entry.id, "branch": branch_name})
-                continue
-            try:
-                self.cleanup_worktree(
-                    worktree_repo_id=entry.id,
-                    archive=True,
-                )
-                worktree_items.append({"id": entry.id, "branch": branch_name})
-            except Exception as exc:
-                logger.warning(
-                    "cleanup_all: worktree cleanup failed for %s",
-                    entry.id,
-                    exc_info=exc,
-                )
-                worktree_errors.append({"id": entry.id, "error": str(exc)})
-
-        flow_by_repo: list[dict[str, object]] = []
-        total_flow_count = 0
-        for entry in manifest.repos:
-            repo_root = (self.hub_config.root / entry.path).resolve()
-            db_path = repo_root / ".codex-autorunner" / "flows.db"
-            if not db_path.exists():
-                continue
-            try:
-                repo_config = load_repo_config(repo_root)
-                durable = bool(getattr(repo_config, "durable_writes", False))
-            except ConfigError:
-                durable = False
-            store = FlowStore(db_path, durable=durable)
-            records: list[Any] = []
-            try:
-                store.initialize()
-                records = list(store.list_flow_runs(flow_type="ticket_flow"))
-            except Exception as exc:
-                logger.warning(
-                    "cleanup_all: flow store failed for %s",
-                    entry.id,
-                    exc_info=exc,
-                )
-                continue
-            finally:
-                store.close()
-            completed = [r for r in records if r.status == FlowRunStatus.COMPLETED]
-            if not completed:
-                continue
-            if dry_run:
-                n = len(completed)
-                flow_by_repo.append({"repo_id": entry.id, "count": n})
-                total_flow_count += n
-                continue
-            archived_here = 0
-            for record in completed:
-                try:
-                    archive_flow_run_artifacts(
-                        repo_root,
-                        run_id=record.id,
-                        force=False,
-                        delete_run=True,
-                    )
-                    archived_here += 1
-                except Exception as exc:
-                    logger.warning(
-                        "cleanup_all: archive flow run failed repo=%s run=%s",
-                        entry.id,
-                        record.id,
-                        exc_info=exc,
-                    )
-            if archived_here:
-                flow_by_repo.append({"repo_id": entry.id, "count": archived_here})
-            total_flow_count += archived_here
-
-        if not dry_run and (
-            total_thread_count or len(worktree_items) or total_flow_count
-        ):
-            self._invalidate_list_cache()
-
-        if dry_run:
-            if total_thread_count or len(worktree_items) or total_flow_count:
-                message = (
-                    f"Would archive {total_thread_count} threads, "
-                    f"{len(worktree_items)} worktrees, {total_flow_count} flow runs"
-                )
-            else:
-                message = "Nothing to clean up"
-        else:
-            if total_thread_count or len(worktree_items) or total_flow_count:
-                message = (
-                    f"Archived {total_thread_count} threads, "
-                    f"{len(worktree_items)} worktrees, {total_flow_count} flow runs"
-                )
-            else:
-                message = "Nothing to clean up"
-
-        return {
-            "status": "ok",
-            "dry_run": dry_run,
-            "threads": {
-                "archived_count": total_thread_count,
-                "by_repo": threads_by_repo,
-            },
-            "worktrees": {
-                "archived_count": len(worktree_items),
-                "items": worktree_items,
-                "errors": worktree_errors,
-            },
-            "flow_runs": {
-                "archived_count": total_flow_count,
-                "by_repo": flow_by_repo,
-            },
-            "message": message,
-        }
+        return self._worktree_manager.cleanup_all(dry_run=dry_run)
 
     def check_repo_removal(self, repo_id: str) -> Dict[str, object]:
         manifest = load_manifest(self.hub_config.manifest_path, self.hub_config.root)
@@ -3261,57 +2516,6 @@ class HubSupervisor:
             exists_on_disk=workspace_path.exists(),
             effective_destination=effective_destination,
         )
-
-    def _run_worktree_setup_commands(
-        self,
-        worktree_path: Path,
-        commands: Optional[List[str]],
-        *,
-        base_repo_id: str,
-    ) -> None:
-        normalized = [str(cmd).strip() for cmd in (commands or []) if str(cmd).strip()]
-        if not normalized:
-            return
-        log_path = worktree_path / ".codex-autorunner" / "logs" / "worktree-setup.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a", encoding="utf-8") as log_file:
-            log_file.write(
-                f"[{now_iso()}] base_repo={base_repo_id} commands={len(normalized)}\n"
-            )
-            for idx, command in enumerate(normalized, start=1):
-                log_file.write(f"$ {command}\n")
-                try:
-                    proc = subprocess.run(
-                        ["/bin/sh", "-lc", command],
-                        cwd=str(worktree_path),
-                        capture_output=True,
-                        text=True,
-                        timeout=_WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS,
-                        env=subprocess_env(),
-                        check=False,
-                    )
-                except subprocess.TimeoutExpired as exc:
-                    raise ValueError(
-                        "Worktree setup command %d/%d timed out after %ds: %r"
-                        % (
-                            idx,
-                            len(normalized),
-                            _WORKTREE_SETUP_COMMAND_TIMEOUT_SECONDS,
-                            command,
-                        )
-                    ) from exc
-                output = (proc.stdout or "") + (proc.stderr or "")
-                if output:
-                    log_file.write(output)
-                    if not output.endswith("\n"):
-                        log_file.write("\n")
-                if proc.returncode != 0:
-                    detail = output.strip() or f"exit {proc.returncode}"
-                    raise ValueError(
-                        "Worktree setup failed for command %d/%d (%r): %s"
-                        % (idx, len(normalized), command, detail)
-                    )
-            log_file.write("\n")
 
     def _derive_status(
         self,

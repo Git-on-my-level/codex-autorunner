@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
 import codex_autorunner.core.hub as hub_module
+import codex_autorunner.core.hub_worktree_manager as wtm_module
 from codex_autorunner.bootstrap import seed_repo_files
 from codex_autorunner.core.config import (
     CONFIG_FILENAME,
@@ -24,6 +25,7 @@ from codex_autorunner.core.destinations import default_car_docker_container_name
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
+from codex_autorunner.core.hub_worktree_manager import WorktreeManager
 from codex_autorunner.core.orchestration.bindings import OrchestrationBindingStore
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.runner_controller import ProcessRunnerController
@@ -2152,7 +2154,7 @@ def test_cleanup_worktree_removes_car_managed_docker_container(
             )
         raise AssertionError(f"unexpected docker call: {args_list}")
 
-    monkeypatch.setattr(HubSupervisor, "_run_docker_command", _fake_run_docker)
+    monkeypatch.setattr(WorktreeManager, "_run_docker_command", _fake_run_docker)
 
     result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
     assert result["status"] == "ok"
@@ -2205,7 +2207,7 @@ def test_cleanup_worktree_skips_explicit_docker_container_name(
         _ = self, args, timeout_seconds
         raise AssertionError("explicit container_name should not be auto-cleaned")
 
-    monkeypatch.setattr(HubSupervisor, "_run_docker_command", _unexpected_run_docker)
+    monkeypatch.setattr(WorktreeManager, "_run_docker_command", _unexpected_run_docker)
 
     result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
     assert result["status"] == "ok"
@@ -2271,7 +2273,7 @@ def test_cleanup_worktree_continues_when_docker_cleanup_errors(
             )
         raise AssertionError(f"unexpected docker call: {args_list}")
 
-    monkeypatch.setattr(HubSupervisor, "_run_docker_command", _fake_run_docker)
+    monkeypatch.setattr(WorktreeManager, "_run_docker_command", _fake_run_docker)
 
     result = supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=False)
     assert result["status"] == "ok"
@@ -2340,7 +2342,7 @@ def test_hub_api_cleanup_worktree_returns_docker_cleanup_status(
             )
         raise AssertionError(f"unexpected docker call: {args_list}")
 
-    monkeypatch.setattr(HubSupervisor, "_run_docker_command", _fake_run_docker)
+    monkeypatch.setattr(WorktreeManager, "_run_docker_command", _fake_run_docker)
 
     app = create_hub_app(hub_root)
     with TestClient(app) as client:
@@ -2492,6 +2494,7 @@ def test_cleanup_worktree_failure_keeps_bound_pma_threads_active(
         return original_run_git(args, cwd, **kwargs)
 
     monkeypatch.setattr(hub_module, "run_git", _failing_run_git)
+    monkeypatch.setattr(wtm_module, "run_git", _failing_run_git)
 
     with pytest.raises(ValueError, match="git worktree remove failed:"):
         supervisor.cleanup_worktree(worktree_repo_id=worktree.id, archive=True)
@@ -2633,7 +2636,9 @@ def test_cleanup_worktree_rejects_when_binding_lookup_fails_without_force(
     def _raise_lookup_error(_repo_id: str) -> bool:
         raise RuntimeError("db temporarily unavailable")
 
-    monkeypatch.setattr(supervisor, "_has_active_chat_binding", _raise_lookup_error)
+    monkeypatch.setattr(
+        supervisor._worktree_manager, "_has_active_chat_binding", _raise_lookup_error
+    )
 
     with pytest.raises(
         ValueError,
@@ -2668,7 +2673,9 @@ def test_cleanup_worktree_allows_force_when_binding_lookup_fails(
     def _raise_lookup_error(_repo_id: str) -> bool:
         raise RuntimeError("db temporarily unavailable")
 
-    monkeypatch.setattr(supervisor, "_has_active_chat_binding", _raise_lookup_error)
+    monkeypatch.setattr(
+        supervisor._worktree_manager, "_has_active_chat_binding", _raise_lookup_error
+    )
 
     supervisor.cleanup_worktree(
         worktree_repo_id=worktree.id,
