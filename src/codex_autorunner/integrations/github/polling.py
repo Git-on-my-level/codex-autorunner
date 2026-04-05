@@ -989,9 +989,13 @@ class GitHubScmPollingService:
             return list(candidate_roots)
         grouped: dict[int, list[Path]] = {0: [], 1: [], 2: []}
         for root in candidate_roots:
-            activity_key = _activity_sort_key(workspace_activity.get(str(root.resolve())))
+            activity_key = _activity_sort_key(
+                workspace_activity.get(str(root.resolve()))
+            )
             grouped.setdefault(activity_key[0], []).append(root)
-        cycle_index = int(_utc_now().timestamp()) // max(1, polling_config.interval_seconds)
+        cycle_index = int(_utc_now().timestamp()) // max(
+            1, polling_config.interval_seconds
+        )
         ordered: list[Path] = []
         for group_key in sorted(grouped):
             bucket = grouped[group_key]
