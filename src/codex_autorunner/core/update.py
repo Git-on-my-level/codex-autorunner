@@ -310,20 +310,27 @@ def _available_update_target_definitions(
     raw_config: Optional[dict[str, Any]] = None,
     update_backend: str = "auto",
     linux_service_names: Optional[dict[str, str]] = None,
+    include_runtime_probes: bool = True,
 ) -> tuple[UpdateTargetDefinition, ...]:
     telegram_available = _chat_target_enableable(
         raw_config=raw_config, target="telegram"
-    ) or _chat_target_active(
-        target="telegram",
-        update_backend=update_backend,
-        linux_service_names=linux_service_names,
+    ) or (
+        include_runtime_probes
+        and _chat_target_active(
+            target="telegram",
+            update_backend=update_backend,
+            linux_service_names=linux_service_names,
+        )
     )
     discord_available = _chat_target_enableable(
         raw_config=raw_config, target="discord"
-    ) or _chat_target_active(
-        target="discord",
-        update_backend=update_backend,
-        linux_service_names=linux_service_names,
+    ) or (
+        include_runtime_probes
+        and _chat_target_active(
+            target="discord",
+            update_backend=update_backend,
+            linux_service_names=linux_service_names,
+        )
     )
 
     return available_update_target_definitions(
@@ -337,6 +344,7 @@ def _available_update_target_options(
     raw_config: Optional[dict[str, Any]] = None,
     update_backend: str = "auto",
     linux_service_names: Optional[dict[str, str]] = None,
+    include_runtime_probes: bool = True,
 ) -> tuple[tuple[str, str], ...]:
     return tuple(
         (definition.value, definition.label)
@@ -344,6 +352,7 @@ def _available_update_target_options(
             raw_config=raw_config,
             update_backend=update_backend,
             linux_service_names=linux_service_names,
+            include_runtime_probes=include_runtime_probes,
         )
     )
 
@@ -353,6 +362,7 @@ def _default_update_target(
     raw_config: Optional[dict[str, Any]] = None,
     update_backend: str = "auto",
     linux_service_names: Optional[dict[str, str]] = None,
+    include_runtime_probes: bool = True,
 ) -> str:
     values = {
         definition.value
@@ -360,6 +370,7 @@ def _default_update_target(
             raw_config=raw_config,
             update_backend=update_backend,
             linux_service_names=linux_service_names,
+            include_runtime_probes=include_runtime_probes,
         )
     }
     if "all" in values:
