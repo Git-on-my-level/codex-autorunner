@@ -5150,6 +5150,51 @@ async def test_unknown_pma_subcommand_has_explicit_unknown_message(
 
 
 @pytest.mark.anyio
+async def test_on_dispatch_backgrounds_interaction_handling(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _slow_handle(_event: Any, _context: Any) -> None:
+        started.set()
+        await release.wait()
+
+    service._handle_chat_event = _slow_handle  # type: ignore[assignment]
+
+    try:
+        dispatch_task = asyncio.create_task(
+            service._on_dispatch(
+                "INTERACTION_CREATE",
+                _interaction_path(
+                    command_path=("car", "session", "compact"),
+                    options=[],
+                ),
+            )
+        )
+        await asyncio.wait_for(dispatch_task, timeout=1.0)
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+        release.set()
+        await asyncio.wait_for(service._dispatcher.wait_idle(), timeout=1.0)
+    finally:
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_malformed_interaction_payload_returns_ephemeral_response(
     tmp_path: Path,
 ) -> None:
