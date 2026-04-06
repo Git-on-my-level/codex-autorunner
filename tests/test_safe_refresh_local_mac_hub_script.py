@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -12,6 +13,7 @@ def test_safe_refresh_local_mac_hub_script_runs_past_parse_stage(
     env = {
         "HOME": str(tmp_path),
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PIPX_PYTHON": sys.executable,
         "USER": "tester",
     }
 
