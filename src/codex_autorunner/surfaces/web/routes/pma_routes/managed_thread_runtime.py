@@ -556,6 +556,52 @@ async def _run_managed_thread_execution(
     hub_root = request.app.state.config.root
     transcripts = PmaTranscriptStore(hub_root)
     response_payload = dict(delivery_payload or {})
+    live_timeline_count = 0
+    live_timeline_error_logged = False
+    live_timeline_metadata = _build_managed_thread_turn_metadata(
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=current_turn_id,
+        thread_row=current_thread_row,
+        backend_thread_id=current_backend_thread_id,
+        backend_turn_id=started.execution.backend_id,
+        workspace_root=started.workspace_root,
+        model=started.request.model,
+        reasoning=started.request.reasoning,
+        status="running",
+    )
+
+    def _persist_live_timeline_events(events: list[RunEvent]) -> None:
+        nonlocal live_timeline_count
+        nonlocal live_timeline_error_logged
+        if not events:
+            return
+        try:
+            persist_turn_timeline(
+                hub_root,
+                execution_id=current_turn_id,
+                target_kind="thread_target",
+                target_id=managed_thread_id,
+                repo_id=normalize_optional_text(current_thread_row.get("repo_id")),
+                resource_kind=normalize_optional_text(
+                    current_thread_row.get("resource_kind")
+                ),
+                resource_id=normalize_optional_text(
+                    current_thread_row.get("resource_id")
+                ),
+                metadata=live_timeline_metadata,
+                events=events,
+                start_index=live_timeline_count + 1,
+            )
+        except Exception:
+            if not live_timeline_error_logged:
+                live_timeline_error_logged = True
+                logger.exception(
+                    "Failed to persist live managed-thread timeline (managed_thread_id=%s, managed_turn_id=%s)",
+                    managed_thread_id,
+                    current_turn_id,
+                )
+        else:
+            live_timeline_count += len(events)
 
     if (
         harness is not None
@@ -573,13 +619,13 @@ async def _run_managed_thread_execution(
                 live_backend_turn_id,
             ):
                 streamed_raw_events.append(raw_event)
-                timeline_events.extend(
-                    await normalize_runtime_thread_raw_event(
-                        raw_event,
-                        timeline_state,
-                        timestamp=now_iso(),
-                    )
+                new_events = await normalize_runtime_thread_raw_event(
+                    raw_event,
+                    timeline_state,
+                    timestamp=now_iso(),
                 )
+                timeline_events.extend(new_events)
+                _persist_live_timeline_events(new_events)
 
         stream_task = asyncio.create_task(_collect_timeline())
     try:
