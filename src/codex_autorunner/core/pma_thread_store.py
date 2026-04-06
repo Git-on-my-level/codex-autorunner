@@ -590,17 +590,27 @@ class PmaThreadStore:
 
         thread_row = conn.execute(
             """
-            SELECT status_turn_id
+            SELECT runtime_status, status_turn_id
               FROM orch_thread_targets
              WHERE thread_target_id = ?
             """,
             (managed_thread_id,),
         ).fetchone()
+        runtime_status = (
+            str(thread_row["runtime_status"]).strip().lower()
+            if thread_row is not None and thread_row["runtime_status"] is not None
+            else ""
+        )
         status_turn_id = (
             str(thread_row["status_turn_id"]).strip()
             if thread_row is not None and thread_row["status_turn_id"] is not None
             else ""
         )
+
+        # If thread state says terminal while a running execution exists, the
+        # execution record is inconsistent and should be recovered.
+        if runtime_status in {"completed", "failed", "interrupted"}:
+            return [str(row["execution_id"]) for row in running_rows]
 
         stale_execution_ids: list[str] = []
         now_dt = datetime.now(timezone.utc)

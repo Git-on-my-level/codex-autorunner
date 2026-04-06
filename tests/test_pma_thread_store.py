@@ -473,6 +473,61 @@ def test_claim_next_queued_turn_recovers_old_running_execution_when_status_turn_
     assert stale_after["finished_at"]
 
 
+def test_claim_next_queued_turn_recovers_running_turn_when_thread_status_is_terminal(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    stale_running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second queued",
+        request_kind="review",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second queued", "kind": "review"}},
+    )
+    assert queued_turn["status"] == "queued"
+
+    # Simulate corrupted state: thread reports terminal while a running turn remains.
+    with store._write_conn() as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET runtime_status = 'completed',
+                       status_reason = 'managed_turn_completed',
+                       status_turn_id = ?,
+                       status_terminal = 1,
+                       status_updated_at = ?,
+                       updated_at = ?
+                 WHERE thread_target_id = ?
+                """,
+                (
+                    stale_running_turn["managed_turn_id"],
+                    stale_running_turn["started_at"],
+                    stale_running_turn["started_at"],
+                    thread["managed_thread_id"],
+                ),
+            )
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is not None
+    execution, payload = claimed
+    assert execution["managed_turn_id"] == queued_turn["managed_turn_id"]
+    assert execution["status"] == "running"
+    assert payload["request"]["kind"] == "review"
+    assert payload["request"]["message_text"] == "second queued"
+
+    stale_after = store.get_turn(
+        thread["managed_thread_id"], stale_running_turn["managed_turn_id"]
+    )
+    assert stale_after is not None
+    assert stale_after["status"] == "interrupted"
+    assert stale_after["error"] == "stale_running_execution_recovered"
+    assert stale_after["finished_at"]
+
+
 def test_create_turn_keeps_old_running_execution_with_recent_activity(
     tmp_path: Path,
 ) -> None:
@@ -665,6 +720,43 @@ def test_create_turn_rejects_archived_thread(tmp_path: Path) -> None:
         store.create_turn(thread["managed_thread_id"], prompt="should reject")
 
     assert store.list_turns(thread["managed_thread_id"]) == []
+
+
+def test_archived_thread_does_not_recover_live_running_turn(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    running = store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second queued",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second queued"}},
+    )
+    assert queued["status"] == "queued"
+
+    store.archive_thread(thread["managed_thread_id"])
+
+    running_view = store.get_running_turn(thread["managed_thread_id"])
+    assert running_view is not None
+    assert running_view["managed_turn_id"] == running["managed_turn_id"]
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is None
+
+    running_after = store.get_turn(
+        thread["managed_thread_id"], running["managed_turn_id"]
+    )
+    assert running_after is not None
+    assert running_after["status"] == "running"
+    assert running_after["error"] is None
+    assert running_after["finished_at"] is None
+
+    queued_after = store.get_turn(
+        thread["managed_thread_id"], queued["managed_turn_id"]
+    )
+    assert queued_after is not None
+    assert queued_after["status"] == "queued"
 
 
 def test_set_compact_seed_and_reset_backend_id(tmp_path: Path) -> None:
