@@ -10,6 +10,7 @@ from ...integrations.chat.compaction import (
     COMPACT_SEED_PREFIX,
     COMPACT_SEED_SUFFIX,
 )
+from ...integrations.chat.session_messages import build_resumed_thread_lines
 from ...integrations.chat.thread_summaries import (
     _extract_raw_first_user_preview,
     _extract_thread_preview_parts,
@@ -463,16 +464,16 @@ def _format_resume_summary(
     effort: Optional[str] = None,
 ) -> str:
     user_preview, assistant_preview = _extract_thread_resume_parts(entry)
-    parts = [f"Resumed thread `{thread_id}`"]
-    if workspace_path or model or effort:
-        parts.append(f"Directory: {workspace_path or 'unbound'}")
-        parts.append(f"Model: {model or 'default'}")
-        parts.append(f"Effort: {effort or 'default'}")
-    if user_preview:
-        parts.extend(["", "User:", user_preview])
-    if assistant_preview:
-        parts.extend(["", "Assistant:", assistant_preview])
-    return "\n".join(parts)
+    return "\n".join(
+        build_resumed_thread_lines(
+            thread_id=thread_id,
+            workspace_path=workspace_path,
+            model=model,
+            effort=effort,
+            user_preview=user_preview,
+            assistant_preview=assistant_preview,
+        )
+    )
 
 
 def _format_summary_preview(summary: ThreadSummary) -> str:

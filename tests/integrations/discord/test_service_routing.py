@@ -5225,8 +5225,15 @@ async def test_car_new_resets_repo_session_key(tmp_path: Path) -> None:
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "fresh repo session" in content
+        content = rest.followup_messages[0]["payload"]["content"]
+        normalized = content.lower()
+        assert "fresh repo session" in normalized
+        assert "Thread: `" in content
+        assert "Directory: " in content
+        assert str(workspace.resolve()).replace("_", "\\_") in content
+        assert "agent: codex" in normalized
+        assert "Model: default" in content
+        assert "Effort: default" in content
     finally:
         await store.close()
 
@@ -5291,10 +5298,17 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
         assert len(rest.interaction_responses) == 1
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
-        content = rest.followup_messages[0]["payload"]["content"].lower()
-        assert "reset branch" in content
-        assert "origin/master" in content
-        assert "fresh repo session" in content
+        content = rest.followup_messages[0]["payload"]["content"]
+        normalized = content.lower()
+        assert "reset branch" in normalized
+        assert "origin/master" in normalized
+        assert "fresh repo session" in normalized
+        assert "Thread: `" in content
+        assert "Directory: " in content
+        assert str(workspace.resolve()).replace("_", "\\_") in content
+        assert "agent: codex" in normalized
+        assert "Model: default" in content
+        assert "Effort: default" in content
     finally:
         await store.close()
 
