@@ -320,8 +320,10 @@ class PmaAuditLog:
     def count_fingerprint(
         self, fingerprint: str, *, within_seconds: Optional[int] = None
     ) -> int:
-        self._backfill_legacy_entries()
         entries = self._list_recent_sqlite(limit=10000)
+        if not entries:
+            self._backfill_legacy_entries()
+            entries = self._list_recent_sqlite(limit=10000)
         if not entries:
             entries = self._list_recent_unlocked(limit=10000)
         if not within_seconds:
