@@ -215,6 +215,19 @@ normalize_bool() {
   esac
 }
 
+normalize_true_default_bool() {
+  local normalized
+  normalized="$(normalize_bool "${1:-}")"
+  case "${normalized}" in
+    false)
+      echo "false"
+      ;;
+    *)
+      echo "true"
+      ;;
+  esac
+}
+
 if [[ -z "${HELPER_PYTHON}" || ! -x "${HELPER_PYTHON}" ]]; then
   if command -v python3 >/dev/null 2>&1; then
     HELPER_PYTHON="$(command -v python3)"
@@ -437,12 +450,7 @@ HEALTH_CHECK_STATIC="$(normalize_bool "${HEALTH_CHECK_STATIC}")"
 HEALTH_CHECK_TELEGRAM="$(normalize_bool "${HEALTH_CHECK_TELEGRAM}")"
 HEALTH_CHECK_DISCORD="$(normalize_bool "${HEALTH_CHECK_DISCORD}")"
 WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD="$(
-  raw="$(printf '%s' "${WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD:-}" | tr '[:upper:]' '[:lower:]')"
-  case "${raw}" in
-    1|true|yes|y|on) echo "true" ;;
-    0|false|no|n|off) echo "false" ;;
-    *) echo "true" ;;
-  esac
+  normalize_true_default_bool "${WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD:-}"
 )"
 should_reload_hub=false
 should_reload_telegram=false
