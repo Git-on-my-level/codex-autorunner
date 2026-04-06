@@ -281,6 +281,7 @@ class CodexAppServerClient:
         self._process_registry_key: Optional[str] = None
         self._reader_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._start_lock: Optional[asyncio.Lock] = None
         self._write_lock: Optional[asyncio.Lock] = None
         self._data_lock: Optional[asyncio.Lock] = None
@@ -362,6 +363,7 @@ class CodexAppServerClient:
             except asyncio.CancelledError:
                 pass
             self._restart_task = None
+        await self._cancel_background_tasks()
         await self._terminate_process()
         self._fail_pending(CodexAppServerDisconnected("Client closed"))
         _CLIENT_INSTANCES.discard(self)
@@ -870,17 +872,33 @@ class CodexAppServerClient:
         self._apply_turn_completed(state, message, params)
         if self._notification_handler is None:
             return
-        try:
-            await _maybe_await(self._notification_handler(message))
-        except Exception as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "app_server.notification_handler.failed",
-                method="turn/completed",
-                handled=True,
-                exc=exc,
-            )
+        self._schedule_notification_handler(message, method="turn/completed")
+
+    def _schedule_notification_handler(
+        self, message: Dict[str, Any], *, method: str, handled: bool = True
+    ) -> None:
+        handler = self._notification_handler
+        if handler is None:
+            return
+
+        async def _invoke_notification_handler() -> None:
+            try:
+                await _maybe_await(handler(message))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.notification_handler.failed",
+                    method=method,
+                    handled=handled,
+                    exc=exc,
+                )
+
+        task = asyncio.create_task(_invoke_notification_handler())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def _maybe_fail_stalled_turn(
         self,
@@ -2183,6 +2201,17 @@ class CodexAppServerClient:
             await task
         except asyncio.CancelledError:
             pass
+
+    async def _cancel_background_tasks(self) -> None:
+        tasks = [task for task in self._background_tasks if not task.done()]
+        self._background_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def _terminate_running_process(
         self, process: asyncio.subprocess.Process

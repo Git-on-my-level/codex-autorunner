@@ -890,9 +890,13 @@ async def test_completion_gap_recovery_emits_synthetic_turn_completed_notificati
     tmp_path: Path,
 ) -> None:
     notifications: list[dict[str, object]] = []
+    handler_started = asyncio.Event()
+    release_handler = asyncio.Event()
 
     async def on_notification(message: dict[str, object]) -> None:
         notifications.append(message)
+        handler_started.set()
+        await release_handler.wait()
 
     client = CodexAppServerClient(
         fixture_command("basic"),
@@ -931,7 +935,11 @@ async def test_completion_gap_recovery_emits_synthetic_turn_completed_notificati
 
         client.thread_resume = _resume  # type: ignore[method-assign]
 
-        result = await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0)
+        result = await asyncio.wait_for(
+            client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0),
+            timeout=0.2,
+        )
+        await asyncio.wait_for(handler_started.wait(), timeout=0.5)
 
         assert result.status == "completed"
         assert state.turn_completed_seen is True
@@ -950,6 +958,7 @@ async def test_completion_gap_recovery_emits_synthetic_turn_completed_notificati
             for event in result.raw_events
         )
     finally:
+        release_handler.set()
         await client.close()
 
 
