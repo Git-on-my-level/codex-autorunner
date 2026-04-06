@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 import subprocess
 from pathlib import Path
 from typing import (
@@ -297,7 +298,9 @@ class WorktreeManager:
                 intent=intent,
                 retention_policy=retention_policy,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: archive_worktree_snapshot spans file I/O, git, and compression with unpredictable failure modes
             logger.exception(
                 "Hub archive worktree failed id=%s snapshot_id=%s",
                 worktree_repo_id,
@@ -540,19 +543,71 @@ class WorktreeManager:
             repo_id=repo_id,
         )
 
-    def cleanup_worktree(
+    def _remove_worktree_git_refs(
+        self,
+        *,
+        worktree_path: Path,
+        base_path: Path,
+        branch: Optional[str],
+        delete_branch: bool = False,
+        delete_remote: bool = False,
+    ) -> None:
+        try:
+            proc = run_git(
+                ["worktree", "remove", "--force", str(worktree_path)],
+                base_path,
+                check=False,
+                timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
+            )
+        except GitError as exc:
+            raise ValueError(f"git worktree remove failed: {exc}") from exc
+        if proc.returncode != 0:
+            detail = _git_failure_detail(proc)
+            detail_lower = detail.lower()
+            if "not a working tree" not in detail_lower:
+                raise ValueError(f"git worktree remove failed: {detail}")
+        try:
+            proc = run_git(["worktree", "prune"], base_path, check=False)
+            if proc.returncode != 0:
+                logger.warning(
+                    "git worktree prune failed: %s", _git_failure_detail(proc)
+                )
+        except GitError as exc:
+            logger.warning("git worktree prune failed: %s", exc)
+
+        if delete_branch and branch:
+            try:
+                proc = run_git(["branch", "-D", branch], base_path, check=False)
+                if proc.returncode != 0:
+                    logger.warning(
+                        "git branch delete failed: %s", _git_failure_detail(proc)
+                    )
+            except GitError as exc:
+                logger.warning("git branch delete failed: %s", exc)
+        if delete_remote and branch:
+            try:
+                proc = run_git(
+                    ["push", "origin", "--delete", branch],
+                    base_path,
+                    check=False,
+                    timeout_seconds=_GIT_PUSH_DELETE_TIMEOUT_SECONDS,
+                )
+                if proc.returncode != 0:
+                    logger.warning(
+                        "git push delete failed: %s", _git_failure_detail(proc)
+                    )
+            except GitError as exc:
+                logger.warning("git push delete failed: %s", exc)
+
+    def _validate_cleanup_worktree(
         self,
         *,
         worktree_repo_id: str,
-        delete_branch: bool = False,
-        delete_remote: bool = False,
-        archive: bool = True,
-        force_archive: bool = False,
-        archive_note: Optional[str] = None,
-        force: bool = False,
-        force_attestation: Optional[Mapping[str, object]] = None,
-        archive_profile: Optional[str] = None,
-    ) -> Dict[str, object]:
+        archive: bool,
+        force: bool,
+        force_archive: bool,
+        force_attestation: Optional[Mapping[str, object]],
+    ) -> tuple[Manifest, Any, Any, Path, Path]:
         if self._hub_config.pma.cleanup_require_archive and not archive:
             raise ValueError(
                 "Worktree cleanup requires archiving per PMA policy "
@@ -581,7 +636,7 @@ class WorktreeManager:
         branch_name = entry.branch or "unknown"
         try:
             has_active_chat_binding = self._has_active_chat_binding(worktree_repo_id)
-        except Exception as exc:
+        except (OSError, ValueError, KeyError) as exc:
             if not force:
                 raise ValueError(
                     "Unable to verify active chat bindings for "
@@ -601,6 +656,30 @@ class WorktreeManager:
                 f"(branch={branch_name}). This worktree is bound to a chat. "
                 "Re-run with --force to proceed."
             )
+        return manifest, entry, base, base_path, worktree_path
+
+    def cleanup_worktree(
+        self,
+        *,
+        worktree_repo_id: str,
+        delete_branch: bool = False,
+        delete_remote: bool = False,
+        archive: bool = True,
+        force_archive: bool = False,
+        archive_note: Optional[str] = None,
+        force: bool = False,
+        force_attestation: Optional[Mapping[str, object]] = None,
+        archive_profile: Optional[str] = None,
+    ) -> Dict[str, object]:
+        manifest, entry, base, base_path, worktree_path = (
+            self._validate_cleanup_worktree(
+                worktree_repo_id=worktree_repo_id,
+                archive=archive,
+                force=force,
+                force_archive=force_archive,
+                force_attestation=force_attestation,
+            )
+        )
 
         self._on_stop_runner(
             repo_id=worktree_repo_id,
@@ -633,52 +712,13 @@ class WorktreeManager:
                 destination=effective_destination.destination,
             )
 
-        try:
-            proc = run_git(
-                ["worktree", "remove", "--force", str(worktree_path)],
-                base_path,
-                check=False,
-                timeout_seconds=_GIT_WORKTREE_TIMEOUT_SECONDS,
-            )
-        except GitError as exc:
-            raise ValueError(f"git worktree remove failed: {exc}") from exc
-        if proc.returncode != 0:
-            detail = _git_failure_detail(proc)
-            detail_lower = detail.lower()
-            if "not a working tree" not in detail_lower:
-                raise ValueError(f"git worktree remove failed: {detail}")
-        try:
-            proc = run_git(["worktree", "prune"], base_path, check=False)
-            if proc.returncode != 0:
-                logger.warning(
-                    "git worktree prune failed: %s", _git_failure_detail(proc)
-                )
-        except GitError as exc:
-            logger.warning("git worktree prune failed: %s", exc)
-
-        if delete_branch and entry.branch:
-            try:
-                proc = run_git(["branch", "-D", entry.branch], base_path, check=False)
-                if proc.returncode != 0:
-                    logger.warning(
-                        "git branch delete failed: %s", _git_failure_detail(proc)
-                    )
-            except GitError as exc:
-                logger.warning("git branch delete failed: %s", exc)
-        if delete_remote and entry.branch:
-            try:
-                proc = run_git(
-                    ["push", "origin", "--delete", entry.branch],
-                    base_path,
-                    check=False,
-                    timeout_seconds=_GIT_PUSH_DELETE_TIMEOUT_SECONDS,
-                )
-                if proc.returncode != 0:
-                    logger.warning(
-                        "git push delete failed: %s", _git_failure_detail(proc)
-                    )
-            except GitError as exc:
-                logger.warning("git push delete failed: %s", exc)
+        self._remove_worktree_git_refs(
+            worktree_path=worktree_path,
+            base_path=base_path,
+            branch=entry.branch,
+            delete_branch=delete_branch,
+            delete_remote=delete_remote,
+        )
 
         manifest.repos = [r for r in manifest.repos if r.id != worktree_repo_id]
         save_manifest(self._hub_config.manifest_path, manifest, self._hub_config.root)
@@ -751,28 +791,12 @@ class WorktreeManager:
             archive_profile=archive_profile,
         )
 
-    def cleanup_all(self, *, dry_run: bool = False) -> Dict[str, object]:
-        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
-        unbound_threads_by_repo = self._on_collect_unbound_repo_threads(
-            manifest=manifest
-        )
-
-        threads_by_repo: list[dict[str, object]] = []
-        total_thread_count = 0
-        for repo_id, thread_ids in sorted(unbound_threads_by_repo.items()):
-            count = len(thread_ids)
-            if count == 0:
-                continue
-            total_thread_count += count
-            threads_by_repo.append({"repo_id": repo_id, "count": count})
-
-        if not dry_run:
-            for repo_id in self._on_base_repo_paths(manifest).keys():
-                self._on_archive_unbound_repo_threads(
-                    repo_id=repo_id,
-                    unbound_threads_by_repo=unbound_threads_by_repo,
-                )
-
+    def _collect_cleanup_worktrees(
+        self,
+        *,
+        manifest: Manifest,
+        dry_run: bool,
+    ) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
         worktree_items: list[dict[str, str]] = []
         worktree_errors: list[dict[str, str]] = []
         for entry in manifest.repos:
@@ -783,7 +807,7 @@ class WorktreeManager:
             try:
                 if self._has_active_chat_binding(entry.id):
                     continue
-            except Exception as exc:
+            except (OSError, ValueError, KeyError) as exc:
                 logger.warning(
                     "cleanup_all: chat binding check failed for %s",
                     entry.id,
@@ -797,7 +821,7 @@ class WorktreeManager:
                 try:
                     if not git_is_clean(worktree_path):
                         continue
-                except Exception:
+                except OSError:
                     continue
             branch_name = entry.branch or git_branch(worktree_path) or "unknown"
             if dry_run:
@@ -809,14 +833,23 @@ class WorktreeManager:
                     archive=True,
                 )
                 worktree_items.append({"id": entry.id, "branch": branch_name})
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: cleanup_worktree orchestrates git, archive, docker, and state with diverse failure modes
                 logger.warning(
                     "cleanup_all: worktree cleanup failed for %s",
                     entry.id,
                     exc_info=exc,
                 )
                 worktree_errors.append({"id": entry.id, "error": str(exc)})
+        return worktree_items, worktree_errors
 
+    def _cleanup_worktree_flows(
+        self,
+        *,
+        manifest: Manifest,
+        dry_run: bool,
+    ) -> tuple[list[dict[str, object]], int]:
         flow_by_repo: list[dict[str, object]] = []
         total_flow_count = 0
         for entry in manifest.repos:
@@ -836,7 +869,7 @@ class WorktreeManager:
             try:
                 store.initialize()
                 records = list(store.list_flow_runs(flow_type="ticket_flow"))
-            except Exception as exc:
+            except (OSError, sqlite3.Error) as exc:
                 logger.warning(
                     "cleanup_all: flow store failed for %s",
                     entry.id,
@@ -863,7 +896,7 @@ class WorktreeManager:
                         delete_run=True,
                     )
                     archived_here += 1
-                except Exception as exc:
+                except (OSError, ValueError) as exc:
                     logger.warning(
                         "cleanup_all: archive flow run failed repo=%s run=%s",
                         entry.id,
@@ -873,6 +906,39 @@ class WorktreeManager:
             if archived_here:
                 flow_by_repo.append({"repo_id": entry.id, "count": archived_here})
             total_flow_count += archived_here
+        return flow_by_repo, total_flow_count
+
+    def cleanup_all(self, *, dry_run: bool = False) -> Dict[str, object]:
+        manifest = load_manifest(self._hub_config.manifest_path, self._hub_config.root)
+        unbound_threads_by_repo = self._on_collect_unbound_repo_threads(
+            manifest=manifest
+        )
+
+        threads_by_repo: list[dict[str, object]] = []
+        total_thread_count = 0
+        for repo_id, thread_ids in sorted(unbound_threads_by_repo.items()):
+            count = len(thread_ids)
+            if count == 0:
+                continue
+            total_thread_count += count
+            threads_by_repo.append({"repo_id": repo_id, "count": count})
+
+        if not dry_run:
+            for repo_id in self._on_base_repo_paths(manifest).keys():
+                self._on_archive_unbound_repo_threads(
+                    repo_id=repo_id,
+                    unbound_threads_by_repo=unbound_threads_by_repo,
+                )
+
+        worktree_items, worktree_errors = self._collect_cleanup_worktrees(
+            manifest=manifest,
+            dry_run=dry_run,
+        )
+
+        flow_by_repo, total_flow_count = self._cleanup_worktree_flows(
+            manifest=manifest,
+            dry_run=dry_run,
+        )
 
         if not dry_run and (
             total_thread_count or len(worktree_items) or total_flow_count

@@ -48,7 +48,7 @@ async def execute_file_chat(
             if engine is not None
             else None
         )
-    except Exception:
+    except (AttributeError, TypeError):
         stall_timeout_seconds = None
     if supervisor is None and opencode is None:
         raise FileChatError("No agent supervisor available for file chat")
@@ -207,7 +207,9 @@ async def execute_app_server(
     if thread_id:
         try:
             await client.thread_resume(thread_id)
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: thread_resume may fail with various client/network errors; fallback to new thread
             thread_id = None
 
     if not thread_id:
@@ -234,14 +236,18 @@ async def execute_app_server(
     if events is not None:
         try:
             await events.register_turn(thread_id, handle.turn_id)
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: register_turn is best-effort non-critical observability
             logger.debug("file chat register_turn failed", exc_info=True)
     if on_meta is not None:
         try:
             maybe = on_meta(agent_id, thread_id, handle.turn_id)
             if asyncio.iscoroutine(maybe):
                 await maybe
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: user-provided callback must not crash execution
             logger.debug("file chat meta callback failed", exc_info=True)
 
     turn_task = asyncio.create_task(handle.wait(timeout=None))
@@ -325,7 +331,9 @@ async def execute_opencode(
             maybe = on_meta("opencode", session_id, turn_id)
             if asyncio.iscoroutine(maybe):
                 await maybe
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: user-provided callback must not crash execution
             logger.debug("file chat opencode meta failed", exc_info=True)
 
     model_payload = split_model_id(model)
@@ -342,7 +350,9 @@ async def execute_opencode(
                 maybe = on_usage(part)
                 if asyncio.iscoroutine(maybe):
                     await maybe
-            except Exception:
+            except (
+                Exception
+            ):  # intentional: user-provided callback must not crash execution
                 logger.debug("file chat usage handler failed", exc_info=True)
 
     ready_event = asyncio.Event()
@@ -382,7 +392,9 @@ async def execute_opencode(
         prompt_response = None
         try:
             prompt_response = await prompt_task
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: rewrap any client failure as FileChatError
             interrupt_event.set()
             output_task.cancel()
             raise FileChatError(f"OpenCode prompt failed: {exc}") from exc
@@ -421,18 +433,15 @@ async def execute_opencode(
         )
     if output_result.error:
         raise FileChatError(output_result.error)
-    agent_message = parse_agent_message(output_result.text)
-    result = {
+    return {
         "status": "ok",
-        "agent_message": agent_message,
+        "agent_message": parse_agent_message(output_result.text),
         "message": output_result.text,
         "thread_id": session_id,
         "turn_id": turn_id,
         "agent": "opencode",
+        **({"usage_parts": usage_parts} if usage_parts else {}),
     }
-    if usage_parts:
-        result["usage_parts"] = usage_parts
-    return result
 
 
 def parse_agent_message(output: str) -> str:
