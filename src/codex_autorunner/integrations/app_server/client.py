@@ -701,6 +701,9 @@ class CodexAppServerClient:
 
         status = self._apply_resume_snapshot(state, snapshot)
         if status and _status_is_terminal(status) and not state.future.done():
+            await self._emit_recovered_turn_completed_notification(
+                state, thread_id=thread_id, recovery_source="turn_completion_gap"
+            )
             log_event(
                 self._logger,
                 logging.INFO,
@@ -804,6 +807,9 @@ class CodexAppServerClient:
         status = self._apply_resume_snapshot(state, snapshot)
 
         if status and _status_is_terminal(status) and not state.future.done():
+            await self._emit_recovered_turn_completed_notification(
+                state, thread_id=thread_id, recovery_source="turn_stall"
+            )
             self._set_turn_result_if_pending(state)
             return
 
@@ -837,6 +843,44 @@ class CodexAppServerClient:
         if status:
             state.status = status
         return status
+
+    async def _emit_recovered_turn_completed_notification(
+        self,
+        state: _TurnState,
+        *,
+        thread_id: str,
+        recovery_source: str,
+    ) -> None:
+        if state.turn_completed_seen:
+            return
+        params = {
+            "turnId": state.turn_id,
+            "threadId": thread_id,
+            "status": state.status,
+            "recoveredVia": "thread/resume",
+            "recoverySource": recovery_source,
+            "synthetic": True,
+        }
+        message = {
+            "jsonrpc": "2.0",
+            "method": "turn/completed",
+            "params": params,
+        }
+        self._mark_notification_event(state=state, method="turn/completed")
+        self._apply_turn_completed(state, message, params)
+        if self._notification_handler is None:
+            return
+        try:
+            await _maybe_await(self._notification_handler(message))
+        except Exception as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "app_server.notification_handler.failed",
+                method="turn/completed",
+                handled=True,
+                exc=exc,
+            )
 
     def _maybe_fail_stalled_turn(
         self,

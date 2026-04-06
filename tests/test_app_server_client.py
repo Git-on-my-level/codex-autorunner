@@ -886,6 +886,74 @@ async def test_wait_for_turn_reconciles_completion_gap_without_idle_stall(
 
 
 @pytest.mark.anyio
+async def test_completion_gap_recovery_emits_synthetic_turn_completed_notification(
+    tmp_path: Path,
+) -> None:
+    notifications: list[dict[str, object]] = []
+
+    async def on_notification(message: dict[str, object]) -> None:
+        notifications.append(message)
+
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=10.0,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+        turn_completion_gap_timeout_seconds=0.01,
+        notification_handler=on_notification,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.status = "running"
+        state.item_completed_count = 3
+        state.completion_gap_started_at = time.monotonic() - 1.0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            _ = kwargs
+            return {
+                "thread": {
+                    "id": thread_id,
+                    "turns": [
+                        {
+                            "id": "turn-1",
+                            "status": "completed",
+                            "items": [
+                                {
+                                    "type": "agentMessage",
+                                    "text": "recovered reply",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            }
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        result = await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0)
+
+        assert result.status == "completed"
+        assert state.turn_completed_seen is True
+        assert any(
+            event.get("method") == "turn/completed"
+            and event.get("params", {}).get("turnId") == "turn-1"
+            and event.get("params", {}).get("threadId") == "thread-1"
+            and event.get("params", {}).get("status") == "completed"
+            and event.get("params", {}).get("synthetic") is True
+            and event.get("params", {}).get("recoveredVia") == "thread/resume"
+            for event in notifications
+        )
+        assert any(
+            event.get("method") == "turn/completed"
+            and event.get("params", {}).get("synthetic") is True
+            for event in result.raw_events
+        )
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_wait_for_turn_fails_when_completion_gap_recovery_exhausted(
     tmp_path: Path,
 ) -> None:
