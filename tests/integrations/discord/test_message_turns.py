@@ -4740,6 +4740,74 @@ async def test_message_create_streaming_turn_ignores_late_failed_with_stream_fal
 
 
 @pytest.mark.anyio
+async def test_message_create_streaming_turn_ignores_commentary_when_stream_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway([("MESSAGE_CREATE", _message_create("ship it"))])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    commentary_text = "draft release summary"
+    final_text = "final release summary"
+    _patch_streaming_harness(
+        monkeypatch,
+        [
+            {
+                "message": {
+                    "method": "item/completed",
+                    "params": {
+                        "itemId": "item-1",
+                        "item": {
+                            "type": "agentMessage",
+                            "text": commentary_text,
+                            "phase": "commentary",
+                        },
+                    },
+                }
+            },
+            OutputDelta(
+                timestamp="2026-01-01T00:00:01Z",
+                content=final_text,
+                delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+            ),
+            Completed(timestamp="2026-01-01T00:00:02Z", final_message=""),
+        ],
+        assistant_text="",
+        wait_for_stream=True,
+    )
+
+    try:
+        await service.run_forever()
+        contents = [
+            str(msg["payload"].get("content", "")) for msg in rest.channel_messages
+        ]
+        assert any(final_text in content for content in contents)
+        assert not any(commentary_text in content for content in contents)
+        assert not any(
+            "(No response text returned.)" in content for content in contents
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_create_streaming_turn_recovers_if_wait_disconnects_after_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

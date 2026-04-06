@@ -253,6 +253,49 @@ function extractErrorMessage(params) {
         return params.message;
     return "";
 }
+function normalizeStatusSummary(statusValue) {
+    if (typeof statusValue === "string")
+        return statusValue.trim();
+    if (typeof statusValue === "number" || typeof statusValue === "boolean") {
+        return String(statusValue);
+    }
+    const statusObj = asRecord(statusValue);
+    if (!statusObj)
+        return "";
+    const statusType = statusObj.type;
+    if (typeof statusType === "string" && statusType.trim())
+        return statusType.trim();
+    const nestedStatus = statusObj.status;
+    if (typeof nestedStatus === "string" && nestedStatus.trim())
+        return nestedStatus.trim();
+    const nestedStatusObj = asRecord(nestedStatus);
+    if (nestedStatusObj) {
+        const nestedType = nestedStatusObj.type;
+        if (typeof nestedType === "string" && nestedType.trim())
+            return nestedType.trim();
+        const nestedState = nestedStatusObj.state;
+        if (typeof nestedState === "string" && nestedState.trim())
+            return nestedState.trim();
+    }
+    const state = statusObj.state;
+    if (typeof state === "string" && state.trim())
+        return state.trim();
+    const message = statusObj.message;
+    if (typeof message === "string" && message.trim())
+        return message.trim();
+    const reason = statusObj.reason;
+    if (typeof reason === "string" && reason.trim())
+        return reason.trim();
+    try {
+        const encoded = JSON.stringify(statusObj);
+        if (encoded && encoded !== "{}")
+            return encoded;
+    }
+    catch {
+        // Ignore serialization failures and fall back to default status text.
+    }
+    return "";
+}
 function hasMeaningfulText(summary, detail) {
     return Boolean(summary.trim() || detail.trim());
 }
@@ -600,7 +643,7 @@ export function parseAppServerEvent(payload) {
     // Handle generic status updates
     if (method === "status" || params.status) {
         title = "Status";
-        summary = params.status || "Processing";
+        summary = normalizeStatusSummary(params.status) || "Processing";
         kind = "status";
     }
     else if (method === "item/completed") {
@@ -651,7 +694,7 @@ export function parseAppServerEvent(payload) {
     }
     else if (method === "turn/completed") {
         title = "Turn completed";
-        summary = params.status || "completed";
+        summary = normalizeStatusSummary(params.status) || "completed";
         kind = "status";
     }
     else if (method === "error") {

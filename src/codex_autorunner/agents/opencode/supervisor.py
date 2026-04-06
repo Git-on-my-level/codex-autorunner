@@ -670,12 +670,26 @@ class OpenCodeSupervisor:
             OpenCodeProtocolError,
         ):  # startup cleanup
             handle.started = False
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+            pid = process.pid
+            pgid = self._record_pid_and_pgid(pid)[1] if pid is not None else None
+            terminated = False
+            if pid is not None:
+                terminated = await asyncio.to_thread(
+                    terminate_record,
+                    pid,
+                    pgid,
+                    grace_seconds=0.5,
+                    kill_seconds=0.5,
+                    logger=self._logger,
+                    event_prefix="opencode.supervisor.startup_cleanup",
+                )
+            if not terminated:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
             raise
 
     async def _ensure_started_from_registry(self, handle: OpenCodeHandle) -> bool:

@@ -10,7 +10,9 @@ from fastapi.testclient import TestClient
 
 from codex_autorunner.agents.hermes.harness import HermesHarness
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration.turn_timeline import persist_turn_timeline
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.ports.run_event import OutputDelta
 from codex_autorunner.integrations.app_server.event_buffer import AppServerEventBuffer
 from codex_autorunner.server import create_hub_app
 from codex_autorunner.surfaces.web.routes.pma_routes import tail_stream
@@ -574,6 +576,81 @@ def test_managed_thread_tail_snapshot_includes_opencode_list_progress_events(
     first = payload["events"][0]
     assert first.get("event_type") == "assistant_update"
     assert "Working" in str(first.get("summary") or "")
+
+
+def test_managed_thread_tail_snapshot_prefers_persisted_live_timeline_for_opencode(
+    hub_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _enable_pma(hub_env.hub_root)
+
+    class _OpenCodeHarnessWithoutBufferedProgress:
+        def supports(self, capability: str) -> bool:
+            return capability == "event_streaming"
+
+        def allows_parallel_event_stream(self) -> bool:
+            return True
+
+        async def list_progress_events(
+            self, conversation_id: str, turn_id: str, **kwargs: Any
+        ) -> list[dict[str, Any]]:
+            _ = conversation_id, turn_id, kwargs
+            return []
+
+        def stream_events(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: str,
+        ):
+            _ = workspace_root, conversation_id, turn_id
+
+            async def _stream():
+                if False:
+                    yield None
+
+            return _stream()
+
+    monkeypatch.setattr(
+        tail_stream,
+        "_managed_thread_harness",
+        lambda service, agent_id: _OpenCodeHarnessWithoutBufferedProgress(),
+    )
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        managed_thread_id, managed_turn_id = _seed_running_managed_thread(
+            hub_env,
+            app,
+            agent="opencode",
+            backend_thread_id="opencode-session-live",
+            backend_turn_id="opencode-turn-live",
+            name="opencode persisted timeline",
+        )
+        persist_turn_timeline(
+            hub_env.hub_root,
+            execution_id=managed_turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=hub_env.repo_id,
+            metadata={"agent": "opencode", "status": "running"},
+            events=[
+                OutputDelta(
+                    timestamp="2026-04-06T10:00:00Z",
+                    content="Working through the issue...",
+                    delta_type="assistant_message",
+                )
+            ],
+        )
+        resp = client.get(f"/hub/pma/threads/{managed_thread_id}/tail")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["stream_available"] is True
+    assert [event["event_id"] for event in payload["events"]] == [1]
+    assert payload["events"][0]["event_type"] == "assistant_update"
+    assert "Working through the issue" in str(payload["events"][0]["summary"] or "")
+    assert payload["last_event_id"] == 1
+    assert payload["last_event_at"] == "2026-04-06T10:00:00Z"
 
 
 def test_managed_thread_tail_snapshot_stream_available_when_backend_binding_appears(

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
-from .orchestration.migrate_legacy_state import backfill_legacy_audit_entries
+from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .text_utils import lock_path_for
 
@@ -321,8 +321,10 @@ class PmaAuditLog:
     def count_fingerprint(
         self, fingerprint: str, *, within_seconds: Optional[int] = None
     ) -> int:
-        self._backfill_legacy_entries()
         entries = self._list_recent_sqlite(limit=10000)
+        if not entries:
+            self._backfill_legacy_entries()
+            entries = self._list_recent_sqlite(limit=10000)
         if not entries:
             entries = self._list_recent_unlocked(limit=10000)
         if not within_seconds:
@@ -339,13 +341,7 @@ class PmaAuditLog:
         return count
 
     def _backfill_legacy_entries(self) -> None:
-        with open_orchestration_sqlite(self._hub_root) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) AS c FROM orch_audit_entries"
-            ).fetchone()
-            if row is not None and int(row["c"] or 0) > 0:
-                return
-            backfill_legacy_audit_entries(self._hub_root, conn)
+        ensure_legacy_orchestration_backfill(self._hub_root)
 
     @staticmethod
     def _row_to_entry(row: Any) -> Optional[PmaAuditEntry]:

@@ -17,6 +17,7 @@ from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
 )
+from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.ports.run_event import (
     ApprovalRequested,
@@ -650,6 +651,107 @@ def _tail_event_from_run_event(
     }
 
 
+def _run_event_from_timeline_entry(entry: dict[str, Any]) -> Any | None:
+    event_type = str(entry.get("event_type") or "").strip().lower()
+    event = coerce_dict(entry.get("event"))
+    timestamp = normalize_optional_text(
+        event.get("timestamp")
+    ) or normalize_optional_text(entry.get("timestamp"))
+    if timestamp is None:
+        return None
+    if event_type == "output_delta":
+        return OutputDelta(
+            timestamp=timestamp,
+            content=str(event.get("content") or ""),
+            delta_type=str(event.get("delta_type") or "text"),
+        )
+    if event_type == "tool_call":
+        return ToolCall(
+            timestamp=timestamp,
+            tool_name=str(event.get("tool_name") or ""),
+            tool_input=coerce_dict(event.get("tool_input")),
+        )
+    if event_type == "tool_result":
+        return ToolResult(
+            timestamp=timestamp,
+            tool_name=str(event.get("tool_name") or ""),
+            status=str(event.get("status") or ""),
+            result=event.get("result"),
+            error=event.get("error"),
+        )
+    if event_type == "approval_requested":
+        return ApprovalRequested(
+            timestamp=timestamp,
+            request_id=str(event.get("request_id") or ""),
+            description=str(event.get("description") or ""),
+            context=coerce_dict(event.get("context")),
+        )
+    if event_type == "token_usage":
+        usage = event.get("usage")
+        return TokenUsage(
+            timestamp=timestamp,
+            usage=usage if isinstance(usage, dict) else {},
+        )
+    if event_type == "run_notice":
+        return RunNotice(
+            timestamp=timestamp,
+            kind=str(event.get("kind") or ""),
+            message=str(event.get("message") or ""),
+            data=coerce_dict(event.get("data")),
+        )
+    if event_type == "turn_completed":
+        return Completed(
+            timestamp=timestamp,
+            final_message=str(event.get("final_message") or ""),
+        )
+    if event_type == "turn_failed":
+        return Failed(
+            timestamp=timestamp,
+            error_message=str(event.get("error_message") or "Turn failed"),
+        )
+    return None
+
+
+def _serialize_persisted_timeline_tail_events(
+    timeline_entries: list[dict[str, Any]],
+    *,
+    level: str,
+    since_ms: Optional[int],
+    resume_after: Optional[int],
+) -> tuple[list[dict[str, Any]], Optional[str]]:
+    serialized: list[dict[str, Any]] = []
+    last_activity_at: Optional[str] = None
+    min_event_id = int(resume_after or 0)
+    for entry in timeline_entries:
+        if not isinstance(entry, dict):
+            continue
+        event_id = int(entry.get("event_index") or 0)
+        if event_id <= 0 or event_id <= min_event_id:
+            continue
+        timestamp = normalize_optional_text(entry.get("timestamp"))
+        if timestamp is None:
+            continue
+        if since_ms is not None:
+            dt = parse_iso_datetime(timestamp)
+            if dt is not None and int(dt.timestamp() * 1000) < since_ms:
+                continue
+        run_event = _run_event_from_timeline_entry(entry)
+        if run_event is None:
+            continue
+        payload = _tail_event_from_run_event(
+            run_event,
+            event_id=event_id,
+            received_at=timestamp,
+        )
+        if payload is None:
+            continue
+        if level == "debug":
+            payload["raw"] = _redact_nested(entry)
+        serialized.append(payload)
+        last_activity_at = timestamp
+    return serialized, last_activity_at
+
+
 async def _serialize_runtime_raw_tail_events(
     raw_event: Any,
     state: RuntimeThreadRunEventState,
@@ -786,7 +888,17 @@ async def _build_managed_thread_tail_snapshot(
     )
     tail_events: list[dict[str, Any]] = []
     raw_last_activity_at: Optional[str] = None
-    if has_backend_binding and harness is not None:
+    persisted_timeline_entries = list_turn_timeline(
+        request.app.state.config.root,
+        execution_id=managed_turn_id,
+    )
+    tail_events, raw_last_activity_at = _serialize_persisted_timeline_tail_events(
+        persisted_timeline_entries,
+        level=level,
+        since_ms=since_ms,
+        resume_after=resume_after,
+    )
+    if not tail_events and has_backend_binding and harness is not None:
         list_fn = getattr(harness, "list_progress_events", None)
         if callable(list_fn):
             try:

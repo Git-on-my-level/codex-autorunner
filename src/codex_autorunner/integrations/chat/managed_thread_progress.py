@@ -61,6 +61,12 @@ def apply_run_event_to_progress_tracker(
                 or incoming_output.startswith(latest_output)
             ):
                 tracker.note_output(delta)
+            elif tracker.last_output_index is not None:
+                # Stored output may be truncated by max_output_chars, making
+                # the startswith check unreliable.  Merge into the existing
+                # segment so the authoritative snapshot replaces the stale
+                # tail rather than creating a visually duplicated action.
+                tracker.note_output(delta)
             else:
                 tracker.note_output(delta, new_segment=True)
         elif run_event.delta_type == RUN_EVENT_DELTA_TYPE_LOG_LINE:

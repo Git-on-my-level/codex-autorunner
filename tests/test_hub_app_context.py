@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from codex_autorunner.bootstrap import seed_hub_files
@@ -164,14 +165,10 @@ async def test_hub_lifespan_restores_exception_hooks_on_startup_failure(
     loop = asyncio.get_running_loop()
     original_asyncio_exception_handler = loop.get_exception_handler()
 
-    async def _boom_start_repo_lifespans(self) -> None:
+    def _boom_record_hub_startup(*args, **kwargs):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(
-        web_app_module.HubMountManager,
-        "start_repo_lifespans",
-        _boom_start_repo_lifespans,
-    )
+    monkeypatch.setattr(web_app_module, "record_hub_startup", _boom_record_hub_startup)
     app = create_hub_app(hub_env.hub_root)
 
     with pytest.raises(RuntimeError, match="boom"):
@@ -207,6 +204,35 @@ def test_hub_opencode_prune_interval_uses_opencode_ttl(
     app = create_hub_app(hub_root)
 
     assert app.state.opencode_prune_interval == 120.0
+
+
+def test_hub_repo_apps_build_lazily(hub_env, monkeypatch) -> None:
+    _stub_opencode_supervisor(monkeypatch)
+    build_calls: list[Path] = []
+
+    def _fake_create_repo_app(repo_root, server_overrides=None, hub_config=None):
+        repo_path = Path(repo_root)
+        build_calls.append(repo_path)
+        app = FastAPI()
+
+        @app.get("/api/version")
+        def version():
+            return {"repo": repo_path.name}
+
+        return app
+
+    monkeypatch.setattr(web_app_module, "create_repo_app", _fake_create_repo_app)
+
+    app = create_hub_app(hub_env.hub_root)
+    assert build_calls == []
+
+    with TestClient(app) as client:
+        assert build_calls == []
+        response = client.get(f"/repos/{hub_env.repo_id}/api/version")
+        assert response.status_code == 200
+        assert response.json() == {"repo": hub_env.repo_root.name}
+
+    assert build_calls == [hub_env.repo_root]
 
 
 def test_build_app_server_supervisor_prefers_global_env_override(

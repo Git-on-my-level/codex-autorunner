@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -43,6 +44,9 @@ from .transcript_mirror import TranscriptMirrorStore
 MessagePreviewLimit = 120
 LOST_BACKEND_THREAD_ERROR = "Backend thread lost after restart"
 MISSING_BACKEND_THREAD_ERROR = "Backend thread missing from orchestration state"
+CLAIMED_EXECUTION_START_CANCELLED_ERROR = (
+    "Runtime thread start cancelled before completion"
+)
 _MISSING_THREAD_MARKERS = (
     "missing thread",
     "thread not found",
@@ -1180,6 +1184,98 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         )
         return thread, execution, request, client_request_id, sandbox_policy
 
+    def _claimed_execution_start_error_detail(
+        self,
+        request: MessageRequest,
+        exc: BaseException,
+    ) -> str:
+        configured = str(
+            getattr(request, "metadata", {}).get("execution_error_message") or ""
+        ).strip()
+        if configured:
+            return configured
+        detail = str(exc).strip()
+        if detail:
+            return detail
+        if isinstance(exc, asyncio.CancelledError):
+            return CLAIMED_EXECUTION_START_CANCELLED_ERROR
+        return "Runtime thread execution failed"
+
+    def _record_claimed_execution_start_failure(
+        self,
+        thread: ThreadTarget,
+        execution: ExecutionRecord,
+        request: MessageRequest,
+        exc: BaseException,
+    ) -> None:
+        try:
+            current = self.get_execution(
+                thread.thread_target_id, execution.execution_id
+            )
+        except Exception:
+            current = None
+        if current is not None and current.status != "running":
+            return
+        detail = self._claimed_execution_start_error_detail(request, exc)
+        logged_exc = exc if isinstance(exc, Exception) else None
+        log_event(
+            logger,
+            logging.WARNING,
+            "orchestration.thread.claimed_start_failed",
+            exc=logged_exc,
+            thread_target_id=thread.thread_target_id,
+            execution_id=execution.execution_id,
+            request_kind=request.kind,
+            reported_error=detail,
+        )
+        try:
+            self.thread_store.record_execution_result(
+                thread.thread_target_id,
+                execution.execution_id,
+                status="error",
+                assistant_text="",
+                error=detail,
+                backend_turn_id=None,
+                transcript_turn_id=None,
+            )
+        except KeyError:
+            return
+
+    async def _start_claimed_execution_request(
+        self,
+        thread: ThreadTarget,
+        request: MessageRequest,
+        execution: ExecutionRecord,
+        *,
+        harness: Optional[RuntimeThreadHarness] = None,
+        workspace_root: Optional[Path] = None,
+        sandbox_policy: Optional[Any] = None,
+    ) -> tuple[ExecutionRecord, RuntimeThreadHarness]:
+        resolved_workspace_root = workspace_root
+        if resolved_workspace_root is None:
+            if not thread.workspace_root:
+                raise RuntimeError("Thread target is missing workspace_root")
+            resolved_workspace_root = Path(thread.workspace_root)
+        try:
+            resolved_harness = harness or self._harness_for_thread(thread)
+            started = await self._start_execution(
+                thread,
+                request,
+                execution,
+                harness=resolved_harness,
+                workspace_root=resolved_workspace_root,
+                sandbox_policy=sandbox_policy,
+            )
+            return started, resolved_harness
+        except BaseException as exc:
+            self._record_claimed_execution_start_failure(
+                thread,
+                execution,
+                request,
+                exc,
+            )
+            raise
+
     async def start_next_queued_execution(
         self,
         thread_target_id: str,
@@ -1190,17 +1286,17 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         if claimed is None:
             return None
         thread, execution, request, _client_request_id, sandbox_policy = claimed
-        if not thread.workspace_root:
-            raise RuntimeError("Thread target is missing workspace_root")
-        harness = harness or self._harness_for_thread(thread)
-        return await self._start_execution(
+        started, _resolved_harness = await self._start_claimed_execution_request(
             thread,
             request,
             execution,
             harness=harness,
-            workspace_root=Path(thread.workspace_root),
+            workspace_root=(
+                Path(thread.workspace_root) if thread.workspace_root else None
+            ),
             sandbox_policy=sandbox_policy,
         )
+        return started
 
     async def interrupt_thread(self, thread_target_id: str) -> ExecutionRecord:
         thread = self.get_thread_target(thread_target_id)

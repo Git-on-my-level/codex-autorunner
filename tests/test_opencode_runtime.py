@@ -149,6 +149,45 @@ async def test_collect_output_supports_message_part_delta_with_direct_ids() -> N
 
 
 @pytest.mark.anyio
+async def test_collect_output_dedupes_delta_then_full_text_update_for_same_part() -> (
+    None
+):
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data='{"sessionID":"s1","properties":{"info":{"id":"assistant-1","role":"assistant"}}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"part":{"id":"p1","messageID":"assistant-1","type":"text","text":""}}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p1","messageID":"assistant-1","delta":"2"}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p1","messageID":"assistant-1","delta":" + 2"}}',
+        ),
+        SSEEvent(
+            event="message.part.delta",
+            data='{"sessionID":"s1","properties":{"partID":"p1","messageID":"assistant-1","delta":" = 4."}}',
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data='{"sessionID":"s1","properties":{"part":{"id":"p1","messageID":"assistant-1","type":"text","text":"2 + 2 = 4."}}}',
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "2 + 2 = 4."
+    assert output.error is None
+
+
+@pytest.mark.anyio
 async def test_collect_output_uses_part_type_memory_for_reasoning_delta_events() -> (
     None
 ):
@@ -1377,3 +1416,247 @@ def test_recover_last_assistant_message_ignores_ignored_text_parts() -> None:
     result = recover_last_assistant_message(payload, prompt="user echo")
     assert result.text == "final answer"
     assert result.error is None
+
+
+@pytest.mark.anyio
+async def test_collect_output_prefers_last_completed_message_over_accumulated_stream() -> (
+    None
+):
+    """In a multi-message turn, the final output should be the last completed
+    assistant message, not all accumulated stream text concatenated."""
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m1", "role": "assistant"}},
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "delta": {"text": "Let me check the release docs."},
+                        "part": {
+                            "id": "p1",
+                            "type": "text",
+                            "text": "Let me check the release docs.",
+                        },
+                        "message": {"id": "m1"},
+                    },
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m1", "role": "assistant"}},
+                    "parts": [
+                        {
+                            "type": "text",
+                            "text": "Let me check the release docs.",
+                        }
+                    ],
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m2", "role": "assistant"}},
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "delta": {"text": "Patch release v1.9.15 is done."},
+                        "part": {
+                            "id": "p2",
+                            "type": "text",
+                            "text": "Patch release v1.9.15 is done.",
+                        },
+                        "message": {"id": "m2"},
+                    },
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m2", "role": "assistant"}},
+                    "parts": [
+                        {
+                            "type": "text",
+                            "text": "Patch release v1.9.15 is done.",
+                        }
+                    ],
+                }
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "Patch release v1.9.15 is done."
+    assert "Let me check" not in output.text
+
+
+@pytest.mark.anyio
+async def test_collect_output_falls_back_to_stream_when_final_completion_has_no_text() -> (
+    None
+):
+    """If the last message.completed has no parseable text, fall back to
+    accumulated stream text rather than using a stale earlier completion."""
+    events = [
+        SSEEvent(
+            event="message.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m1", "role": "assistant"}},
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "delta": {"text": "Early message."},
+                        "part": {"id": "p1", "type": "text", "text": "Early message."},
+                        "message": {"id": "m1"},
+                    },
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m1", "role": "assistant"}},
+                    "parts": [{"type": "text", "text": "Early message."}],
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m2", "role": "assistant"}},
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "delta": {"text": "Final streamed answer."},
+                        "part": {
+                            "id": "p2",
+                            "type": "text",
+                            "text": "Final streamed answer.",
+                        },
+                        "message": {"id": "m2"},
+                    },
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m2", "role": "assistant"}},
+                    "parts": [],
+                }
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert "Final streamed answer." in output.text
+    assert output.text != "Early message."
+
+
+@pytest.mark.anyio
+async def test_collect_output_completed_message_excludes_reasoning_from_final_text() -> (
+    None
+):
+    """When message.completed carries reasoning and text parts, the final output
+    should only contain text from text-type parts."""
+    events = [
+        SSEEvent(
+            event="message.part.delta",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "delta": {"text": "internal reasoning"},
+                        "part": {"id": "r1", "type": "reasoning"},
+                        "message": {"id": "m1"},
+                    },
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.part.updated",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {
+                        "delta": {"text": "The final answer."},
+                        "part": {
+                            "id": "t1",
+                            "type": "text",
+                            "text": "The final answer.",
+                        },
+                        "message": {"id": "m1"},
+                    },
+                }
+            ),
+        ),
+        SSEEvent(
+            event="message.completed",
+            data=json.dumps(
+                {
+                    "sessionID": "s1",
+                    "properties": {"info": {"id": "m1", "role": "assistant"}},
+                    "parts": [
+                        {"type": "reasoning", "text": "internal reasoning"},
+                        {"type": "text", "text": "The final answer."},
+                    ],
+                }
+            ),
+        ),
+        SSEEvent(event="session.idle", data='{"sessionID":"s1"}'),
+    ]
+    output = await collect_opencode_output_from_events(
+        _iter_events(events),
+        session_id="s1",
+    )
+    assert output.text == "The final answer."
+    assert "internal reasoning" not in output.text

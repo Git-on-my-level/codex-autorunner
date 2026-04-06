@@ -1,5 +1,6 @@
 from codex_autorunner.core.ports.run_event import (
     RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+    RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
     RUN_EVENT_DELTA_TYPE_LOG_LINE,
     Completed,
     OutputDelta,
@@ -374,3 +375,54 @@ def test_interleaved_busy_and_tool_events_preserves_tools() -> None:
     assert tracker.transient_action.text == "planning next step"
 
     assert len(tracker.actions) == 0
+
+
+def test_assistant_message_does_not_duplicate_when_stream_output_is_truncated() -> None:
+    """Regression: when streamed output exceeds max_output_chars, the stored
+    text is truncated.  A subsequent ASSISTANT_MESSAGE with the full text
+    would fail the startsWith check and create a duplicate output action.
+    """
+    tracker = TurnProgressTracker(
+        started_at=0.0,
+        agent="codex",
+        model="default",
+        label="working",
+        max_output_chars=80,
+    )
+    state = ProgressRuntimeState()
+
+    long_stream = (
+        "I'm investigating the server startup delay by tracing the request "
+        "lifecycle from the web entrypoint through each middleware layer."
+    )
+    assert len(long_stream) > 80
+
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="t0",
+            content=long_stream,
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_STREAM,
+        ),
+        runtime_state=state,
+    )
+
+    full_message = long_stream + " The root cause is a blocking sleep call."
+    apply_run_event_to_progress_tracker(
+        tracker,
+        OutputDelta(
+            timestamp="t1",
+            content=full_message,
+            delta_type=RUN_EVENT_DELTA_TYPE_ASSISTANT_MESSAGE,
+        ),
+        runtime_state=state,
+    )
+
+    output_actions = [a for a in tracker.actions if a.label == "output"]
+    assert len(output_actions) == 1, (
+        f"Expected single output action but got {len(output_actions)}; "
+        f"texts={[a.text for a in output_actions]}"
+    )
+
+    rendered = render_progress_text(tracker, max_length=4000, now=1.0)
+    assert rendered.count("investigating") <= 1

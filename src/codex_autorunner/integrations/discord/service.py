@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import hashlib
 import inspect
+import json
 import logging
 import os
 import subprocess
@@ -93,7 +94,10 @@ from ...core.update import (  # noqa: F401 - kept for test monkeypatching
     _update_target_restarts_surface,
 )
 from ...core.update_paths import resolve_update_paths  # noqa: F401
-from ...core.update_targets import get_update_target_label  # noqa: F401
+from ...core.update_targets import (  # noqa: F401
+    all_update_target_definitions,
+    get_update_target_label,
+)
 from ...core.utils import (
     canonicalize_path,
     is_within,
@@ -165,13 +169,16 @@ from ...integrations.chat.picker_filter import (
 )
 from ...integrations.chat.queue_control import ChatQueueControlStore
 from ...integrations.chat.run_mirror import ChatRunMirror
+from ...integrations.chat.session_messages import (
+    build_fresh_session_started_lines,
+    build_thread_detail_lines,
+)
 from ...integrations.chat.turn_policy import (
     PlainTextTurnContext,
     should_trigger_plain_text_turn,
 )
 from ...integrations.chat.update_notifier import (  # noqa: F401 - kept for test monkeypatching
     ChatUpdateStatusNotifier,
-    format_update_status_message,
     mark_update_status_notified,
 )
 from ...integrations.github.context_injection import maybe_inject_github_context
@@ -731,6 +738,11 @@ class DiscordBotService:
                 await self._dispatch_chat_event(event)
 
     async def _dispatch_chat_event(self, event: ChatEvent) -> None:
+        if isinstance(event, ChatInteractionEvent):
+            prepared = await self._prepare_dispatched_interaction_event(event)
+            if not prepared:
+                return
+
         async def _handle_dispatched_event(
             queued_event: ChatEvent, context: DispatchContext
         ) -> None:
@@ -746,6 +758,41 @@ class DiscordBotService:
             event, _handle_dispatched_event
         )
         await self._maybe_send_queued_notice(event, dispatch_result)
+
+    async def _prepare_dispatched_interaction_event(
+        self, event: ChatInteractionEvent
+    ) -> bool:
+        policy_result = self._evaluate_interaction_collaboration_policy(
+            channel_id=event.thread.chat_id,
+            guild_id=event.thread.thread_id,
+            user_id=event.from_user_id,
+        )
+        if not policy_result.command_allowed:
+            return True
+        payload_str = event.payload or "{}"
+        try:
+            payload_data = json.loads(payload_str)
+        except json.JSONDecodeError:
+            return True
+        if payload_data.get("type") != "command":
+            return True
+        interaction_token = payload_data.get("_discord_token")
+        if not isinstance(interaction_token, str) or not interaction_token.strip():
+            return True
+        command_raw = payload_data.get("command")
+        command_path = (
+            tuple(part for part in str(command_raw).split(":") if part)
+            if isinstance(command_raw, str)
+            else ()
+        )
+        if not command_path:
+            return True
+        return await self._prepare_command_interaction_or_abort(
+            interaction_id=event.interaction.interaction_id,
+            interaction_token=interaction_token,
+            command_path=self._normalize_discord_command_path(command_path),
+            timing="dispatch",
+        )
 
     def _evaluate_message_collaboration_policy(
         self,
@@ -1142,9 +1189,29 @@ class DiscordBotService:
             )
         return result.command_allowed
 
+    def _uses_background_command_dispatch(self, command_path: tuple[str, ...]) -> bool:
+        normalized_path = self._normalize_discord_command_path(command_path)
+        return normalized_path == ("car", "session", "compact")
+
     def _bypass_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
         if isinstance(event, ChatInteractionEvent):
-            return True
+            import json
+
+            payload_str = event.payload or "{}"
+            try:
+                payload_data = json.loads(payload_str)
+            except json.JSONDecodeError:
+                return True
+            payload_type = payload_data.get("type")
+            if not isinstance(payload_type, str) or payload_type != "command":
+                return True
+            command_raw = payload_data.get("command")
+            command_path = (
+                tuple(part for part in str(command_raw).split(":") if part)
+                if isinstance(command_raw, str)
+                else ()
+            )
+            return not self._uses_background_command_dispatch(command_path)
         return False
 
     async def _handle_normalized_interaction(
@@ -3299,9 +3366,7 @@ class DiscordBotService:
         if event_type == "INTERACTION_CREATE":
             interaction_event = self._chat_adapter.parse_interaction_event(payload)
             if interaction_event is not None:
-                await self._dispatcher.dispatch(
-                    interaction_event, self._handle_chat_event
-                )
+                await self._dispatch_chat_event(interaction_event)
         elif event_type == "MESSAGE_CREATE":
             await self._record_channel_directory_seen_from_message_payload(payload)
             message_event = self._chat_adapter.parse_message_event(payload)
@@ -3725,6 +3790,17 @@ class DiscordBotService:
                 "Please select a filter and try again.",
             )
             return
+        deferred = await self._defer_component_update(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+        if not deferred:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Discord interaction acknowledgement failed. Please retry.",
+            )
+            return
         workspace_root = await self._require_bound_workspace(
             interaction_id, interaction_token, channel_id=channel_id
         )
@@ -3818,7 +3894,20 @@ class DiscordBotService:
             )
             return
         try:
-            ticket_text = candidate.read_text(encoding="utf-8")
+            ticket_text = await asyncio.wait_for(
+                asyncio.to_thread(candidate.read_text, encoding="utf-8"),
+                timeout=1.5,
+            )
+        except asyncio.TimeoutError:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                (
+                    "Ticket load timed out before opening the modal. "
+                    "Try again or edit the file directly."
+                ),
+            )
+            return
         except Exception as exc:
             await self._respond_ephemeral(
                 interaction_id,
@@ -4151,6 +4240,36 @@ class DiscordBotService:
             interaction_id=interaction_id,
             interaction_token=interaction_token,
         )
+
+    async def _prepare_command_interaction_or_abort(
+        self,
+        *,
+        interaction_id: str,
+        interaction_token: str,
+        command_path: tuple[str, ...],
+        timing: str = "dispatch",
+    ) -> bool:
+        if self._prepared_interaction_policy(interaction_token) is not None:
+            return True
+        entry = command_contract_entry_for_path(command_path)
+        if entry is None or entry.discord_ack_policy in (None, "immediate"):
+            return True
+        if entry.discord_ack_timing != timing:
+            return True
+        prepared = await self._prepare_command_interaction(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            command_path=command_path,
+            timing=timing,
+        )
+        if prepared:
+            return True
+        await self._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Discord interaction did not acknowledge. Please retry.",
+        )
+        return False
 
     async def _bind_with_path(
         self,
@@ -4804,9 +4923,24 @@ class DiscordBotService:
         await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
-
+        actor_label = self._format_agent_state(agent, agent_profile)
         text = format_discord_message(
-            f"Started a fresh {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` ({state_label})."
+            "\n".join(
+                [
+                    *build_fresh_session_started_lines(
+                        mode_label=mode_label,
+                        actor_label=actor_label,
+                        state_label=state_label,
+                    ),
+                    *build_thread_detail_lines(
+                        thread_id=_new_thread_id,
+                        workspace_path=str(workspace_root),
+                        actor_label=actor_label,
+                        model=self._status_model_label(binding),
+                        effort=self._status_effort_label(binding, agent),
+                    ),
+                ]
+            )
         )
         await self._send_or_respond_public(
             interaction_id=interaction_id,

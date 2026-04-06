@@ -93,7 +93,12 @@ def select_ticket(
     commit_state: dict[str, Any] = commit_raw if isinstance(commit_raw, dict) else {}
     commit_pending = bool(commit_state.get("pending"))
 
-    if current_path and ticket_is_done(current_path) and not commit_pending:
+    current_ticket_done = ticket_is_done(current_path) if current_path else False
+    if current_path and commit_pending and not current_ticket_done:
+        state_updates["commit"] = None
+        commit_pending = False
+
+    if current_path and current_ticket_done and not commit_pending:
         current_path = None
         _clear_per_ticket_state()
 
@@ -121,8 +126,7 @@ def select_ticket(
         state_updates["last_agent_output"] = None
         state_updates["lint"] = None
         state_updates["loop_guard"] = None
-
-    state_updates["commit"] = None
+        state_updates["commit"] = None
 
     return TicketSelectionResult(
         selected=SelectedTicket(

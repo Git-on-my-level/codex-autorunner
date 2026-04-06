@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
+from ...core.orchestration.sqlite import open_orchestration_sqlite
 from ...core.pma_thread_store import PmaThreadStore
 from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.scm_events import ScmEventStore
@@ -20,6 +22,16 @@ _FAILED_CHECK_CONCLUSIONS = frozenset(
     {"action_required", "cancelled", "failure", "startup_failure", "stale", "timed_out"}
 )
 _ACTIVE_PR_STATES = frozenset({"open", "draft"})
+_VALID_PR_STATES = frozenset({"open", "draft", "closed", "merged"})
+_ACTIVITY_PRIORITY = {"hot": 0, "warm": 1, "cold": 2}
+_HOT_THREAD_WINDOW_MINUTES = 60
+_RECENT_THREAD_WINDOW_MINUTES = 24 * 60
+_WARM_INTERVAL_SECONDS_FLOOR = 15 * 60
+_COLD_INTERVAL_SECONDS_FLOOR = 60 * 60
+_RATE_LIMIT_MIN_REMAINING = 100
+_RATE_LIMIT_RATIO_FLOOR = 0.02
+_RATE_LIMIT_BACKOFF_SECONDS = 15 * 60
+_RATE_LIMIT_RESOURCES = ("graphql", "core")
 _LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -58,6 +70,153 @@ def _reaction_config_mapping(value: Any) -> dict[str, Any]:
 def _github_automation_config(raw_config: object) -> Mapping[str, Any]:
     github = _mapping(raw_config).get("github")
     return _mapping(_mapping(github).get("automation"))
+
+
+def _normalize_positive_int(value: Any) -> Optional[int]:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized > 0 else None
+
+
+def _normalize_non_negative_int(value: Any) -> Optional[int]:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized if normalized >= 0 else None
+
+
+def _parse_optional_iso(value: Any) -> Optional[datetime]:
+    normalized = _normalize_text(value)
+    if normalized is None:
+        return None
+    try:
+        return _parse_iso(normalized)
+    except ValueError:
+        return None
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return True
+    return "rate limit" in str(exc).lower()
+
+
+def _timestamp_from_epoch(epoch_seconds: Optional[int]) -> Optional[str]:
+    if epoch_seconds is None:
+        return None
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+@dataclass(frozen=True)
+class _GitHubQuotaState:
+    resource: str
+    remaining: int
+    limit: int
+    reset_epoch: Optional[int]
+    near_limit: bool
+
+    @property
+    def reset_at(self) -> Optional[str]:
+        return _timestamp_from_epoch(self.reset_epoch)
+
+
+def _quota_state_from_payload(
+    payload: Mapping[str, Any],
+) -> Optional[_GitHubQuotaState]:
+    resources = _mapping(payload.get("resources"))
+    selected: Optional[tuple[float, int, _GitHubQuotaState]] = None
+    for resource_name in _RATE_LIMIT_RESOURCES:
+        entry = _mapping(resources.get(resource_name))
+        limit = _normalize_positive_int(entry.get("limit"))
+        remaining = _normalize_non_negative_int(entry.get("remaining"))
+        reset_epoch = _normalize_positive_int(entry.get("reset"))
+        if limit is None or remaining is None:
+            continue
+        remaining_ratio = remaining / float(limit)
+        near_limit = (
+            remaining <= min(_RATE_LIMIT_MIN_REMAINING, limit)
+            or remaining_ratio <= _RATE_LIMIT_RATIO_FLOOR
+        )
+        candidate = _GitHubQuotaState(
+            resource=resource_name,
+            remaining=remaining,
+            limit=limit,
+            reset_epoch=reset_epoch,
+            near_limit=near_limit,
+        )
+        ranking = (remaining_ratio, remaining, candidate)
+        if selected is None or ranking[:2] < selected[:2]:
+            selected = ranking
+    return selected[2] if selected is not None else None
+
+
+def _rate_limit_backoff_until(quota_state: Optional[_GitHubQuotaState]) -> str:
+    reset_at = quota_state.reset_at if quota_state is not None else None
+    if reset_at is not None:
+        reset_dt = _parse_iso(reset_at)
+        if reset_dt > _utc_now():
+            return reset_at
+    return _iso_after_seconds(_RATE_LIMIT_BACKOFF_SECONDS)
+
+
+def _activity_sort_key(timestamp: Optional[datetime]) -> tuple[int, float]:
+    if timestamp is None:
+        return (1, 0.0)
+    recent_cutoff = _utc_now() - timedelta(minutes=_RECENT_THREAD_WINDOW_MINUTES)
+    if timestamp >= recent_cutoff:
+        return (0, -timestamp.timestamp())
+    return (2, -timestamp.timestamp())
+
+
+def _rotated(items: list[Path], *, offset: int) -> list[Path]:
+    if not items:
+        return []
+    normalized_offset = offset % len(items)
+    if normalized_offset == 0:
+        return list(items)
+    return list(items[normalized_offset:]) + list(items[:normalized_offset])
+
+
+def _binding_from_polling_row(row: sqlite3.Row) -> PrBinding:
+    binding_id = _normalize_text(row["binding_id"])
+    provider = _normalize_text(row["provider"])
+    repo_slug = _normalize_text(row["repo_slug"])
+    pr_number = _normalize_positive_int(row["pr_number"])
+    pr_state = _normalize_lower_text(row["pr_state"])
+    created_at = _normalize_text(row["created_at"])
+    updated_at = _normalize_text(row["updated_at"])
+    if binding_id is None:
+        raise ValueError("binding_id is required")
+    if provider is None:
+        raise ValueError("provider is required")
+    if repo_slug is None:
+        raise ValueError("repo_slug is required")
+    if pr_number is None:
+        raise ValueError("pr_number must be > 0")
+    if pr_state not in _VALID_PR_STATES:
+        raise ValueError("pr_state must be a valid PR state")
+    if created_at is None or updated_at is None:
+        raise ValueError("binding timestamps are required")
+    return PrBinding(
+        binding_id=binding_id,
+        provider=provider,
+        repo_slug=repo_slug,
+        pr_number=pr_number,
+        pr_state=pr_state,
+        created_at=created_at,
+        updated_at=updated_at,
+        repo_id=_normalize_text(row["repo_id"]),
+        head_branch=_normalize_text(row["head_branch"]),
+        base_branch=_normalize_text(row["base_branch"]),
+        thread_target_id=_normalize_text(row["thread_target_id"]),
+        closed_at=_normalize_text(row["closed_at"]),
+    )
 
 
 @dataclass(frozen=True)
@@ -302,6 +461,8 @@ class GitHubScmPollingService:
         binding: PrBinding,
         workspace_root: Path,
         reaction_config: Optional[Mapping[str, Any]] = None,
+        establish_baseline: bool = True,
+        next_poll_at: Optional[str] = None,
     ) -> Optional[ScmPollingWatch]:
         polling_config = GitHubPollingConfig.from_mapping(self._raw_config)
         if not polling_config.enabled or binding.pr_state not in _ACTIVE_PR_STATES:
@@ -309,22 +470,29 @@ class GitHubScmPollingService:
 
         now_timestamp = now_iso()
         expires_at = _iso_after_seconds(polling_config.watch_window_minutes * 60)
-        next_poll_at = _iso_after_seconds(polling_config.interval_seconds)
+        scheduled_next_poll_at = next_poll_at or _iso_after_seconds(
+            polling_config.interval_seconds
+        )
         snapshot: dict[str, Any] = {"baseline_pending": True}
-        try:
-            github = self._github_service_factory(
-                workspace_root,
-                self._raw_config if isinstance(self._raw_config, dict) else None,
-            )
-            snapshot = _build_snapshot(binding=binding, service=github)
-        except Exception:
-            _LOGGER.warning(
-                "Failed establishing SCM polling baseline for %s#%s",
-                binding.repo_slug,
-                binding.pr_number,
-                exc_info=True,
-            )
-            next_poll_at = now_timestamp
+        if establish_baseline:
+            try:
+                github = self._github_service_factory(
+                    workspace_root,
+                    self._raw_config if isinstance(self._raw_config, dict) else None,
+                )
+                snapshot = _build_snapshot(binding=binding, service=github)
+            except Exception as exc:
+                _LOGGER.warning(
+                    "Failed establishing SCM polling baseline for %s#%s",
+                    binding.repo_slug,
+                    binding.pr_number,
+                    exc_info=True,
+                )
+                scheduled_next_poll_at = (
+                    _iso_after_seconds(_RATE_LIMIT_BACKOFF_SECONDS)
+                    if _is_rate_limit_error(exc)
+                    else now_timestamp
+                )
 
         return self._watch_store.upsert_watch(
             provider="github",
@@ -335,7 +503,7 @@ class GitHubScmPollingService:
             workspace_root=str(workspace_root.resolve()),
             thread_target_id=binding.thread_target_id,
             poll_interval_seconds=polling_config.interval_seconds,
-            next_poll_at=next_poll_at,
+            next_poll_at=scheduled_next_poll_at,
             expires_at=expires_at,
             reaction_config=_reaction_config_mapping(
                 _github_automation_config(reaction_config or self._raw_config)
@@ -346,9 +514,12 @@ class GitHubScmPollingService:
     def discover_and_arm_missing_watches(self, *, limit: int = 20) -> dict[str, int]:
         counts = {
             "candidate_workspaces": 0,
+            "candidate_workspaces_scanned": 0,
             "bindings_discovered": 0,
             "watches_armed": 0,
             "discovery_errors": 0,
+            "invalid_bindings_skipped": 0,
+            "rate_limited_skipped": 0,
         }
         polling_config = GitHubPollingConfig.from_mapping(self._raw_config)
         if not polling_config.enabled:
@@ -358,9 +529,20 @@ class GitHubScmPollingService:
             self._candidate_workspace_roots()
         )
         counts["candidate_workspaces"] = len(candidate_roots)
+        thread_activity_by_thread, workspace_activity = self._thread_activity()
 
-        active_bindings = self._active_bindings(limit=max(100, limit * 10))
-        for workspace_root in candidate_roots:
+        active_bindings, invalid_bindings = self._active_bindings(
+            limit=max(100, limit * 10)
+        )
+        counts["invalid_bindings_skipped"] += invalid_bindings
+
+        prioritized_roots = self._prioritized_discovery_roots(
+            candidate_roots=candidate_roots,
+            workspace_activity=workspace_activity,
+            polling_config=polling_config,
+        )
+        for workspace_root in prioritized_roots[: max(1, limit)]:
+            counts["candidate_workspaces_scanned"] += 1
             try:
                 github = self._github_service_factory(
                     workspace_root,
@@ -382,6 +564,7 @@ class GitHubScmPollingService:
             active_bindings[binding.binding_id] = binding
 
         repo_slug_cache: dict[str, Optional[str]] = {}
+        quota_state_cache: dict[str, Optional[_GitHubQuotaState]] = {}
         for binding in active_bindings.values():
             watch = self._watch_store.get_watch(
                 provider="github",
@@ -405,6 +588,31 @@ class GitHubScmPollingService:
                 == resolved_workspace_root.resolve()
             ):
                 continue
+            activity_tier = self._activity_tier_for_binding(
+                binding=binding,
+                workspace_root=resolved_workspace_root,
+                watch=watch,
+                thread_activity_by_thread=thread_activity_by_thread,
+                workspace_activity=workspace_activity,
+            )
+            scheduled_next_poll_at = _iso_after_seconds(
+                self._poll_interval_for_tier(
+                    activity_tier=activity_tier,
+                    polling_config=polling_config,
+                )
+            )
+            quota_state: Optional[_GitHubQuotaState] = None
+            defer_baseline = False
+            if watch is None or watch.state != "active":
+                quota_state = self._quota_state_for_workspace(
+                    workspace_root=resolved_workspace_root,
+                    cache=quota_state_cache,
+                )
+                defer_baseline = bool(
+                    quota_state is not None
+                    and quota_state.near_limit
+                    and activity_tier != "hot"
+                )
             try:
                 armed: Optional[ScmPollingWatch]
                 if watch is not None and watch.state == "active":
@@ -417,7 +625,21 @@ class GitHubScmPollingService:
                     armed = self.arm_watch(
                         binding=binding,
                         workspace_root=resolved_workspace_root,
+                        establish_baseline=not defer_baseline,
+                        next_poll_at=scheduled_next_poll_at,
                     )
+                    if armed is not None and defer_baseline:
+                        armed = (
+                            self._watch_store.refresh_watch(
+                                watch_id=armed.watch_id,
+                                next_poll_at=_rate_limit_backoff_until(quota_state),
+                                last_error_text=(
+                                    "GitHub rate-limit budget low; baseline deferred"
+                                ),
+                            )
+                            or armed
+                        )
+                        counts["rate_limited_skipped"] += 1
             except Exception:
                 _LOGGER.warning(
                     "Failed arming discovered SCM polling watch for %s#%s",
@@ -439,7 +661,9 @@ class GitHubScmPollingService:
             "expired": 0,
             "closed": 0,
             "errors": 0,
+            "rate_limited_skipped": 0,
         }
+        polling_config = GitHubPollingConfig.from_mapping(self._raw_config)
         due_watches = self._watch_store.claim_due_watches(
             provider="github",
             limit=limit,
@@ -448,7 +672,9 @@ class GitHubScmPollingService:
         if not due_watches:
             return counts
 
+        thread_activity_by_thread, workspace_activity = self._thread_activity()
         binding_store = PrBindingStore(self._hub_root)
+        pending_watches: list[tuple[str, ScmPollingWatch, PrBinding, Path]] = []
         for watch in due_watches:
             if _parse_iso(watch.expires_at) <= _utc_now():
                 self._watch_store.close_watch(watch_id=watch.watch_id, state="expired")
@@ -470,6 +696,41 @@ class GitHubScmPollingService:
                 continue
 
             workspace_root = Path(watch.workspace_root)
+            activity_tier = self._activity_tier_for_binding(
+                binding=binding,
+                workspace_root=workspace_root,
+                watch=watch,
+                thread_activity_by_thread=thread_activity_by_thread,
+                workspace_activity=workspace_activity,
+            )
+            pending_watches.append((activity_tier, watch, binding, workspace_root))
+
+        pending_watches.sort(
+            key=lambda item: (
+                _ACTIVITY_PRIORITY.get(item[0], 1),
+                item[1].next_poll_at,
+                item[1].watch_id,
+            )
+        )
+        quota_state_cache: dict[str, Optional[_GitHubQuotaState]] = {}
+        for activity_tier, watch, binding, workspace_root in pending_watches:
+            quota_state = self._quota_state_for_workspace(
+                workspace_root=workspace_root,
+                cache=quota_state_cache,
+            )
+            if (
+                quota_state is not None
+                and quota_state.near_limit
+                and activity_tier != "hot"
+            ):
+                self._watch_store.refresh_watch(
+                    watch_id=watch.watch_id,
+                    next_poll_at=_rate_limit_backoff_until(quota_state),
+                    last_polled_at=now_iso(),
+                    last_error_text="GitHub rate-limit budget low; polling deferred",
+                )
+                counts["rate_limited_skipped"] += 1
+                continue
             try:
                 github = self._github_service_factory(
                     workspace_root,
@@ -477,6 +738,15 @@ class GitHubScmPollingService:
                 )
                 snapshot = _build_snapshot(binding=binding, service=github)
             except Exception as exc:
+                if _is_rate_limit_error(exc):
+                    self._watch_store.refresh_watch(
+                        watch_id=watch.watch_id,
+                        next_poll_at=_rate_limit_backoff_until(quota_state),
+                        last_polled_at=now_iso(),
+                        last_error_text=str(exc),
+                    )
+                    counts["rate_limited_skipped"] += 1
+                    continue
                 self._watch_store.refresh_watch(
                     watch_id=watch.watch_id,
                     next_poll_at=_iso_after_seconds(watch.poll_interval_seconds),
@@ -507,7 +777,12 @@ class GitHubScmPollingService:
             self._watch_store.refresh_watch(
                 watch_id=watch.watch_id,
                 snapshot=snapshot,
-                next_poll_at=_iso_after_seconds(watch.poll_interval_seconds),
+                next_poll_at=_iso_after_seconds(
+                    self._poll_interval_for_tier(
+                        activity_tier=activity_tier,
+                        polling_config=polling_config,
+                    )
+                ),
                 last_polled_at=now_iso(),
                 last_error_text=None,
             )
@@ -524,9 +799,12 @@ class GitHubScmPollingService:
             "closed": 0,
             "errors": 0,
             "candidate_workspaces": 0,
+            "candidate_workspaces_scanned": 0,
             "bindings_discovered": 0,
             "watches_armed": 0,
             "discovery_errors": 0,
+            "invalid_bindings_skipped": 0,
+            "rate_limited_skipped": 0,
         }
         discovery_counts = self.discover_and_arm_missing_watches(limit=limit)
         due_counts = self.process_due_watches(limit=limit)
@@ -534,19 +812,185 @@ class GitHubScmPollingService:
             counts[key] = counts.get(key, 0) + int(value)
         for key, value in due_counts.items():
             counts[key] = counts.get(key, 0) + int(value)
+        _LOGGER.info(
+            "GitHub SCM poll cycle: scanned=%s/%s discovered=%s armed=%s "
+            "due=%s polled=%s emitted=%s rate_limited=%s invalid_bindings=%s "
+            "closed=%s expired=%s errors=%s",
+            counts["candidate_workspaces_scanned"],
+            counts["candidate_workspaces"],
+            counts["bindings_discovered"],
+            counts["watches_armed"],
+            counts["due"],
+            counts["polled"],
+            counts["events_emitted"],
+            counts["rate_limited_skipped"],
+            counts["invalid_bindings_skipped"],
+            counts["closed"],
+            counts["expired"],
+            counts["errors"] + counts["discovery_errors"],
+        )
         return counts
 
-    def _active_bindings(self, *, limit: int) -> dict[str, PrBinding]:
-        binding_store = PrBindingStore(self._hub_root)
+    def _active_bindings(self, *, limit: int) -> tuple[dict[str, PrBinding], int]:
         active_bindings: dict[str, PrBinding] = {}
-        for state in sorted(_ACTIVE_PR_STATES):
-            for binding in binding_store.list_bindings(
-                provider="github",
-                pr_state=state,
-                limit=limit,
-            ):
-                active_bindings[binding.binding_id] = binding
-        return active_bindings
+        invalid_rows = 0
+        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                  FROM orch_pr_bindings
+                 WHERE provider = ?
+                   AND pr_state IN (?, ?)
+                 ORDER BY updated_at DESC, created_at DESC, pr_number DESC
+                 LIMIT ?
+                """,
+                ("github", "open", "draft", limit),
+            ).fetchall()
+        for row in rows:
+            try:
+                binding = _binding_from_polling_row(row)
+            except Exception:
+                invalid_rows += 1
+                _LOGGER.warning(
+                    "Skipping malformed SCM polling binding row binding_id=%s repo_slug=%s",
+                    row["binding_id"] if "binding_id" in row.keys() else None,
+                    row["repo_slug"] if "repo_slug" in row.keys() else None,
+                    exc_info=True,
+                )
+                continue
+            active_bindings[binding.binding_id] = binding
+        return active_bindings, invalid_rows
+
+    def _thread_activity(
+        self,
+    ) -> tuple[dict[str, datetime], dict[str, datetime]]:
+        by_thread: dict[str, datetime] = {}
+        by_workspace: dict[str, datetime] = {}
+        try:
+            threads = PmaThreadStore(self._hub_root).list_threads(
+                status="active",
+                limit=1000,
+            )
+        except Exception:
+            return by_thread, by_workspace
+        for thread in threads:
+            activity_at = max(
+                (
+                    timestamp
+                    for timestamp in (
+                        _parse_optional_iso(thread.get("status_updated_at")),
+                        _parse_optional_iso(thread.get("updated_at")),
+                    )
+                    if timestamp is not None
+                ),
+                default=None,
+            )
+            if activity_at is None:
+                continue
+            thread_target_id = _normalize_text(thread.get("managed_thread_id"))
+            if thread_target_id is not None:
+                prior_thread_activity = by_thread.get(thread_target_id)
+                if prior_thread_activity is None or activity_at > prior_thread_activity:
+                    by_thread[thread_target_id] = activity_at
+            workspace_root = _normalize_text(thread.get("workspace_root"))
+            if workspace_root is not None:
+                workspace_key = str(Path(workspace_root).resolve())
+                prior_workspace_activity = by_workspace.get(workspace_key)
+                if (
+                    prior_workspace_activity is None
+                    or activity_at > prior_workspace_activity
+                ):
+                    by_workspace[workspace_key] = activity_at
+        return by_thread, by_workspace
+
+    def _activity_tier_for_binding(
+        self,
+        *,
+        binding: PrBinding,
+        workspace_root: Path,
+        watch: Optional[ScmPollingWatch],
+        thread_activity_by_thread: Mapping[str, datetime],
+        workspace_activity: Mapping[str, datetime],
+    ) -> str:
+        activity_at: Optional[datetime] = None
+        if binding.thread_target_id is not None:
+            activity_at = thread_activity_by_thread.get(binding.thread_target_id)
+        if (
+            activity_at is None
+            and watch is not None
+            and watch.thread_target_id is not None
+        ):
+            activity_at = thread_activity_by_thread.get(watch.thread_target_id)
+        if activity_at is None:
+            activity_at = workspace_activity.get(str(workspace_root.resolve()))
+        if activity_at is None:
+            return "warm"
+        if activity_at >= _utc_now() - timedelta(minutes=_HOT_THREAD_WINDOW_MINUTES):
+            return "hot"
+        if activity_at >= _utc_now() - timedelta(minutes=_RECENT_THREAD_WINDOW_MINUTES):
+            return "warm"
+        return "cold"
+
+    def _poll_interval_for_tier(
+        self,
+        *,
+        activity_tier: str,
+        polling_config: GitHubPollingConfig,
+    ) -> int:
+        if activity_tier == "hot":
+            return polling_config.interval_seconds
+        if activity_tier == "cold":
+            return max(
+                polling_config.interval_seconds * 40,
+                _COLD_INTERVAL_SECONDS_FLOOR,
+            )
+        return max(
+            polling_config.interval_seconds * 10,
+            _WARM_INTERVAL_SECONDS_FLOOR,
+        )
+
+    def _quota_state_for_workspace(
+        self,
+        *,
+        workspace_root: Path,
+        cache: dict[str, Optional[_GitHubQuotaState]],
+    ) -> Optional[_GitHubQuotaState]:
+        cache_key = "global"
+        if cache_key in cache:
+            return cache[cache_key]
+        try:
+            github = self._github_service_factory(
+                workspace_root,
+                self._raw_config if isinstance(self._raw_config, dict) else None,
+            )
+            cache[cache_key] = _quota_state_from_payload(github.rate_limit_status())
+        except Exception:
+            cache[cache_key] = None
+        return cache[cache_key]
+
+    def _prioritized_discovery_roots(
+        self,
+        *,
+        candidate_roots: list[Path],
+        workspace_activity: Mapping[str, datetime],
+        polling_config: GitHubPollingConfig,
+    ) -> list[Path]:
+        if len(candidate_roots) <= 1:
+            return list(candidate_roots)
+        grouped: dict[int, list[Path]] = {0: [], 1: [], 2: []}
+        for root in candidate_roots:
+            activity_key = _activity_sort_key(
+                workspace_activity.get(str(root.resolve()))
+            )
+            grouped.setdefault(activity_key[0], []).append(root)
+        cycle_index = int(_utc_now().timestamp()) // max(
+            1, polling_config.interval_seconds
+        )
+        ordered: list[Path] = []
+        for group_key in sorted(grouped):
+            bucket = grouped[group_key]
+            ordered.extend(_rotated(bucket, offset=cycle_index))
+        return ordered
 
     def _repair_active_watch(
         self,

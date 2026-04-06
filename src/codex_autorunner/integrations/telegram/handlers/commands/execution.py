@@ -55,6 +55,7 @@ from .....core.orchestration.runtime_threads import (
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
+from .....core.orchestration.turn_timeline import persist_turn_timeline
 from .....core.pma_context import (
     build_hub_snapshot,
     format_pma_discoverability_preamble,
@@ -666,6 +667,56 @@ async def _finalize_telegram_managed_thread_execution(
     ).strip()
     event_state = runtime_event_state or RuntimeThreadRunEventState()
     stream_task: Optional[asyncio.Task[None]] = None
+    timeline_events: list[Any] = []
+    live_timeline_count = 0
+    live_timeline_error_logged = False
+
+    def _persist_live_timeline_events(events: list[Any]) -> None:
+        nonlocal live_timeline_count
+        nonlocal live_timeline_error_logged
+        if not events:
+            return
+        try:
+            persist_turn_timeline(
+                state_root,
+                execution_id=managed_turn_id,
+                target_kind="thread_target",
+                target_id=managed_thread_id,
+                repo_id=str(current_thread_row.get("repo_id") or "").strip() or None,
+                resource_kind=(
+                    str(current_thread_row.get("resource_kind") or "").strip() or None
+                ),
+                resource_id=(
+                    str(current_thread_row.get("resource_id") or "").strip() or None
+                ),
+                metadata={
+                    "agent": getattr(started.thread, "agent_id", None),
+                    "execution_id": managed_turn_id,
+                    "thread_target_id": managed_thread_id,
+                    "backend_thread_id": current_backend_thread_id or None,
+                    "backend_turn_id": started.execution.backend_id,
+                    "model": started.request.model,
+                    "reasoning": started.request.reasoning,
+                    "request_kind": getattr(started.request, "kind", None),
+                    "status": "running",
+                    "surface_kind": "telegram",
+                    "surface_key": surface_key,
+                    "chat_id": chat_id,
+                    "thread_id": thread_id,
+                },
+                events=events,
+                start_index=live_timeline_count + 1,
+            )
+        except Exception:
+            if not live_timeline_error_logged:
+                live_timeline_error_logged = True
+                handlers._logger.exception(
+                    "Failed to persist live Telegram thread timeline (thread=%s turn=%s)",
+                    managed_thread_id,
+                    managed_turn_id,
+                )
+        else:
+            live_timeline_count += len(events)
 
     stream_backend_thread_id = current_backend_thread_id
     stream_backend_turn_id = str(started.execution.backend_id or "").strip()
@@ -699,6 +750,8 @@ async def _finalize_telegram_managed_thread_execution(
                         raw_event,
                         event_state,
                     )
+                    timeline_events.extend(run_events)
+                    _persist_live_timeline_events(run_events)
                     if on_progress_event is None:
                         continue
                     for run_event in run_events:
@@ -784,10 +837,10 @@ async def _finalize_telegram_managed_thread_execution(
         outcome = recovered_outcome
 
     if on_progress_event is not None:
+        terminal_event = terminal_run_event_from_outcome(outcome, event_state)
+        timeline_events.append(terminal_event)
         try:
-            await on_progress_event(
-                terminal_run_event_from_outcome(outcome, event_state)
-            )
+            await on_progress_event(terminal_event)
         except (
             RuntimeError,
             ValueError,
@@ -799,6 +852,46 @@ async def _finalize_telegram_managed_thread_execution(
             handlers._logger.debug(
                 "Telegram terminal progress event failed", exc_info=True
             )
+    else:
+        timeline_events.append(terminal_run_event_from_outcome(outcome, event_state))
+
+    try:
+        persist_turn_timeline(
+            state_root,
+            execution_id=managed_turn_id,
+            target_kind="thread_target",
+            target_id=managed_thread_id,
+            repo_id=str(current_thread_row.get("repo_id") or "").strip() or None,
+            resource_kind=(
+                str(current_thread_row.get("resource_kind") or "").strip() or None
+            ),
+            resource_id=(
+                str(current_thread_row.get("resource_id") or "").strip() or None
+            ),
+            metadata={
+                "agent": getattr(started.thread, "agent_id", None),
+                "execution_id": managed_turn_id,
+                "thread_target_id": managed_thread_id,
+                "backend_thread_id": current_backend_thread_id or None,
+                "backend_turn_id": outcome.backend_turn_id
+                or started.execution.backend_id,
+                "model": started.request.model,
+                "reasoning": started.request.reasoning,
+                "request_kind": getattr(started.request, "kind", None),
+                "status": outcome.status,
+                "surface_kind": "telegram",
+                "surface_key": surface_key,
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+            },
+            events=timeline_events,
+        )
+    except Exception:
+        handlers._logger.exception(
+            "Failed to persist Telegram thread timeline (thread=%s turn=%s)",
+            managed_thread_id,
+            managed_turn_id,
+        )
 
     resolved_assistant_text = (
         outcome.assistant_text or event_state.best_assistant_text()

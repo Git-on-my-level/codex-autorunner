@@ -18,6 +18,7 @@ from codex_autorunner.core.orchestration import (
 from codex_autorunner.core.orchestration.runtime_threads import (
     RUNTIME_THREAD_MISSING_BACKEND_IDS_ERROR,
     await_runtime_thread_outcome,
+    begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
     stream_runtime_thread_events,
 )
@@ -389,6 +390,82 @@ async def test_runtime_threads_allow_missing_interrupt_event(
 
     assert outcome.status == "ok"
     assert outcome.assistant_text == "assistant-output"
+
+
+async def test_begin_next_queued_runtime_thread_execution_clears_claimed_turn_on_cancellation(
+    tmp_path: Path,
+) -> None:
+    class _ClaimedStartAborted(BaseException):
+        pass
+
+    harness = _HarnessWithWait()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    first = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="first",
+        )
+    )
+    queued = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="second",
+        )
+    )
+    service.record_execution_result(
+        thread.thread_target_id,
+        first.execution_id,
+        status="ok",
+        assistant_text="done",
+        backend_turn_id="backend-turn-1",
+    )
+
+    async def _cancelled_start_turn(
+        workspace_root: Path,
+        conversation_id: str,
+        prompt: str,
+        model: Optional[str],
+        reasoning: Optional[str],
+        *,
+        approval_mode: Optional[str],
+        sandbox_policy: Optional[Any],
+        input_items: Optional[list[dict[str, Any]]] = None,
+    ) -> _FakeTurn:
+        _ = (
+            workspace_root,
+            conversation_id,
+            prompt,
+            model,
+            reasoning,
+            approval_mode,
+            sandbox_policy,
+            input_items,
+        )
+        raise _ClaimedStartAborted("queue worker stopped")
+
+    harness.start_turn = _cancelled_start_turn  # type: ignore[method-assign]
+
+    try:
+        await begin_next_queued_runtime_thread_execution(
+            service, thread.thread_target_id
+        )
+    except _ClaimedStartAborted as exc:
+        assert str(exc) == "queue worker stopped"
+    else:
+        raise AssertionError("Expected claimed queued turn start to be cancelled")
+
+    refreshed = service.get_execution(thread.thread_target_id, queued.execution_id)
+    assert refreshed is not None
+    assert refreshed.status == "error"
+    assert refreshed.error == "queue worker stopped"
+    assert service.get_running_execution(thread.thread_target_id) is None
+    assert service.get_queue_depth(thread.thread_target_id) == 0
 
 
 async def test_runtime_threads_fail_cleanly_when_backend_ids_are_missing(

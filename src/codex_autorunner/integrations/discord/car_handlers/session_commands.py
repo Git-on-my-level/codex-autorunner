@@ -9,6 +9,10 @@ from typing import Any, Optional
 
 from ....core.git_utils import GitError
 from ....core.utils import canonicalize_path
+from ...chat.session_messages import (
+    build_fresh_session_started_lines,
+    build_thread_detail_lines,
+)
 from ..components import DISCORD_SELECT_OPTION_MAX_OPTIONS, build_session_threads_picker
 from ..message_turns import (
     clear_discord_turn_progress_reuse,
@@ -123,9 +127,24 @@ async def handle_car_new(
     await service._store.clear_pending_compact_seed(channel_id=channel_id)
     mode_label = "PMA" if pma_enabled else "repo"
     state_label = "cleared previous thread" if had_previous else "new thread ready"
-
+    actor_label = service._format_agent_state(agent, agent_profile)
     text = format_discord_message(
-        f"Started a fresh {mode_label} session for `{service._format_agent_state(agent, agent_profile)}` ({state_label})."
+        "\n".join(
+            [
+                *build_fresh_session_started_lines(
+                    mode_label=mode_label,
+                    actor_label=actor_label,
+                    state_label=state_label,
+                ),
+                *build_thread_detail_lines(
+                    thread_id=_new_thread_id,
+                    workspace_path=str(workspace_root),
+                    actor_label=actor_label,
+                    model=service._status_model_label(binding),
+                    effort=service._status_effort_label(binding, agent),
+                ),
+            ]
+        )
     )
     await service._send_or_respond_public(
         interaction_id=interaction_id,
@@ -133,6 +152,11 @@ async def handle_car_new(
         deferred=deferred,
         text=text,
     )
+
+
+# Keep a source-level reference because DiscordBotService imports this helper
+# lazily and dead-code heuristics do not track that import path reliably.
+_HANDLE_CAR_NEW = handle_car_new
 
 
 async def handle_car_newt(
@@ -324,9 +348,24 @@ async def handle_car_newt(
     setup_note = (
         f" Ran {setup_command_count} setup command(s)." if setup_command_count else ""
     )
-
+    actor_label = service._format_agent_state(agent, agent_profile)
     text = format_discord_message(
-        f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{service._format_agent_state(agent, agent_profile)}` ({state_label}).{setup_note}"
+        "\n".join(
+            [
+                (
+                    f"Reset branch `{branch_name}` to `origin/{default_branch}` "
+                    f"in current workspace and started fresh {mode_label} session "
+                    f"for `{actor_label}` ({state_label}).{setup_note}"
+                ),
+                *build_thread_detail_lines(
+                    thread_id=_new_thread_id,
+                    workspace_path=str(workspace_root),
+                    actor_label=actor_label,
+                    model=service._status_model_label(binding),
+                    effort=service._status_effort_label(binding, agent),
+                ),
+            ]
+        )
     )
     await service._send_or_respond_public(
         interaction_id=interaction_id,

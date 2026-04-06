@@ -99,6 +99,7 @@ MANAGED_THREAD_INTERRUPT_FAILED_DETAIL = (
 PMA_TIMEOUT_SECONDS = 7200
 PMA_MAX_TEXT = PMA_DEFAULT_MAX_TEXT_CHARS
 BOUND_CHAT_SURFACE_KINDS = frozenset({"discord", "telegram"})
+BOUND_CHAT_CLIENT_TURN_PREFIXES = ("discord:", "telegram:")
 
 
 def _build_managed_thread_orchestration_service(
@@ -552,6 +553,52 @@ async def _run_managed_thread_execution(
     hub_root = request.app.state.config.root
     transcripts = PmaTranscriptStore(hub_root)
     response_payload = dict(delivery_payload or {})
+    live_timeline_count = 0
+    live_timeline_error_logged = False
+    live_timeline_metadata = _build_managed_thread_turn_metadata(
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=current_turn_id,
+        thread_row=current_thread_row,
+        backend_thread_id=current_backend_thread_id,
+        backend_turn_id=started.execution.backend_id,
+        workspace_root=started.workspace_root,
+        model=started.request.model,
+        reasoning=started.request.reasoning,
+        status="running",
+    )
+
+    def _persist_live_timeline_events(events: list[RunEvent]) -> None:
+        nonlocal live_timeline_count
+        nonlocal live_timeline_error_logged
+        if not events:
+            return
+        try:
+            persist_turn_timeline(
+                hub_root,
+                execution_id=current_turn_id,
+                target_kind="thread_target",
+                target_id=managed_thread_id,
+                repo_id=normalize_optional_text(current_thread_row.get("repo_id")),
+                resource_kind=normalize_optional_text(
+                    current_thread_row.get("resource_kind")
+                ),
+                resource_id=normalize_optional_text(
+                    current_thread_row.get("resource_id")
+                ),
+                metadata=live_timeline_metadata,
+                events=events,
+                start_index=live_timeline_count + 1,
+            )
+        except Exception:
+            if not live_timeline_error_logged:
+                live_timeline_error_logged = True
+                logger.exception(
+                    "Failed to persist live managed-thread timeline (managed_thread_id=%s, managed_turn_id=%s)",
+                    managed_thread_id,
+                    current_turn_id,
+                )
+        else:
+            live_timeline_count += len(events)
 
     if (
         harness is not None
@@ -569,13 +616,13 @@ async def _run_managed_thread_execution(
                 live_backend_turn_id,
             ):
                 streamed_raw_events.append(raw_event)
-                timeline_events.extend(
-                    await normalize_runtime_thread_raw_event(
-                        raw_event,
-                        timeline_state,
-                        timestamp=now_iso(),
-                    )
+                new_events = await normalize_runtime_thread_raw_event(
+                    raw_event,
+                    timeline_state,
+                    timestamp=now_iso(),
                 )
+                timeline_events.extend(new_events)
+                _persist_live_timeline_events(new_events)
 
         stream_task = asyncio.create_task(_collect_timeline())
     try:
@@ -918,8 +965,37 @@ async def restart_managed_thread_queue_workers(app: Any) -> None:
         ensure_managed_thread_queue_worker(app, managed_thread_id)
 
 
+def _has_bound_chat_surface(
+    binding_store: OrchestrationBindingStore, managed_thread_id: str
+) -> bool:
+    return any(
+        binding.surface_kind in BOUND_CHAT_SURFACE_KINDS
+        for binding in binding_store.list_bindings(
+            thread_target_id=managed_thread_id,
+            include_disabled=False,
+            limit=1000,
+        )
+    )
+
+
+def _is_chat_origin_running_execution(
+    thread_store: PmaThreadStore, managed_thread_id: str
+) -> bool:
+    running_turn = thread_store.get_running_turn(managed_thread_id)
+    client_turn_id = normalize_optional_text(
+        running_turn.get("client_turn_id") if running_turn is not None else None
+    )
+    if not client_turn_id:
+        return False
+    client_turn_id = client_turn_id.lower()
+    return any(
+        client_turn_id.startswith(prefix) for prefix in BOUND_CHAT_CLIENT_TURN_PREFIXES
+    )
+
+
 async def recover_orphaned_managed_thread_executions(app: Any) -> None:
     thread_store = PmaThreadStore(app.state.config.root)
+    binding_store = OrchestrationBindingStore(app.state.config.root)
     service = _build_managed_thread_orchestration_service_for_app(
         app,
         thread_store=thread_store,
@@ -932,6 +1008,10 @@ async def recover_orphaned_managed_thread_executions(app: Any) -> None:
             thread = service.get_thread_target(managed_thread_id)
             execution = service.get_running_execution(managed_thread_id)
             if thread is None or execution is None:
+                continue
+            if _has_bound_chat_surface(
+                binding_store, managed_thread_id
+            ) and _is_chat_origin_running_execution(thread_store, managed_thread_id):
                 continue
             has_turn = getattr(app_server_events, "has_turn", None)
             if (

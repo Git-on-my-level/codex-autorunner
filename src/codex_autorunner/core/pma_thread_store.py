@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+from .config import load_hub_config
+from .freshness import parse_iso_datetime, resolve_stale_threshold_seconds
 from .locks import file_lock
 from .managed_thread_status import (
     ManagedThreadStatusReason,
@@ -13,7 +16,10 @@ from .managed_thread_status import (
     build_managed_thread_status_snapshot,
     transition_managed_thread_status,
 )
-from .orchestration.migrate_legacy_state import backfill_legacy_thread_state
+from .orchestration.legacy_backfill_gate import (
+    backfill_legacy_thread_state,
+    ensure_legacy_orchestration_backfill,
+)
 from .orchestration.models import normalize_resource_owner_fields
 from .orchestration.runtime_bindings import (
     RuntimeThreadBinding,
@@ -101,6 +107,21 @@ def _sanitize_thread_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, A
 
 def _thread_queue_lane_id(managed_thread_id: str) -> str:
     return f"thread:{managed_thread_id}"
+
+
+def _resolve_stale_running_threshold_seconds(
+    hub_root: Path, *, override: Optional[int]
+) -> int:
+    if isinstance(override, int) and override > 0:
+        return override
+    try:
+        config = load_hub_config(hub_root)
+        pma_cfg = getattr(config, "pma", None)
+        return resolve_stale_threshold_seconds(
+            getattr(pma_cfg, "freshness_stale_threshold_seconds", None)
+        )
+    except Exception:
+        return resolve_stale_threshold_seconds(None)
 
 
 def _latest_turn_for_thread(
@@ -346,10 +367,21 @@ class PmaThreadStore:
     long-term orchestration API surface.
     """
 
-    def __init__(self, hub_root: Path, *, durable: bool = False) -> None:
+    def __init__(
+        self,
+        hub_root: Path,
+        *,
+        durable: bool = False,
+        stale_running_threshold_seconds: Optional[int] = None,
+    ) -> None:
         self._hub_root = hub_root
         self._path = default_pma_threads_db_path(hub_root)
         self._durable = durable
+        self._stale_running_threshold_seconds = (
+            _resolve_stale_running_threshold_seconds(
+                hub_root, override=stale_running_threshold_seconds
+            )
+        )
         self._initialize()
 
     @property
@@ -375,6 +407,10 @@ class PmaThreadStore:
 
     def _initialize(self) -> None:
         with pma_threads_db_lock(self._path):
+            ensure_legacy_orchestration_backfill(
+                self._hub_root,
+                durable=self._durable,
+            )
             with open_orchestration_sqlite(
                 self._hub_root,
                 durable=self._durable,
@@ -384,21 +420,27 @@ class PmaThreadStore:
 
     @contextmanager
     def _read_conn(self) -> Iterator[Any]:
+        ensure_legacy_orchestration_backfill(
+            self._hub_root,
+            durable=self._durable,
+        )
         with open_orchestration_sqlite(
             self._hub_root,
             durable=self._durable,
         ) as conn:
-            backfill_legacy_thread_state(self._hub_root, conn)
             yield conn
 
     @contextmanager
     def _write_conn(self) -> Iterator[Any]:
         with pma_threads_db_lock(self._path):
+            ensure_legacy_orchestration_backfill(
+                self._hub_root,
+                durable=self._durable,
+            )
             with open_orchestration_sqlite(
                 self._hub_root,
                 durable=self._durable,
             ) as conn:
-                backfill_legacy_thread_state(self._hub_root, conn)
                 yield conn
                 self._run_legacy_mirror(conn)
 
@@ -522,11 +564,23 @@ class PmaThreadStore:
         return self._fetch_thread(conn, managed_thread_id)
 
     def _find_stale_running_turn_ids(
-        self, conn: Any, managed_thread_id: str
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        *,
+        include_status_turn_age_recovery: bool = True,
     ) -> list[str]:
         running_rows = conn.execute(
             """
-            SELECT execution_id
+            SELECT
+                execution_id,
+                started_at,
+                created_at,
+                (
+                    SELECT MAX(ep.timestamp)
+                      FROM orch_event_projections AS ep
+                     WHERE ep.execution_id = orch_thread_executions.execution_id
+                ) AS last_event_at
               FROM orch_thread_executions
              WHERE thread_target_id = ?
                AND status = 'running'
@@ -545,21 +599,56 @@ class PmaThreadStore:
             """,
             (managed_thread_id,),
         ).fetchone()
+        runtime_status = (
+            str(thread_row["runtime_status"]).strip().lower()
+            if thread_row is not None and thread_row["runtime_status"] is not None
+            else ""
+        )
         status_turn_id = (
             str(thread_row["status_turn_id"]).strip()
             if thread_row is not None and thread_row["status_turn_id"] is not None
             else ""
         )
 
+        # If thread state says terminal while a running execution exists, the
+        # execution record is inconsistent and should be recovered.
+        if runtime_status in {"completed", "failed", "interrupted"}:
+            return [str(row["execution_id"]) for row in running_rows]
+
         stale_execution_ids: list[str] = []
+        now_dt = datetime.now(timezone.utc)
         for row in running_rows:
             execution_id = str(row["execution_id"])
             if status_turn_id and status_turn_id != execution_id:
                 stale_execution_ids.append(execution_id)
+                continue
+            if not include_status_turn_age_recovery and status_turn_id == execution_id:
+                continue
+
+            last_activity_at = (
+                parse_iso_datetime(row["last_event_at"])
+                or parse_iso_datetime(row["started_at"])
+                or parse_iso_datetime(row["created_at"])
+            )
+            if last_activity_at is None:
+                continue
+            age_seconds = max(0, int((now_dt - last_activity_at).total_seconds()))
+            if age_seconds > self._stale_running_threshold_seconds:
+                stale_execution_ids.append(execution_id)
         return stale_execution_ids
 
-    def _recover_stale_running_turns(self, conn: Any, managed_thread_id: str) -> int:
-        stale_execution_ids = self._find_stale_running_turn_ids(conn, managed_thread_id)
+    def _recover_stale_running_turns(
+        self,
+        conn: Any,
+        managed_thread_id: str,
+        *,
+        include_status_turn_age_recovery: bool = True,
+    ) -> int:
+        stale_execution_ids = self._find_stale_running_turn_ids(
+            conn,
+            managed_thread_id,
+            include_status_turn_age_recovery=include_status_turn_age_recovery,
+        )
         if not stale_execution_ids:
             return 0
         recovered_at = now_iso()
@@ -1269,7 +1358,13 @@ class PmaThreadStore:
 
     def get_running_turn(self, managed_thread_id: str) -> Optional[dict[str, Any]]:
         with self._write_conn() as conn:
-            self._recover_stale_running_turns(conn, managed_thread_id)
+            # Status checks can be polled frequently; avoid age-based interruption of
+            # the currently-tracked status turn during passive reads.
+            self._recover_stale_running_turns(
+                conn,
+                managed_thread_id,
+                include_status_turn_age_recovery=False,
+            )
             row = conn.execute(
                 """
                 SELECT *

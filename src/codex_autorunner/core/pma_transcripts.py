@@ -8,8 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from .orchestration.migrate_legacy_state import backfill_legacy_transcript_mirrors
-from .orchestration.sqlite import open_orchestration_sqlite
+from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.transcript_mirror import (
     TranscriptMirrorStore,
     build_plain_text_transcript,
@@ -188,8 +187,7 @@ class PmaTranscriptStore:
         return {"metadata": meta, "content": content}
 
     def _backfill_legacy_transcripts(self) -> None:
-        with open_orchestration_sqlite(self._root) as conn:
-            backfill_legacy_transcript_mirrors(self._root, conn)
+        ensure_legacy_orchestration_backfill(self._root)
 
     def _find_metadata(self, turn_id: str) -> Optional[tuple[dict[str, Any], Path]]:
         if not self._dir.exists():

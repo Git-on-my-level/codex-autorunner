@@ -35,6 +35,13 @@ set -euo pipefail
 #   HEALTH_CHECK_DISCORD   discord launchd check (auto|true|false; default: auto)
 #   HEALTH_CONNECT_TIMEOUT_SECONDS connection timeout for each health request (default: 2)
 #   HEALTH_REQUEST_TIMEOUT_SECONDS total timeout for each health request (default: 5)
+#   HUB_PRE_CHAT_HEALTH_TIMEOUT_SECONDS seconds to wait for hub /health before chat reload
+#                          (default: 120). This warmup gate avoids hub/chat DB contention.
+#   WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD after hub launchd reload, wait for hub HTTP health before
+#                          restarting Telegram/Discord (true|false; default: true). Set false to
+#                          restore legacy parallel reload (all launchd kicks closer together).
+#   LAUNCHD_STOP_WAIT_SECONDS seconds to wait after launchctl unload for the old PID to exit before
+#                          SIGKILL (default: 10). Hub/chat can hold DB handles briefly; 5s was tight.
 #   KEEP_OLD_VENVS         how many old next-* venvs to keep (default: 3)
 #   NVM_BIN                Node bin path to prepend (default: ~/.nvm/versions/node/v22.12.0/bin)
 #   LOCAL_BIN              Local bin path to prepend (default: ~/.local/bin)
@@ -67,11 +74,14 @@ HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-30}"
 HEALTH_INTERVAL_SECONDS="${HEALTH_INTERVAL_SECONDS:-0.5}"
 HEALTH_CONNECT_TIMEOUT_SECONDS="${HEALTH_CONNECT_TIMEOUT_SECONDS:-2}"
 HEALTH_REQUEST_TIMEOUT_SECONDS="${HEALTH_REQUEST_TIMEOUT_SECONDS:-5}"
+HUB_PRE_CHAT_HEALTH_TIMEOUT_SECONDS="${HUB_PRE_CHAT_HEALTH_TIMEOUT_SECONDS:-120}"
 HEALTH_PATH="${HEALTH_PATH:-}"
 HEALTH_STATIC_PATH="${HEALTH_STATIC_PATH:-}"
 HEALTH_CHECK_STATIC="${HEALTH_CHECK_STATIC:-auto}"
 HEALTH_CHECK_TELEGRAM="${HEALTH_CHECK_TELEGRAM:-auto}"
 HEALTH_CHECK_DISCORD="${HEALTH_CHECK_DISCORD:-auto}"
+WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD="${WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD:-true}"
+LAUNCHD_STOP_WAIT_SECONDS="${LAUNCHD_STOP_WAIT_SECONDS:-10}"
 KEEP_OLD_VENVS="${KEEP_OLD_VENVS:-3}"
 NVM_BIN="${NVM_BIN:-$HOME/.nvm/versions/node/v22.12.0/bin}"
 LOCAL_BIN="${LOCAL_BIN:-$HOME/.local/bin}"
@@ -83,6 +93,10 @@ swap_completed=false
 rollback_completed=false
 cutover_committed=false
 post_cutover_warnings=()
+hub_health_verified_after_reload=false
+HUB_HEALTH_WAIT_TIMED_OUT=false
+TELEGRAM_HEALTH_WAIT_TIMED_OUT=false
+DISCORD_HEALTH_WAIT_TIMED_OUT=false
 
 write_status() {
   local status message
@@ -200,6 +214,19 @@ normalize_bool() {
       ;;
     *)
       echo "auto"
+      ;;
+  esac
+}
+
+normalize_true_default_bool() {
+  local normalized
+  normalized="$(normalize_bool "${1:-}")"
+  case "${normalized}" in
+    false)
+      echo "false"
+      ;;
+    *)
+      echo "true"
       ;;
   esac
 }
@@ -425,6 +452,9 @@ UPDATE_TARGET="$(normalize_update_target "${UPDATE_TARGET}")"
 HEALTH_CHECK_STATIC="$(normalize_bool "${HEALTH_CHECK_STATIC}")"
 HEALTH_CHECK_TELEGRAM="$(normalize_bool "${HEALTH_CHECK_TELEGRAM}")"
 HEALTH_CHECK_DISCORD="$(normalize_bool "${HEALTH_CHECK_DISCORD}")"
+WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD="$(
+  normalize_true_default_bool "${WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD:-}"
+)"
 should_reload_hub=false
 should_reload_telegram=false
 should_reload_discord=false
@@ -736,40 +766,81 @@ _discord_service_pid() {
   launchctl print "${discord_domain}" 2>/dev/null | awk '/pid =/ {print $3; exit}'
 }
 
-_wait_pid_exit() {
-  local pid start
+_collect_pid_tree() {
+  local pid child
   pid="$1"
-  start="$(date +%s)"
-  while kill -0 "${pid}" >/dev/null 2>&1; do
-    if (( $(date +%s) - start >= 5 )); then
-      return 1
+  if [[ -z "${pid}" || "${pid}" == "0" ]]; then
+    return 0
+  fi
+  printf '%s\n' "${pid}"
+  while read -r child; do
+    if [[ -n "${child}" ]]; then
+      _collect_pid_tree "${child}"
     fi
-    sleep 0.1
-  done
-  return 0
+  done < <(pgrep -P "${pid}" || true)
 }
 
-_reload() {
-  local pid
+# After launchctl unload, the main process may linger briefly while flushing state or releasing
+# SQLite (orchestration) locks. Default 10s reduces SIGKILL races vs the old 5s fixed budget.
+_wait_pid_exit() {
+  local start budget pid
+  budget="${LAUNCHD_STOP_WAIT_SECONDS:-10}"
+  start="$(date +%s)"
+  while true; do
+    for pid in "$@"; do
+      if [[ -n "${pid}" && "${pid}" != "0" ]] && kill -0 "${pid}" >/dev/null 2>&1; then
+        if (( $(date +%s) - start >= budget )); then
+          return 1
+        fi
+        sleep 0.1
+        continue 2
+      fi
+    done
+    return 0
+  done
+}
+
+_stop_service() {
+  local root_pid
+  local -a pids=()
   _require_gui_domain
-  pid="$(_service_pid)"
+  root_pid="$(_service_pid)"
+  if [[ -n "${root_pid}" && "${root_pid}" != "0" ]]; then
+    while read -r pid; do
+      if [[ -n "${pid}" ]]; then
+        pids+=( "${pid}" )
+      fi
+    done < <(_collect_pid_tree "${root_pid}")
+  fi
   _ensure_plist_has_opencode_path
   _normalize_plist_process_limits "${PLIST_PATH}"
   launchctl unload -w "${PLIST_PATH}" >/dev/null 2>&1 || true
-  if [[ -n "${pid}" && "${pid}" != "0" ]]; then
-    if ! _wait_pid_exit "${pid}"; then
-      kill -9 "${pid}" >/dev/null 2>&1 || true
+  if (( ${#pids[@]} > 0 )); then
+    if ! _wait_pid_exit "${pids[@]}"; then
+      kill -9 "${pids[@]}" >/dev/null 2>&1 || true
+      _wait_pid_exit "${pids[@]}" || true
     fi
   fi
+}
+
+_start_service() {
+  _require_gui_domain
   launchctl load -w "${PLIST_PATH}" >/dev/null
   launchctl kickstart -k "${domain}" >/dev/null
 }
 
+_reload() {
+  _stop_service
+  _start_service
+}
+
 _reload_telegram() {
-  local hub_root telegram_state telegram_domain
+  local hub_root telegram_state telegram_domain root_pid
+  local -a pids=()
   _require_gui_domain
   hub_root="$(_plist_arg_value path)"
   telegram_state="$(_telegram_state "${hub_root}")"
+  telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
 
   if [[ "${telegram_state}" == "enabled" ]]; then
     if [[ -z "${hub_root}" ]]; then
@@ -782,8 +853,21 @@ _reload_telegram() {
     _ensure_telegram_plist_uses_current_venv
     PLIST_PATH="${TELEGRAM_PLIST_PATH}" _ensure_plist_has_opencode_path
     _normalize_plist_process_limits "${TELEGRAM_PLIST_PATH}"
-    telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
+    root_pid="$(_telegram_service_pid)"
+    if [[ -n "${root_pid}" && "${root_pid}" != "0" ]]; then
+      while read -r pid; do
+        if [[ -n "${pid}" ]]; then
+          pids+=( "${pid}" )
+        fi
+      done < <(_collect_pid_tree "${root_pid}")
+    fi
     launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
+    if (( ${#pids[@]} > 0 )); then
+      if ! _wait_pid_exit "${pids[@]}"; then
+        kill -9 "${pids[@]}" >/dev/null 2>&1 || true
+        _wait_pid_exit "${pids[@]}" || true
+      fi
+    fi
     launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
     launchctl kickstart -k "${telegram_domain}" >/dev/null
     return 0
@@ -792,7 +876,21 @@ _reload_telegram() {
   if [[ "${telegram_state}" == "disabled" ]]; then
     if [[ -f "${TELEGRAM_PLIST_PATH}" ]]; then
       echo "Telegram disabled; unloading launchd service ${TELEGRAM_LABEL}..."
+      root_pid="$(_telegram_service_pid)"
+      if [[ -n "${root_pid}" && "${root_pid}" != "0" ]]; then
+        while read -r pid; do
+          if [[ -n "${pid}" ]]; then
+            pids+=( "${pid}" )
+          fi
+        done < <(_collect_pid_tree "${root_pid}")
+      fi
       launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
+      if (( ${#pids[@]} > 0 )); then
+        if ! _wait_pid_exit "${pids[@]}"; then
+          kill -9 "${pids[@]}" >/dev/null 2>&1 || true
+          _wait_pid_exit "${pids[@]}" || true
+        fi
+      fi
     fi
     return 0
   fi
@@ -801,17 +899,32 @@ _reload_telegram() {
     return 0
   fi
   _normalize_plist_process_limits "${TELEGRAM_PLIST_PATH}"
-  telegram_domain="gui/$(id -u)/${TELEGRAM_LABEL}"
+  root_pid="$(_telegram_service_pid)"
+  if [[ -n "${root_pid}" && "${root_pid}" != "0" ]]; then
+    while read -r pid; do
+      if [[ -n "${pid}" ]]; then
+        pids+=( "${pid}" )
+      fi
+    done < <(_collect_pid_tree "${root_pid}")
+  fi
   launchctl unload -w "${TELEGRAM_PLIST_PATH}" >/dev/null 2>&1 || true
+  if (( ${#pids[@]} > 0 )); then
+    if ! _wait_pid_exit "${pids[@]}"; then
+      kill -9 "${pids[@]}" >/dev/null 2>&1 || true
+      _wait_pid_exit "${pids[@]}" || true
+    fi
+  fi
   launchctl load -w "${TELEGRAM_PLIST_PATH}" >/dev/null
   launchctl kickstart -k "${telegram_domain}" >/dev/null
 }
 
 _reload_discord() {
-  local hub_root discord_state discord_domain missing_envs
+  local hub_root discord_state discord_domain missing_envs root_pid
+  local -a pids=()
   _require_gui_domain
   hub_root="$(_plist_arg_value path)"
   discord_state="$(_discord_state "${hub_root}")"
+  discord_domain="gui/$(id -u)/${DISCORD_LABEL}"
 
   if [[ "${discord_state}" == "enabled" ]]; then
     if [[ -z "${hub_root}" ]]; then
@@ -824,8 +937,21 @@ _reload_discord() {
     _ensure_discord_plist_uses_current_venv
     PLIST_PATH="${DISCORD_PLIST_PATH}" _ensure_plist_has_opencode_path
     _normalize_plist_process_limits "${DISCORD_PLIST_PATH}"
-    discord_domain="gui/$(id -u)/${DISCORD_LABEL}"
+    root_pid="$(_discord_service_pid)"
+    if [[ -n "${root_pid}" && "${root_pid}" != "0" ]]; then
+      while read -r pid; do
+        if [[ -n "${pid}" ]]; then
+          pids+=( "${pid}" )
+        fi
+      done < <(_collect_pid_tree "${root_pid}")
+    fi
     launchctl unload -w "${DISCORD_PLIST_PATH}" >/dev/null 2>&1 || true
+    if (( ${#pids[@]} > 0 )); then
+      if ! _wait_pid_exit "${pids[@]}"; then
+        kill -9 "${pids[@]}" >/dev/null 2>&1 || true
+        _wait_pid_exit "${pids[@]}" || true
+      fi
+    fi
     launchctl load -w "${DISCORD_PLIST_PATH}" >/dev/null
     launchctl kickstart -k "${discord_domain}" >/dev/null
     return 0
@@ -843,7 +969,21 @@ _reload_discord() {
       else
         echo "Discord disabled; unloading launchd service ${DISCORD_LABEL}..."
       fi
+      root_pid="$(_discord_service_pid)"
+      if [[ -n "${root_pid}" && "${root_pid}" != "0" ]]; then
+        while read -r pid; do
+          if [[ -n "${pid}" ]]; then
+            pids+=( "${pid}" )
+          fi
+        done < <(_collect_pid_tree "${root_pid}")
+      fi
       launchctl unload -w "${DISCORD_PLIST_PATH}" >/dev/null 2>&1 || true
+      if (( ${#pids[@]} > 0 )); then
+        if ! _wait_pid_exit "${pids[@]}"; then
+          kill -9 "${pids[@]}" >/dev/null 2>&1 || true
+          _wait_pid_exit "${pids[@]}" || true
+        fi
+      fi
     fi
     return 0
   fi
@@ -852,8 +992,21 @@ _reload_discord() {
     return 0
   fi
   _normalize_plist_process_limits "${DISCORD_PLIST_PATH}"
-  discord_domain="gui/$(id -u)/${DISCORD_LABEL}"
+  root_pid="$(_discord_service_pid)"
+  if [[ -n "${root_pid}" && "${root_pid}" != "0" ]]; then
+    while read -r pid; do
+      if [[ -n "${pid}" ]]; then
+        pids+=( "${pid}" )
+      fi
+    done < <(_collect_pid_tree "${root_pid}")
+  fi
   launchctl unload -w "${DISCORD_PLIST_PATH}" >/dev/null 2>&1 || true
+  if (( ${#pids[@]} > 0 )); then
+    if ! _wait_pid_exit "${pids[@]}"; then
+      kill -9 "${pids[@]}" >/dev/null 2>&1 || true
+      _wait_pid_exit "${pids[@]}" || true
+    fi
+  fi
   launchctl load -w "${DISCORD_PLIST_PATH}" >/dev/null
   launchctl kickstart -k "${discord_domain}" >/dev/null
 }
@@ -920,8 +1073,8 @@ except Exception:  # pragma: no cover - optional dependency
     dotenv_values = None
 
 
-def parse_fallback(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
+def parse_fallback(path: Path):
+    env = {}
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
@@ -944,7 +1097,7 @@ def parse_fallback(path: Path) -> dict[str, str]:
     return env
 
 
-found: str | None = None
+found = None
 for candidate in (root / ".env", root / ".codex-autorunner" / ".env"):
     if not candidate.exists():
         continue
@@ -1407,6 +1560,8 @@ _should_check_discord() {
 }
 
 _health_check_once() {
+  local include_static
+  include_static="${1:-true}"
   local port url static_url hub_root
   port="$(_plist_arg_value port)"
   if [[ -z "${port}" ]]; then
@@ -1423,7 +1578,7 @@ _health_check_once() {
   curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
     --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
     "${url}" >/dev/null 2>&1
-  if _should_check_static; then
+  if [[ "${include_static}" == "true" ]] && _should_check_static; then
     static_url="http://127.0.0.1:${port}${HEALTH_STATIC_PATH}"
     curl -fsS --connect-timeout "${HEALTH_CONNECT_TIMEOUT_SECONDS}" \
       --max-time "${HEALTH_REQUEST_TIMEOUT_SECONDS}" \
@@ -1432,14 +1587,18 @@ _health_check_once() {
 }
 
 _wait_healthy() {
-  local start now
+  local timeout include_static start now
+  timeout="${1:-${HEALTH_TIMEOUT_SECONDS}}"
+  include_static="${2:-true}"
   start="$(date +%s)"
+  HUB_HEALTH_WAIT_TIMED_OUT=false
   while true; do
-    if _health_check_once; then
+    if _health_check_once "${include_static}"; then
       return 0
     fi
     now="$(date +%s)"
-    if (( now - start >= HEALTH_TIMEOUT_SECONDS )); then
+    if (( now - start >= timeout )); then
+      HUB_HEALTH_WAIT_TIMED_OUT=true
       return 1
     fi
     sleep "${HEALTH_INTERVAL_SECONDS}"
@@ -1469,12 +1628,14 @@ _telegram_check_once() {
 _wait_telegram_healthy() {
   local start now
   start="$(date +%s)"
+  TELEGRAM_HEALTH_WAIT_TIMED_OUT=false
   while true; do
     if _telegram_check_once; then
       return 0
     fi
     now="$(date +%s)"
     if (( now - start >= HEALTH_TIMEOUT_SECONDS )); then
+      TELEGRAM_HEALTH_WAIT_TIMED_OUT=true
       return 1
     fi
     sleep "${HEALTH_INTERVAL_SECONDS}"
@@ -1498,12 +1659,14 @@ _discord_check_once() {
 _wait_discord_healthy() {
   local start now
   start="$(date +%s)"
+  DISCORD_HEALTH_WAIT_TIMED_OUT=false
   while true; do
     if _discord_check_once; then
       return 0
     fi
     now="$(date +%s)"
     if (( now - start >= HEALTH_TIMEOUT_SECONDS )); then
+      DISCORD_HEALTH_WAIT_TIMED_OUT=true
       return 1
     fi
     sleep "${HEALTH_INTERVAL_SECONDS}"
@@ -1515,7 +1678,11 @@ _check_hub_health() {
     echo "Skipping hub health check (update target: ${UPDATE_TARGET})."
     return 0
   fi
-  if _wait_healthy; then
+  if [[ "${hub_health_verified_after_reload}" == "true" ]]; then
+    echo "Hub health already verified after reload; skipping duplicate wait."
+    return 0
+  fi
+  if _wait_healthy "${HEALTH_TIMEOUT_SECONDS}" "true"; then
     echo "Hub health check OK."
     return 0
   fi
@@ -1538,7 +1705,7 @@ _check_telegram_health() {
     echo "Telegram health check OK."
     return 0
   fi
-    telegram_health_reason="Telegram health check failed."
+  telegram_health_reason="Telegram health check failed."
   echo "Telegram health check failed." >&2
   return 1
 }
@@ -1589,8 +1756,10 @@ _rollback() {
   rollback_completed=true
   echo "${message}" >&2
   ln -sfn "${current_target}" "${CURRENT_VENV_LINK}"
+  hub_health_verified_after_reload=false
   if [[ "${should_reload_hub}" == "true" ]]; then
-    _reload || true
+    _stop_service || true
+    _start_service || true
   fi
   if [[ "${should_reload_telegram}" == "true" ]]; then
     _reload_telegram || true
@@ -1633,24 +1802,43 @@ HUB_ROOT="${HUB_ROOT}" HELPER_PYTHON="${CURRENT_VENV_LINK}/bin/python" \
 if [[ "${should_reload_hub}" == "true" ]]; then
   echo "Restarting launchd service ${LABEL}..."
   _ensure_plist_uses_current_venv
-  _reload
-fi
-if [[ "${should_reload_telegram}" == "true" ]]; then
-  _reload_telegram
-fi
-if [[ "${should_reload_discord}" == "true" ]]; then
-  _reload_discord
+  _stop_service
+  _start_service
 fi
 
-health_ok=true
-if ! _check_hub_health; then
-  health_ok=false
+hub_warm_ok=true
+if [[ "${should_reload_hub}" == "true" && "${WAIT_HUB_HEALTH_BEFORE_CHAT_RELOAD}" == "true" ]] && \
+   { [[ "${should_reload_telegram}" == "true" ]] || [[ "${should_reload_discord}" == "true" ]]; }; then
+  echo "Waiting for hub health before restarting chat services..."
+  if _wait_healthy "${HUB_PRE_CHAT_HEALTH_TIMEOUT_SECONDS}" "false"; then
+    echo "Hub health OK before chat service reload."
+    hub_health_verified_after_reload=true
+  else
+    echo "Hub health check failed before chat reload." >&2
+    hub_warm_ok=false
+  fi
 fi
-if ! _check_telegram_health; then
-  health_ok=false
+
+if [[ "${hub_warm_ok}" == "true" ]]; then
+  if [[ "${should_reload_telegram}" == "true" ]]; then
+    _reload_telegram
+  fi
+  if [[ "${should_reload_discord}" == "true" ]]; then
+    _reload_discord
+  fi
 fi
-if ! _check_discord_health; then
-  health_ok=false
+
+health_ok="${hub_warm_ok}"
+if [[ "${health_ok}" == "true" ]]; then
+  if ! _check_hub_health; then
+    health_ok=false
+  fi
+  if ! _check_telegram_health; then
+    health_ok=false
+  fi
+  if ! _check_discord_health; then
+    health_ok=false
+  fi
 fi
 
 if [[ "${health_ok}" == "true" ]]; then
@@ -1680,28 +1868,53 @@ else
   rollback_hub_ok=true
   rollback_telegram_ok=true
   rollback_discord_ok=true
+  rollback_hub_timed_out=false
+  rollback_telegram_timed_out=false
+  rollback_discord_timed_out=false
+  HUB_HEALTH_WAIT_TIMED_OUT=false
+  TELEGRAM_HEALTH_WAIT_TIMED_OUT=false
+  DISCORD_HEALTH_WAIT_TIMED_OUT=false
   if ! _check_hub_health; then
     rollback_hub_ok=false
+    rollback_hub_timed_out="${HUB_HEALTH_WAIT_TIMED_OUT}"
   fi
   if ! _check_telegram_health; then
     rollback_telegram_ok=false
+    rollback_telegram_timed_out="${TELEGRAM_HEALTH_WAIT_TIMED_OUT}"
   fi
   if ! _check_discord_health; then
     rollback_discord_ok=false
+    rollback_discord_timed_out="${DISCORD_HEALTH_WAIT_TIMED_OUT}"
   fi
   if [[ "${rollback_hub_ok}" == "true" && "${rollback_telegram_ok}" == "true" && "${rollback_discord_ok}" == "true" ]]; then
     echo "Rollback OK; service restored." >&2
     write_status "rollback" "Update failed; rollback succeeded."
   else
     failed_checks=()
+    failed_labels=()
     if [[ "${rollback_hub_ok}" != "true" ]]; then
       failed_checks+=(hub)
+      if [[ "${rollback_hub_timed_out}" == "true" ]]; then
+        failed_labels+=("hub: health wait timed out")
+      else
+        failed_labels+=("hub: health check failed")
+      fi
     fi
     if [[ "${rollback_telegram_ok}" != "true" ]]; then
       failed_checks+=(telegram)
+      if [[ "${rollback_telegram_timed_out}" == "true" ]]; then
+        failed_labels+=("telegram: health wait timed out")
+      else
+        failed_labels+=("telegram: health check failed")
+      fi
     fi
     if [[ "${rollback_discord_ok}" != "true" ]]; then
       failed_checks+=(discord)
+      if [[ "${rollback_discord_timed_out}" == "true" ]]; then
+        failed_labels+=("discord: health wait timed out")
+      else
+        failed_labels+=("discord: health check failed")
+      fi
     fi
     if (( ${#failed_checks[@]} > 0 )); then
       failed_summary="Health check failed after rollback (${failed_checks[*]})."
@@ -1709,10 +1922,17 @@ else
       failed_summary="Health check failed after rollback."
     fi
     echo "${failed_summary} Verify service health and logs:" >&2
+    if (( ${#failed_labels[@]} > 0 )); then
+      echo "  (${failed_labels[*]})" >&2
+    fi
     echo "  tail -n 200 ~/car-workspace/.codex-autorunner/codex-autorunner-hub.log" >&2
     echo "  launchctl print ${domain}" >&2
+    rb_detail=""
+    for part in "${failed_labels[@]}"; do
+      rb_detail+=" ${part}."
+    done
     write_status "rollback" \
-      "Update failed; rollback completed, but post-rollback health checks failed. Verify service health."
+      "Update failed; rollback completed, but post-rollback health checks failed.${rb_detail} Verify service health."
     exit 2
   fi
   exit 1

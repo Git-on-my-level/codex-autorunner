@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .locks import file_lock
-from .orchestration.migrate_legacy_state import backfill_legacy_reactive_state
+from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .text_utils import lock_path_for
 from .time_utils import now_iso
@@ -67,8 +67,8 @@ class PmaReactiveStore:
         return True
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
+        ensure_legacy_orchestration_backfill(self._hub_root, durable=True)
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            backfill_legacy_reactive_state(self._hub_root, conn)
             rows = conn.execute(
                 """
                 SELECT debounce_key, last_enqueued_at
@@ -92,8 +92,8 @@ class PmaReactiveStore:
         last_enqueued = state.get("last_enqueued")
         values = last_enqueued if isinstance(last_enqueued, dict) else {}
         stamp = now_iso()
+        ensure_legacy_orchestration_backfill(self._hub_root, durable=True)
         with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            backfill_legacy_reactive_state(self._hub_root, conn)
             with conn:
                 conn.execute("DELETE FROM orch_reactive_debounce_state")
                 for key, raw_value in values.items():

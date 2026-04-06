@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Optional
 
@@ -18,7 +19,7 @@ TRUNCATION_SUFFIX = "... (truncated)\n"
 def _safe_read(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         return f"(failed to read {path.name}: {exc})"
 
 
@@ -45,7 +46,7 @@ def _artifact_entries(
                     selected = override
             artifacts = store.get_artifacts(selected.id)
             events = store.get_events(selected.id, limit=120)
-    except (OSError, ValueError):
+    except (OSError, ValueError, sqlite3.Error):
         return []
 
     repo_root = ctx.repo_root
@@ -150,14 +151,14 @@ def build_spec_progress_review_context(
     def doc_label(name: str) -> str:
         try:
             return ctx.config.doc_path(name).relative_to(ctx.repo_root).as_posix()
-        except ValueError:
+        except (ValueError, KeyError):
             return name
 
     def read_doc(name: str) -> str:
         try:
             path = ctx.config.doc_path(name)
             return _safe_read(path)
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, KeyError) as exc:
             return f"(failed to read {name}: {exc})"
 
     add("# Autorunner Review Context\n\n")

@@ -237,7 +237,6 @@ def build_pause_result(
 
 def process_commit_required(
     *,
-    state: dict[str, Any],
     clean_after_agent: Optional[bool],
     commit_pending: bool,
     commit_retries: int,
@@ -247,47 +246,15 @@ def process_commit_required(
     status_after_agent: Optional[str],
     max_commit_retries: int,
 ) -> tuple[dict[str, Any], str, Optional[str], str, Optional[str]]:
-    """Process commit-required logic after successful turn."""
-    commit_state = {}
-    status = "continue"
-    reason = None
-    reason_code = "needs_user_fix"
-    reason_details = None
+    from .runner_commit import process_commit_required as _process_commit_required
 
-    commit_required_now = clean_after_agent is False
-
-    if not commit_pending and not commit_required_now:
-        return {}, status, reason, reason_code, reason_details
-
-    if commit_pending:
-        next_failed_attempts = commit_retries + 1
-    else:
-        next_failed_attempts = 0
-
-    commit_state = {
-        "pending": True,
-        "retries": next_failed_attempts,
-        "head_before": head_before_turn,
-        "head_after": head_after_agent,
-        "agent_committed_this_turn": agent_committed_this_turn,
-        "status_porcelain": status_after_agent,
-    }
-
-    if commit_pending and next_failed_attempts >= max_commit_retries:
-        detail = (status_after_agent or "").strip()
-        detail_lines = detail.splitlines()[:20]
-        details_parts = [
-            "Please commit manually (ensuring pre-commit hooks pass) and resume."
-        ]
-        if detail_lines:
-            details_parts.append(
-                "\n\nWorking tree status (git status --porcelain):\n- "
-                + "\n- ".join(detail_lines)
-            )
-        reason = (
-            f"Commit failed after {max_commit_retries} attempts. "
-            "Manual commit required."
-        )
-        reason_details = "".join(details_parts)
-
-    return commit_state, status, reason, reason_code, reason_details
+    return _process_commit_required(
+        clean_after_agent=clean_after_agent,
+        commit_pending=commit_pending,
+        commit_retries=commit_retries,
+        head_before_turn=head_before_turn,
+        head_after_agent=head_after_agent,
+        agent_committed_this_turn=agent_committed_this_turn,
+        status_after_agent=status_after_agent,
+        max_commit_retries=max_commit_retries,
+    )

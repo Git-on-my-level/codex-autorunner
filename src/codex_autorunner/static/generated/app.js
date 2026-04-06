@@ -1,27 +1,66 @@
 // GENERATED FILE - do not edit directly. Source: static_src/
 import { REPO_ID, HUB_BASE } from "./env.js";
-import { initHub } from "./hub.js";
-import { initTabs, registerTab, registerHamburgerAction } from "./tabs.js";
-import { initTerminal } from "./terminal.js";
-import { initTicketFlow } from "./tickets.js";
-import { initMessages, initMessageBell } from "./messages.js";
-import { initMobileCompact } from "./mobileCompact.js";
-import { subscribe } from "./bus.js";
-import { initRepoSettingsPanel, openRepoSettings } from "./settings.js";
 import { flash, getAuthToken, repairModalBackgroundIfStuck, resolvePath, updateUrlParams, } from "./utils.js";
-import { initLiveUpdates } from "./liveUpdates.js";
-import { initHealthGate } from "./health.js";
-import { initContextspace } from "./contextspace.js";
-import { initDashboard } from "./dashboard.js";
-import { initArchive } from "./archive.js";
-import { initPMA, setPMARefreshActive } from "./pma.js";
-import { initNotifications } from "./notifications.js";
 let pmaInitialized = false;
+let hubModulePromise = null;
+let pmaModulePromise = null;
+let notificationsModulePromise = null;
+let repoShellModulesPromise = null;
+function loadHubModule() {
+    hubModulePromise ?? (hubModulePromise = import("./hub.js"));
+    return hubModulePromise;
+}
+function loadPMAModule() {
+    pmaModulePromise ?? (pmaModulePromise = import("./pma.js"));
+    return pmaModulePromise;
+}
+function loadNotificationsModule() {
+    notificationsModulePromise ?? (notificationsModulePromise = import("./notifications.js"));
+    return notificationsModulePromise;
+}
+function loadRepoShellModules() {
+    repoShellModulesPromise ?? (repoShellModulesPromise = Promise.all([
+        import("./archive.js"),
+        import("./bus.js"),
+        import("./contextspace.js"),
+        import("./dashboard.js"),
+        import("./health.js"),
+        import("./liveUpdates.js"),
+        import("./messages.js"),
+        import("./mobileCompact.js"),
+        import("./settings.js"),
+        import("./tabs.js"),
+        import("./terminal.js"),
+        import("./tickets.js"),
+    ]).then(([archive, bus, contextspace, dashboard, health, liveUpdates, messages, mobileCompact, settings, tabs, terminal, tickets,]) => ({
+        archive,
+        bus,
+        contextspace,
+        dashboard,
+        health,
+        liveUpdates,
+        messages,
+        mobileCompact,
+        settings,
+        tabs,
+        terminal,
+        tickets,
+    })));
+    return repoShellModulesPromise;
+}
 async function initPMAView() {
     if (!pmaInitialized) {
+        const { initPMA } = await loadPMAModule();
         await initPMA();
         pmaInitialized = true;
     }
+}
+function setPMARefreshActiveIfLoaded(active) {
+    if (!pmaInitialized && pmaModulePromise === null)
+        return;
+    void loadPMAModule().then(({ setPMARefreshActive }) => {
+        setPMARefreshActive(active);
+    });
 }
 function showHubView() {
     const hubShell = document.getElementById("hub-shell");
@@ -30,7 +69,7 @@ function showHubView() {
         hubShell.classList.remove("hidden");
     if (pmaShell)
         pmaShell.classList.add("hidden");
-    setPMARefreshActive(false);
+    setPMARefreshActiveIfLoaded(false);
     updateModeToggle("manual");
     updateUrlParams({ view: null });
 }
@@ -43,7 +82,7 @@ function showPMAView() {
         pmaShell.classList.remove("hidden");
     updateModeToggle("pma");
     void initPMAView().then(() => {
-        setPMARefreshActive(true);
+        setPMARefreshActiveIfLoaded(true);
     });
     updateUrlParams({ view: "pma" });
 }
@@ -87,6 +126,10 @@ async function initHubShell() {
         hubShell.classList.remove("hidden");
     if (repoShell)
         repoShell.classList.add("hidden");
+    const [{ initHub }, { initNotifications }] = await Promise.all([
+        loadHubModule(),
+        loadNotificationsModule(),
+    ]);
     initHub();
     initNotifications();
     manualBtns.forEach((btn) => {
@@ -121,6 +164,19 @@ async function initHubShell() {
     }
 }
 async function initRepoShell() {
+    const { archive, bus, contextspace, dashboard, health, liveUpdates, messages, mobileCompact, settings, tabs, terminal, tickets, } = await loadRepoShellModules();
+    const { initHealthGate } = health;
+    const { initArchive } = archive;
+    const { subscribe } = bus;
+    const { initContextspace } = contextspace;
+    const { initDashboard } = dashboard;
+    const { initMessages, initMessageBell } = messages;
+    const { initMobileCompact } = mobileCompact;
+    const { initRepoSettingsPanel, openRepoSettings } = settings;
+    const { initTabs, registerTab, registerHamburgerAction } = tabs;
+    const { initTerminal } = terminal;
+    const { initTicketFlow } = tickets;
+    const { initLiveUpdates } = liveUpdates;
     await initHealthGate();
     if (REPO_ID) {
         const navBar = document.querySelector(".nav-bar");

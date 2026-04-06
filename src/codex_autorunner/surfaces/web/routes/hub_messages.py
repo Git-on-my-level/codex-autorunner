@@ -163,6 +163,7 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             )
             dismissed_at = str(dismissed.get("resolved_at") or "")
             dismissed["dismissed_at"] = dismissed_at
+        hub_gather_service.invalidate_hub_message_snapshot_cache(context)
         return {
             "status": "ok",
             "dismissed": dismissed,
@@ -264,6 +265,7 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                 hint_id=hint_id,
                 scope_key=scope_key,
             )
+        hub_gather_service.invalidate_hub_message_snapshot_cache(context)
         return {"status": "ok", "resolved": resolved}
 
     return router

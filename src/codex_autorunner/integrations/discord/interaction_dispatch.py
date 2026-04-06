@@ -109,12 +109,14 @@ async def handle_interaction(
         ingress,
         command_path=service._normalize_discord_command_path(ingress.command_path),
     )
-    await service._prepare_command_interaction(
+    prepared = await service._prepare_command_interaction_or_abort(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
         command_path=ingress.command_path,
         timing="dispatch",
     )
+    if not prepared:
+        return
 
     try:
         if ingress.command_path[:1] == ("car",):
@@ -306,12 +308,14 @@ async def handle_normalized_interaction(
         ingress,
         command_path=service._normalize_discord_command_path(ingress.command_path),
     )
-    await service._prepare_command_interaction(
+    prepared = await service._prepare_command_interaction_or_abort(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
         command_path=ingress.command_path,
         timing="dispatch",
     )
+    if not prepared:
+        return
 
     try:
         if ingress.command_path[:1] == ("car",):
@@ -790,10 +794,15 @@ async def _handle_flow_action_select(
         )
         pending_text = service._pending_flow_reply_text.pop(pending_key, None)
         if not isinstance(pending_text, str) or not pending_text.strip():
-            await service._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Reply selection expired. Re-run `/flow reply text:<...>`.",
+            deferred = await service._defer_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+            )
+            await service._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="Reply selection expired. Re-run `/flow reply text:<...>`.",
             )
             return
         await service._handle_flow_reply(

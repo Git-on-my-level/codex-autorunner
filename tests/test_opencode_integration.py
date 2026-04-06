@@ -14,6 +14,10 @@ from codex_autorunner.agents.opencode.supervisor import (
     OpenCodeSupervisorError,
 )
 from codex_autorunner.core.managed_processes.registry import read_process_record
+from codex_autorunner.core.orchestration.runtime_thread_events import (
+    RuntimeThreadRunEventState,
+    normalize_runtime_thread_raw_event,
+)
 from codex_autorunner.core.sse import parse_sse_lines
 from codex_autorunner.workspace import canonical_workspace_root, workspace_id_for_path
 
@@ -502,6 +506,40 @@ async def test_harness_stream_turn_events(workspace: Path) -> None:
                 pass
     finally:
         await supervisor.close_all()
+
+
+@pytest.mark.asyncio
+async def test_harness_wait_for_turn_matches_runtime_event_fallback(
+    supervisor: OpenCodeSupervisor,
+    workspace: Path,
+) -> None:
+    """Real OpenCode turns should agree with runtime-event fallback text."""
+
+    harness = OpenCodeHarness(supervisor)
+    conv = await harness.new_conversation(workspace)
+    turn = await harness.start_turn(
+        workspace,
+        conv.id,
+        prompt="What is 2+2? Think carefully first, then answer in one short sentence.",
+        model=None,
+        reasoning=None,
+        approval_mode=None,
+        sandbox_policy=None,
+    )
+
+    result = await asyncio.wait_for(
+        harness.wait_for_turn(workspace, conv.id, turn.turn_id),
+        timeout=90.0,
+    )
+
+    state = RuntimeThreadRunEventState()
+    for raw_event in result.raw_events:
+        await normalize_runtime_thread_raw_event(raw_event, state)
+
+    assert result.status == "ok"
+    assert result.assistant_text.strip()
+    assert state.best_assistant_text().strip()
+    assert result.assistant_text.strip() == state.best_assistant_text().strip()
 
 
 @pytest.mark.asyncio

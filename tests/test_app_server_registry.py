@@ -170,3 +170,37 @@ async def test_app_server_supervisor_passes_workspace_id_to_client(
     await supervisor.get_client(workspace)
 
     assert isinstance(captured.get("workspace_id"), str)
+
+
+@pytest.mark.anyio
+async def test_force_kill_process_escalates_to_process_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeProcess:
+        pid = 32103
+
+        async def wait(self) -> int:
+            return 0
+
+        def kill(self) -> None:
+            return
+
+    killpg_calls: list[tuple[int, int]] = []
+    kill_calls: list[tuple[int, int]] = []
+
+    monkeypatch.setattr(
+        app_server_client.os,
+        "killpg",
+        lambda pgid, sig: killpg_calls.append((pgid, sig)),
+    )
+    monkeypatch.setattr(
+        app_server_client.os,
+        "kill",
+        lambda pid, sig: kill_calls.append((pid, sig)),
+    )
+
+    client = CodexAppServerClient(["python", "-m", "codex_autorunner"])
+    await client._force_kill_process(_FakeProcess())
+
+    assert killpg_calls == [(32103, signal.SIGKILL)]
+    assert kill_calls == [(32103, signal.SIGKILL)]

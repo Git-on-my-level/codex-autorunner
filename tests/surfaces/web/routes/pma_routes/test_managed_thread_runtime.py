@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import write_test_config
 
 from codex_autorunner.core.config import CONFIG_FILENAME, DEFAULT_HUB_CONFIG
+from codex_autorunner.core.orchestration import OrchestrationBindingStore
 from codex_autorunner.core.orchestration.runtime_bindings import (
     clear_runtime_thread_binding,
 )
@@ -81,6 +82,107 @@ async def test_recover_orphaned_managed_thread_executions_unblocks_restart_queue
     managed_thread_id = str(created["managed_thread_id"])
     running = store.create_turn(managed_thread_id, prompt="running")
     queued = store.create_turn(managed_thread_id, prompt="queued", busy_policy="queue")
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
+    with open_orchestration_sqlite(hub_env.hub_root) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET runtime_status = 'idle',
+                       status_turn_id = NULL
+                 WHERE thread_target_id = ?
+                """,
+                (managed_thread_id,),
+            )
+
+    await managed_thread_runtime.recover_orphaned_managed_thread_executions(app)
+
+    updated_running = store.get_turn(managed_thread_id, running["managed_turn_id"])
+    updated_queued = store.get_turn(managed_thread_id, queued["managed_turn_id"])
+    assert updated_running is not None
+    assert updated_running["status"] == "error"
+    assert updated_running["error"] == "Backend thread missing from orchestration state"
+    assert updated_queued is not None
+    assert updated_queued["status"] == "queued"
+
+    claimed = store.claim_next_queued_turn(managed_thread_id)
+    assert claimed is not None
+    claimed_turn, _queue_payload = claimed
+    assert claimed_turn["managed_turn_id"] == queued["managed_turn_id"]
+
+
+@pytest.mark.anyio
+async def test_recover_orphaned_managed_thread_executions_skips_chat_bound_threads(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    bindings = OrchestrationBindingStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    running = store.create_turn(
+        managed_thread_id,
+        prompt="running",
+        client_turn_id="discord:channel-123:run-1",
+    )
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="channel-123",
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
+    store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
+    clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
+    with open_orchestration_sqlite(hub_env.hub_root) as conn:
+        with conn:
+            conn.execute(
+                """
+                UPDATE orch_thread_targets
+                   SET runtime_status = 'idle',
+                       status_turn_id = NULL
+                 WHERE thread_target_id = ?
+                """,
+                (managed_thread_id,),
+            )
+
+    await managed_thread_runtime.recover_orphaned_managed_thread_executions(app)
+
+    updated_running = store.get_turn(managed_thread_id, running["managed_turn_id"])
+    assert updated_running is not None
+    assert updated_running["status"] == "running"
+    assert updated_running["error"] is None
+
+
+@pytest.mark.anyio
+async def test_recover_orphaned_managed_thread_executions_recovers_pma_runs_on_chat_bound_threads(
+    hub_env,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    store = PmaThreadStore(hub_env.hub_root)
+    bindings = OrchestrationBindingStore(hub_env.hub_root)
+    created = store.create_thread(
+        "codex",
+        hub_env.repo_root.resolve(),
+        repo_id=hub_env.repo_id,
+    )
+    managed_thread_id = str(created["managed_thread_id"])
+    running = store.create_turn(managed_thread_id, prompt="running")
+    queued = store.create_turn(managed_thread_id, prompt="queued", busy_policy="queue")
+    bindings.upsert_binding(
+        surface_kind="discord",
+        surface_key="channel-123",
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
     store.set_thread_backend_id(managed_thread_id, "backend-thread-1")
     clear_runtime_thread_binding(hub_env.hub_root, managed_thread_id)
     with open_orchestration_sqlite(hub_env.hub_root) as conn:

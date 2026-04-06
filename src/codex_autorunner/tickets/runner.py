@@ -8,7 +8,7 @@ from ..contextspace.paths import contextspace_doc_path
 from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
 from ..core.git_utils import git_diff_stats
-from . import runner_post_turn, runner_prompt, runner_selection
+from . import runner_commit, runner_post_turn, runner_prompt, runner_selection
 from .agent_pool import AgentPool
 from .files import list_ticket_paths, safe_relpath
 from .models import TicketContextEntry, TicketResult, TicketRunConfig
@@ -283,9 +283,10 @@ class TicketRunner:
             )
 
         current_path = selection_result.selected.path
-        if selection_result.reset_commit_state:
-            commit_pending = False
-            commit_retries = 0
+        _commit_raw = state.get("commit")
+        commit_state = _commit_raw if isinstance(_commit_raw, dict) else {}
+        commit_pending = bool(commit_state.get("pending"))
+        commit_retries = int(commit_state.get("retries") or 0)
 
         # Determine lint-retry mode early. When lint state is present, we allow the
         # agent to fix the ticket frontmatter even if the ticket is currently
@@ -467,6 +468,22 @@ class TicketRunner:
                 )
 
             state.pop("network_retry", None)
+            commit_failure_result = runner_commit.handle_failed_commit_turn(
+                state=state,
+                workspace_root=self._workspace_root,
+                commit_pending=commit_pending,
+                commit_retries=commit_retries,
+                head_before_turn=head_before_turn,
+                max_commit_retries=self._config.max_commit_retries,
+                current_ticket_path=current_ticket_path,
+                result_error=result.error,
+                result_text=result.text,
+                result_agent_id=result.agent_id,
+                result_conversation_id=result.conversation_id,
+                result_turn_id=result.turn_id,
+            )
+            if commit_failure_result is not None:
+                return commit_failure_result
             return self._pause(
                 state,
                 reason="Agent turn failed. Fix the issue and resume.",
@@ -713,8 +730,7 @@ class TicketRunner:
                     commit_reason,
                     commit_reason_code,
                     commit_reason_details,
-                ) = runner_post_turn.process_commit_required(
-                    state=state,
+                ) = runner_commit.process_commit_required(
                     clean_after_agent=clean_after_agent,
                     commit_pending=commit_pending,
                     commit_retries=commit_retries,
@@ -1140,7 +1156,7 @@ class TicketRunner:
                 "</CAR_TICKET_FLOW_PROMPT>"
             )
 
-        prompt = _shrink_prompt(
+        return _shrink_prompt(
             max_bytes=self._config.prompt_max_bytes,
             render=render,
             sections=sections,
@@ -1153,7 +1169,6 @@ class TicketRunner:
                 "ticket_block",
             ],
         )
-        return prompt
 
     def _prior_no_change_turns(self, state: dict[str, Any], ticket_id: str) -> int:
         loop_guard_raw = state.get("loop_guard")

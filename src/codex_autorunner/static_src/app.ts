@@ -1,12 +1,4 @@
 import { REPO_ID, HUB_BASE } from "./env.js";
-import { initHub } from "./hub.js";
-import { initTabs, registerTab, registerHamburgerAction } from "./tabs.js";
-import { initTerminal } from "./terminal.js";
-import { initTicketFlow } from "./tickets.js";
-import { initMessages, initMessageBell } from "./messages.js";
-import { initMobileCompact } from "./mobileCompact.js";
-import { subscribe } from "./bus.js";
-import { initRepoSettingsPanel, openRepoSettings } from "./settings.js";
 import {
   flash,
   getAuthToken,
@@ -14,21 +6,101 @@ import {
   resolvePath,
   updateUrlParams,
 } from "./utils.js";
-import { initLiveUpdates } from "./liveUpdates.js";
-import { initHealthGate } from "./health.js";
-import { initContextspace } from "./contextspace.js";
-import { initDashboard } from "./dashboard.js";
-import { initArchive } from "./archive.js";
-import { initPMA, setPMARefreshActive } from "./pma.js";
-import { initNotifications } from "./notifications.js";
 
 let pmaInitialized = false;
+let hubModulePromise: Promise<typeof import("./hub.js")> | null = null;
+let pmaModulePromise: Promise<typeof import("./pma.js")> | null = null;
+let notificationsModulePromise: Promise<typeof import("./notifications.js")> | null =
+  null;
+let repoShellModulesPromise: Promise<{
+  archive: typeof import("./archive.js");
+  bus: typeof import("./bus.js");
+  contextspace: typeof import("./contextspace.js");
+  dashboard: typeof import("./dashboard.js");
+  health: typeof import("./health.js");
+  liveUpdates: typeof import("./liveUpdates.js");
+  messages: typeof import("./messages.js");
+  mobileCompact: typeof import("./mobileCompact.js");
+  settings: typeof import("./settings.js");
+  tabs: typeof import("./tabs.js");
+  terminal: typeof import("./terminal.js");
+  tickets: typeof import("./tickets.js");
+}> | null = null;
+
+function loadHubModule(): Promise<typeof import("./hub.js")> {
+  hubModulePromise ??= import("./hub.js");
+  return hubModulePromise;
+}
+
+function loadPMAModule(): Promise<typeof import("./pma.js")> {
+  pmaModulePromise ??= import("./pma.js");
+  return pmaModulePromise;
+}
+
+function loadNotificationsModule(): Promise<typeof import("./notifications.js")> {
+  notificationsModulePromise ??= import("./notifications.js");
+  return notificationsModulePromise;
+}
+
+function loadRepoShellModules() {
+  repoShellModulesPromise ??= Promise.all([
+    import("./archive.js"),
+    import("./bus.js"),
+    import("./contextspace.js"),
+    import("./dashboard.js"),
+    import("./health.js"),
+    import("./liveUpdates.js"),
+    import("./messages.js"),
+    import("./mobileCompact.js"),
+    import("./settings.js"),
+    import("./tabs.js"),
+    import("./terminal.js"),
+    import("./tickets.js"),
+  ]).then(
+    ([
+      archive,
+      bus,
+      contextspace,
+      dashboard,
+      health,
+      liveUpdates,
+      messages,
+      mobileCompact,
+      settings,
+      tabs,
+      terminal,
+      tickets,
+    ]) => ({
+      archive,
+      bus,
+      contextspace,
+      dashboard,
+      health,
+      liveUpdates,
+      messages,
+      mobileCompact,
+      settings,
+      tabs,
+      terminal,
+      tickets,
+    })
+  );
+  return repoShellModulesPromise;
+}
 
 async function initPMAView(): Promise<void> {
   if (!pmaInitialized) {
+    const { initPMA } = await loadPMAModule();
     await initPMA();
     pmaInitialized = true;
   }
+}
+
+function setPMARefreshActiveIfLoaded(active: boolean): void {
+  if (!pmaInitialized && pmaModulePromise === null) return;
+  void loadPMAModule().then(({ setPMARefreshActive }) => {
+    setPMARefreshActive(active);
+  });
 }
 
 function showHubView(): void {
@@ -36,7 +108,7 @@ function showHubView(): void {
   const pmaShell = document.getElementById("pma-shell");
   if (hubShell) hubShell.classList.remove("hidden");
   if (pmaShell) pmaShell.classList.add("hidden");
-  setPMARefreshActive(false);
+  setPMARefreshActiveIfLoaded(false);
   updateModeToggle("manual");
   updateUrlParams({ view: null });
 }
@@ -48,7 +120,7 @@ function showPMAView(): void {
   if (pmaShell) pmaShell.classList.remove("hidden");
   updateModeToggle("pma");
   void initPMAView().then(() => {
-    setPMARefreshActive(true);
+    setPMARefreshActiveIfLoaded(true);
   });
   updateUrlParams({ view: "pma" });
 }
@@ -101,6 +173,10 @@ async function initHubShell(): Promise<void> {
 
   if (hubShell) hubShell.classList.remove("hidden");
   if (repoShell) repoShell.classList.add("hidden");
+  const [{ initHub }, { initNotifications }] = await Promise.all([
+    loadHubModule(),
+    loadNotificationsModule(),
+  ]);
   initHub();
   initNotifications();
 
@@ -141,6 +217,33 @@ async function initHubShell(): Promise<void> {
 }
 
 async function initRepoShell(): Promise<void> {
+  const {
+    archive,
+    bus,
+    contextspace,
+    dashboard,
+    health,
+    liveUpdates,
+    messages,
+    mobileCompact,
+    settings,
+    tabs,
+    terminal,
+    tickets,
+  } = await loadRepoShellModules();
+  const { initHealthGate } = health;
+  const { initArchive } = archive;
+  const { subscribe } = bus;
+  const { initContextspace } = contextspace;
+  const { initDashboard } = dashboard;
+  const { initMessages, initMessageBell } = messages;
+  const { initMobileCompact } = mobileCompact;
+  const { initRepoSettingsPanel, openRepoSettings } = settings;
+  const { initTabs, registerTab, registerHamburgerAction } = tabs;
+  const { initTerminal } = terminal;
+  const { initTicketFlow } = tickets;
+  const { initLiveUpdates } = liveUpdates;
+
   await initHealthGate();
 
   if (REPO_ID) {

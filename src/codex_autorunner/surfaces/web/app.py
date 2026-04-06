@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional, Protocol, cast
 
 from fastapi import FastAPI, HTTPException
@@ -134,7 +136,18 @@ def create_hub_app(
         ),
     )
 
-    initial_snapshots = context.supervisor.scan()
+    # Mount lightweight placeholders immediately so repo URLs remain routable
+    # without paying the cost of constructing every repo app up front.
+    _, records = context.supervisor._manifest_records(manifest_only=True)
+    initial_snapshots = [
+        SimpleNamespace(
+            id=record.repo.id,
+            path=record.absolute_path,
+            initialized=record.initialized,
+            exists_on_disk=record.exists_on_disk,
+        )
+        for record in records
+    ]
     mount_manager.mount_initial(initial_snapshots)
 
     @asynccontextmanager
@@ -158,42 +171,123 @@ def create_hub_app(
             loop=asyncio.get_running_loop(),
         )
         try:
-            try:
-                await recover_orphaned_managed_thread_executions(app)
-                await restart_managed_thread_queue_workers(app)
-            except (
-                RuntimeError,
-                TypeError,
-                AttributeError,
-                OSError,
-            ) as exc:  # intentional: best-effort startup recovery
-                safe_log(
-                    app.state.logger,
-                    logging.WARNING,
-                    "Managed-thread queue worker restore failed at hub startup",
-                    exc,
-                )
-            try:
-                cleanup = reap_managed_processes(context.config.root)
-                if cleanup.killed or cleanup.signaled or cleanup.removed:
-                    app.state.logger.info(
-                        "Managed process cleanup: killed=%s signaled=%s removed=%s skipped=%s",
-                        cleanup.killed,
-                        cleanup.signaled,
-                        cleanup.removed,
-                        cleanup.skipped,
+
+            async def _refresh_mounts_from_manifest() -> None:
+                try:
+                    snapshots = await asyncio.to_thread(
+                        context.supervisor.list_repos, use_cache=False
                     )
-            except (
-                OSError,
-                RuntimeError,
-                AttributeError,
-            ) as exc:  # intentional: best-effort startup cleanup
-                safe_log(
-                    app.state.logger,
-                    logging.WARNING,
-                    "Managed process reaper failed at hub startup",
-                    exc,
+                    await mount_manager.refresh_mounts(snapshots)
+                except Exception as exc:
+                    safe_log(
+                        app.state.logger,
+                        logging.WARNING,
+                        "Hub repo mount refresh failed",
+                        exc,
+                    )
+
+            tasks.append(asyncio.create_task(_refresh_mounts_from_manifest()))
+
+            async def _deferred_hub_startup() -> None:
+                """DB/process-heavy hub startup; runs after /health can succeed."""
+                t0 = time.monotonic()
+                log = app.state.logger
+                log.info("hub.deferred_startup.begin")
+                t_phase = time.monotonic()
+                try:
+                    await recover_orphaned_managed_thread_executions(app)
+                    await restart_managed_thread_queue_workers(app)
+                except (
+                    RuntimeError,
+                    TypeError,
+                    AttributeError,
+                    OSError,
+                ) as exc:  # intentional: best-effort startup recovery
+                    safe_log(
+                        log,
+                        logging.WARNING,
+                        "Managed-thread queue worker restore failed at hub startup",
+                        exc,
+                    )
+                log.info(
+                    "hub.deferred_startup.phase done=managed_thread_restore elapsed_ms=%.2f",
+                    (time.monotonic() - t_phase) * 1000,
                 )
+                t_phase = time.monotonic()
+                try:
+                    cleanup = reap_managed_processes(context.config.root)
+                    if cleanup.killed or cleanup.signaled or cleanup.removed:
+                        log.info(
+                            "Managed process cleanup: killed=%s signaled=%s removed=%s skipped=%s",
+                            cleanup.killed,
+                            cleanup.signaled,
+                            cleanup.removed,
+                            cleanup.skipped,
+                        )
+                    log.info(
+                        "hub.deferred_startup.phase done=reap_managed_processes elapsed_ms=%.2f",
+                        (time.monotonic() - t_phase) * 1000,
+                    )
+                except (
+                    OSError,
+                    RuntimeError,
+                    AttributeError,
+                ) as exc:  # intentional: best-effort startup cleanup
+                    safe_log(
+                        log,
+                        logging.WARNING,
+                        "Managed process reaper failed at hub startup",
+                        exc,
+                    )
+                pma_cfg = getattr(app.state.config, "pma", None)
+                if pma_cfg is not None and pma_cfg.enabled:
+                    starter = getattr(app.state, "pma_lane_worker_start", None)
+                    if starter is not None:
+                        t_phase = time.monotonic()
+                        try:
+                            await starter(app, "pma:default")
+                        except (
+                            RuntimeError,
+                            TypeError,
+                            AttributeError,
+                            OSError,
+                        ) as exc:  # intentional: best-effort startup
+                            safe_log(
+                                log,
+                                logging.WARNING,
+                                "PMA lane worker startup failed",
+                                exc,
+                            )
+                        else:
+                            log.info(
+                                "hub.deferred_startup.phase done=pma_lane_worker elapsed_ms=%.2f",
+                                (time.monotonic() - t_phase) * 1000,
+                            )
+                t_phase = time.monotonic()
+                try:
+                    await mount_manager.start_repo_lifespans()
+                except (
+                    OSError,
+                    RuntimeError,
+                    AttributeError,
+                ) as exc:  # intentional: best-effort startup
+                    safe_log(
+                        log,
+                        logging.WARNING,
+                        "Hub repo lifespans failed during deferred startup",
+                        exc,
+                    )
+                else:
+                    log.info(
+                        "hub.deferred_startup.phase done=start_repo_lifespans elapsed_ms=%.2f",
+                        (time.monotonic() - t_phase) * 1000,
+                    )
+                log.info(
+                    "hub.deferred_startup.complete total_elapsed_ms=%.2f",
+                    (time.monotonic() - t0) * 1000,
+                )
+
+            tasks.append(asyncio.create_task(_deferred_hub_startup()))
             if app.state.config.housekeeping.enabled:
                 interval = max(app.state.config.housekeeping.interval_seconds, 1)
                 initial_delay = min(interval, 60)
@@ -382,23 +476,9 @@ def create_hub_app(
                             "PMA lane worker registration failed",
                             exc,
                         )
-                if starter is not None:
-                    try:
-                        await starter(app, "pma:default")
-                    except (
-                        RuntimeError,
-                        TypeError,
-                        AttributeError,
-                        OSError,
-                    ) as exc:  # intentional: best-effort startup
-                        safe_log(
-                            app.state.logger,
-                            logging.WARNING,
-                            "PMA lane worker startup failed",
-                            exc,
-                        )
-
-            await mount_manager.start_repo_lifespans()
+            # Default lane worker starts in _deferred_hub_startup so /health is not blocked.
+            # Eager repo lifespans run there too; until then, /repos/* still activates via
+            # _LazyRepoApp._ensure_ready when hub_started is True.
             startup_completed = True
             try:
                 yield

@@ -54,7 +54,7 @@ def test_legacy_backfill_runs_once_per_store_instance(tmp_path, monkeypatch) -> 
         return {"subscriptions": 0, "timers": 0, "wakeups": 0}
 
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_automation_store.backfill_legacy_automation_state",
+        "codex_autorunner.core.orchestration.legacy_backfill_gate.backfill_legacy_automation_state",
         _fake_backfill,
     )
 

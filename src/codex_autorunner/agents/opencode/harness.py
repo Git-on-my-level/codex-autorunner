@@ -526,6 +526,9 @@ def _normalize_message_text(value: Any) -> Optional[str]:
         parts: list[str] = []
         for part in value:
             if isinstance(part, dict):
+                part_type = part.get("type")
+                if isinstance(part_type, str) and part_type != "text":
+                    continue
                 part_text = part.get("text")
                 if isinstance(part_text, str):
                     parts.append(part_text)

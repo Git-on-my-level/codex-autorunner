@@ -494,13 +494,15 @@ async def _bind_to_workspace_candidate(
     selected_resource_kind: Optional[str],
     selected_resource_id: Optional[str],
     workspace_path: str,
+    deferred_component: bool = False,
 ) -> None:
     workspace = canonicalize_path(Path(workspace_path))
     if not workspace.exists() or not workspace.is_dir():
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            f"Workspace path does not exist: {workspace}",
+        await service._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred_component,
+            text=f"Workspace path does not exist: {workspace}",
         )
         return
 
@@ -523,10 +525,11 @@ async def _bind_to_workspace_candidate(
         message = f"Bound this channel to: {selected_resource_id} ({workspace})"
     else:
         message = f"Bound this channel to workspace: {workspace}"
-    await service._respond_ephemeral(
-        interaction_id,
-        interaction_token,
-        message,
+    await service._send_or_respond_ephemeral(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+        deferred=deferred_component,
+        text=message,
     )
 
 
@@ -559,6 +562,17 @@ async def handle_bind_selection(
             f"Workspace not found: {selected_workspace_value}",
         )
         return
+    deferred_component = await service._defer_component_update(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+    )
+    if not deferred_component:
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Discord interaction did not acknowledge. Please retry.",
+        )
+        return
 
     await _bind_to_workspace_candidate(
         service,
@@ -569,6 +583,7 @@ async def handle_bind_selection(
         selected_resource_kind=resolved_workspace[0],
         selected_resource_id=resolved_workspace[1],
         workspace_path=resolved_workspace[2],
+        deferred_component=True,
     )
 
 
@@ -608,6 +623,17 @@ async def handle_bind_page_component(
     prompt, components = _build_bind_page_prompt_and_components(
         service, candidates, page=requested_page
     )
+    deferred_component = await service._defer_component_update(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+    )
+    if not deferred_component:
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "Discord interaction did not acknowledge. Please retry.",
+        )
+        return
     await service._update_component_message(
         interaction_id=interaction_id,
         interaction_token=interaction_token,

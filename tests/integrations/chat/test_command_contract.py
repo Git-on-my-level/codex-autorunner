@@ -165,6 +165,7 @@ def test_command_contract_discord_metadata_is_present_for_registered_paths() -> 
 
     by_id = {entry.id: entry for entry in COMMAND_CONTRACT}
     assert by_id["car.flow.status"].discord_ack_timing == "post_private_preflight"
+    assert by_id["car.flow.runs"].discord_ack_timing == "post_private_preflight"
     assert by_id["car.flow.start"].discord_ack_timing == "post_private_preflight"
     assert by_id["car.flow.restart"].discord_ack_timing == "post_private_preflight"
 

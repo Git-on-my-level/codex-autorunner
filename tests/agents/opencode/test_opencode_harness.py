@@ -10,7 +10,11 @@ import pytest
 
 from codex_autorunner.agents.base import harness_progress_event_stream
 from codex_autorunner.agents.opencode import harness as harness_module
-from codex_autorunner.agents.opencode.harness import OpenCodeHarness
+from codex_autorunner.agents.opencode.harness import (
+    OpenCodeHarness,
+    _collect_terminal_text,
+    _normalize_message_text,
+)
 from codex_autorunner.agents.opencode.runtime import OpenCodeTurnOutput
 from codex_autorunner.agents.registry import get_registered_agents
 from codex_autorunner.core.orchestration import FreshConversationRequiredError
@@ -1976,3 +1980,59 @@ async def test_opencode_harness_rewrites_child_agent_messages_without_polluting_
     assert assistant_messages == [
         "Done. Patch release v1.9.11 is tagged and pushed to origin/main."
     ]
+
+
+def test_normalize_message_text_filters_reasoning_parts() -> None:
+    """_normalize_message_text should exclude non-text parts from content lists."""
+    content = [
+        {"type": "reasoning", "text": "thinking hard"},
+        {"type": "text", "text": "the answer"},
+    ]
+    result = _normalize_message_text(content)
+    assert result == "the answer"
+
+
+def test_normalize_message_text_includes_untyped_parts() -> None:
+    """Parts without a type field should be included (legacy/fallback)."""
+    content = [
+        {"text": "legacy text"},
+        {"type": "text", "text": " and modern text"},
+    ]
+    result = _normalize_message_text(content)
+    assert result == "legacy text and modern text"
+
+
+def test_normalize_message_text_excludes_output_text_type() -> None:
+    """output_text is not 'text' and should be excluded for consistency
+    with the runtime event normalizer."""
+    content = [
+        {"type": "output_text", "text": "output only"},
+        {"type": "text", "text": "actual text"},
+    ]
+    result = _normalize_message_text(content)
+    assert result == "actual text"
+
+
+def test_collect_terminal_text_filters_reasoning_from_completed_message() -> None:
+    """_collect_terminal_text should produce a completed_message without reasoning."""
+    payloads = [
+        {
+            "message": {
+                "method": "message.updated",
+                "params": {
+                    "message": {
+                        "id": "m1",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "reasoning", "text": "Let me think..."},
+                            {"type": "text", "text": "The final answer."},
+                        ],
+                    },
+                },
+            }
+        },
+    ]
+    assistant_text, errors = _collect_terminal_text(payloads)
+    assert assistant_text == "The final answer."
+    assert "think" not in assistant_text.lower()
+    assert errors == []

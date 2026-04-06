@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional, cast
 
 from .locks import file_lock
-from .orchestration.migrate_legacy_state import backfill_legacy_automation_state
+from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_automation_persistence import PmaAutomationPersistence
 from .pma_automation_types import (
@@ -359,7 +359,6 @@ class PmaAutomationStore:
         self._hub_root = hub_root
         self._persistence = PmaAutomationPersistence(hub_root)
         self._path = self._persistence.path
-        self._legacy_automation_backfill_complete = False
 
     @property
     def path(self) -> Path:
@@ -373,11 +372,7 @@ class PmaAutomationStore:
             return self._load_unlocked() or default_pma_automation_state()
 
     def _migrate_legacy_if_needed(self) -> None:
-        if self._legacy_automation_backfill_complete:
-            return
-        with open_orchestration_sqlite(self._hub_root, durable=True) as conn:
-            backfill_legacy_automation_state(self._hub_root, conn)
-        self._legacy_automation_backfill_complete = True
+        ensure_legacy_orchestration_backfill(self._hub_root, durable=True)
 
     def _load_unlocked(self) -> Optional[dict[str, Any]]:
         self._migrate_legacy_if_needed()

@@ -2889,8 +2889,10 @@ async function silentRefreshHub() {
         renderSummary(hubData.repos || []);
         renderReposWithScroll(hubData.repos || []);
         renderAgentWorkspaces(hubData.agent_workspaces || []);
-        await loadHubUsage({ silent: true, allowRetry: false });
-        await loadHubChannelDirectory({ silent: true });
+        await Promise.allSettled([
+            loadHubUsage({ silent: true, allowRetry: false }),
+            loadHubChannelDirectory({ silent: true }),
+        ]);
     }
     catch (err) {
         console.error("Auto-refresh hub failed:", err);
@@ -2972,8 +2974,7 @@ export function initHub() {
     }
     loadHubChannelDirectory({ silent: true }).catch(() => { });
     refreshHub();
-    loadHubVersion();
-    checkUpdateStatus();
+    void Promise.allSettled([loadHubVersion(), checkUpdateStatus()]);
     registerAutoRefresh("hub-repos", {
         callback: async (ctx) => {
             void ctx;

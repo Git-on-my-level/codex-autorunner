@@ -281,6 +281,7 @@ class CodexAppServerClient:
         self._process_registry_key: Optional[str] = None
         self._reader_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self._start_lock: Optional[asyncio.Lock] = None
         self._write_lock: Optional[asyncio.Lock] = None
         self._data_lock: Optional[asyncio.Lock] = None
@@ -362,6 +363,7 @@ class CodexAppServerClient:
             except asyncio.CancelledError:
                 pass
             self._restart_task = None
+        await self._cancel_background_tasks()
         await self._terminate_process()
         self._fail_pending(CodexAppServerDisconnected("Client closed"))
         _CLIENT_INSTANCES.discard(self)
@@ -674,6 +676,14 @@ class CodexAppServerClient:
                 item_completed_count=state.item_completed_count,
                 exc=exc,
             )
+            self._maybe_fail_completion_gap_turn(
+                state,
+                turn_id=turn_id,
+                thread_id=thread_id,
+                completion_gap_seconds=completion_gap_seconds,
+                reason="thread_resume_failed",
+                recovery_status=state.status,
+            )
             return
 
         snapshot = extract_resume_snapshot(resume_result, turn_id)
@@ -687,10 +697,21 @@ class CodexAppServerClient:
                 completion_gap_seconds=round(completion_gap_seconds, 2),
                 item_completed_count=state.item_completed_count,
             )
+            self._maybe_fail_completion_gap_turn(
+                state,
+                turn_id=turn_id,
+                thread_id=thread_id,
+                completion_gap_seconds=completion_gap_seconds,
+                reason="resume_snapshot_missing",
+                recovery_status=state.status,
+            )
             return
 
         status = self._apply_resume_snapshot(state, snapshot)
         if status and _status_is_terminal(status) and not state.future.done():
+            await self._emit_recovered_turn_completed_notification(
+                state, thread_id=thread_id, recovery_source="turn_completion_gap"
+            )
             log_event(
                 self._logger,
                 logging.INFO,
@@ -713,6 +734,14 @@ class CodexAppServerClient:
             status=state.status,
             item_completed_count=state.item_completed_count,
             recovery_attempts=state.completion_gap_recovery_attempts,
+        )
+        self._maybe_fail_completion_gap_turn(
+            state,
+            turn_id=turn_id,
+            thread_id=thread_id,
+            completion_gap_seconds=completion_gap_seconds,
+            reason="resume_non_terminal",
+            recovery_status=state.status,
         )
 
     async def _recover_stalled_turn(
@@ -792,6 +821,9 @@ class CodexAppServerClient:
         status = self._apply_resume_snapshot(state, snapshot)
 
         if status and _status_is_terminal(status) and not state.future.done():
+            await self._emit_recovered_turn_completed_notification(
+                state, thread_id=thread_id, recovery_source="turn_stall"
+            )
             self._set_turn_result_if_pending(state)
             return
 
@@ -825,6 +857,60 @@ class CodexAppServerClient:
         if status:
             state.status = status
         return status
+
+    async def _emit_recovered_turn_completed_notification(
+        self,
+        state: _TurnState,
+        *,
+        thread_id: str,
+        recovery_source: str,
+    ) -> None:
+        if state.turn_completed_seen:
+            return
+        params = {
+            "turnId": state.turn_id,
+            "threadId": thread_id,
+            "status": state.status,
+            "recoveredVia": "thread/resume",
+            "recoverySource": recovery_source,
+            "synthetic": True,
+        }
+        message = {
+            "jsonrpc": "2.0",
+            "method": "turn/completed",
+            "params": params,
+        }
+        self._mark_notification_event(state=state, method="turn/completed")
+        self._apply_turn_completed(state, message, params)
+        if self._notification_handler is None:
+            return
+        self._schedule_notification_handler(message, method="turn/completed")
+
+    def _schedule_notification_handler(
+        self, message: Dict[str, Any], *, method: str, handled: bool = True
+    ) -> None:
+        handler = self._notification_handler
+        if handler is None:
+            return
+
+        async def _invoke_notification_handler() -> None:
+            try:
+                await _maybe_await(handler(message))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.notification_handler.failed",
+                    method=method,
+                    handled=handled,
+                    exc=exc,
+                )
+
+        task = asyncio.create_task(_invoke_notification_handler())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def _maybe_fail_stalled_turn(
         self,
@@ -879,6 +965,68 @@ class CodexAppServerClient:
             status=recovery_status or state.status,
             recovery_attempts=state.recovery_attempts,
             max_recovery_attempts=max_attempts,
+        )
+        self._set_turn_result_if_pending(state)
+
+    def _maybe_fail_completion_gap_turn(
+        self,
+        state: _TurnState,
+        *,
+        turn_id: str,
+        thread_id: str,
+        completion_gap_seconds: float,
+        reason: str,
+        recovery_status: Optional[str],
+    ) -> None:
+        if state.future.done():
+            return
+        max_attempts = self._turn_stall_max_recovery_attempts
+        if (
+            max_attempts is None
+            or state.completion_gap_recovery_attempts < max_attempts
+        ):
+            return
+
+        error = (
+            "Turn completion-gap recovery exhausted: "
+            f"attempts={state.completion_gap_recovery_attempts}, "
+            f"max_attempts={max_attempts}, "
+            f"reason={reason}, "
+            f"last_method={state.last_method or 'unknown'}, "
+            f"status={recovery_status or state.status or 'unknown'}, "
+            f"item_completed_count={state.item_completed_count}."
+        )
+        state.status = "failed"
+        state.errors.append(error)
+        state.raw_events.append(
+            {
+                "method": "turn/completionGapRecoveryExhausted",
+                "params": {
+                    "turnId": turn_id,
+                    "threadId": thread_id,
+                    "reason": reason,
+                    "recoveryAttempts": state.completion_gap_recovery_attempts,
+                    "maxRecoveryAttempts": max_attempts,
+                    "lastMethod": state.last_method,
+                    "status": recovery_status or state.status,
+                    "completionGapSeconds": round(completion_gap_seconds, 2),
+                    "itemCompletedCount": state.item_completed_count,
+                },
+            }
+        )
+        log_event(
+            self._logger,
+            logging.ERROR,
+            "app_server.turn_completion_gap_recovery.exhausted",
+            turn_id=turn_id,
+            thread_id=thread_id,
+            completion_gap_seconds=round(completion_gap_seconds, 2),
+            recovery_attempts=state.completion_gap_recovery_attempts,
+            max_recovery_attempts=max_attempts,
+            reason=reason,
+            last_method=state.last_method,
+            status=recovery_status or state.status,
+            item_completed_count=state.item_completed_count,
         )
         self._set_turn_result_if_pending(state)
 
@@ -2113,6 +2261,17 @@ class CodexAppServerClient:
         except asyncio.CancelledError:
             pass
 
+    async def _cancel_background_tasks(self) -> None:
+        tasks = [task for task in self._background_tasks if not task.done()]
+        self._background_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     async def _terminate_running_process(
         self, process: asyncio.subprocess.Process
     ) -> None:
@@ -2150,6 +2309,11 @@ class CodexAppServerClient:
             )
 
     async def _force_kill_process(self, process: asyncio.subprocess.Process) -> None:
+        if os.name != "nt" and hasattr(os, "killpg"):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except Exception:
+                pass
         try:
             os.kill(process.pid, signal.SIGKILL)
         except OSError:

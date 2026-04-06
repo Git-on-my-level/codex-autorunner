@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -12,6 +13,28 @@ from .text_utils import _mapping, _normalize_text
 _BRANCH_METADATA_KEYS = ("head_branch", "branch", "git_branch")
 _THREAD_TARGET_ID_KEYS = ("thread_target_id", "managed_thread_id")
 _CONTEXT_MAPPING_KEYS = ("manual_context", "scm", "scm_context", "context")
+_RECENT_TERMINAL_THREAD_LOOKBACK = timedelta(hours=24)
+
+
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    text = _normalize_text(value)
+    if text is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _thread_changed_at(thread: Mapping[str, Any]) -> Optional[datetime]:
+    for key in ("status_updated_at", "updated_at", "created_at"):
+        parsed = _parse_timestamp(thread.get(key))
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def find_hub_binding_context(repo_root: Path) -> tuple[Optional[Path], Optional[str]]:
@@ -93,6 +116,19 @@ def resolve_thread_target_id(
     for thread in store.list_threads(status="active", repo_id=repo_id, limit=100):
         candidate_thread_id = _normalize_text(thread.get("managed_thread_id"))
         if candidate_thread_id is None:
+            continue
+        if thread_matches_branch(thread, head_branch=head_branch):
+            return candidate_thread_id
+
+    cutoff = datetime.now(timezone.utc) - _RECENT_TERMINAL_THREAD_LOOKBACK
+    for thread in store.list_threads(repo_id=repo_id, limit=100):
+        candidate_thread_id = _normalize_text(thread.get("managed_thread_id"))
+        if candidate_thread_id is None:
+            continue
+        if not bool(thread.get("status_terminal")):
+            continue
+        changed_at = _thread_changed_at(thread)
+        if changed_at is None or changed_at < cutoff:
             continue
         if thread_matches_branch(thread, head_branch=head_branch):
             return candidate_thread_id

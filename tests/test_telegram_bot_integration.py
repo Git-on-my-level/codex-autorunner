@@ -1555,7 +1555,8 @@ async def test_update_callback_acknowledged_before_spawn(tmp_path: Path) -> None
         ("spawn", "discord"),
         (
             "finalize",
-            "Update started (discord). The selected service(s) will restart.",
+            "Update started (discord). The selected service(s) will restart. "
+            "I will post completion status in this thread. Use /update status for progress.",
         ),
     ]
 

@@ -1,6 +1,6 @@
 [project]
 name = "codex-autorunner"
-version = "1.9.13"
+version = "1.9.16"
 description = "Codex autorunner CLI per DESIGN-V1"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -113,6 +113,9 @@ filterwarnings = [
 line-length = 88
 target-version = "py39"
 src = ["src"]
+
+[tool.black]
+target-version = ["py39"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B"]

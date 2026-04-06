@@ -70,6 +70,7 @@ def persist_turn_timeline(
     resource_id: Optional[str] = None,
     metadata: Optional[dict[str, Any]] = None,
     events: Iterable[RunEvent],
+    start_index: int = 1,
 ) -> int:
     normalized_execution_id = str(execution_id or "").strip()
     if not normalized_execution_id:
@@ -77,8 +78,10 @@ def persist_turn_timeline(
 
     base_metadata = dict(metadata or {})
     count = 0
+    next_index = max(int(start_index or 1), 1)
     with open_orchestration_sqlite(hub_root) as conn:
-        for index, event in enumerate(events, start=1):
+        for event in events:
+            index = next_index + count
             event_type, status = _event_type_and_status(event)
             event_payload = {
                 **base_metadata,
