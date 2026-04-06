@@ -722,6 +722,43 @@ def test_create_turn_rejects_archived_thread(tmp_path: Path) -> None:
     assert store.list_turns(thread["managed_thread_id"]) == []
 
 
+def test_archived_thread_does_not_recover_live_running_turn(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    running = store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second queued",
+        busy_policy="queue",
+        queue_payload={"request": {"message_text": "second queued"}},
+    )
+    assert queued["status"] == "queued"
+
+    store.archive_thread(thread["managed_thread_id"])
+
+    running_view = store.get_running_turn(thread["managed_thread_id"])
+    assert running_view is not None
+    assert running_view["managed_turn_id"] == running["managed_turn_id"]
+
+    claimed = store.claim_next_queued_turn(thread["managed_thread_id"])
+    assert claimed is None
+
+    running_after = store.get_turn(
+        thread["managed_thread_id"], running["managed_turn_id"]
+    )
+    assert running_after is not None
+    assert running_after["status"] == "running"
+    assert running_after["error"] is None
+    assert running_after["finished_at"] is None
+
+    queued_after = store.get_turn(
+        thread["managed_thread_id"], queued["managed_turn_id"]
+    )
+    assert queued_after is not None
+    assert queued_after["status"] == "queued"
+
+
 def test_set_compact_seed_and_reset_backend_id(tmp_path: Path) -> None:
     store = PmaThreadStore(tmp_path / "hub")
     thread = store.create_thread(

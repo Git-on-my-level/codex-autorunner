@@ -609,7 +609,7 @@ class PmaThreadStore:
 
         # If thread state says terminal while a running execution exists, the
         # execution record is inconsistent and should be recovered.
-        if runtime_status in {"completed", "failed", "interrupted", "archived"}:
+        if runtime_status in {"completed", "failed", "interrupted"}:
             return [str(row["execution_id"]) for row in running_rows]
 
         stale_execution_ids: list[str] = []
