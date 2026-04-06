@@ -1299,9 +1299,29 @@ class DiscordBotService:
             )
         return result.command_allowed
 
+    def _uses_background_command_dispatch(self, command_path: tuple[str, ...]) -> bool:
+        normalized_path = self._normalize_discord_command_path(command_path)
+        return normalized_path == ("car", "session", "compact")
+
     def _bypass_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
         if isinstance(event, ChatInteractionEvent):
-            return True
+            import json
+
+            payload_str = event.payload or "{}"
+            try:
+                payload_data = json.loads(payload_str)
+            except json.JSONDecodeError:
+                return True
+            payload_type = payload_data.get("type")
+            if not isinstance(payload_type, str) or payload_type != "command":
+                return True
+            command_raw = payload_data.get("command")
+            command_path = (
+                tuple(part for part in str(command_raw).split(":") if part)
+                if isinstance(command_raw, str)
+                else ()
+            )
+            return not self._uses_background_command_dispatch(command_path)
         return False
 
     async def _handle_normalized_interaction(
@@ -4273,9 +4293,39 @@ class DiscordBotService:
         if event_type == "INTERACTION_CREATE":
             interaction_event = self._chat_adapter.parse_interaction_event(payload)
             if interaction_event is not None:
-                await self._dispatcher.dispatch(
-                    interaction_event, self._handle_chat_event
-                )
+                if (
+                    not is_component_interaction(payload)
+                    and not is_modal_submit_interaction(payload)
+                    and not is_autocomplete_interaction(payload)
+                ):
+                    interaction_id = extract_interaction_id(payload)
+                    interaction_token = extract_interaction_token(payload)
+                    command_path, options = extract_command_path_and_options(payload)
+                    ingress = canonicalize_command_ingress(
+                        command_path=command_path,
+                        options=options,
+                    )
+                    if (
+                        interaction_id
+                        and interaction_token
+                        and ingress is not None
+                        and self._uses_background_command_dispatch(ingress.command_path)
+                    ):
+                        ingress = replace(
+                            ingress,
+                            command_path=self._normalize_discord_command_path(
+                                ingress.command_path
+                            ),
+                        )
+                        prepared = await self._prepare_command_interaction_or_abort(
+                            interaction_id=interaction_id,
+                            interaction_token=interaction_token,
+                            command_path=ingress.command_path,
+                            timing="dispatch",
+                        )
+                        if not prepared:
+                            return
+                await self._dispatch_chat_event(interaction_event)
         elif event_type == "MESSAGE_CREATE":
             await self._record_channel_directory_seen_from_message_payload(payload)
             message_event = self._chat_adapter.parse_message_event(payload)
