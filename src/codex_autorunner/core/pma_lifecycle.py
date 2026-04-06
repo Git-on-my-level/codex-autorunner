@@ -29,7 +29,7 @@ from .app_server_threads import (
 )
 from .locks import file_lock
 from .logging_utils import log_event
-from .orchestration.migrate_legacy_state import backfill_legacy_pma_lifecycle_events
+from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
 from .pma_audit import PmaActionType
 from .pma_context import (
@@ -85,8 +85,7 @@ class PmaLifecycleRouter:
         self._events_log = (
             hub_root / ".codex-autorunner" / "pma" / "lifecycle_events.jsonl"
         )
-        with open_orchestration_sqlite(hub_root) as conn:
-            backfill_legacy_pma_lifecycle_events(hub_root, conn)
+        ensure_legacy_orchestration_backfill(hub_root)
         safety_config = PmaSafetyConfig()
         self._safety_checker = PmaSafetyChecker(hub_root, config=safety_config)
 

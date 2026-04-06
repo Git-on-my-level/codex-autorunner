@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from .locks import file_lock
+from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import (
     open_orchestration_sqlite,
     resolve_orchestration_sqlite_path,
@@ -907,16 +908,105 @@ class _OrchestrationLifecycleEventStore:
         return int(row["c"] or 0)
 
 
+def _quarantine_malformed_lifecycle_events_json(
+    hub_root: Path,
+    *,
+    raw_text: Optional[str],
+    error: Optional[str],
+) -> None:
+    legacy_path = default_lifecycle_events_path(hub_root)
+    if not legacy_path.exists():
+        return
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    quarantine_path = legacy_path.with_name(
+        f"{LIFECYCLE_EVENTS_MALFORMED_PREFIX}.{timestamp}.json"
+    )
+    try:
+        legacy_path.rename(quarantine_path)
+    except OSError:
+        if raw_text is not None:
+            try:
+                atomic_write(quarantine_path, raw_text)
+                legacy_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning(
+                    "Failed to quarantine malformed lifecycle events file at %s",
+                    legacy_path,
+                )
+                return
+        else:
+            logger.warning(
+                "Malformed lifecycle events file at %s could not be quarantined",
+                legacy_path,
+            )
+            return
+    logger.warning(
+        "Quarantined malformed lifecycle events file: %s (reason=%s)",
+        quarantine_path,
+        error or "unknown",
+    )
+
+
+def migrate_legacy_lifecycle_event_sources_if_needed(hub_root: Path) -> bool:
+    """Copy legacy lifecycle sqlite/JSON stores into orchestration DB when it is still empty.
+
+    Returns False if JSON migration was aborted (malformed file not fully handled); the
+    orchestration backfill gate must not record completion in that case so a later process
+    can retry.
+    """
+    legacy_store = _LegacyJsonLifecycleEventStore(hub_root)
+    legacy_sqlite_store = _SqliteLifecycleEventStore(hub_root, initialize_schema=False)
+    orchestration_store = _OrchestrationLifecycleEventStore(hub_root)
+    if orchestration_store.count() > 0:
+        return True
+    migrated = 0
+
+    legacy_sqlite_events = legacy_sqlite_store.load(ensure_exists=False)
+    if legacy_sqlite_events:
+        logger.info(
+            "Migrating %s legacy lifecycle events from %s to %s",
+            len(legacy_sqlite_events),
+            legacy_sqlite_store.path,
+            orchestration_store.path,
+        )
+        for event in legacy_sqlite_events:
+            orchestration_store.append_with_result(event)
+            migrated += 1
+
+    legacy_path = legacy_store.path
+    if legacy_path.exists():
+        result = legacy_store.load_with_result()
+        if result.malformed:
+            _quarantine_malformed_lifecycle_events_json(
+                hub_root,
+                raw_text=result.raw_text,
+                error=result.error,
+            )
+            return False
+        if result.events:
+            logger.info(
+                "Migrating %s legacy lifecycle JSON events from %s to %s",
+                len(result.events),
+                legacy_path,
+                orchestration_store.path,
+            )
+            for event in result.events:
+                orchestration_store.append_with_result(event)
+                migrated += 1
+    return True
+
+
 class LifecycleEventStore:
     """Lifecycle event store facade using orchestration SQLite with legacy migration."""
 
     def __init__(self, hub_root: Path) -> None:
+        ensure_legacy_orchestration_backfill(hub_root)
+        self._hub_root = hub_root
         self._legacy_store = _LegacyJsonLifecycleEventStore(hub_root)
         self._legacy_sqlite_store = _SqliteLifecycleEventStore(
             hub_root, initialize_schema=False
         )
         self._orchestration_store = _OrchestrationLifecycleEventStore(hub_root)
-        self._migrate_legacy_if_needed()
 
     @property
     def path(self) -> Path:
@@ -925,83 +1015,6 @@ class LifecycleEventStore:
     @property
     def legacy_path(self) -> Path:
         return self._legacy_store.path
-
-    def _quarantine_malformed_legacy_file(
-        self,
-        *,
-        raw_text: Optional[str],
-        error: Optional[str],
-    ) -> None:
-        legacy_path = self._legacy_store.path
-        if not legacy_path.exists():
-            return
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        quarantine_path = legacy_path.with_name(
-            f"{LIFECYCLE_EVENTS_MALFORMED_PREFIX}.{timestamp}.json"
-        )
-        try:
-            legacy_path.rename(quarantine_path)
-        except OSError:
-            if raw_text is not None:
-                try:
-                    atomic_write(quarantine_path, raw_text)
-                    legacy_path.unlink(missing_ok=True)
-                except OSError:
-                    logger.warning(
-                        "Failed to quarantine malformed lifecycle events file at %s",
-                        legacy_path,
-                    )
-                    return
-            else:
-                logger.warning(
-                    "Malformed lifecycle events file at %s could not be quarantined",
-                    legacy_path,
-                )
-                return
-        logger.warning(
-            "Quarantined malformed lifecycle events file: %s (reason=%s)",
-            quarantine_path,
-            error or "unknown",
-        )
-
-    def _migrate_legacy_if_needed(self) -> None:
-        if self._orchestration_store.count() > 0:
-            return
-        migrated = 0
-
-        legacy_sqlite_events = self._legacy_sqlite_store.load(ensure_exists=False)
-        if legacy_sqlite_events:
-            logger.info(
-                "Migrating %s legacy lifecycle events from %s to %s",
-                len(legacy_sqlite_events),
-                self._legacy_sqlite_store.path,
-                self._orchestration_store.path,
-            )
-            for event in legacy_sqlite_events:
-                self._orchestration_store.append_with_result(event)
-                migrated += 1
-
-        legacy_path = self._legacy_store.path
-        if legacy_path.exists():
-            result = self._legacy_store.load_with_result()
-            if result.malformed:
-                self._quarantine_malformed_legacy_file(
-                    raw_text=result.raw_text,
-                    error=result.error,
-                )
-                return
-            if result.events:
-                logger.info(
-                    "Migrating %s legacy lifecycle JSON events from %s to %s",
-                    len(result.events),
-                    legacy_path,
-                    self._orchestration_store.path,
-                )
-                for event in result.events:
-                    self._orchestration_store.append_with_result(event)
-                    migrated += 1
-        if migrated == 0:
-            return
 
     def load(self, *, ensure_exists: bool = True) -> list[LifecycleEvent]:
         return self._orchestration_store.load(ensure_exists=ensure_exists)

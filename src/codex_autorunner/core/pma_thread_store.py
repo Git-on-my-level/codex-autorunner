@@ -17,7 +17,7 @@ from .managed_thread_status import (
     build_managed_thread_status_snapshot,
     transition_managed_thread_status,
 )
-from .orchestration.migrate_legacy_state import backfill_legacy_thread_state
+from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.models import normalize_resource_owner_fields
 from .orchestration.runtime_bindings import (
     RuntimeThreadBinding,
@@ -405,30 +405,39 @@ class PmaThreadStore:
 
     def _initialize(self) -> None:
         with pma_threads_db_lock(self._path):
+            ensure_legacy_orchestration_backfill(
+                self._hub_root,
+                durable=self._durable,
+            )
             with open_orchestration_sqlite(
                 self._hub_root,
                 durable=self._durable,
             ) as conn:
-                backfill_legacy_thread_state(self._hub_root, conn)
                 self._sync_legacy_mirror(conn)
 
     @contextmanager
     def _read_conn(self) -> Iterator[Any]:
+        ensure_legacy_orchestration_backfill(
+            self._hub_root,
+            durable=self._durable,
+        )
         with open_orchestration_sqlite(
             self._hub_root,
             durable=self._durable,
         ) as conn:
-            backfill_legacy_thread_state(self._hub_root, conn)
             yield conn
 
     @contextmanager
     def _write_conn(self) -> Iterator[Any]:
         with pma_threads_db_lock(self._path):
+            ensure_legacy_orchestration_backfill(
+                self._hub_root,
+                durable=self._durable,
+            )
             with open_orchestration_sqlite(
                 self._hub_root,
                 durable=self._durable,
             ) as conn:
-                backfill_legacy_thread_state(self._hub_root, conn)
                 yield conn
                 self._sync_legacy_mirror(conn)
 

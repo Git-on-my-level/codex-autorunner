@@ -8,7 +8,7 @@ from typing import Callable
 from ..time_utils import now_iso
 from .models import OrchestrationTableDefinition
 
-ORCHESTRATION_SCHEMA_VERSION = 16
+ORCHESTRATION_SCHEMA_VERSION = 17
 
 
 @dataclass(frozen=True)
@@ -1063,6 +1063,17 @@ def _apply_v16(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_v17(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS orch_legacy_backfill_flags (
+            backfill_key TEXT PRIMARY KEY,
+            completed_at TEXT NOT NULL
+        )
+        """
+    )
+
+
 _MIGRATIONS = (
     _MigrationStep(1, "create_core_orchestration_schema", _apply_v1),
     _MigrationStep(2, "add_binding_and_flow_projection_scaffolding", _apply_v2),
@@ -1084,6 +1095,7 @@ _MIGRATIONS = (
     _MigrationStep(14, "add_feedback_report_store", _apply_v14),
     _MigrationStep(15, "add_scm_polling_watch_store", _apply_v15),
     _MigrationStep(16, "add_notification_conversation_store", _apply_v16),
+    _MigrationStep(17, "add_legacy_backfill_completion_flags", _apply_v17),
 )
 
 
@@ -1192,6 +1204,11 @@ _TABLE_DEFINITIONS = (
         name="orch_audit_entries",
         role="projection",
         description="Operator-facing audit projection records.",
+    ),
+    OrchestrationTableDefinition(
+        name="orch_legacy_backfill_flags",
+        role="ops",
+        description="One-shot completion markers for legacy orchestration state backfill.",
     ),
     OrchestrationTableDefinition(
         name="orch_schema_migrations",
