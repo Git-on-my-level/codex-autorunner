@@ -34,11 +34,12 @@ from ...chat.picker_filter import (
     filter_picker_items,
     find_exact_picker_item,
 )
-from ...chat.turn_metrics import compose_turn_response_with_footer
-from ...chat.update_notifier import (
+from ...chat.session_messages import (
+    format_update_started_message,
     format_update_status_message,
-    mark_update_status_notified,
 )
+from ...chat.turn_metrics import compose_turn_response_with_footer
+from ...chat.update_notifier import mark_update_status_notified
 from ..adapter import (
     CompactCallback,
     InlineButton,
@@ -2793,8 +2794,10 @@ Summary applied.""",
                 )
             return
         target_label = get_update_target_label(update_target)
-        message = (
-            f"Update started ({target_label}). The selected service(s) will restart."
+        message = format_update_started_message(
+            target_label,
+            status_command="/update status",
+            completion_scope_label="this thread",
         )
         if callback and selection_key:
             if not callback_answered:

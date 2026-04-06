@@ -5521,7 +5521,11 @@ async def test_pma_new_resets_session(tmp_path: Path) -> None:
     assert registry.get_thread_id(PMA_OPENCODE_KEY) is None
     sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
     assert PMA_OPENCODE_KEY not in sessions
-    assert handler._sent and "PMA session reset" in handler._sent[-1]
+    assert (
+        handler._sent
+        and handler._sent[-1]
+        == "Started a fresh PMA session for `opencode` (new thread ready)."
+    )
 
 
 @pytest.mark.anyio
@@ -5565,7 +5569,11 @@ async def test_pma_new_resets_managed_binding_when_runtime_threads_enabled(
     assert calls[-1]["surface_key"] == "-2002:333"
     assert calls[-1]["mode"] == "pma"
     assert calls[-1]["pma_enabled"] is True
-    assert handler._sent and "PMA session reset" in handler._sent[-1]
+    assert (
+        handler._sent
+        and handler._sent[-1]
+        == "Started a fresh PMA session for `codex` (new thread ready)."
+    )
 
 
 @pytest.mark.anyio
@@ -5607,7 +5615,11 @@ async def test_pma_new_resets_scoped_key_when_require_topics_enabled(
     assert registry.get_thread_id(scoped_key) is None
     sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
     assert scoped_key not in sessions
-    assert handler._sent and "PMA session reset" in handler._sent[-1]
+    assert (
+        handler._sent
+        and handler._sent[-1]
+        == "Started a fresh PMA session for `opencode` (new thread ready)."
+    )
 
 
 @pytest.mark.anyio
@@ -5647,7 +5659,10 @@ async def test_pma_reset_resets_scoped_key_when_require_topics_enabled(
     assert registry.get_thread_id(scoped_key) is None
     sessions = json.loads(state_path.read_text(encoding="utf-8")).get("sessions", {})
     assert scoped_key not in sessions
-    assert handler._sent and "PMA thread reset" in handler._sent[-1]
+    assert (
+        handler._sent
+        and handler._sent[-1] == "Reset PMA thread state (fresh state) for `codex`."
+    )
 
 
 class _PMAWorkspaceHandlerWithScopedKey(WorkspaceCommands):
@@ -5788,7 +5803,7 @@ async def test_newt_runs_hub_setup_commands_for_workspace(
     assert hub_supervisor.calls == [
         {"workspace_path": workspace.resolve(), "repo_id_hint": "base-repo"}
     ]
-    assert any("Setup commands run: 2" in text for text in handler._sent)
+    assert any("Ran 2 setup command(s)." in text for text in handler._sent)
 
 
 @pytest.mark.anyio
@@ -5949,6 +5964,13 @@ async def test_newt_thread_fallback_and_workspace_state_reset(
     assert reset_snapshot["rollout_path"] is None
     assert reset_snapshot["pending_compact_seed"] is None
     assert reset_snapshot["pending_compact_seed_thread_id"] is None
+    assert handler._sent
+    assert (
+        handler._sent[-1]
+        .splitlines()[0]
+        .startswith("Reset branch `thread-chat-123456-msg-808-upd-909-")
+    )
+    assert handler._sent[-1].splitlines()[1].startswith("Started new thread ")
 
 
 @pytest.mark.anyio

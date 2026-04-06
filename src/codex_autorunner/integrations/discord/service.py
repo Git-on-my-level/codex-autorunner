@@ -203,6 +203,16 @@ from ...integrations.chat.picker_filter import (
 )
 from ...integrations.chat.queue_control import ChatQueueControlStore
 from ...integrations.chat.run_mirror import ChatRunMirror
+from ...integrations.chat.session_messages import (
+    build_branch_reset_started_lines,
+    build_fresh_session_started_lines,
+    build_reset_state_lines,
+    build_thread_detail_lines,
+    format_resumed_session_message,
+    format_update_preparing_message,
+    format_update_started_message,
+    format_update_status_message,
+)
 from ...integrations.chat.status_diagnostics import (
     StatusBlockContext,
     build_status_block_lines,
@@ -215,7 +225,6 @@ from ...integrations.chat.turn_policy import (
 )
 from ...integrations.chat.update_notifier import (
     ChatUpdateStatusNotifier,
-    format_update_status_message,
     mark_update_status_notified,
 )
 from ...integrations.github.context_injection import maybe_inject_github_context
@@ -5658,6 +5667,22 @@ class DiscordBotService:
                 )
             )
         extra_lines = [f"Queued requests: {pending_queue}"]
+        mode = "pma" if bool(binding.get("pma_enabled", False)) else "repo"
+        current_thread = None
+        if hasattr(self, "_config"):
+            _orchestration_service, _binding_row, current_thread = (
+                self._get_discord_thread_binding(channel_id=channel_id, mode=mode)
+            )
+        if current_thread is not None:
+            extra_lines.append(f"Active thread: {current_thread.thread_target_id}")
+        pending_approval_map = getattr(self, "_discord_pending_approvals", {})
+        pending_approvals = sum(
+            1
+            for pending in pending_approval_map.values()
+            if pending.channel_id == channel_id
+        )
+        if pending_approvals:
+            extra_lines.append(f"Pending approvals: {pending_approvals}")
         if pending_queue:
             extra_lines.append(
                 "Queued messages include Cancel and Interrupt + Send buttons."
@@ -6631,9 +6656,24 @@ class DiscordBotService:
         await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
-
+        actor_label = self._format_agent_state(agent, agent_profile)
         text = format_discord_message(
-            f"Started a fresh {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` ({state_label})."
+            "\n".join(
+                [
+                    *build_fresh_session_started_lines(
+                        mode_label=mode_label,
+                        actor_label=actor_label,
+                        state_label=state_label,
+                    ),
+                    *build_thread_detail_lines(
+                        thread_id=_new_thread_id,
+                        workspace_path=str(workspace_root),
+                        actor_label=actor_label,
+                        model=self._status_model_label(binding),
+                        effort=self._status_effort_label(binding, agent),
+                    ),
+                ]
+            )
         )
         await self._send_or_respond_public(
             interaction_id=interaction_id,
@@ -6820,14 +6860,27 @@ class DiscordBotService:
         await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "new thread ready"
-        setup_note = (
-            f" Ran {setup_command_count} setup command(s)."
-            if setup_command_count
-            else ""
-        )
-
+        actor_label = self._format_agent_state(agent, agent_profile)
         text = format_discord_message(
-            f"Reset branch `{branch_name}` to `origin/{default_branch}` in current workspace and started fresh {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` ({state_label}).{setup_note}"
+            "\n".join(
+                [
+                    *build_branch_reset_started_lines(
+                        branch_name=branch_name,
+                        default_branch=default_branch,
+                        mode_label=mode_label,
+                        actor_label=actor_label,
+                        state_label=state_label,
+                        setup_command_count=setup_command_count,
+                    ),
+                    *build_thread_detail_lines(
+                        thread_id=_new_thread_id,
+                        workspace_path=str(workspace_root),
+                        actor_label=actor_label,
+                        model=self._status_model_label(binding),
+                        effort=self._status_effort_label(binding, agent),
+                    ),
+                ]
+            )
         )
         await self._send_or_respond_public(
             interaction_id=interaction_id,
@@ -7024,8 +7077,24 @@ class DiscordBotService:
             )
             await self._store.clear_pending_compact_seed(channel_id=channel_id)
             mode_label = "PMA" if pma_enabled else "repo"
+            actor_label = self._format_agent_state(agent, agent_profile)
             text = format_discord_message(
-                f"Resumed {mode_label} session for `{self._format_agent_state(agent, agent_profile)}` with thread `{thread_id}`."
+                "\n".join(
+                    [
+                        format_resumed_session_message(
+                            mode_label=mode_label,
+                            actor_label=actor_label,
+                            thread_id=thread_id,
+                        ),
+                        *build_thread_detail_lines(
+                            thread_id=thread_id,
+                            workspace_path=str(workspace_root),
+                            actor_label=actor_label,
+                            model=self._status_model_label(binding),
+                            effort=self._status_effort_label(binding, agent),
+                        ),
+                    ]
+                )
             )
         else:
             thread_items = self._list_discord_thread_targets_for_picker(
@@ -7217,9 +7286,11 @@ class DiscordBotService:
         )
         if restarts_discord:
             text = format_discord_message(
-                f"Preparing update ({target_label}). Checking whether the update can start now. "
-                "If it does, the selected service(s) will restart shortly and I will post completion status in this channel. "
-                "Use `/car update target:status` for progress."
+                format_update_preparing_message(
+                    target_label,
+                    status_command="`/car update target:status`",
+                    completion_scope_label="this channel",
+                )
             )
             if component_response:
                 await self._send_or_update_component_message(
@@ -7323,9 +7394,11 @@ class DiscordBotService:
             self._update_status_notifier.schedule_watch({"chat_id": channel_id})
             return
         text = format_discord_message(
-            f"Update started ({target_label}). The selected service(s) will restart. "
-            "I will post completion status in this channel. "
-            "Use `/car update target:status` for progress."
+            format_update_started_message(
+                target_label,
+                status_command="`/car update target:status`",
+                completion_scope_label="this channel",
+            )
         )
         if component_response:
             await self._send_or_update_component_message(
@@ -7452,17 +7525,7 @@ class DiscordBotService:
         return resolve_update_paths().status_path
 
     def _format_update_status_message(self, status: Optional[dict[str, Any]]) -> str:
-        rendered = format_update_status_message(status)
-        if not status:
-            return rendered
-        lines = [rendered]
-        repo_ref = status.get("repo_ref")
-        if isinstance(repo_ref, str) and repo_ref.strip():
-            lines.append(f"Ref: {repo_ref.strip()}")
-        log_path = status.get("log_path")
-        if isinstance(log_path, str) and log_path.strip():
-            lines.append(f"Log: {log_path.strip()}")
-        return "\n".join(lines)
+        return format_update_status_message(status)
 
     def _dynamic_update_target_definitions(self):
         raw_config = self._hub_raw_config_cache
@@ -12437,11 +12500,27 @@ class DiscordBotService:
         await self._store.clear_pending_compact_seed(channel_id=channel_id)
         mode_label = "PMA" if pma_enabled else "repo"
         state_label = "cleared previous thread" if had_previous else "fresh state"
+        actor_label = self._format_agent_state(agent, agent_profile)
 
         await self._respond_ephemeral(
             interaction_id,
             interaction_token,
-            f"Reset {mode_label} thread state ({state_label}) for `{self._format_agent_state(agent, agent_profile)}`.",
+            "\n".join(
+                [
+                    *build_reset_state_lines(
+                        mode_label=mode_label,
+                        actor_label=actor_label,
+                        state_label=state_label,
+                    ),
+                    *build_thread_detail_lines(
+                        thread_id=_new_thread_id,
+                        workspace_path=str(workspace_root),
+                        actor_label=actor_label,
+                        model=self._status_model_label(binding),
+                        effort=self._status_effort_label(binding, agent),
+                    ),
+                ]
+            ),
         )
 
     async def _handle_car_review(

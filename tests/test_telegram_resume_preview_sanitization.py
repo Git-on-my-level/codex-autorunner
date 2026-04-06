@@ -1,6 +1,7 @@
 from codex_autorunner.integrations.telegram.helpers import (
     _extract_first_user_preview,
     _extract_thread_preview_parts,
+    _format_resume_summary,
 )
 
 
@@ -45,3 +46,21 @@ def test_extract_first_user_preview_strips_leading_car_html_comments() -> None:
         }
     )
     assert preview == "Show the session datetime first."
+
+
+def test_format_resume_summary_preserves_default_model_and_effort_labels() -> None:
+    summary = _format_resume_summary(
+        "thread-1",
+        {
+            "last_user_message": "Resume this session.",
+            "last_assistant_message": "Ready.",
+        },
+        workspace_path="/repo",
+        model=None,
+        effort=None,
+    )
+
+    assert "Resumed thread `thread-1`" in summary
+    assert "Directory: /repo" in summary
+    assert "Model: default" in summary
+    assert "Effort: default" in summary

@@ -419,8 +419,14 @@ async def test_new_command_starts_hermes_thread(
     assert client.thread_start_calls == [(workspace, "hermes")]
     assert record.active_thread_id == "hermes-thread-1"
     assert record.thread_ids == ["hermes-thread-1"]
-    assert "Started new thread hermes-thread-1." in handler.sent_messages[0]
+    assert (
+        handler.sent_messages[0].splitlines()[0]
+        == "Started a fresh repo session for `hermes` (new thread ready)."
+    )
+    assert f"Directory: {workspace}" in handler.sent_messages[0]
     assert "Agent: hermes" in handler.sent_messages[0]
+    assert "Model: default" in handler.sent_messages[0]
+    assert "Effort: " in handler.sent_messages[0]
 
 
 @pytest.mark.anyio

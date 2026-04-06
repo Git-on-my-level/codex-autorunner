@@ -28,6 +28,12 @@ from ....chat.agents import (
     resolve_chat_agent_and_profile,
     resolve_chat_runtime_agent,
 )
+from ....chat.session_messages import (
+    build_branch_reset_started_lines,
+    build_fresh_session_started_lines,
+    build_reset_state_lines,
+    build_thread_detail_lines,
+)
 from ....chat.status_diagnostics import (
     StatusBlockContext,
     build_status_block_lines,
@@ -1208,7 +1214,13 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                         return
             await self._send_message(
                 message.chat_id,
-                "PMA thread reset. Send a message to start a fresh PMA turn.",
+                "\n".join(
+                    build_reset_state_lines(
+                        mode_label="PMA",
+                        actor_label=self._effective_agent_label(record),
+                        state_label="fresh state",
+                    )
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1359,9 +1371,16 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             message.chat_id,
             "\n".join(
                 [
-                    f"Reset thread {thread_id}.",
-                    f"Agent: {agent}",
-                    f"Effort: {effort_label}",
+                    *build_reset_state_lines(
+                        mode_label="repo",
+                        actor_label=self._effective_agent_label(record),
+                        state_label="fresh state",
+                    ),
+                    *build_thread_detail_lines(
+                        headline=f"Started new thread `{thread_id}`.",
+                        actor_label=self._effective_agent_label(record),
+                        effort=effort_label,
+                    ),
                 ]
             ),
             thread_id=message.thread_id,
@@ -1449,7 +1468,13 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                         return
             await self._send_message(
                 message.chat_id,
-                "PMA session reset. Send a message to start a fresh PMA turn.",
+                "\n".join(
+                    build_fresh_session_started_lines(
+                        mode_label="PMA",
+                        actor_label=self._effective_agent_label(record),
+                        state_label="new thread ready",
+                    )
+                ),
                 thread_id=message.thread_id,
                 reply_to=message.message_id,
             )
@@ -1656,11 +1681,18 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             message.chat_id,
             "\n".join(
                 [
-                    f"Started new thread {thread_id}.",
-                    f"Directory: {record.workspace_path or 'unbound'}",
-                    f"Agent: {agent}",
-                    f"Model: {record.model or 'default'}",
-                    f"Effort: {effort_label}",
+                    *build_fresh_session_started_lines(
+                        mode_label="repo",
+                        actor_label=self._effective_agent_label(record),
+                        state_label="new thread ready",
+                    ),
+                    *build_thread_detail_lines(
+                        headline=f"Started new thread `{thread_id}`.",
+                        workspace_path=record.workspace_path,
+                        actor_label=self._effective_agent_label(record),
+                        model=record.model or "default",
+                        effort=effort_label,
+                    ),
                 ]
             ),
             thread_id=message.thread_id,
@@ -1714,6 +1746,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             :10
         ]
         branch_name = f"thread-chat-{safe_chat_id}-{safe_thread_id}-{branch_suffix}"
+        had_previous = bool(record.active_thread_id)
 
         try:
             default_branch = await asyncio.to_thread(
@@ -1954,15 +1987,24 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             record.effort or "default" if self._agent_supports_effort(agent) else "n/a"
         )
         message_lines = [
-            f"Reset branch `{branch_name}` to `origin/{default_branch}`.",
-            f"Directory: {workspace_root}",
-            f"Started new thread {thread_id}.",
-            f"Agent: {agent}",
-            f"Model: {record.model or 'default'}",
-            f"Effort: {effort_label}",
+            *build_branch_reset_started_lines(
+                branch_name=branch_name,
+                default_branch=default_branch,
+                mode_label="repo",
+                actor_label=self._effective_agent_label(record),
+                state_label=(
+                    "cleared previous thread" if had_previous else "new thread ready"
+                ),
+                setup_command_count=setup_command_count or None,
+            ),
+            *build_thread_detail_lines(
+                headline=f"Started new thread `{thread_id}`.",
+                workspace_path=str(workspace_root),
+                actor_label=self._effective_agent_label(record),
+                model=record.model or "default",
+                effort=effort_label,
+            ),
         ]
-        if setup_command_count:
-            message_lines.insert(2, f"Setup commands run: {setup_command_count}")
         await self._send_message(
             message.chat_id,
             "\n".join(message_lines),
