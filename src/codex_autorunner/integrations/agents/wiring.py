@@ -228,7 +228,7 @@ class AgentBackendFactory:
             if self._owns_opencode_supervisor:
                 try:
                     await self._opencode_supervisor.close_all()
-                except Exception:
+                except Exception:  # intentional: best-effort supervisor cleanup
                     self._logger.warning(
                         "Failed closing opencode supervisor", exc_info=True
                     )
@@ -236,7 +236,7 @@ class AgentBackendFactory:
         if self._codex_supervisor is not None:
             try:
                 await self._codex_supervisor.close_all()
-            except Exception:
+            except Exception:  # intentional: best-effort supervisor cleanup
                 self._logger.warning("Failed closing codex supervisor", exc_info=True)
             self._codex_supervisor = None
 

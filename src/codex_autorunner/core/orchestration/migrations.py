@@ -1280,7 +1280,9 @@ def apply_orchestration_migrations(conn: sqlite3.Connection) -> int:
                 """,
                 (now_iso(), run_id),
             )
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: migration step callables may raise arbitrary errors
         with conn:
             conn.execute(
                 """

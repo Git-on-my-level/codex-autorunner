@@ -73,7 +73,9 @@ def write_contextspace_doc(repo_root: Path, kind: str, content: str) -> str:
     try:
         draft_utils.invalidate_drafts_for_path(repo_root, rel)
         draft_utils.remove_draft(repo_root, state_key)
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: best-effort draft cleanup across unpredictable utility internals
         log_event(
             logger,
             logging.WARNING,

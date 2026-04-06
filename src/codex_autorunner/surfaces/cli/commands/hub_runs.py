@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, cast
@@ -83,7 +84,14 @@ def _cleanup_stale_flow_runs(
     try:
         store.initialize()
         records = store.list_flow_runs(flow_type="ticket_flow")
-    except Exception:
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        TypeError,
+        KeyError,
+        sqlite3.Error,
+    ):  # intentional: best-effort stale cleanup; store operations may fail with various DB/IO errors
         store.close()
         return 0
 
@@ -114,7 +122,13 @@ def _cleanup_stale_flow_runs(
                     dry_run=False,
                 )
                 cleanup_count += 1
-            except Exception:
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                KeyError,
+            ):  # best-effort per-run archive
                 continue
     finally:
         store.close()
@@ -287,7 +301,14 @@ def register_hub_runs_commands(
                 )
                 store.initialize()
                 records = store.list_flow_runs(flow_type="ticket_flow")
-            except Exception as exc:
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                TypeError,
+                KeyError,
+                sqlite3.Error,
+            ) as exc:  # intentional: batch processing; store/config open may fail with DB/IO errors
                 errors.append(
                     {
                         "repo_id": entry.id,
@@ -325,7 +346,14 @@ def register_hub_runs_commands(
                         )
                         summary["repo_id"] = entry.id
                         results.append(summary)
-                    except Exception as exc:
+                    except (
+                        OSError,
+                        RuntimeError,
+                        ValueError,
+                        TypeError,
+                        KeyError,
+                        sqlite3.Error,
+                    ) as exc:
                         errors.append(
                             {
                                 "repo_id": entry.id,

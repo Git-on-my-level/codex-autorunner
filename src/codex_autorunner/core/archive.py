@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import shutil
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -315,7 +316,11 @@ def _runner_state_is_dirty(path: Path) -> bool:
         return False
     try:
         state = load_state(path)
-    except Exception:
+    except (
+        sqlite3.Error,
+        OSError,
+        ValueError,
+    ):  # load_state touches sqlite/json; any failure means dirty
         return True
     if state.status != "idle":
         return True
@@ -658,7 +663,11 @@ def resolve_workspace_archive_target(
     ):
         try:
             manifest = load_manifest(manifest_path, resolved_hub_root)
-        except Exception:
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+        ):  # manifest parsing may raise OSError/ValueError/ManifestError
             manifest = None
         if manifest is not None:
             entry = manifest.get_by_path(resolved_hub_root, workspace_root)
@@ -750,7 +759,7 @@ def archive_workspace_managed_threads(
         if workspace_root:
             try:
                 matches_workspace = Path(workspace_root).resolve() == canonical_worktree
-            except Exception:
+            except OSError:
                 matches_workspace = False
         if not matches_repo and not matches_workspace:
             continue
@@ -1100,13 +1109,17 @@ def archive_worktree_snapshot(
                     policy=retention_policy,
                     preserve_paths=(final_snapshot_root,),
                 )
-            except Exception:
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+            ):  # best-effort prune; must not fail the archive
                 logger.warning(
                     "Failed to prune worktree archives under %s",
                     base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
                     exc_info=True,
                 )
-    except Exception as exc:
+    except (RuntimeError, OSError, ValueError, TypeError) as exc:
         logger.warning(
             "Failed to finalize worktree archive snapshot %s intent=%s: %s",
             snapshot_id,
@@ -1219,7 +1232,11 @@ def archive_workspace_car_state(
                     policy=retention_policy,
                     preserve_paths=(final_snapshot_root,),
                 )
-            except Exception:
+            except (
+                OSError,
+                ValueError,
+                RuntimeError,
+            ):
                 logger.warning(
                     "Failed to prune worktree archives under %s",
                     base_repo_root / ".codex-autorunner" / "archive" / "worktrees",
@@ -1235,13 +1252,13 @@ def archive_workspace_car_state(
                     final_snapshot_root / "META.json",
                     json.dumps(final_meta, indent=2) + "\n",
                 )
-            except Exception:
+            except (OSError, ValueError, TypeError):
                 logger.warning(
                     "Failed to refresh reset_paths in archive metadata for %s",
                     final_snapshot_root,
                     exc_info=True,
                 )
-    except Exception as exc:
+    except (RuntimeError, OSError, ValueError, TypeError) as exc:
         logger.warning(
             "Failed to finalize CAR state archive snapshot %s intent=%s: %s",
             snapshot_id,

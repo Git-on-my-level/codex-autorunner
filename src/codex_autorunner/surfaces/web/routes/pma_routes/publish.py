@@ -67,7 +67,7 @@ def resolve_publish_repo_id(
         return None
     try:
         thread = PmaThreadStore(request.app.state.config.root).get_thread(thread_id)
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         logger.exception(
             "Failed resolving managed thread repo for publish thread_id=%s",
             thread_id,
@@ -166,7 +166,9 @@ async def enqueue_with_retry(enqueue_call: Any) -> None:
         try:
             await enqueue_call()
             return
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: enqueue callback - exception types depend on queue backend
             last_error = exc
     if last_error is not None:
         raise last_error

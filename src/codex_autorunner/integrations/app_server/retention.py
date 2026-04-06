@@ -317,7 +317,7 @@ def execute_workspace_retention(
         path = candidate.path
         try:
             validate_path_within_roots(path, allowed_roots=[workspace_root])
-        except Exception:
+        except (ValueError, OSError):
             blocked_paths.append(str(path))
             blocked_reasons.append("path_outside_root")
             failed_prune_count += 1

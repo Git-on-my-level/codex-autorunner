@@ -44,7 +44,14 @@ def build_review_routes() -> APIRouter:
             return ReviewStatusResponse(review=status)
         except ReviewError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+        ) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/review/start")
@@ -60,7 +67,14 @@ def build_review_routes() -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except ReviewError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+        ) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/review/stop")
@@ -74,7 +88,14 @@ def build_review_routes() -> APIRouter:
             )
         except ReviewError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+        ) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.post("/api/review/reset")
@@ -90,7 +111,14 @@ def build_review_routes() -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except ReviewError as exc:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            KeyError,
+        ) as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @router.get("/api/review/artifact")
@@ -142,7 +170,7 @@ def build_review_routes() -> APIRouter:
             raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
         except HTTPException:
             raise
-        except Exception as exc:
+        except Exception as exc:  # intentional: top-level route safety net
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return router

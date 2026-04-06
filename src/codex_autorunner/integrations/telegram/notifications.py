@@ -860,7 +860,9 @@ class TelegramNotificationHandlers:
         if tracker.label in _ACTIVE_PROGRESS_LABELS:
             try:
                 reply_markup = self._interrupt_keyboard()
-            except Exception:
+            except (
+                Exception
+            ):  # intentional: non-critical keyboard builder, any failure is safe to ignore
                 self._logger.debug(
                     "Telegram interrupt keyboard build failed", exc_info=True
                 )

@@ -80,7 +80,7 @@ def _list_template_files(git_dir: Path, ref: str = "HEAD") -> Iterator[Path]:
             path_str = path_str.strip()
             if path_str and path_str.endswith(".md"):
                 yield Path(path_str)
-    except Exception:
+    except (OSError, ValueError):
         return
 
 
@@ -93,7 +93,7 @@ def _get_file_content(git_dir: Path, path: Path, ref: str = "HEAD") -> Optional[
         )
         if result.returncode == 0:
             return result.stdout
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.debug("Failed to get file content at %s:%s: %s", ref, path, e)
     return None
 
@@ -124,7 +124,7 @@ def _index_single_repo(repo: TemplateRepoConfig, hub_root: Path) -> list[Templat
 
     try:
         git_dir = ensure_git_mirror(repo, hub_root)
-    except Exception:
+    except (OSError, ValueError):
         return templates
 
     if not git_dir.exists():
@@ -182,7 +182,7 @@ def get_template_by_ref(
 
     try:
         git_dir = ensure_git_mirror(repo_match, hub_root)
-    except Exception:
+    except (OSError, ValueError):
         return None
 
     if not git_dir.exists():

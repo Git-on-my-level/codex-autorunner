@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Optional, cast
 
 from ..core.config import load_hub_config, load_repo_config
+from ..core.config_contract import ConfigError
 from ..plugin_api import CAR_AGENT_ENTRYPOINT_GROUP, CAR_PLUGIN_API_VERSION
 from .aliased_harness import AliasedAgentHarness
 from .base import AgentHarness
@@ -298,7 +299,7 @@ def _resolve_runtime_agent_config(ctx: Any) -> Any:
     for loader in loaders:
         try:
             config = loader(root)
-        except Exception:
+        except (ValueError, OSError, TypeError, RuntimeError, ConfigError):
             continue
         if callable(getattr(config, "agent_binary", None)):
             return config
@@ -523,7 +524,13 @@ def _load_agent_plugins() -> dict[str, AgentDescriptor]:
     for ep in _select_entry_points(CAR_AGENT_ENTRYPOINT_GROUP):
         try:
             obj = ep.load()
-        except Exception as exc:  # noqa: BLE001
+        except (
+            ImportError,
+            AttributeError,
+            TypeError,
+            RuntimeError,
+            ValueError,
+        ) as exc:  # noqa: BLE001
             _logger.warning(
                 "Failed to load agent plugin entry point %s:%s: %s",
                 ep.group,
@@ -538,7 +545,12 @@ def _load_agent_plugins() -> dict[str, AgentDescriptor]:
         elif callable(obj):
             try:
                 maybe = obj()
-            except Exception as exc:  # noqa: BLE001
+            except (
+                TypeError,
+                RuntimeError,
+                ValueError,
+                AttributeError,
+            ) as exc:  # noqa: BLE001
                 _logger.warning(
                     "Agent plugin entry point %s:%s factory failed: %s",
                     ep.group,
@@ -572,7 +584,7 @@ def _load_agent_plugins() -> dict[str, AgentDescriptor]:
         else:
             try:
                 api_version = int(api_version_raw)
-            except Exception:
+            except (ValueError, TypeError):
                 api_version = None
         if api_version is None:
             _logger.warning(

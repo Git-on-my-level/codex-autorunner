@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from ....core.utils import canonicalize_path
 from ...chat.compaction import build_compact_seed_prompt
+from ..errors import DiscordAPIError
 from ..rendering import (
     chunk_discord_message,
     truncate_for_discord,
@@ -125,7 +126,7 @@ async def handle_car_compact(
                     channel_id if not pma_enabled else f"pma:{channel_id}"
                 ),
             )
-        except Exception as exc:
+        except Exception as exc:  # intentional: agent turn failures are unpredictable
             log_event(
                 service._logger,
                 logging.WARNING,
@@ -177,7 +178,9 @@ async def handle_car_compact(
                 ),
                 pma_enabled=pma_enabled,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: thread reset involves multiple Discord API calls
             log_event(
                 service._logger,
                 logging.WARNING,
@@ -209,7 +212,9 @@ async def handle_car_compact(
                 seed_text=build_compact_seed_prompt(response_text),
                 session_key=compact_pending_session_key,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: store write can fail in various database-specific ways
             log_event(
                 service._logger,
                 logging.WARNING,
@@ -224,7 +229,9 @@ async def handle_car_compact(
             try:
                 orchestration_service = service._discord_thread_service()
                 if next_thread_id:
-                    with contextlib.suppress(Exception):
+                    with contextlib.suppress(
+                        Exception
+                    ):  # intentional: best-effort archive during rollback
                         orchestration_service.archive_thread_target(next_thread_id)
                 restored = orchestration_service.resume_thread_target(
                     previous_thread_id
@@ -255,7 +262,9 @@ async def handle_car_compact(
                     workspace_root=workspace_root,
                     pma_enabled=pma_enabled,
                 )
-            except Exception as rollback_exc:
+            except (
+                Exception
+            ) as rollback_exc:  # intentional: rollback involves multiple recovery operations
                 rollback_failed = True
                 log_event(
                     service._logger,
@@ -314,7 +323,7 @@ async def handle_car_compact(
                     )
                     preview_chunk_applied = True
                     next_chunk_index = 1
-                except Exception as exc:
+                except (DiscordAPIError, OSError) as exc:
                     log_event(
                         service._logger,
                         logging.WARNING,
@@ -339,7 +348,9 @@ async def handle_car_compact(
                 workspace_root=workspace_root,
                 channel_id=channel_id,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: finalization mixes Discord API + file I/O
             log_event(
                 service._logger,
                 logging.WARNING,

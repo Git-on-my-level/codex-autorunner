@@ -215,7 +215,7 @@ def setup_ticket_pack(
                 "assigned_count": len(assigned_files),
             },
         )
-    except Exception as exc:  # noqa: BLE001
+    except OSError as exc:
         logger.warning(
             "Failed to write ingest receipt at %s after setup_pack_new: %s",
             ingest_state_path(target_path),

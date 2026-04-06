@@ -522,7 +522,7 @@ def _log_event(
         fields["exc_info"] = raw_exc
     try:
         from .core.logging_utils import log_event
-    except Exception:
+    except ImportError:
         logger.log(level, f"{event} {fields}")
         return
     log_event_typed = cast(_LogEvent, log_event)

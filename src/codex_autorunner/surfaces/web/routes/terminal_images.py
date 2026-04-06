@@ -67,7 +67,7 @@ def build_terminal_image_routes() -> APIRouter:
 
         try:
             data = await file.read()
-        except Exception as exc:
+        except (OSError, RuntimeError) as exc:
             raise HTTPException(
                 status_code=400, detail="unable to read upload"
             ) from exc
@@ -88,7 +88,7 @@ def build_terminal_image_routes() -> APIRouter:
         path = images_dir / name
         try:
             path.write_bytes(data)
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(status_code=500, detail="failed to save image") from exc
 
         rel_path = path.relative_to(repo_root).as_posix()

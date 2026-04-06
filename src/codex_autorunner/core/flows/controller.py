@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Dict, Optional, Set
 
 from ...manifest import ManifestError, load_manifest
-from ..git_utils import run_git
+from ..git_utils import GitError, run_git
 from ..lifecycle_events import LifecycleEventEmitter, LifecycleEventType
 from ..utils import find_repo_root
 from .definition import FlowDefinition
@@ -136,7 +137,7 @@ class FlowController:
                     _logger.info(
                         "Marked run %s as superseded by %s", old_run.id, new_run_id
                     )
-            except Exception as exc:
+            except sqlite3.Error as exc:
                 _logger.warning(
                     "Failed to mark run %s as superseded: %s", old_run.id, exc
                 )
@@ -266,7 +267,7 @@ class FlowController:
         if flows_dir.exists():
             try:
                 clear_worker_metadata(flows_dir)
-            except Exception as exc:
+            except OSError as exc:
                 _logger.warning(
                     "Failed to clear stale worker metadata for run %s: %s", run_id, exc
                 )
@@ -288,7 +289,7 @@ class FlowController:
             if not head:
                 return None
             return f"{head}\n{status}"
-        except Exception:
+        except GitError:
             _logger.exception("Failed to get git state")
             return None
 
@@ -395,7 +396,9 @@ class FlowController:
         for listener in self._lifecycle_event_listeners:
             try:
                 listener(event_type, resolved_repo_id, run_id, payload, origin)
-            except Exception as e:
+            except (
+                Exception
+            ) as e:  # intentional: arbitrary listener callbacks must not break event dispatch
                 _logger.exception("Error in lifecycle event listener: %s", e)
 
     def _emit_to_lifecycle_store(
@@ -433,14 +436,18 @@ class FlowController:
                 self._lifecycle_emitter.emit_flow_stopped(
                     repo_id, run_id, data=data, origin=origin
                 )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: lifecycle store errors must not break flow operations
             _logger.exception("Error emitting to lifecycle store: %s", exc)
 
     def _emit_event(self, event: FlowEvent) -> None:
         for listener in self._event_listeners:
             try:
                 listener(event)
-            except Exception as e:
+            except (
+                Exception
+            ) as e:  # intentional: arbitrary listener callbacks must not break event dispatch
                 _logger.exception("Error in event listener: %s", e)
 
     def _prepare_artifacts_dir(self, run_id: str) -> Path:

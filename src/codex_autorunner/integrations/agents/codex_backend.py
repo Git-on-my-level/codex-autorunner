@@ -435,7 +435,7 @@ class CodexAppServerBackend(AgentBackend):
                     if run_event:
                         yield run_event
                     continue
-        except Exception as e:
+        except Exception as e:  # intentional: top-level turn execution error handler
             _logger.error("Error during turn execution: %s", e)
             if not wait_task.done():
                 wait_task.cancel()
@@ -472,7 +472,9 @@ class CodexAppServerBackend(AgentBackend):
                     target_thread or "unknown",
                 )
                 return
-            except Exception as e:
+            except (
+                Exception
+            ) as e:  # intentional: best-effort interrupt, must not propagate
                 _logger.warning("Failed to interrupt turn: %s", e)
                 return
         if self._client and target_thread:
@@ -529,7 +531,7 @@ class CodexAppServerBackend(AgentBackend):
         if self._notification_handler is not None:
             try:
                 await self._notification_handler(notification)
-            except Exception as exc:
+            except Exception as exc:  # intentional: external notification handler error
                 self._logger.debug("Notification handler failed: %s", exc)
         method = notification.get("method", "")
         params = notification.get("params", {}) or {}

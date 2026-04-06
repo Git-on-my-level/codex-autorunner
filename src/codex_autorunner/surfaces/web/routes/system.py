@@ -149,7 +149,9 @@ def build_system_routes() -> APIRouter:
             return await asyncio.to_thread(
                 _system_update_check, repo_url=repo_url, repo_ref=repo_ref
             )
-        except Exception as e:
+        except (
+            Exception
+        ) as e:  # intentional: git check runs in thread, unknown failure surface
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
                 logger.error("Update check error: %s", e, exc_info=True)
@@ -275,7 +277,7 @@ def build_system_routes() -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as e:
+        except Exception as e:  # intentional: last-resort handler for update endpoint
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
                 logger.error("Update error: %s", e, exc_info=True)
@@ -333,7 +335,9 @@ def build_system_routes() -> APIRouter:
         try:
             repo_root = find_repo_root(request.app.state.engine.repo_root)
             return await asyncio.to_thread(collect_describe_data, repo_root)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: diagnostic endpoint, surface any failure as 500
             logger = getattr(getattr(request.app, "state", None), "logger", None)
             if logger:
                 logger.error("Describe endpoint error: %s", exc, exc_info=True)

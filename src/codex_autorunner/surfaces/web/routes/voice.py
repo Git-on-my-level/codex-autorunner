@@ -83,7 +83,7 @@ def build_voice_routes() -> APIRouter:
             content_type = file.content_type
             try:
                 audio_bytes = await file.read()
-            except Exception as exc:
+            except (OSError, RuntimeError) as exc:
                 raise HTTPException(
                     status_code=400, detail="Unable to read audio upload"
                 ) from exc

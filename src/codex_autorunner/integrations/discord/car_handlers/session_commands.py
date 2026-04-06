@@ -97,7 +97,12 @@ async def handle_car_new(
             resource_id=resource_id,
             pma_enabled=pma_enabled,
         )
-    except Exception as exc:
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:  # intentional: top-level command handler wrapping complex service reset
         log_event(
             service._logger,
             logging.WARNING,
@@ -235,7 +240,10 @@ async def handle_car_newt(
                 workspace_root,
                 repo_id_hint=repo_id_hint,
             )
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+        ) as exc:  # intentional: runs arbitrary setup commands with unpredictable failures
             log_event(
                 service._logger,
                 logging.WARNING,
@@ -285,7 +293,12 @@ async def handle_car_newt(
             resource_id=resource_id,
             pma_enabled=pma_enabled,
         )
-    except Exception as exc:
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:
         log_event(
             service._logger,
             logging.WARNING,
@@ -491,7 +504,7 @@ async def handle_car_resume(
         if lifecycle_status and lifecycle_status != "active":
             try:
                 orchestration_service.resume_thread_target(thread_id)
-            except Exception:
+            except (RuntimeError, OSError, ValueError, TypeError):
                 _logger.debug(
                     "resume_thread_target failed for %s", thread_id, exc_info=True
                 )
@@ -627,7 +640,12 @@ async def handle_car_reset(
             resource_id=resource_id,
             pma_enabled=pma_enabled,
         )
-    except Exception as exc:
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:
         log_event(
             service._logger,
             logging.WARNING,
@@ -707,7 +725,7 @@ async def handle_car_archive(
             text=str(exc),
         )
         return
-    except Exception as exc:
+    except (RuntimeError, OSError) as exc:
         log_event(
             service._logger,
             logging.WARNING,
@@ -920,7 +938,7 @@ async def handle_car_interrupt(
             deferred=deferred,
             text=text,
         )
-    except Exception as exc:
+    except (RuntimeError, ConnectionError, OSError, ValueError) as exc:
         if progress_reuse_source_message_id or progress_reuse_acknowledgement:
             clear_discord_turn_progress_reuse(
                 service,

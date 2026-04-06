@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 from .....core.logging_utils import log_event
 from .....integrations.chat.compaction import build_compact_seed_prompt
-from ...adapter import TelegramMessage
+from ...adapter import TelegramAPIError, TelegramMessage
 from ...constants import TELEGRAM_MAX_MESSAGE_LENGTH
 from ...helpers import _compact_preview
 
@@ -53,7 +53,7 @@ class FormattingHelpers:
             message_id = (
                 response.get("message_id") if isinstance(response, dict) else None
             )
-        except Exception as exc:
+        except (TelegramAPIError, ValueError, RuntimeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

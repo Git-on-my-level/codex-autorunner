@@ -487,7 +487,7 @@ def register_telegram_commands(
                 default_approval_mode=telegram_cfg.defaults.approval_mode,
             )
             store._connection_sync()
-        except Exception as exc:
+        except Exception as exc:  # intentional: state diagnostic error barrier
             raise_exit(f"Telegram state check failed: {exc}", cause=exc)
 
     @telegram_app.command("trace")

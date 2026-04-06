@@ -108,9 +108,9 @@ class PmaStateStore:
         notice_path = self._notice_path()
         try:
             atomic_write(notice_path, json.dumps(notice, indent=2) + "\n")
-        except Exception:
+        except OSError:
             logger.warning("Failed to write PMA corruption notice at %s", notice_path)
         try:
             self._save_unlocked(default_pma_state())
-        except Exception:
+        except OSError:
             logger.warning("Failed to reset PMA state at %s", self._path)

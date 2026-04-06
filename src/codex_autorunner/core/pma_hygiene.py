@@ -58,7 +58,7 @@ def _load_stale_threshold_seconds(
         return resolve_stale_threshold_seconds(
             getattr(pma_cfg, "freshness_stale_threshold_seconds", None)
         )
-    except Exception:
+    except (OSError, ValueError):
         return resolve_stale_threshold_seconds(None)
 
 
@@ -152,7 +152,9 @@ def _build_thread_candidates(
         busy_ids = set(store.list_thread_ids_with_running_executions(limit=None))
         busy_ids.update(store.list_thread_ids_with_pending_queue(limit=None))
         binding_store = OrchestrationBindingStore(hub_root)
-    except Exception:
+    except (
+        Exception
+    ):  # intentional: multi-store init + DB queries; safe fallback to empty
         return []
 
     candidates: list[dict[str, Any]] = []
@@ -181,7 +183,7 @@ def _build_thread_candidates(
                 include_disabled=False,
                 limit=50,
             )
-        except Exception:
+        except (OSError, ValueError):
             bindings = []
         surface_kinds = sorted(
             {
@@ -226,7 +228,7 @@ def _build_thread_candidates(
 def _build_automation_candidates(hub_root: Path) -> list[dict[str, Any]]:
     try:
         store = PmaAutomationStore(hub_root)
-    except Exception:
+    except (OSError, ValueError):
         return []
 
     candidates: list[dict[str, Any]] = []
@@ -521,7 +523,9 @@ def apply_pma_hygiene_report(hub_root: Path, report: dict[str, Any]) -> dict[str
                 if dispatch_path.is_file():
                     dispatch_path.unlink()
                     ok = True
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: multi-action apply; records per-item failure
             error = str(exc)
         results.append(
             {

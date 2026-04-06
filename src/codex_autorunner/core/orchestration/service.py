@@ -123,7 +123,7 @@ async def _resolve_harness_runtime_instance_id(
         return None
     try:
         runtime_instance_id = await resolver(workspace_root)
-    except Exception:
+    except (AttributeError, TypeError, RuntimeError, OSError, ValueError):
         logger.debug(
             "Failed to resolve backend runtime instance id",
             exc_info=True,
@@ -869,7 +869,14 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                             conversation = await harness.resume_conversation(
                                 workspace_root, conversation_id
                             )
-                        except Exception as exc:
+                        except (
+                            RuntimeError,
+                            OSError,
+                            ValueError,
+                            TypeError,
+                            AttributeError,
+                            ConnectionError,
+                        ) as exc:
                             if not _is_missing_thread_error(exc):
                                 raise
                             log_event(
@@ -996,7 +1003,9 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
                     )
                     conversation_id = None
                     continue
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: top-level execution boundary records all harness failures
             detail = (
                 str(request.metadata.get("execution_error_message") or "").strip()
                 or str(exc).strip()
@@ -1092,7 +1101,13 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
         if running is not None and request.busy_policy == "interrupt":
             try:
                 await self.stop_thread(thread.thread_target_id)
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ) as exc:
                 current_running = self.get_running_execution(thread.thread_target_id)
                 raise BusyInterruptFailedError(
                     thread_target_id=thread.thread_target_id,

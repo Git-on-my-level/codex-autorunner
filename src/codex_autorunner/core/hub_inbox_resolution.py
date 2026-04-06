@@ -164,7 +164,7 @@ def load_hub_inbox_dismissals(repo_root: Path) -> dict[str, dict[str, Any]]:
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, ValueError):
         return {}
     if not isinstance(payload, dict):
         return {}

@@ -624,7 +624,7 @@ def register_hub_tickets_commands(
                 force=force,
                 start_point=start_point,
             )
-        except Exception as exc:
+        except Exception as exc:  # intentional: worktree creation error barrier
             raise_exit(str(exc), cause=exc)
 
         repo_id = snapshot.id

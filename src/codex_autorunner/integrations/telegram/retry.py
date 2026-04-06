@@ -15,7 +15,7 @@ def _extract_retry_after_seconds(exc: Exception) -> Optional[int]:
                 return int(header)
             try:
                 payload = current.response.json()
-            except Exception:
+            except (ValueError, TypeError):
                 payload = None
             if isinstance(payload, dict):
                 parameters = payload.get("parameters")

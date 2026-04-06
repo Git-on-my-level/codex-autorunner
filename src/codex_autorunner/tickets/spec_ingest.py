@@ -89,7 +89,7 @@ When you need ongoing context, you may also consult (optional):
                 "first_ticket_path": first_ticket_path,
             },
         )
-    except Exception as exc:  # noqa: BLE001
+    except OSError as exc:
         logger.warning(
             "Failed to write ingest receipt at %s after spec ingest: %s",
             safe_relpath(ingest_state_path(repo_root), repo_root),

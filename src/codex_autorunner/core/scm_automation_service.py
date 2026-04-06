@@ -582,7 +582,9 @@ class ScmAutomationService:
                         "escalation_reason": reason,
                     },
                 )
-            except Exception:  # pragma: no cover - defensive logging
+            except (
+                Exception
+            ):  # intentional: defensive audit logging, must not crash caller
                 _LOGGER.warning(
                     "SCM publish-created audit recording failed for %s",
                     operation.operation_id,
@@ -597,7 +599,7 @@ class ScmAutomationService:
                 operation_key=operation_key,
                 metadata=escalation_metadata,
             )
-        except Exception:  # pragma: no cover - defensive logging
+        except Exception:  # intentional: defensive state update, must not crash caller
             _LOGGER.warning(
                 "SCM escalation state update failed for operation %s",
                 operation.operation_id,
@@ -640,7 +642,9 @@ class ScmAutomationService:
                     error_text=operation.last_error_text,
                     metadata=tracking,
                 )
-            except Exception:  # pragma: no cover - defensive logging
+            except (
+                Exception
+            ):  # intentional: defensive state update, must not crash caller
                 _LOGGER.warning(
                     "SCM reaction-state update failed for operation %s",
                     operation.operation_id,
@@ -691,7 +695,9 @@ class ScmAutomationService:
                     correlation_id=correlation_id,
                     operation=operation,
                 )
-            except Exception:  # pragma: no cover - defensive logging
+            except (
+                Exception
+            ):  # intentional: defensive audit logging, must not crash caller
                 _LOGGER.warning(
                     "SCM publish-finished audit recording failed for %s",
                     operation.operation_id,

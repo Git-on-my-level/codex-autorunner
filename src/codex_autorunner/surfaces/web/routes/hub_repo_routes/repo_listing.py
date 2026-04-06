@@ -56,7 +56,9 @@ class HubRepoListingService:
                 hub_root=self._context.config.root,
                 raw_config=self._context.config.raw,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: chat binding lookup failure is non-critical
             safe_log(
                 self._context.logger,
                 logging.WARNING,

@@ -44,7 +44,7 @@ def _trim_extra(extra: Any, limit: int) -> Any:
         return _truncate(extra, limit)
     try:
         raw = json.dumps(extra, ensure_ascii=True, sort_keys=True, default=str)
-    except Exception:
+    except (TypeError, ValueError):
         raw = str(extra)
     if len(raw) <= limit:
         return extra
@@ -110,7 +110,7 @@ def _latest_reply_history_seq(
             if len(name) == 4 and name.isdigit():
                 latest = max(latest, int(name))
         return latest
-    except Exception as exc:
+    except (ValueError, OSError) as exc:
         _logger.warning("Could not get latest reply history seq: %s", exc)
         return 0
 
@@ -303,7 +303,7 @@ def _latest_dispatch(
             "errors": [],
             "files": _list_files(selected_dir),
         }
-    except Exception as exc:
+    except (ValueError, OSError) as exc:
         _logger.warning("Could not get latest dispatch: %s", exc)
         return None
 
@@ -365,7 +365,7 @@ def build_ticket_flow_run_state(
         try:
             health = check_worker_health(repo_root, run_id)
             dead_worker = health.status in {"dead", "invalid", "mismatch"}
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             _logger.warning("Could not check worker health: %s", exc)
             health = None
             dead_worker = False
@@ -375,7 +375,9 @@ def build_ticket_flow_run_state(
     if dead_worker:
         try:
             crash_info = read_worker_crash_info(repo_root, run_id)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: defensive guard; read_worker_crash_info handles known errors internally
             _logger.warning("Could not read worker crash info: %s", exc)
             crash_info = None
         if isinstance(crash_info, dict):
@@ -513,7 +515,9 @@ def get_latest_ticket_flow_run_state_with_record(
                 dispatch_state_reason=reason,
             )
             return run_state, record
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: top-level guard spanning config, db, fs, and validation errors
         _logger.warning(
             "Failed to get latest ticket flow run state for repo %s: %s", repo_id, exc
         )

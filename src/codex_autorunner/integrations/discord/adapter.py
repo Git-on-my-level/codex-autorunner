@@ -553,7 +553,7 @@ class DiscordChatAdapter(ChatAdapter):
                 exc,
             )
             raise
-        except Exception as exc:
+        except (RuntimeError, OSError, ConnectionError, ValueError, TypeError) as exc:
             self._logger.error(
                 "Unexpected error sending text message to channel %s: %s",
                 channel_id,
@@ -598,7 +598,15 @@ class DiscordChatAdapter(ChatAdapter):
                 exc,
             )
             raise
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ConnectionError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+        ) as exc:
             self._logger.error(
                 "Unexpected error editing message %s: %s",
                 message.message_id,
@@ -682,7 +690,15 @@ class DiscordChatAdapter(ChatAdapter):
                 exc,
             )
             raise
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ConnectionError,
+            ValueError,
+            TypeError,
+            FileNotFoundError,
+            IsADirectoryError,
+        ) as exc:
             self._logger.error(
                 "Unexpected error sending attachment %s to channel %s: %s",
                 path.name,
@@ -732,7 +748,15 @@ class DiscordChatAdapter(ChatAdapter):
                 exc,
             )
             raise
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ConnectionError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+        ) as exc:
             self._logger.error(
                 "Unexpected error acking interaction %s: %s",
                 interaction.interaction_id,

@@ -20,7 +20,7 @@ def _read_lock_payload(path: Path) -> Optional[dict[str, Any]]:
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
 

@@ -9,6 +9,7 @@ with the rest of the app.
 from __future__ import annotations
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -66,7 +67,7 @@ def _ticket_counts(ticket_dir: Path) -> dict[str, int]:
         try:
             if ticket_is_done(path):
                 done += 1
-        except Exception:
+        except (OSError, ValueError):
             # Treat unreadable/invalid tickets as not-done but still count them.
             continue
     todo = max(total - done, 0)
@@ -117,7 +118,7 @@ def _aggregate_diff_stats(dispatch_history_dir: Path) -> Dict[str, int]:
                         totals["files_changed"] += int(
                             diff_stats.get("files_changed") or 0
                         )
-            except Exception:
+            except (OSError, ValueError, TypeError):
                 continue
     except OSError:
         pass
@@ -137,7 +138,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
                 db_path, durable=load_repo_config(repo_root).durable_writes
             ) as store:
                 records = store.list_flow_runs(flow_type="ticket_flow")
-        except Exception:
+        except (sqlite3.Error, OSError):
             records = []
 
     run_record = _select_primary_run(records)
@@ -212,7 +213,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
                 totals["deletions"] += int(data.get("deletions") or 0)
                 totals["files_changed"] += int(data.get("files_changed") or 0)
             turns["diff_stats"] = totals
-        except Exception:
+        except (sqlite3.Error, OSError):
             turns["diff_stats"] = _aggregate_diff_stats(
                 outbox_paths.dispatch_history_dir
             )
@@ -224,7 +225,7 @@ def _build_summary(repo_root: Path) -> Dict[str, Any]:
                 doc, _errors = read_ticket(current_path)
                 if doc and doc.frontmatter and getattr(doc.frontmatter, "agent", None):
                     agent_id = doc.frontmatter.agent
-            except Exception:
+            except (OSError, ValueError):
                 _logger.debug(
                     "Failed to read ticket frontmatter for analytics", exc_info=True
                 )

@@ -42,15 +42,15 @@ def cleanup_processes() -> None:
         if proc.poll() is None:
             try:
                 proc.terminate()
-            except Exception:
+            except OSError:
                 logger.debug("Failed to terminate runner process", exc_info=True)
             try:
                 proc.wait(timeout=5)
-            except Exception:
+            except (subprocess.TimeoutExpired, OSError):
                 logger.debug("Runner process wait timed out", exc_info=True)
                 try:
                     proc.kill()
-                except Exception:
+                except OSError:
                     logger.debug("Failed to kill runner process", exc_info=True)
     _process_registry.clear()
 

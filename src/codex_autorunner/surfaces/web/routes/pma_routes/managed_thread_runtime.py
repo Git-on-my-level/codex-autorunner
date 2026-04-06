@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
@@ -203,7 +204,11 @@ def _get_live_thread_runtime_binding(service: Any, managed_thread_id: str) -> An
         return None
     try:
         return getter(managed_thread_id)
-    except Exception:
+    except (
+        AttributeError,
+        TypeError,
+        RuntimeError,
+    ):  # intentional: defensive fallback for dynamic getter call
         logger.debug(
             "Failed to resolve live runtime binding for managed thread %s",
             managed_thread_id,
@@ -334,7 +339,7 @@ async def _interrupt_managed_thread_via_orchestration(
     backend_error: Optional[str] = None
     try:
         stop_outcome = await service.stop_thread(managed_thread_id)
-    except Exception:
+    except Exception:  # intentional: top-level error handler for thread interrupt
         logger.exception(
             "Failed to interrupt managed-thread turn via orchestration service (managed_thread_id=%s, managed_turn_id=%s)",
             managed_thread_id,
@@ -488,7 +493,7 @@ def _persist_managed_thread_timeline(
             metadata=metadata,
             events=events,
         )
-    except Exception:
+    except (OSError, TypeError, ValueError):  # best-effort timeline persistence
         logger.exception(
             "Failed to persist %s managed-thread timeline (managed_thread_id=%s, managed_turn_id=%s)",
             log_status,
@@ -580,7 +585,7 @@ async def _run_managed_thread_execution(
             timeout_seconds=PMA_TIMEOUT_SECONDS,
             execution_error_message=MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
         )
-    except Exception:
+    except Exception:  # intentional: top-level error handler for execution outcome
         logger.exception(
             "Managed thread execution raised unexpected error (managed_thread_id=%s, managed_turn_id=%s)",
             managed_thread_id,
@@ -647,7 +652,7 @@ async def _run_managed_thread_execution(
                 assistant_text=outcome.assistant_text,
             )
             transcript_turn_id = current_turn_id
-        except Exception:
+        except (OSError, TypeError, ValueError):  # best-effort transcript persistence
             logger.exception(
                 "Failed to persist managed-thread transcript (managed_thread_id=%s, managed_turn_id=%s)",
                 managed_thread_id,
@@ -886,7 +891,7 @@ def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None
                         backend_turn_id=None,
                         transcript_turn_id=None,
                     )
-            except Exception:
+            except (OSError, RuntimeError):  # intentional: cleanup in error handler
                 logger.exception(
                     "Failed to clean up running execution after queue worker failure "
                     "(managed_thread_id=%s)",
@@ -960,12 +965,22 @@ async def recover_orphaned_managed_thread_executions(app: Any) -> None:
                             thread.backend_thread_id,
                             execution.backend_id,
                         )
-                    except Exception:
+                    except (
+                        AttributeError,
+                        TypeError,
+                        RuntimeError,
+                    ):  # intentional: defensive fallback for dynamic supervisor call
                         live_events = []
                     if live_events:
                         continue
             service.recover_running_execution_after_restart(managed_thread_id)
-        except Exception:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+        ):  # intentional: top-level error handler for thread recovery loop
             logger.exception(
                 "Managed-thread running execution recovery failed (managed_thread_id=%s)",
                 managed_thread_id,
@@ -1062,7 +1077,7 @@ async def deliver_bound_chat_assistant_output(
                     continue
                 try:
                     chat_id, thread_id, _scope = parse_topic_key(surface_key)
-                except Exception:
+                except ValueError:
                     logger.warning(
                         "Failed to parse telegram bound-chat surface key for managed-thread delivery: %s",
                         surface_key,
@@ -1095,7 +1110,13 @@ async def deliver_bound_chat_assistant_output(
                         record
                     )
                 )
-            except Exception:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                KeyError,
+            ):  # intentional: best-effort per-binding delivery
                 logger.exception(
                     "Failed to enqueue bound-chat delivery target (managed_thread_id=%s, managed_turn_id=%s, surface_kind=%s, surface_key=%s)",
                     managed_thread_id,
@@ -1107,12 +1128,20 @@ async def deliver_bound_chat_assistant_output(
         if discord_store is not None:
             try:
                 await discord_store.close()
-            except Exception:
+            except (
+                sqlite3.Error,
+                OSError,
+                RuntimeError,
+            ):  # intentional: best-effort store close
                 logger.exception("Failed to close discord bound-chat delivery store")
         if telegram_store is not None:
             try:
                 await telegram_store.close()
-            except Exception:
+            except (
+                sqlite3.Error,
+                OSError,
+                RuntimeError,
+            ):  # intentional: best-effort store close
                 logger.exception("Failed to close telegram bound-chat delivery store")
 
 
@@ -1229,7 +1258,11 @@ async def _notify_hub_automation_transition(
                 ((), dict(payload)),
             ],
         )
-    except Exception:
+    except (
+        AttributeError,
+        TypeError,
+        RuntimeError,
+    ):  # intentional: defensive catch for dynamic automation call
         logger.exception("Failed to notify hub automation transition")
         return
 
@@ -1245,9 +1278,15 @@ async def _notify_hub_automation_transition(
     except TypeError:
         try:
             await await_if_needed(process_now())
-        except Exception:
+        except (
+            AttributeError,
+            RuntimeError,
+        ):  # intentional: defensive catch for dynamic supervisor call
             logger.exception("Failed immediate PMA automation processing")
-    except Exception:
+    except (
+        AttributeError,
+        RuntimeError,
+    ):  # intentional: defensive catch for dynamic supervisor call
         logger.exception("Failed immediate PMA automation processing")
 
 
@@ -1455,7 +1494,7 @@ def build_managed_thread_runtime_routes(
                     delivery_payload=delivery_payload,
                 ),
             )
-        except Exception:
+        except Exception:  # intentional: top-level error handler for execution setup
             logger.exception(
                 "Managed thread execution setup failed (managed_thread_id=%s)",
                 managed_thread_id,

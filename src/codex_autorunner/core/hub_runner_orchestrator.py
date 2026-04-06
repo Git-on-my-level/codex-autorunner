@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, Optional
@@ -121,7 +122,7 @@ class RunnerOrchestrator:
                 lock_status = read_lock_status(lock_path)
                 runner_state = load_state(state_path) if state_path.exists() else None
                 last_error = None
-            except Exception as exc:
+            except (OSError, ValueError, sqlite3.Error) as exc:
                 last_error = exc
             else:
                 if lock_status != LockStatus.LOCKED_ALIVE and (

@@ -142,7 +142,9 @@ class ChatApprovalHandlers:
                     thread_id=pending.thread_id,
                     message_id=pending.message_id,
                 )
-            except Exception:
+            except (
+                Exception
+            ):  # intentional: platform delete may fail with varied errors
                 deleted = False
             if deleted:
                 return
@@ -154,5 +156,5 @@ class ChatApprovalHandlers:
                     text=self._format_approval_decision(decision),
                     clear_actions=True,
                 )
-            except Exception:
+            except Exception:  # intentional: platform edit may fail with varied errors
                 return

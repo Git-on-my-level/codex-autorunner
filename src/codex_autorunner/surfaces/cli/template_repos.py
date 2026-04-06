@@ -155,7 +155,7 @@ def load_template_repos_manager(hub: Optional[Path]) -> TemplateReposManager:
     """Load a TemplateReposManager for the given hub path."""
     try:
         config = load_hub_config(hub or Path.cwd())
-    except Exception as exc:
+    except Exception as exc:  # intentional: CLI entry-point error barrier
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
     hub_config_path = config.root / CONFIG_FILENAME

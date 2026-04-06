@@ -11,7 +11,7 @@ from ...integrations.chat.command_diagnostics import (
     build_status_text,
 )
 from ...integrations.chat.help_catalog import build_discord_help_lines
-from ...manifest import load_manifest
+from ...manifest import ManifestError, load_manifest
 from ..chat.approval_modes import (
     normalize_approval_mode,
     resolve_approval_mode_policies,
@@ -63,7 +63,7 @@ def _list_manifest_repos(
             )
         ordered.sort(key=lambda item: (item[0], item[1], item[2]))
         return [(repo_id, path) for _, _, repo_id, path in ordered]
-    except Exception:
+    except (ManifestError, OSError, ValueError):
         return []
 
 
@@ -73,7 +73,7 @@ def _list_agent_workspaces(service: Any) -> list[tuple[str, str, str]]:
         return []
     try:
         snapshots = supervisor.list_agent_workspaces()
-    except Exception:
+    except Exception:  # intentional: external supervisor API, defensive fallback
         return []
     workspaces: list[tuple[str, str, str]] = []
     for snapshot in snapshots:
@@ -733,7 +733,7 @@ async def _get_active_flow_info(
                     return ActiveFlowInfo(flow_id=record.id, status="paused")
         finally:
             store.close()
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         _logger.debug("failed to query active flow info", exc_info=True)
     return None
 
@@ -798,7 +798,7 @@ async def handle_debug(
                 lines.append(f".codex-autorunner exists: {car_dir.exists()}")
                 flows_db = car_dir / "flows.db"
                 lines.append(f"flows.db exists: {flows_db.exists()}")
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             lines.append(f"Path resolution error: {exc}")
 
     outbox_items = await service._store.list_outbox()
@@ -911,7 +911,7 @@ async def _read_status_rate_limits(
         return None
     try:
         client = await service._client_for_workspace(workspace_path)
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         return None
     if client is None:
         return None
@@ -920,7 +920,7 @@ async def _read_status_rate_limits(
     for method in ("account/rateLimits/read", "account/read"):
         try:
             result = await client.request(method, params=None, timeout=5.0)
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             continue
         rate_limits = extract_rate_limits(result)
         if rate_limits:

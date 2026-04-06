@@ -132,7 +132,7 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
             seconds /= 1000.0
         try:
             return datetime.fromtimestamp(seconds, tz=timezone.utc)
-        except Exception:
+        except (ValueError, OverflowError, OSError):
             return None
     if isinstance(value, str):
         parsed = _parse_iso_timestamp(value)
@@ -140,7 +140,7 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
             return parsed
         try:
             return _coerce_datetime(float(value))
-        except Exception:
+        except (ValueError, OverflowError, OSError):
             return None
     return None
 

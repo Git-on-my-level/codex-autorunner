@@ -13,7 +13,7 @@ from ....core.diagnostics.process_snapshot import (
     collect_processes,
     enrich_with_ownership,
 )
-from ....core.git_utils import run_git
+from ....core.git_utils import GitError, run_git
 from ....core.managed_processes import list_process_records
 from ....core.runtime import (
     DoctorReport,
@@ -48,7 +48,7 @@ def _build_process_registry_payload(
     records: list[dict[str, Any]] = []
     try:
         process_records = list_process_records(repo_root)
-    except Exception as e:
+    except (OSError, json.JSONDecodeError, ValueError) as e:
         logger.debug("Failed to list process records: %s", e)
         process_records = []
 
@@ -56,7 +56,9 @@ def _build_process_registry_payload(
         record_key = "unknown"
         try:
             record_key = record.record_key()
-        except Exception as e:
+        except (
+            Exception
+        ) as e:  # intentional: record implementation may raise arbitrary errors
             logger.debug("Failed to get record key: %s", e)
         records.append(
             {
@@ -95,7 +97,7 @@ def _find_hub_server_process(port: Optional[int]) -> Optional[dict[str, Any]]:
             capture_output=True,
             text=True,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
         return None
@@ -159,7 +161,7 @@ def _repo_checkout_info(repo_root: Optional[Path]) -> Optional[dict[str, Any]]:
             check=False,
         )
         dirty = run_git(["status", "--porcelain"], repo_root, check=False)
-    except Exception:
+    except GitError:
         return None
     return {
         "root": str(repo_root),
@@ -192,7 +194,7 @@ def _doctor_versions_payload(start_path: Path) -> dict[str, Any]:
         import codex_autorunner
 
         package_path = str(Path(codex_autorunner.__file__).resolve())
-    except Exception:
+    except (ImportError, OSError):
         package_path = None
 
     site_packages: list[str] = []
@@ -200,13 +202,13 @@ def _doctor_versions_payload(start_path: Path) -> dict[str, Any]:
         for item in site.getsitepackages():
             if isinstance(item, str) and item not in site_packages:
                 site_packages.append(item)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.debug("Failed to get site packages: %s", e)
     try:
         user_site = site.getusersitepackages()
         if isinstance(user_site, str) and user_site not in site_packages:
             site_packages.append(user_site)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         logger.debug("Failed to get user site packages: %s", e)
 
     hub_server = None
@@ -221,7 +223,7 @@ def _doctor_versions_payload(start_path: Path) -> dict[str, Any]:
             source_matches_checkout = is_within(
                 root=repo_root, target=Path(package_path)
             )
-        except Exception:
+        except (OSError, ValueError):
             source_matches_checkout = None
 
     mismatch_detected = None

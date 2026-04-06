@@ -104,7 +104,7 @@ def register_describe_commands(
 
         try:
             data = collect_describe_data(repo_root, hub_root=hub)
-        except Exception as exc:
+        except Exception as exc:  # intentional: self-describe diagnostic error barrier
             raise_exit(f"Failed to collect describe data: {exc}", cause=exc)
 
         if json_output:

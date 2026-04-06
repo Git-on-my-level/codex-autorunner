@@ -49,7 +49,7 @@ async def _run_prune_loop(
             await asyncio.sleep(interval_seconds)
             try:
                 await supervisor.prune_idle()
-            except Exception as exc:
+            except (RuntimeError, OSError, ValueError, TypeError) as exc:
                 safe_log(logger, logging.WARNING, failure_message, exc)
     except asyncio.CancelledError:
         return
@@ -73,7 +73,7 @@ def _app_lifespan(context: AppContext):
                                 app.state.repo_to_session,
                                 app.state.terminal_max_idle_seconds,
                             )
-                    except Exception as exc:
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
@@ -108,7 +108,7 @@ def _app_lifespan(context: AppContext):
                                     filebox_summary.bytes_before,
                                     filebox_summary.bytes_after,
                                 )
-                        except Exception as exc:
+                        except (OSError, ValueError) as exc:
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
@@ -121,7 +121,7 @@ def _app_lifespan(context: AppContext):
                             app.state.engine.repo_root,
                             logger=app.state.logger,
                         )
-                    except Exception as exc:
+                    except (RuntimeError, OSError, ValueError, TypeError) as exc:
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
@@ -233,7 +233,7 @@ def _app_lifespan(context: AppContext):
                                                 repo_path=repo_path,
                                             )
                                         )
-                        except Exception as exc:
+                        except (KeyError, TypeError, AttributeError, ValueError) as exc:
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
@@ -257,7 +257,7 @@ def _app_lifespan(context: AppContext):
             for ws in list(app.state.active_websockets):
                 try:
                     await ws.close(code=1012)  # 1012 = Service Restart
-                except Exception as exc:
+                except (OSError, RuntimeError) as exc:
                     safe_log(
                         app.state.logger,
                         logging.DEBUG,
@@ -285,7 +285,7 @@ def _app_lifespan(context: AppContext):
             if runtime_services is not None:
                 try:
                     await runtime_services.close()
-                except Exception as exc:
+                except (OSError, RuntimeError) as exc:
                     safe_log(
                         app.state.logger,
                         logging.WARNING,
@@ -299,7 +299,7 @@ def _app_lifespan(context: AppContext):
                 if app_server_supervisor is not None:
                     try:
                         await app_server_supervisor.close_all()
-                    except Exception as exc:
+                    except (OSError, RuntimeError) as exc:
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
@@ -310,7 +310,7 @@ def _app_lifespan(context: AppContext):
                 if opencode_supervisor is not None:
                     try:
                         await opencode_supervisor.close_all()
-                    except Exception as exc:
+                    except (OSError, RuntimeError) as exc:
                         safe_log(
                             app.state.logger,
                             logging.WARNING,

@@ -76,7 +76,7 @@ def _read_pma_prompt_state_unlocked(path: Path) -> dict[str, Any]:
     try:
         raw = path.read_text(encoding="utf-8")
         data = json.loads(raw)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         _logger.warning("Could not read PMA prompt state: %s", exc)
         return _default_pma_prompt_state()
     return data if isinstance(data, dict) else _default_pma_prompt_state()

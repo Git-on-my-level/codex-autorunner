@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -171,7 +172,7 @@ class ChatRunMirror:
 
         try:
             self._append_jsonl(path, record)
-        except Exception as exc:
+        except (OSError, RuntimeError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -185,7 +186,7 @@ class ChatRunMirror:
 
         try:
             self._ensure_artifact(run_id_norm, direction, path)
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

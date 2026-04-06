@@ -706,7 +706,7 @@ def register_cleanup_commands(
             raise RuntimeError(
                 "Skipping global workspace cleanup: unable to load hub context for guard discovery; partial visibility could prune an active shared workspace."
             ) from exc
-        except Exception as exc:
+        except (OSError, ValueError, TypeError) as exc:
             raise RuntimeError(
                 "Skipping global workspace cleanup: unable to inspect hub manifest for guard discovery; partial visibility could prune an active shared workspace."
             ) from exc

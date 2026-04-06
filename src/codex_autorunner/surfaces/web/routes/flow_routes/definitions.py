@@ -88,7 +88,7 @@ def get_flow_controller(
         if controller is not None:
             try:
                 controller.initialize()
-            except Exception:
+            except Exception:  # intentional: cached controller re-init is best-effort
                 _logger.debug("Cached flow controller initialize failed", exc_info=True)
             return controller
 
@@ -119,7 +119,9 @@ def get_flow_record(
         if record is None:
             return None
         return _flow_run_record_payload(record)
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: store access may fail in many ways, triggers recovery
         recovered = recover_flow_store_if_possible(repo_root, "ticket_flow", state, exc)
         if not recovered:
             return None
@@ -131,5 +133,5 @@ def get_flow_record(
             if record is None:
                 return None
             return _flow_run_record_payload(record)
-        except Exception:
+        except Exception:  # intentional: post-recovery attempt, silent fallback
             return None

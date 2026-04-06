@@ -251,7 +251,7 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
             seconds /= 1000.0
         try:
             return datetime.fromtimestamp(seconds, tz=timezone.utc)
-        except Exception:
+        except (ValueError, OverflowError, OSError):
             return None
     if isinstance(value, str):
         text = value.strip()
@@ -259,10 +259,10 @@ def _coerce_datetime(value: Any) -> Optional[datetime]:
             return None
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except Exception:
+        except ValueError:
             try:
                 return _coerce_datetime(float(text))
-            except Exception:
+            except (ValueError, TypeError):
                 return None
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)

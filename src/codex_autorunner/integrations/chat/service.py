@@ -67,7 +67,7 @@ class ChatBotServiceCore:
                     removed=cleanup.removed,
                     skipped=cleanup.skipped,
                 )
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             log_event(
                 owner._logger,
                 logging.WARNING,
@@ -151,7 +151,7 @@ class ChatBotServiceCore:
             )
             try:
                 await owner._maybe_send_update_status_notice()
-            except Exception as exc:
+            except (RuntimeError, OSError, ValueError) as exc:
                 log_event(
                     owner._logger,
                     logging.WARNING,
@@ -160,7 +160,7 @@ class ChatBotServiceCore:
                 )
             try:
                 await owner._maybe_send_compact_status_notice()
-            except Exception as exc:
+            except (RuntimeError, OSError, ValueError) as exc:
                 log_event(
                     owner._logger,
                     logging.WARNING,
@@ -175,7 +175,12 @@ class ChatBotServiceCore:
                     )
                     if owner._poller.offset is not None:
                         await owner._record_poll_offset(updates)
-                except Exception as exc:
+                except (
+                    RuntimeError,
+                    ConnectionError,
+                    OSError,
+                    ValueError,
+                ) as exc:  # transient poll failure, retry immediately
                     log_event(
                         owner._logger,
                         logging.WARNING,
@@ -231,7 +236,7 @@ class ChatBotServiceCore:
             finally:
                 try:
                     await self._dispatcher.close()
-                except Exception as exc:
+                except (OSError, RuntimeError) as exc:
                     log_event(
                         owner._logger,
                         logging.WARNING,
@@ -240,7 +245,7 @@ class ChatBotServiceCore:
                     )
                 try:
                     await owner._bot.close()
-                except Exception as exc:
+                except (OSError, RuntimeError) as exc:
                     log_event(
                         owner._logger,
                         logging.WARNING,
@@ -249,7 +254,7 @@ class ChatBotServiceCore:
                     )
                 try:
                     await self._runtime_services.close()
-                except Exception as exc:
+                except (OSError, RuntimeError) as exc:
                     log_event(
                         owner._logger,
                         logging.WARNING,
@@ -258,7 +263,7 @@ class ChatBotServiceCore:
                     )
                 try:
                     await self._state_store.close()
-                except Exception as exc:
+                except (OSError, RuntimeError) as exc:
                     log_event(
                         owner._logger,
                         logging.WARNING,

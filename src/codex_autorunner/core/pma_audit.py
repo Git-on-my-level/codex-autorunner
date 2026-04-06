@@ -334,7 +334,7 @@ class PmaAuditLog:
                 ts = datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00"))
                 if ts.timestamp() >= cutoff and entry.fingerprint == fingerprint:
                     count += 1
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 continue
         return count
 
@@ -357,7 +357,7 @@ class PmaAuditLog:
             action_type = PmaActionType(str(row["action_type"]))
         except ValueError:
             action_type = PmaActionType.UNKNOWN
-        except Exception:
+        except (KeyError, TypeError):
             return None
         return PmaAuditEntry(
             action_type=action_type,

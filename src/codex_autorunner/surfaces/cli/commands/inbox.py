@@ -270,7 +270,12 @@ def register_inbox_commands(
                         timeout_seconds=10.0,
                     )
                     result_payload["resolved"].append(resolved.get("resolved"))
-                except Exception as exc:
+                except (
+                    httpx.HTTPError,
+                    httpx.ConnectError,
+                    httpx.TimeoutException,
+                    OSError,
+                ) as exc:
                     result_payload["errors"].append(
                         {
                             "repo_id": item.get("repo_id"),

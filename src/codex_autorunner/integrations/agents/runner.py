@@ -62,7 +62,9 @@ async def run_turn_with_backend(
                         log_handler(agent_event)
 
         return 0
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: backend protocol may raise arbitrary exceptions
         _logger.error("Turn execution failed: %s", exc)
         if event_callback:
             event_callback(Failed(timestamp=now_iso(), error_message=str(exc)))

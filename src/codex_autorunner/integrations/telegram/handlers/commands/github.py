@@ -188,7 +188,16 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 setup,
                 turn_context,
             )
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ConnectionError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            asyncio.TimeoutError,
+        ) as exc:
             await self._handle_codex_review_failure(
                 message,
                 exc,
@@ -414,9 +423,18 @@ class GitHubCommands(TelegramCommandSupportMixin):
             ):
                 return None
             return turn_context
-        except Exception:
+        except (
+            RuntimeError,
+            OSError,
+            ConnectionError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            asyncio.CancelledError,
+        ):  # intentional: cleanup + re-raise
             if turn_context.placeholder_id is not None:
-                with suppress(Exception):
+                with suppress(Exception):  # intentional: best-effort cleanup
                     await self._delete_message(
                         message.chat_id, turn_context.placeholder_id
                     )
@@ -711,7 +729,17 @@ class GitHubCommands(TelegramCommandSupportMixin):
             turn_context, output_result = await self._execute_opencode_review_turn(
                 message, runtime, record, setup
             )
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ConnectionError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            asyncio.TimeoutError,
+            httpx.HTTPError,
+        ) as exc:
             await self._handle_opencode_review_failure(
                 message,
                 setup,
@@ -760,7 +788,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
             return None
         try:
             opencode_client = await supervisor.get_client(workspace_root)
-        except Exception as exc:
+        except (httpx.HTTPError, ConnectionError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -782,7 +810,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 session = await opencode_client.create_session(
                     directory=str(workspace_root)
                 )
-            except Exception as exc:
+            except (httpx.HTTPError, ConnectionError, OSError, ValueError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -916,13 +944,13 @@ class GitHubCommands(TelegramCommandSupportMixin):
                 if turn_key is None or not self._register_turn_context(
                     turn_key, turn_id, ctx
                 ):
-                    with suppress(Exception):
+                    with suppress(Exception):  # intentional: best-effort cleanup
                         await harness.interrupt(
                             setup.workspace_root,
                             setup.review_session_id,
                             turn_id,
                         )
-                    with suppress(Exception):
+                    with suppress(Exception):  # intentional: best-effort cleanup
                         await harness.wait_for_turn(
                             setup.workspace_root,
                             setup.review_session_id,
@@ -1043,7 +1071,15 @@ class GitHubCommands(TelegramCommandSupportMixin):
                                     )
                     except asyncio.CancelledError:
                         raise
-                    except Exception:
+                    except (
+                        RuntimeError,
+                        OSError,
+                        ValueError,
+                        TypeError,
+                        KeyError,
+                        AttributeError,
+                        ConnectionError,
+                    ):  # intentional: best-effort progress streaming
                         self._logger.warning(
                             "Telegram OpenCode review progress pump failed",
                             exc_info=True,
@@ -1452,7 +1488,7 @@ class GitHubCommands(TelegramCommandSupportMixin):
                     "timeoutMs": 10000,
                 },
             )
-        except Exception as exc:
+        except (httpx.HTTPError, ConnectionError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1487,7 +1523,7 @@ def _format_opencode_exception(exc: Exception) -> Optional[str]:
         detail = None
         try:
             detail = extract_opencode_error_detail(exc.response.json())
-        except Exception:
+        except (ValueError, KeyError, TypeError):
             detail = None
         if detail:
             return f"OpenCode error: {format_public_error(detail)}"

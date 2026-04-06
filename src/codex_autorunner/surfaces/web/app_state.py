@@ -498,7 +498,9 @@ def build_app_context(
     else:
         try:
             voice_service = VoiceService(voice_config, logger=logger)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: optional voice feature, any init failure disables gracefully
             voice_service = None
             safe_log(
                 logger,
@@ -544,7 +546,7 @@ def build_app_context(
         )
         try:
             require_static_assets(static_dir, logger)
-        except Exception as exc:
+        except RuntimeError as exc:
             if static_context is not None:
                 static_context.close()
             safe_log(
@@ -562,7 +564,7 @@ def build_app_context(
             config.static_assets.max_cache_entries,
             config.static_assets.max_cache_age_days,
         )
-    except Exception as exc:
+    except (OSError, RuntimeError) as exc:
         if hub_config is None:
             raise
         hub_static = hub_config.static_assets
@@ -693,7 +695,7 @@ def build_hub_context(
             snapshots = supervisor.list_repos(use_cache=False)
             if not snapshots:
                 supervisor.scan()
-        except Exception as exc:
+        except Exception as exc:  # intentional: dev-mode bootstrap scan is best-effort
             safe_log(
                 logger,
                 logging.WARNING,
@@ -707,7 +709,7 @@ def build_hub_context(
     )
     try:
         ensure_hub_car_shim(config.root, python_executable=sys.executable)
-    except Exception as exc:
+    except OSError as exc:
         safe_log(
             logger,
             logging.WARNING,
@@ -753,7 +755,7 @@ def build_hub_context(
     )
     try:
         require_static_assets(static_dir, logger)
-    except Exception as exc:
+    except RuntimeError as exc:
         if static_context is not None:
             static_context.close()
         safe_log(

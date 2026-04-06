@@ -26,7 +26,7 @@ def build_opencode_supervisor_from_repo_config(
     opencode_binary = None
     try:
         opencode_binary = config.agent_binary("opencode")
-    except Exception:
+    except (ValueError, OSError, KeyError):
         opencode_binary = None
 
     if command_override is None:

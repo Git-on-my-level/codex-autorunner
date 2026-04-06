@@ -90,11 +90,11 @@ class TelegramStateStore:
     def __del__(self) -> None:
         try:
             self._close_sync()
-        except Exception:
+        except Exception:  # intentional: __del__ must not raise
             logger.debug("state.__del__: close failed", exc_info=True)
         try:
             self._executor.shutdown(wait=False)
-        except Exception:
+        except Exception:  # intentional: __del__ must not raise
             logger.debug("state.__del__: executor shutdown failed", exc_info=True)
 
     async def load(self) -> TelegramState:
@@ -119,7 +119,7 @@ class TelegramStateStore:
                 payload = (
                     json.loads(payload_json) if isinstance(payload_json, str) else {}
                 )
-            except Exception as exc:
+            except (json.JSONDecodeError, ValueError) as exc:
                 logger.warning("Failed to parse topic JSON for key %s: %s", key, exc)
                 payload = {}
             record = TelegramTopicRecord.from_dict(

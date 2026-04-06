@@ -431,7 +431,11 @@ def build_scm_webhook_routes(
                 correlation_id=correlation_id,
                 event=persisted,
             )
-        except Exception:  # pragma: no cover - defensive logging
+        except (
+            OSError,
+            ValueError,
+            sqlite3.Error,
+        ):  # pragma: no cover - defensive audit logging
             logger = getattr(request.app.state, "logger", None)
             if isinstance(logger, logging.Logger):
                 logger.warning(
@@ -448,7 +452,9 @@ def build_scm_webhook_routes(
                     route_callback=drain_callback,
                 )
                 drained_inline = True
-            except Exception as exc:  # pragma: no cover - defensive logging
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - intentional: drain callback exception types unknown
                 logger = getattr(request.app.state, "logger", None)
                 if isinstance(logger, logging.Logger):
                     logger.warning(

@@ -156,7 +156,7 @@ def build_status_history_routes(
                 ):
                     data = event.model_dump(mode="json")
                     yield f"id: {event.seq}\ndata: {json.dumps(data)}\n\n"
-            except Exception as e:
+            except Exception as e:  # intentional: SSE generator, log and propagate
                 _logger.exception("Error streaming events for run %s: %s", run_id, e)
                 raise
 
@@ -208,7 +208,7 @@ def build_status_history_routes(
                     dispatch_dict["is_handoff"] = dispatch.is_handoff
                     try:
                         entry_seq_int = int(entry.name)
-                    except Exception:
+                    except (ValueError, TypeError):
                         entry_seq_int = 0
                     if entry_seq_int and entry_seq_int in diff_by_seq:
                         dispatch_dict["diff_stats"] = diff_by_seq[entry_seq_int]
@@ -314,7 +314,7 @@ def build_status_history_routes(
         finally:
             try:
                 store.close()
-            except Exception:
+            except (OSError, RuntimeError):
                 _logger.debug(
                     "Failed to close flow store in reply history", exc_info=True
                 )

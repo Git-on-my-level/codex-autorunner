@@ -145,7 +145,7 @@ def build_history_files_docs_router(
 
         try:
             return await asyncio.to_thread(_write)
-        except Exception:
+        except Exception:  # intentional: top-level error handler
             logger.exception("Failed to write PMA doc history for %s", doc_name)
             return None
 
@@ -241,7 +241,7 @@ def build_history_files_docs_router(
                 else:
                     content = file if isinstance(file, bytes) else str(file).encode()
                     filename = ""
-            except Exception as exc:
+            except (OSError, UnicodeError, TypeError) as exc:
                 logger.warning("Failed to read PMA upload: %s", exc)
                 raise HTTPException(
                     status_code=400, detail="Failed to read file"
@@ -273,7 +273,7 @@ def build_history_files_docs_router(
             except ValueError as exc:
                 logger.warning("Invalid PMA upload target: %s (%s)", filename, exc)
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
-            except Exception as exc:
+            except OSError as exc:
                 logger.warning("Failed to write PMA file: %s", exc)
                 raise HTTPException(
                     status_code=500, detail="Failed to save file"
@@ -326,7 +326,7 @@ def build_history_files_docs_router(
         except FileNotFoundError:
             logger.warning("File not found in PMA delete: %s", filename)
             raise HTTPException(status_code=404, detail="File not found") from None
-        except Exception as exc:
+        except OSError as exc:
             logger.warning("Failed to delete PMA file: %s", exc)
             raise HTTPException(
                 status_code=500, detail="Failed to delete file"
@@ -369,7 +369,7 @@ def build_history_files_docs_router(
         hub_root = request.app.state.config.root
         try:
             await asyncio.to_thread(ensure_pma_docs, hub_root)
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
             ) from exc
@@ -381,7 +381,7 @@ def build_history_files_docs_router(
         docs_dir = _pma_docs_dir(hub_root)
         try:
             await asyncio.to_thread(docs_dir.mkdir, parents=True, exist_ok=True)
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to prepare PMA docs directory: {exc}"
             ) from exc
@@ -396,7 +396,7 @@ def build_history_files_docs_router(
             active_content = await asyncio.to_thread(
                 active_context_path.read_text, encoding="utf-8"
             )
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to read active_context.md: {exc}"
             ) from exc
@@ -415,7 +415,7 @@ def build_history_files_docs_router(
 
         try:
             await _append_text_file(context_log_path, snapshot_content)
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to append context_log.md: {exc}"
             ) from exc
@@ -425,7 +425,7 @@ def build_history_files_docs_router(
                 await _atomic_write_async(
                     active_context_path, pma_active_context_content()
                 )
-            except Exception as exc:
+            except OSError as exc:
                 raise HTTPException(
                     status_code=500, detail=f"Failed to reset active_context.md: {exc}"
                 ) from exc
@@ -445,7 +445,7 @@ def build_history_files_docs_router(
                     "context_log.md is large "
                     f"({context_log_bytes} bytes); consider pruning"
                 )
-        except Exception:
+        except OSError:
             logger.debug("Failed to stat context_log.md", exc_info=True)
 
         return response
@@ -481,7 +481,7 @@ def build_history_files_docs_router(
         hub_root = request.app.state.config.root
         try:
             ensure_pma_docs(hub_root)
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to ensure PMA docs: {exc}"
             ) from exc
@@ -502,7 +502,7 @@ def build_history_files_docs_router(
                         entry["line_count"] = len(
                             doc_path.read_text(encoding="utf-8").splitlines()
                         )
-                    except Exception:
+                    except OSError:
                         entry["line_count"] = 0
             else:
                 entry["exists"] = False
@@ -524,7 +524,7 @@ def build_history_files_docs_router(
             raise HTTPException(status_code=404, detail=f"Doc not found: {name}")
         try:
             content = doc_path.read_text(encoding="utf-8")
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to read doc: {exc}"
             ) from exc
@@ -551,7 +551,7 @@ def build_history_files_docs_router(
         doc_path = docs_dir / name
         try:
             await _atomic_write_async(doc_path, content)
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to write doc: {exc}"
             ) from exc
@@ -617,7 +617,7 @@ def build_history_files_docs_router(
             raise HTTPException(status_code=404, detail="History entry not found")
         try:
             content = history_path.read_text(encoding="utf-8")
-        except Exception as exc:
+        except OSError as exc:
             raise HTTPException(
                 status_code=500, detail=f"Failed to read history entry: {exc}"
             ) from exc

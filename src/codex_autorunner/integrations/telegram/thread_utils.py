@@ -263,7 +263,7 @@ def _path_within(*, root: Path, target: Path) -> bool:
     try:
         root = canonicalize_path(root)
         target = canonicalize_path(target)
-    except Exception:
+    except (OSError, ValueError):
         return False
     return is_within(root=root, target=target)
 
@@ -314,7 +314,7 @@ def _partition_threads(
         saw_path = True
         try:
             candidate = Path(cwd).expanduser().resolve()
-        except Exception:
+        except (OSError, ValueError):
             continue
         if _paths_compatible(workspace, candidate):
             filtered.append(entry)
@@ -338,7 +338,7 @@ def _local_workspace_threads(
     workspace_root: Optional[Path] = None
     try:
         workspace_root = Path(workspace_key).expanduser().resolve()
-    except Exception:
+    except (OSError, ValueError):
         workspace_root = None
 
     def matches(candidate_path: Optional[str]) -> bool:
@@ -348,7 +348,7 @@ def _local_workspace_threads(
         if workspace_root is not None:
             try:
                 candidate_root = Path(candidate_path).expanduser().resolve()
-            except Exception:
+            except (OSError, ValueError):
                 return False
             return _paths_compatible(workspace_root, candidate_root)
         return candidate_path == workspace_key

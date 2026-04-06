@@ -222,7 +222,7 @@ def _validate_ticket_lint_retry(
             from ..agents.registry import validate_agent_id
 
             agent_id = validate_agent_id(agent_id, workspace_root)
-        except Exception as exc:
+        except (ImportError, ValueError) as exc:
             return TicketValidationResult(
                 status="paused",
                 pause_reason=f"Cannot determine valid agent during lint retry for {safe_relpath(ticket_path, workspace_root)}: {exc}",

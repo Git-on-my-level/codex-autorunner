@@ -51,7 +51,9 @@ async def _run_with_typing_indicator(
         try:
             await begin(chat_id, thread_id)
             began = True
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: typing indicator is best-effort; API errors must not disrupt message handling
             log_event(
                 handlers._logger,
                 logging.DEBUG,
@@ -66,7 +68,9 @@ async def _run_with_typing_indicator(
         if began and callable(end):
             try:
                 await end(chat_id, thread_id)
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: typing indicator is best-effort; API errors must not disrupt message handling
                 log_event(
                     handlers._logger,
                     logging.DEBUG,
@@ -133,7 +137,7 @@ def _log_denied(handlers: Any, update: TelegramUpdate) -> None:
     if chat_id is not None:
         try:
             conversation_id = topic_key(chat_id, thread_id)
-        except Exception:
+        except (ValueError, TypeError):
             conversation_id = None
     log_event(
         handlers._logger,
@@ -253,7 +257,7 @@ async def dispatch_update(handlers: Any, update: TelegramUpdate) -> None:
     if context.chat_id is not None:
         try:
             conversation_id = topic_key(context.chat_id, context.thread_id)
-        except Exception:
+        except (ValueError, TypeError):
             conversation_id = None
     token = set_conversation_id(conversation_id)
     try:

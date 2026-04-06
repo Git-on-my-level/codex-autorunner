@@ -43,7 +43,7 @@ class FlowStore:
             # Ensure parent directory exists so sqlite can create/open file.
             try:
                 self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
+            except OSError:
                 # Let sqlite raise a clearer error below if directory creation failed.
                 pass
             self._local.conn = sqlite3.connect(
@@ -62,7 +62,7 @@ class FlowStore:
             conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
-        except Exception:
+        except Exception:  # intentional: rollback on any error, then re-raise
             conn.rollback()
             raise
 
@@ -389,7 +389,7 @@ class FlowStore:
                 return None
             try:
                 metadata = json.loads(existing["metadata"] or "{}")
-            except Exception:
+            except (json.JSONDecodeError, TypeError):
                 metadata = {}
             metadata = dict(metadata)
             metadata["superseded_by"] = superseded_by
@@ -593,7 +593,7 @@ class FlowStore:
         for row in rows:
             try:
                 data = json.loads(row["data"] or "{}")
-            except Exception:
+            except (json.JSONDecodeError, TypeError):
                 data = {}
             current_ticket = data.get("current_ticket")
             if isinstance(current_ticket, str) and current_ticket.strip():

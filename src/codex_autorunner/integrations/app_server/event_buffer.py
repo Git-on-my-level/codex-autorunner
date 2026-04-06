@@ -223,13 +223,13 @@ class AppServerEventBuffer:
             return
         try:
             lines = formatter.format_event(message)
-        except Exception:
+        except Exception:  # intentional: user-supplied formatter callback
             LOGGER.warning("Failed to format app server event log line.", exc_info=True)
             return
         for line in lines:
             try:
                 emit(line)
-            except Exception:
+            except Exception:  # intentional: user-supplied emit callback
                 LOGGER.warning(
                     "Failed to emit app server event log line.",
                     exc_info=True,

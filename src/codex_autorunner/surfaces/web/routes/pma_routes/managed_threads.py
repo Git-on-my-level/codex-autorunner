@@ -237,7 +237,7 @@ def _chat_binding_defaults() -> dict[str, Any]:
 def _load_chat_binding_metadata_by_thread(hub_root: Path) -> dict[str, dict[str, Any]]:
     try:
         return active_chat_binding_metadata_by_thread(hub_root=hub_root)
-    except Exception as exc:
+    except Exception as exc:  # intentional: non-critical metadata load
         _logger.warning(
             "Could not load PMA chat-binding metadata for thread response: %s", exc
         )
@@ -662,14 +662,14 @@ def build_managed_thread_crud_routes(
         if callable(profile_getter):
             try:
                 available_profiles = profile_getter(agent_id) or {}
-            except Exception:
+            except (ValueError, TypeError):
                 available_profiles = {}
         if requested_profile is None and callable(default_profile_getter):
             try:
                 requested_profile = normalize_optional_text(
                     default_profile_getter(agent_id)
                 )
-            except Exception:
+            except (ValueError, TypeError):
                 requested_profile = None
         valid_profiles = set(available_profiles.keys())
         if agent_id == "hermes":
@@ -680,7 +680,7 @@ def build_managed_thread_crud_routes(
                     opt.profile
                     for opt in chat_hermes_profile_options(request.app.state)
                 }
-            except Exception:
+            except Exception:  # intentional: optional hermes integration
                 _logger.debug(
                     "Failed to resolve hermes profile options for managed thread",
                     exc_info=True,

@@ -101,7 +101,9 @@ class CircuitBreaker:
 
         try:
             yield
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: circuit breaker must intercept all caller exceptions
             if should_record_failure is None or should_record_failure(exc):
                 self._logger.debug(
                     "Exception caught by circuit breaker for %s: %s",

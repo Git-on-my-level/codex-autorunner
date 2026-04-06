@@ -559,7 +559,7 @@ class ChatDispatcher:
                     lambda task: self._log_background_handler_failure(task, context)
                 )
             raise
-        except Exception as exc:
+        except Exception as exc:  # intentional: top-level handler fault barrier
             log_event(
                 self._logger,
                 logging.ERROR,
@@ -592,7 +592,7 @@ class ChatDispatcher:
         if queue:
             try:
                 queued_context = queue[0][1]
-            except Exception:
+            except IndexError:
                 queued_context = None
         context = active_context or queued_context
         return {

@@ -63,7 +63,7 @@ def discover_and_init(hub_config: HubConfig) -> Tuple[Manifest, List[DiscoveryRe
             try:
                 seed_repo_files(repo_path, force=False, git_required=False)
                 initialized = True
-            except Exception as exc:  # pragma: no cover - defensive guard
+            except (OSError, ValueError) as exc:  # pragma: no cover - defensive guard
                 init_error = str(exc)
 
         records.append(

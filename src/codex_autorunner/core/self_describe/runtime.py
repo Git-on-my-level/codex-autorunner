@@ -40,7 +40,7 @@ SECRET_KEY_PATTERNS = [
 def get_car_version() -> str:
     try:
         return importlib.metadata.version("codex-autorunner")
-    except Exception:
+    except importlib.metadata.PackageNotFoundError:
         return "unknown"
 
 
@@ -120,7 +120,7 @@ def _collect_template_info(
             if hub_root is not None
             else load_hub_config(repo_root)
         )
-    except Exception:
+    except (ValueError, OSError):
         return {
             "enabled": False,
             "root": None,
@@ -148,7 +148,7 @@ def _collect_template_info(
     try:
         hub_root = hub_config.root
         templates_root = resolve_hub_templates_root(hub_root)
-    except Exception:
+    except (ValueError, OSError):
         templates_root = None
 
     repos = []
@@ -170,7 +170,7 @@ def _collect_template_info(
         try:
             templates = index_templates(hub_config, hub_config.root)
             template_count = len(templates)
-        except Exception as e:
+        except (ValueError, OSError) as e:
             logger.debug("Failed to index templates: %s", e)
 
     return {

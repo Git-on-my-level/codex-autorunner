@@ -96,7 +96,7 @@ def _run_probe(
         )
     except FileNotFoundError:
         return _ProbeResult(output="", returncode=None, missing_binary=True)
-    except Exception as exc:  # noqa: BLE001
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         return _ProbeResult(output=str(exc), returncode=None)
     return _ProbeResult(
         output="\n".join(
@@ -365,7 +365,7 @@ def preflight_agent_workspace_runtime(
 
     try:
         binary = config.agent_binary(runtime_id).strip()
-    except Exception:
+    except Exception:  # intentional: config.agent_binary may raise from unknown impl
         binary = ""
     if not binary:
         return RuntimePreflightResult(

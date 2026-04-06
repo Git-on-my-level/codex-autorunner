@@ -258,7 +258,7 @@ class TelegramCommandHandlers(
             return workspace_cache[cache_key]
         try:
             payload = await opencode_client.providers(directory=str(workspace_root))
-        except Exception:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError):
             return None
         providers: list[dict[str, Any]] = []
         if isinstance(payload, dict):
@@ -602,7 +602,13 @@ class TelegramCommandHandlers(
                     stop_outcome = await orchestration_service.stop_thread(
                         current_thread.thread_target_id
                     )
-                except Exception as exc:
+                except (
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    ConnectionError,
+                ) as exc:
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -832,7 +838,7 @@ class TelegramCommandHandlers(
         if record.workspace_path:
             try:
                 canonical_path = str(Path(record.workspace_path).expanduser().resolve())
-            except Exception:
+            except OSError:
                 canonical_path = "invalid"
         lines.extend(
             [
@@ -1025,7 +1031,13 @@ class TelegramCommandHandlers(
                     reply_to=message.message_id,
                 )
                 return
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                ConnectionError,
+            ) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1112,7 +1124,13 @@ class TelegramCommandHandlers(
                         reply_to=message.message_id,
                     )
                     return
-                except Exception as exc:
+                except (
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    ConnectionError,
+                ) as exc:
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -1210,7 +1228,13 @@ class TelegramCommandHandlers(
                     reply_to=message.message_id,
                 )
                 return
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                ConnectionError,
+            ) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1532,7 +1556,7 @@ class TelegramCommandHandlers(
                 "skills/list",
                 {"cwds": [record.workspace_path], "forceReload": False},
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1578,7 +1602,7 @@ class TelegramCommandHandlers(
                     "timeoutMs": 10000,
                 },
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1611,7 +1635,7 @@ class TelegramCommandHandlers(
                 "mcpServerStatus/list",
                 {"cursor": None, "limit": DEFAULT_MCP_LIST_LIMIT},
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1658,7 +1682,7 @@ class TelegramCommandHandlers(
         async def _read_explicit_config_features() -> Optional[str]:
             try:
                 result = await client.request("config/read", {"includeLayers": False})
-            except Exception:
+            except (RuntimeError, OSError, ValueError, TypeError, ConnectionError):
                 return None
             return _format_feature_flags(result)
 
@@ -1677,7 +1701,13 @@ class TelegramCommandHandlers(
                         "timeoutMs": 10000,
                     },
                 )
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                ConnectionError,
+            ) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1794,7 +1824,7 @@ class TelegramCommandHandlers(
                 "config/value/write",
                 {"keyPath": key_path, "value": value, "mergeStrategy": "replace"},
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1911,7 +1941,7 @@ class TelegramCommandHandlers(
                 workspace_path,
                 **self._thread_start_kwargs(record),
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2081,7 +2111,7 @@ class TelegramCommandHandlers(
                     reply_to=callback.message_id,
                 )
                 return True
-            except Exception:
+            except (RuntimeError, OSError, TypeError, ValueError):
                 await self._send_message(
                     callback.chat_id, text, thread_id=callback.thread_id
                 )
@@ -2249,7 +2279,7 @@ Summary applied.""",
         rollout_path = None
         try:
             result = await client.thread_resume(record.active_thread_id)
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2278,7 +2308,13 @@ Summary applied.""",
                     max_pages=THREAD_LIST_MAX_PAGES,
                     needed_ids={record.active_thread_id},
                 )
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                ConnectionError,
+            ) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -2394,7 +2430,7 @@ Summary applied.""",
                 repo_ref=repo_ref,
                 update_target=update_target,
             )
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2543,7 +2579,7 @@ Summary applied.""",
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, json.JSONDecodeError, ValueError):
             return None
         return data if isinstance(data, dict) else None
 
@@ -2618,7 +2654,7 @@ Summary applied.""",
             return None
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, json.JSONDecodeError, ValueError):
             return None
         return data if isinstance(data, dict) else None
 
@@ -2635,7 +2671,7 @@ Summary applied.""",
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(payload), encoding="utf-8")
-        except Exception as exc:
+        except (OSError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2650,7 +2686,7 @@ Summary applied.""",
         updated["notify_sent_at"] = time.time()
         try:
             path.write_text(json.dumps(updated), encoding="utf-8")
-        except Exception as exc:
+        except (OSError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2707,11 +2743,11 @@ Summary applied.""",
                     chat_id, message, thread_id=thread_id, reply_to=message_id
                 )
                 sent = True
-            except Exception:
+            except (RuntimeError, OSError, TypeError, ValueError):
                 try:
                     await self._send_message(chat_id, message, thread_id=thread_id)
                     sent = True
-                except Exception:
+                except (RuntimeError, OSError, TypeError, ValueError):
                     sent = False
         if sent:
             self._mark_compact_notified(status)
@@ -2781,7 +2817,7 @@ Summary applied.""",
             return
         try:
             await client.request("account/logout", params=None)
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2850,7 +2886,7 @@ Summary applied.""",
             params["threadId"] = record.active_thread_id
         try:
             result = await client.request("feedback/upload", params)
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

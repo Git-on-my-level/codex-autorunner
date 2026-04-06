@@ -90,5 +90,7 @@ def build_pma_meta_routes(
             return _serialize_model_catalog(await harness.model_catalog(hub_root))
         except RuntimeError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: agent harness/model_catalog errors are unpredictable
             raise HTTPException(status_code=502, detail=str(exc)) from exc

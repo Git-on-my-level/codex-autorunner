@@ -59,11 +59,11 @@ class DiscordStateStore:
         # Best-effort cleanup when callers forget to await close().
         try:
             self._close_sync()
-        except Exception:
+        except Exception:  # intentional: __del__ must never raise
             _logger.debug("close_sync failed in __del__", exc_info=True)
         try:
             self._executor.shutdown(wait=False)
-        except Exception:
+        except Exception:  # intentional: __del__ must never raise
             _logger.debug("executor shutdown failed in __del__", exc_info=True)
 
     async def upsert_binding(

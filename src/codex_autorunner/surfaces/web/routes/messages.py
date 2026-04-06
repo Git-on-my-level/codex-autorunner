@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -250,7 +251,7 @@ def build_messages_routes() -> APIRouter:
                 paused = store.list_flow_runs(
                     flow_type="ticket_flow", status=FlowRunStatus.PAUSED
                 )
-        except Exception:
+        except (sqlite3.Error, OSError, ValueError, KeyError):
             # Corrupt flows db should not 500 the UI.
             return {"active": False}
         if not paused:
@@ -291,7 +292,7 @@ def build_messages_routes() -> APIRouter:
         try:
             with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
                 runs = store.list_flow_runs(flow_type="ticket_flow")
-        except Exception:
+        except (sqlite3.Error, OSError, ValueError, KeyError):
             return {"conversations": []}
 
         conversations: list[dict[str, Any]] = []
@@ -349,7 +350,7 @@ def build_messages_routes() -> APIRouter:
         try:
             with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
                 record = store.get_flow_run(run_id)
-        except Exception:
+        except (sqlite3.Error, OSError, ValueError, KeyError):
             raise HTTPException(
                 status_code=404, detail="Flows database unavailable"
             ) from None
@@ -404,7 +405,7 @@ def build_messages_routes() -> APIRouter:
         try:
             with FlowStore(db_path, durable=_get_durable_writes(repo_root)) as store:
                 record = store.get_flow_run(run_id)
-        except Exception:
+        except (sqlite3.Error, OSError, ValueError, KeyError):
             raise HTTPException(
                 status_code=404, detail="Flows database unavailable"
             ) from None
@@ -449,7 +450,7 @@ def build_messages_routes() -> APIRouter:
                 try:
                     ensure_structure(repo_root)
                     save_file(repo_root, "inbox", filename, data)
-                except Exception:
+                except (OSError, ValueError):
                     _logger.debug(
                         "Failed to mirror attachment into FileBox", exc_info=True
                     )

@@ -53,7 +53,7 @@ def _resolve_repo_root(request: Request) -> Path:
     if isinstance(repo_root, str):
         try:
             return Path(repo_root)
-        except Exception:
+        except (TypeError, ValueError):
             logger.debug("Failed to convert repo_root string to Path", exc_info=True)
     return find_repo_root()
 
@@ -69,7 +69,7 @@ async def _upload_files_to_box(
             continue
         try:
             data = await file.read()
-        except Exception as exc:  # pragma: no cover - defensive
+        except OSError as exc:
             logger.warning("Failed to read upload: %s", exc)
             continue
         try:

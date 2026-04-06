@@ -1,9 +1,12 @@
 import json
 import shlex
+import sqlite3
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Optional, cast
 from urllib.parse import urlencode
 
+import httpx
 import typer
 import uvicorn
 
@@ -666,7 +669,12 @@ def register_hub_commands(
                 display_name=display_name,
                 enabled=enabled,
             )
-        except Exception as exc:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            ValueError,
+        ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
         payload = _agent_workspace_payload(config, supervisor, snapshot.id)
         if output_json:
@@ -701,7 +709,12 @@ def register_hub_commands(
                 enabled=enabled,
                 display_name=display_name,
             )
-        except Exception as exc:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            ValueError,
+        ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
         payload = _agent_workspace_payload(config, supervisor, workspace_id)
         if output_json:
@@ -730,7 +743,12 @@ def register_hub_commands(
         supervisor = build_supervisor(config)
         try:
             supervisor.remove_agent_workspace(workspace_id, delete_dir=delete_files)
-        except Exception as exc:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            ValueError,
+        ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
         payload = {
             "status": "ok",
@@ -825,7 +843,12 @@ def register_hub_commands(
             supervisor.set_agent_workspace_destination(
                 workspace_id, normalized_destination
             )
-        except Exception as exc:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            ValueError,
+        ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
         payload = _agent_workspace_payload(config, supervisor, workspace_id)
         if output_json:
@@ -855,7 +878,7 @@ def register_hub_commands(
         try:
             with open_orchestration_sqlite(config.root, migrate=False) as conn:
                 summary = verify_migration(config.root, conn)
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:  # intentional: top-level error handler
             raise_exit(f"Migration verification failed: {exc}", cause=exc)
         if output_json:
             typer.echo(json.dumps(summary.to_dict(), indent=2))
@@ -940,7 +963,7 @@ def register_hub_commands(
                         f"SELECT COUNT(*) as cnt FROM {table_name}"
                     ).fetchone()
                     table_counts[table_name] = int(cnt["cnt"]) if cnt else 0
-        except Exception as exc:
+        except (sqlite3.Error, OSError) as exc:  # intentional: top-level error handler
             raise_exit(f"Failed to read orchestration state: {exc}", cause=exc)
         legacy_status = {
             "threads_db": (config.root / LEGACY_PMA_THREADS_DB_PATH).exists(),
@@ -997,7 +1020,12 @@ def register_hub_commands(
             snapshot = supervisor.create_repo(
                 repo_id, repo_path, git_init=git_init, force=force
             )
-        except Exception as exc:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            ValueError,
+        ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
         typer.echo(f"Created repo {snapshot.id} at {snapshot.path}")
 
@@ -1024,7 +1052,12 @@ def register_hub_commands(
             snapshot = supervisor.clone_repo(
                 git_url=git_url, repo_id=repo_id, repo_path=repo_path, force=force
             )
-        except Exception as exc:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            ValueError,
+        ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
         typer.echo(
             f"Cloned repo {snapshot.id} at {snapshot.path} (status={snapshot.status.value})"
@@ -1114,7 +1147,12 @@ def register_hub_commands(
         supervisor = build_supervisor(config)
         try:
             result = supervisor.cleanup_all(dry_run=dry_run)
-        except Exception as exc:
+        except (
+            OSError,
+            subprocess.SubprocessError,
+            RuntimeError,
+            ValueError,
+        ) as exc:  # intentional: top-level error handler
             raise_exit(str(exc), cause=exc)
         if output_json:
             indent = 2 if pretty else None
@@ -1193,7 +1231,7 @@ def register_hub_commands(
                 return None
             try:
                 payload = json.loads(artifact_path.read_text(encoding="utf-8"))
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 return None
             return payload if isinstance(payload, dict) else None
 
@@ -1253,7 +1291,13 @@ def register_hub_commands(
                     token_env=config.server_auth_token_env,
                     timeout_seconds=timeout_seconds,
                 )
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                httpx.HTTPError,
+            ) as exc:  # intentional: best-effort
                 fetch_errors.append(
                     {
                         "target": "repos",
@@ -1270,7 +1314,13 @@ def register_hub_commands(
                     token_env=config.server_auth_token_env,
                     timeout_seconds=timeout_seconds,
                 )
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                httpx.HTTPError,
+            ) as exc:  # intentional: best-effort
                 artifact_fallback = (
                     _read_pma_threads_artifact(config.root)
                     if requested_sections == ["pma_threads"]

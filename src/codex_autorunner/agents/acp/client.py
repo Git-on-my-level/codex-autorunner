@@ -357,7 +357,7 @@ class ACPClient:
                     "params": dict(params or {}),
                 }
             )
-        except Exception:
+        except (ACPTransportError, OSError):
             self._pending.pop(request_id, None)
             self._pending_methods.pop(request_id, None)
             raise
@@ -716,7 +716,9 @@ class ACPClient:
                 decision = await self._permission_handler(event)
             except asyncio.CancelledError:
                 decision = "cancel"
-            except Exception:
+            except (
+                Exception
+            ):  # intentional: user-provided permission handler is arbitrary code
                 decision = "cancel"
         await self._write_message(
             {
@@ -788,7 +790,7 @@ class ACPClient:
             task.result()
         except asyncio.CancelledError:
             return
-        except Exception:
+        except Exception:  # intentional: catch-all logging for background task failures
             self._logger.exception("Unhandled ACP background task failure")
 
     def _consume_transport_task_result(self, task: asyncio.Task[Any]) -> None:
@@ -798,7 +800,9 @@ class ACPClient:
             return
         except ACPError:
             return
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: catch-all logging for transport task failures during shutdown
             self._logger.debug(
                 "Unhandled ACP transport task failure during shutdown",
                 exc_info=True,
@@ -892,7 +896,7 @@ class ACPClient:
                     "prompt": [{"type": "text", "text": prompt}],
                 },
             )
-        except Exception as exc:
+        except (ACPError, asyncio.TimeoutError) as exc:
             self._session_active_turns.pop(state.session_id, None)
             if not state.future.done():
                 state.future.set_exception(exc)

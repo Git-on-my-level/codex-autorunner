@@ -332,7 +332,7 @@ def _path_within(*, root: Path, target: Path) -> bool:
     try:
         root = canonicalize_path(root)
         target = canonicalize_path(target)
-    except Exception:
+    except (OSError, ValueError, RuntimeError):
         return False
     return is_within(root=root, target=target)
 
@@ -608,7 +608,7 @@ class DiscordBotService:
                     raw_config=load_hub_config(self._config.root).raw,
                 ),
             )
-        except Exception as exc:
+        except (ConfigError, OSError, ValueError, ImportError, RuntimeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -684,7 +684,7 @@ class DiscordBotService:
             )
             try:
                 await self._update_status_notifier.maybe_send_notice()
-            except Exception as exc:
+            except Exception as exc:  # intentional: top-level error handler
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -693,9 +693,9 @@ class DiscordBotService:
                 )
             await self._gateway.run(self._on_dispatch)
         finally:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._dispatcher.wait_idle()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._dispatcher.close()
             dispatcher_loop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -974,7 +974,7 @@ class DiscordBotService:
                 self._queued_notice_messages[
                     (dispatch_result.context.conversation_id, source_message_id)
                 ] = notice_message_id
-        except Exception:
+        except (DiscordAPIError, OSError, TypeError, ValueError):
             await self._send_channel_message_safe(
                 channel_id,
                 {"content": format_discord_message(DISCORD_QUEUED_PLACEHOLDER_TEXT)},
@@ -1030,7 +1030,7 @@ class DiscordBotService:
             while True:
                 try:
                     await trigger_typing(channel_id=channel_id)
-                except Exception as exc:
+                except (DiscordAPIError, OSError) as exc:
                     log_event(
                         self._logger,
                         logging.DEBUG,
@@ -1060,7 +1060,7 @@ class DiscordBotService:
             typing_coro = self._typing_indicator_loop(channel_id)
             try:
                 self._typing_tasks[channel_id] = self._spawn_task(typing_coro)
-            except Exception:
+            except (RuntimeError, TypeError):
                 typing_coro.close()
                 count = self._typing_sessions.get(channel_id, 0)
                 if count <= 1:
@@ -1099,7 +1099,7 @@ class DiscordBotService:
         try:
             await self._begin_typing_indicator(channel_id)
             began = True
-        except Exception as exc:
+        except (RuntimeError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.DEBUG,
@@ -1113,7 +1113,7 @@ class DiscordBotService:
             if began:
                 try:
                     await self._end_typing_indicator(channel_id)
-                except Exception as exc:
+                except (RuntimeError, TypeError) as exc:
                     log_event(
                         self._logger,
                         logging.DEBUG,
@@ -1262,7 +1262,7 @@ class DiscordBotService:
                 channel_id=event.reply_to.thread.chat_id,
                 message_id=event.reply_to.message_id,
             )
-        except Exception as exc:
+        except (DiscordAPIError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.DEBUG,
@@ -1321,7 +1321,7 @@ class DiscordBotService:
             )
             voice_config = VoiceConfig.from_raw(repo_config.voice, env=workspace_env)
             self._voice_configs_by_workspace[resolved_root] = voice_config
-        except Exception as exc:
+        except (ConfigError, OSError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1342,7 +1342,7 @@ class DiscordBotService:
                 logger=self._logger,
                 env=workspace_env,
             )
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1457,7 +1457,9 @@ class DiscordBotService:
             if isinstance(detail, str) and detail.strip():
                 return None, detail.strip()
             return None, f"Voice transcript unavailable ({exc.reason})."
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: transcribe can fail in unpredictable ways
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1558,7 +1560,7 @@ class DiscordBotService:
                         transcript_warning=transcript_warning,
                     )
                 )
-            except Exception as exc:
+            except (DiscordAPIError, OSError, RuntimeError, ValueError) as exc:
                 failed += 1
                 log_event(
                     self._logger,
@@ -1611,7 +1613,7 @@ class DiscordBotService:
             )
             provider_name = ""
             if voice_service is not None:
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(RuntimeError, AttributeError, ValueError):
                     provider_name = voice_service.effective_provider_name()
             if (
                 not provider_name
@@ -1718,12 +1720,12 @@ class DiscordBotService:
     ) -> Optional[FlowRunRecord]:
         try:
             store = self._open_flow_store(workspace_root)
-        except Exception:
+        except (OSError, ValueError):
             return None
         try:
             runs = store.list_flow_runs(flow_type="ticket_flow")
             return select_ticket_flow_run_record(runs, selection="paused")
-        except Exception:
+        except (OSError, ValueError, KeyError):
             return None
         finally:
             store.close()
@@ -2194,7 +2196,7 @@ class DiscordBotService:
                     "components": self._build_discord_approval_components(token),
                 },
             )
-        except Exception as exc:
+        except (DiscordAPIError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2253,8 +2255,8 @@ class DiscordBotService:
                 pending.channel_id,
                 pending.message_id,
             )
-        except Exception:
-            with contextlib.suppress(Exception):
+        except (DiscordAPIError, OSError, RuntimeError):
+            with contextlib.suppress(DiscordAPIError, OSError, RuntimeError):
                 await self._rest.edit_channel_message(
                     channel_id=pending.channel_id,
                     message_id=pending.message_id,
@@ -2320,7 +2322,7 @@ class DiscordBotService:
             return None
         try:
             workspace_root = canonicalize_path(Path(workspace_path))
-        except Exception:
+        except (OSError, ValueError):
             return None
         if not workspace_root.exists() or not workspace_root.is_dir():
             return None
@@ -2333,7 +2335,7 @@ class DiscordBotService:
                     workspace_root
                 )
                 return await supervisor.get_client(workspace_root)
-            except Exception as exc:
+            except (RuntimeError, ConnectionError, OSError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -2394,7 +2396,7 @@ class DiscordBotService:
                     removed=cleanup.removed,
                     skipped=cleanup.skipped,
                 )
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2409,7 +2411,7 @@ class DiscordBotService:
                 self._config.root,
                 hub_path=self._hub_config_path,
             )
-        except Exception as exc:
+        except (ConfigError, OSError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2444,7 +2446,7 @@ class DiscordBotService:
         roots: set[Path] = {self._config.root.resolve()}
         try:
             bindings = await self._store.list_bindings()
-        except Exception as exc:
+        except (OSError, ValueError, KeyError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2471,7 +2473,7 @@ class DiscordBotService:
                     root,
                     hub_path=self._hub_config_path,
                 )
-            except Exception as exc:
+            except (ConfigError, OSError, ValueError, TypeError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -2490,7 +2492,7 @@ class DiscordBotService:
                     root,
                     policy=resolve_filebox_retention_policy(repo_config.pma),
                 )
-            except Exception as exc:
+            except (OSError, ValueError, RuntimeError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -2543,7 +2545,7 @@ class DiscordBotService:
                 entry.last_requested_at = now
                 try:
                     snapshot = await entry.supervisor.lifecycle_snapshot()
-                except Exception as exc:
+                except (OSError, RuntimeError, ValueError) as exc:
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -2568,7 +2570,7 @@ class DiscordBotService:
             try:
                 killed_processes += await entry.supervisor.prune_idle()
                 snapshot = await entry.supervisor.lifecycle_snapshot()
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -2598,7 +2600,7 @@ class DiscordBotService:
                     evicted_supervisors += 1
                     evicted_objects.append(entry.supervisor)
             for supervisor in evicted_objects:
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                     await supervisor.close_all()
 
         async with self._opencode_lock:
@@ -2931,7 +2933,7 @@ class DiscordBotService:
                 record_id=f"shell:{message_id}:timeout",
             )
             return
-        except Exception as exc:
+        except subprocess.SubprocessError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2968,7 +2970,7 @@ class DiscordBotService:
                 data=attachment,
                 filename=filename,
             )
-        except Exception as exc:
+        except (DiscordAPIError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3063,7 +3065,7 @@ class DiscordBotService:
             )
         except ValueError:
             raise
-        except Exception as exc:
+        except (DiscordAPIError, OSError, RuntimeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3080,13 +3082,13 @@ class DiscordBotService:
             await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
             self._background_tasks.clear()
         if self._owns_gateway:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._gateway.stop()
         if self._owns_rest and hasattr(self._rest, "close"):
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._rest.close()
         if self._owns_store:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._store.close()
         await self._close_all_app_server_supervisors()
         await self._close_all_opencode_supervisors()
@@ -3097,7 +3099,7 @@ class DiscordBotService:
             supervisors = list(self._app_server_supervisors.values())
             self._app_server_supervisors.clear()
         for supervisor in supervisors:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await supervisor.close_all()
 
     async def _close_all_opencode_supervisors(self) -> None:
@@ -3107,7 +3109,7 @@ class DiscordBotService:
             ]
             self._opencode_supervisors.clear()
         for supervisor in opencode_supervisors:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await supervisor.close_all()
 
     async def _watch_ticket_flow_pauses(self) -> None:
@@ -3120,7 +3122,7 @@ class DiscordBotService:
         while True:
             try:
                 await self._apply_pending_chat_queue_resets()
-            except Exception as exc:
+            except Exception as exc:  # intentional: long-running loop must not crash
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -3181,7 +3183,7 @@ class DiscordBotService:
         try:
             await self._send_channel_message(channel_id, payload)
             return
-        except Exception as exc:
+        except (DiscordAPIError, OSError) as exc:
             outbox_record_id = (
                 record_id or f"retry:{channel_id}:{uuid.uuid4().hex[:12]}"
             )
@@ -3203,7 +3205,7 @@ class DiscordBotService:
                         payload_json=dict(payload),
                     )
                 )
-            except Exception as enqueue_exc:
+            except (OSError, ValueError, TypeError) as enqueue_exc:
                 log_event(
                     self._logger,
                     logging.ERROR,
@@ -3235,7 +3237,7 @@ class DiscordBotService:
         try:
             await self._delete_channel_message(channel_id, message_id)
             return
-        except Exception as exc:
+        except (DiscordAPIError, OSError) as exc:
             outbox_record_id = (
                 record_id or f"retry:delete:{channel_id}:{uuid.uuid4().hex[:12]}"
             )
@@ -3258,7 +3260,7 @@ class DiscordBotService:
                         payload_json={},
                     )
                 )
-            except Exception as enqueue_exc:
+            except (OSError, ValueError) as enqueue_exc:
                 log_event(
                     self._logger,
                     logging.ERROR,
@@ -3281,7 +3283,9 @@ class DiscordBotService:
             task.result()
         except asyncio.CancelledError:
             return
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: top-level error handler for background tasks
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3361,7 +3365,7 @@ class DiscordBotService:
                 display,
                 meta,
             )
-        except Exception as exc:
+        except (OSError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3378,7 +3382,7 @@ class DiscordBotService:
             return None
         try:
             payload = await fetch(channel_id=channel_id)
-        except Exception as exc:
+        except (DiscordAPIError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3407,7 +3411,7 @@ class DiscordBotService:
             return None
         try:
             payload = await fetch(guild_id=guild_id)
-        except Exception as exc:
+        except (DiscordAPIError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -3704,6 +3708,151 @@ class DiscordBotService:
             ),
         ]
 
+    async def _handle_ticket_filter_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        values: Optional[list[str]],
+    ) -> None:
+        if not values:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Please select a filter and try again.",
+            )
+            return
+        workspace_root = await self._require_bound_workspace(
+            interaction_id, interaction_token, channel_id=channel_id
+        )
+        if not workspace_root:
+            return
+        status_filter = values[0].strip().lower()
+        if status_filter not in {"all", "open", "done"}:
+            status_filter = "all"
+        search_query = self._pending_ticket_search_queries.get(channel_id, "")
+        self._pending_ticket_filters[channel_id] = status_filter
+        await self._update_component_message(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            text=self._ticket_prompt_text(search_query=search_query),
+            components=self._build_ticket_components(
+                workspace_root,
+                status_filter=status_filter,
+                search_query=search_query,
+            ),
+        )
+
+    async def _handle_ticket_select_component(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        values: Optional[list[str]],
+    ) -> None:
+        if not values:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Please select a ticket and try again.",
+            )
+            return
+        if values[0] == "none":
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "No tickets available for this filter.",
+            )
+            return
+        workspace_root = await self._require_bound_workspace(
+            interaction_id, interaction_token, channel_id=channel_id
+        )
+        if not workspace_root:
+            return
+        ticket_rel = self._resolve_ticket_picker_value(
+            values[0],
+            workspace_root=workspace_root,
+        )
+        if not ticket_rel:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket selection is invalid. Re-open the ticket list and try again.",
+            )
+            return
+        await self._open_ticket_modal(
+            interaction_id,
+            interaction_token,
+            workspace_root=workspace_root,
+            ticket_rel=ticket_rel,
+        )
+
+    async def _open_ticket_modal(
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        workspace_root: Path,
+        ticket_rel: str,
+    ) -> None:
+        ticket_dir = self._ticket_dir(workspace_root).resolve()
+        candidate = (workspace_root / ticket_rel).resolve()
+        try:
+            candidate.relative_to(ticket_dir)
+        except ValueError:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket path is invalid. Re-open the ticket list and try again.",
+            )
+            return
+        if not candidate.exists() or not candidate.is_file():
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Ticket file not found. Re-open the ticket list and try again.",
+            )
+            return
+        try:
+            ticket_text = candidate.read_text(encoding="utf-8")
+        except Exception as exc:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                f"Failed to read ticket: {exc}",
+            )
+            return
+        max_len = 4000
+        if len(ticket_text) > max_len:
+            await self._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                (
+                    f"`{ticket_rel}` is too large to edit in a Discord modal "
+                    f"({len(ticket_text)} characters; limit {max_len}). "
+                    "Use the web UI or edit the file directly."
+                ),
+            )
+            return
+
+        token = uuid.uuid4().hex[:12]
+        self._pending_ticket_context[token] = {
+            "workspace_root": str(workspace_root),
+            "ticket_rel": ticket_rel,
+        }
+
+        title = "Edit ticket"
+        await self._respond_modal(
+            interaction_id,
+            interaction_token,
+            custom_id=f"{TICKETS_MODAL_PREFIX}:{token}",
+            title=title,
+            field_label="Ticket",
+            field_value=ticket_text,
+        )
+
     async def _handle_tickets(
         self,
         interaction_id: str,
@@ -3898,7 +4047,9 @@ class DiscordBotService:
                 "skills/list",
                 {"cwds": [str(workspace_root)], "forceReload": False},
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: client.request can raise arbitrary errors
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -4105,7 +4256,7 @@ class DiscordBotService:
                 candidate = workspace_root / candidate
             try:
                 cwd = canonicalize_path(candidate)
-            except Exception:
+            except (OSError, ValueError):
                 cwd = workspace_root
 
         deferred = await self._defer_ephemeral(
@@ -4138,7 +4289,7 @@ class DiscordBotService:
                 text="Git check timed out.",
             )
             return
-        except Exception as exc:
+        except subprocess.SubprocessError as exc:
             await self._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
@@ -4167,7 +4318,7 @@ class DiscordBotService:
                 output = "(No diff output.)"
         except subprocess.TimeoutExpired:
             output = "Git diff timed out after 30 seconds."
-        except Exception as exc:
+        except subprocess.SubprocessError as exc:
             output = f"Failed to run git diff: {exc}"
 
         from .rendering import truncate_for_discord
@@ -4357,11 +4508,18 @@ class DiscordBotService:
 
         try:
             candidate.write_text(ticket_body, encoding="utf-8")
-        except Exception as exc:
+        except (OSError, ValueError, TypeError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "discord.ticket.write_failed",
+                path=str(candidate),
+                exc=exc,
+            )
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
-                f"Failed to save ticket: {exc}",
+                f"Failed to write ticket: {exc}",
             )
             return
 
@@ -4369,151 +4527,6 @@ class DiscordBotService:
             interaction_id,
             interaction_token,
             f"Saved {safe_relpath(candidate, workspace_root)}.",
-        )
-
-    async def _handle_ticket_filter_component(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        channel_id: str,
-        values: Optional[list[str]],
-    ) -> None:
-        if not values:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a filter and try again.",
-            )
-            return
-        workspace_root = await self._require_bound_workspace(
-            interaction_id, interaction_token, channel_id=channel_id
-        )
-        if not workspace_root:
-            return
-        status_filter = values[0].strip().lower()
-        if status_filter not in {"all", "open", "done"}:
-            status_filter = "all"
-        search_query = self._pending_ticket_search_queries.get(channel_id, "")
-        self._pending_ticket_filters[channel_id] = status_filter
-        await self._update_component_message(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            text=self._ticket_prompt_text(search_query=search_query),
-            components=self._build_ticket_components(
-                workspace_root,
-                status_filter=status_filter,
-                search_query=search_query,
-            ),
-        )
-
-    async def _handle_ticket_select_component(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        channel_id: str,
-        values: Optional[list[str]],
-    ) -> None:
-        if not values:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Please select a ticket and try again.",
-            )
-            return
-        if values[0] == "none":
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "No tickets available for this filter.",
-            )
-            return
-        workspace_root = await self._require_bound_workspace(
-            interaction_id, interaction_token, channel_id=channel_id
-        )
-        if not workspace_root:
-            return
-        ticket_rel = self._resolve_ticket_picker_value(
-            values[0],
-            workspace_root=workspace_root,
-        )
-        if not ticket_rel:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket selection is invalid. Re-open the ticket list and try again.",
-            )
-            return
-        await self._open_ticket_modal(
-            interaction_id,
-            interaction_token,
-            workspace_root=workspace_root,
-            ticket_rel=ticket_rel,
-        )
-
-    async def _open_ticket_modal(
-        self,
-        interaction_id: str,
-        interaction_token: str,
-        *,
-        workspace_root: Path,
-        ticket_rel: str,
-    ) -> None:
-        ticket_dir = self._ticket_dir(workspace_root).resolve()
-        candidate = (workspace_root / ticket_rel).resolve()
-        try:
-            candidate.relative_to(ticket_dir)
-        except ValueError:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket path is invalid. Re-open the ticket list and try again.",
-            )
-            return
-        if not candidate.exists() or not candidate.is_file():
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Ticket file not found. Re-open the ticket list and try again.",
-            )
-            return
-        try:
-            ticket_text = candidate.read_text(encoding="utf-8")
-        except Exception as exc:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                f"Failed to read ticket: {exc}",
-            )
-            return
-        max_len = 4000
-        if len(ticket_text) > max_len:
-            await self._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                (
-                    f"`{ticket_rel}` is too large to edit in a Discord modal "
-                    f"({len(ticket_text)} characters; limit {max_len}). "
-                    "Use the web UI or edit the file directly."
-                ),
-            )
-            return
-
-        token = uuid.uuid4().hex[:12]
-        self._pending_ticket_context[token] = {
-            "workspace_root": str(workspace_root),
-            "ticket_rel": ticket_rel,
-        }
-
-        title = "Edit ticket"
-        await self._respond_modal(
-            interaction_id,
-            interaction_token,
-            custom_id=f"{TICKETS_MODAL_PREFIX}:{token}",
-            title=title,
-            field_label="Ticket",
-            field_value=ticket_text,
         )
 
     async def _respond_modal(
@@ -4617,7 +4630,7 @@ class DiscordBotService:
                 f"Init failed: {exc}",
             )
             return
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -4664,7 +4677,7 @@ class DiscordBotService:
 
         try:
             manifest = load_manifest(self._manifest_path, self._config.root)
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -4766,7 +4779,9 @@ class DiscordBotService:
                 resource_id=resource_id,
                 pma_enabled=pma_enabled,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: top-level error handler for thread reset
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -4879,7 +4894,7 @@ class DiscordBotService:
                 lifecycle_status="active",
                 limit=10_000,
             )
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             return None
         get_running_execution = getattr(
             orchestration_service, "get_running_execution", None
@@ -4893,7 +4908,7 @@ class DiscordBotService:
                 normalized_thread_workspace = str(
                     canonicalize_path(Path(thread_workspace)).resolve()
                 )
-            except Exception:
+            except (OSError, ValueError):
                 normalized_thread_workspace = thread_workspace
             if normalized_thread_workspace != canonical_workspace:
                 continue
@@ -4906,7 +4921,7 @@ class DiscordBotService:
                 try:
                     if get_running_execution(thread_target_id) is not None:
                         return True
-                except Exception:
+                except (OSError, ValueError, RuntimeError):
                     return None
             if str(getattr(thread, "status", "") or "").strip().lower() == "running":
                 return True
@@ -5259,7 +5274,7 @@ class DiscordBotService:
 
         try:
             manifest = load_manifest(self._manifest_path, self._config.root)
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             await self._respond_ephemeral(
                 interaction_id,
                 interaction_token,
@@ -5272,7 +5287,7 @@ class DiscordBotService:
             repo_config = load_repo_config(self._config.root)
             if isinstance(repo_config.raw, dict):
                 raw_config = repo_config.raw
-        except Exception:
+        except (ConfigError, OSError, ValueError):
             raw_config = {}
 
         overview_entries = build_hub_flow_overview_entries(
@@ -5303,7 +5318,7 @@ class DiscordBotService:
                 group_order.append(entry.group)
             try:
                 store = self._open_flow_store(entry.repo_root)
-            except Exception:
+            except (OSError, ValueError):
                 groups[entry.group].append(
                     (
                         line_label,
@@ -5349,7 +5364,7 @@ class DiscordBotService:
                     f"{line_prefix}{display['status_icon']} {line_label}: "
                     f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}{duration_suffix}{freshness_suffix}"
                 )
-            except Exception:
+            except (OSError, ValueError, RuntimeError, KeyError):
                 line = f"{line_prefix}❓ {line_label}: Error reading state"
             finally:
                 store.close()
@@ -5417,10 +5432,14 @@ class DiscordBotService:
         return canonicalize_path(Path(workspace_raw))
 
     def _open_flow_store(self, workspace_root: Path) -> FlowStore:
-        config = load_repo_config(workspace_root)
+        try:
+            config = load_repo_config(workspace_root)
+            durable = config.durable_writes
+        except ConfigError:
+            durable = False
         store = FlowStore(
             workspace_root / ".codex-autorunner" / "flows.db",
-            durable=config.durable_writes,
+            durable=durable,
         )
         store.initialize()
         return store
@@ -5707,7 +5726,7 @@ class DiscordBotService:
     ) -> bool:
         try:
             data = path.read_bytes()
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -5723,7 +5742,7 @@ class DiscordBotService:
                 data=data,
                 filename=path.name,
             )
-        except Exception as exc:
+        except (DiscordAPIError, OSError, ValueError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -5741,7 +5760,7 @@ class DiscordBotService:
                     sent_dir / f"{path.stem}-{uuid.uuid4().hex[:6]}{path.suffix}"
                 )
             path.replace(destination)
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -5781,7 +5800,7 @@ class DiscordBotService:
         deduped: dict[str, tuple[Path, Path]] = {}
         for source_dir, path in candidates:
             key = str(path)
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(OSError, ValueError):
                 key = str(canonicalize_path(path))
             existing = deduped.get(key)
             if existing is None:

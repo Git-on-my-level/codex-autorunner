@@ -36,7 +36,9 @@ def _emit_lifecycle(
     if _lifecycle_emitter:
         try:
             _lifecycle_emitter(event_type, repo_id, run_id, data, origin)
-        except Exception as e:
+        except (
+            Exception
+        ) as e:  # intentional: lifecycle emitter callback - exception types unknown
             logger.debug("Lifecycle emitter failed: %s", e)
 
 
@@ -262,7 +264,7 @@ def archive_dispatch(
         dispatch_path = dest / "DISPATCH.md"
         try:
             relative_dispatch_path = str(dispatch_path.relative_to(paths.run_dir))
-        except Exception:
+        except ValueError:
             relative_dispatch_path = str(dispatch_path)
         _emit_lifecycle(
             "dispatch_created",

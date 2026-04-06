@@ -38,7 +38,7 @@ def _normalize_non_negative_int(
         return fallback
     try:
         parsed = int(value)
-    except Exception:
+    except (ValueError, TypeError):
         return fallback
     if parsed < 0:
         return fallback
@@ -93,7 +93,7 @@ def _parse_iso(value: Any) -> Optional[datetime]:
         return None
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except Exception:
+    except (ValueError, TypeError):
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)

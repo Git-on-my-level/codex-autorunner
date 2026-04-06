@@ -202,7 +202,9 @@ class CodexHarness(AgentHarness):
             return ConversationRef(agent=self.agent_id, id=conversation_id)
         try:
             result = await resume(conversation_id)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: resume may fail with varied error types checked by is_missing_thread_error
             if is_missing_thread_error(exc):
                 return ConversationRef(agent=self.agent_id, id=conversation_id)
             raise
@@ -248,7 +250,9 @@ class CodexHarness(AgentHarness):
         if callable(register_turn):
             try:
                 await register_turn(resolved_thread_id, handle.turn_id)
-            except Exception:
+            except (
+                Exception
+            ):  # intentional: best-effort event registration must not block turn start
                 logger.debug("codex register_turn failed", exc_info=True)
         return TurnRef(conversation_id=resolved_thread_id, turn_id=handle.turn_id)
 

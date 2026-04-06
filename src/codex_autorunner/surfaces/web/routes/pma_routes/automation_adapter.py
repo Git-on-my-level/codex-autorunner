@@ -55,7 +55,7 @@ def discover_automation_store_class() -> Optional[type[Any]]:
     for module_name, class_name in candidates:
         try:
             module = importlib.import_module(module_name)
-        except Exception:
+        except ImportError:
             continue
         klass = getattr(module, class_name, None)
         if isinstance(klass, type):
@@ -154,7 +154,7 @@ async def get_automation_store(
                     store = await await_if_needed(accessor(*args))
                 except TypeError:
                     continue
-                except Exception:
+                except (RuntimeError, OSError, ValueError):
                     logger.exception("Failed to resolve automation store from %s", name)
                     break
                 if store is not None:
@@ -175,7 +175,7 @@ async def get_automation_store(
                 store = klass(*args)
             except TypeError:
                 continue
-            except Exception:
+            except (RuntimeError, OSError, ValueError):
                 logger.exception("Failed to initialize automation store")
                 break
             if runtime_state is not None:
@@ -243,7 +243,12 @@ async def notify_hub_automation_transition(
                 ((), dict(payload)),
             ],
         )
-    except Exception:
+    except (
+        RuntimeError,
+        OSError,
+        TypeError,
+        ValueError,
+    ):  # notification must not disrupt caller
         logger.exception("Failed to notify hub automation transition")
         return
 
@@ -259,9 +264,9 @@ async def notify_hub_automation_transition(
     except TypeError:
         try:
             await await_if_needed(process_now())
-        except Exception:
+        except (RuntimeError, OSError, ValueError):
             logger.exception("Failed immediate PMA automation processing")
-    except Exception:
+    except (RuntimeError, OSError, ValueError):
         logger.exception("Failed immediate PMA automation processing")
 
 

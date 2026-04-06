@@ -218,7 +218,9 @@ def drain_pending_publish_operations(
             continue
         try:
             response = executor_registry.dispatch(current_operation)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: dispatch invokes user-provided executor that may raise any exception
             failed = journal.mark_failed(
                 current_operation.operation_id,
                 error_text=_resolve_error_text(exc),
@@ -237,7 +239,9 @@ def drain_pending_publish_operations(
                 current_operation.operation_id,
                 response=response,
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: preserve publish side-effect result even if journal update fails
             error_text = (
                 "Publish side effects completed but journal completion failed: "
                 f"{_resolve_error_text(exc)}"
@@ -248,7 +252,9 @@ def drain_pending_publish_operations(
                     error_text=error_text,
                     next_attempt_at=None,
                 )
-            except Exception:  # pragma: no cover - defensive logging
+            except (
+                Exception
+            ):  # intentional: defensive fallback when journal bookkeeping fails
                 _LOGGER.warning(
                     "Publish bookkeeping failed for %s after side effects completed",
                     current_operation.operation_id,

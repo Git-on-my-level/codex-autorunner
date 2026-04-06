@@ -159,7 +159,7 @@ class TelegramCommandSupportMixin:
         if isinstance(exc, httpx.HTTPStatusError):
             try:
                 payload = exc.response.json()
-            except Exception:
+            except (json.JSONDecodeError, ValueError):
                 payload = None
             if isinstance(payload, dict):
                 detail = (
@@ -205,7 +205,7 @@ class TelegramCommandSupportMixin:
             detail = None
             try:
                 detail = self._extract_opencode_error_detail(exc.response.json())
-            except Exception:
+            except (json.JSONDecodeError, ValueError):
                 detail = None
             if detail:
                 return f"OpenCode error: {format_public_error(detail)}"
@@ -265,7 +265,7 @@ class TelegramCommandSupportMixin:
                     detail = self._extract_opencode_error_detail(
                         current.response.json()
                     )
-                except Exception:
+                except (json.JSONDecodeError, ValueError):
                     detail = None
                 candidates = [detail, current.response.text, str(current)]
             else:
@@ -449,7 +449,7 @@ class TelegramCommandSupportMixin:
                 ),
             )
             return
-        except Exception as exc:
+        except (httpx.HTTPStatusError, httpx.RequestError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -529,7 +529,7 @@ class TelegramCommandSupportMixin:
                     "timeoutMs": 10000,
                 },
             )
-        except Exception as exc:
+        except (httpx.HTTPStatusError, httpx.RequestError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -580,7 +580,7 @@ class TelegramCommandSupportMixin:
             path = workspace / path
         try:
             path = canonicalize_path(path)
-        except Exception:
+        except (OSError, ValueError):
             await self._send_message(
                 message.chat_id,
                 "Could not resolve that path.",
@@ -606,7 +606,7 @@ class TelegramCommandSupportMixin:
             return
         try:
             data = path.read_bytes()
-        except Exception:
+        except OSError:
             await self._send_message(
                 message.chat_id,
                 "Failed to read file.",

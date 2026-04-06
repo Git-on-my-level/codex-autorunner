@@ -130,7 +130,7 @@ class _LegacyJsonLifecycleEventStore:
                 processed=processed,
                 event_id=event_id,
             )
-        except Exception:
+        except (TypeError, ValueError, KeyError, AttributeError):
             return None
 
     def load_with_result(self) -> LegacyLifecycleLoadResult:
@@ -234,7 +234,7 @@ class _SqliteLifecycleEventStore:
             try:
                 parsed = int(value.strip())
                 return parsed if parsed >= 0 else 0
-            except Exception:
+            except ValueError:
                 return 0
         return 0
 
@@ -333,7 +333,7 @@ class _SqliteLifecycleEventStore:
             if isinstance(data_raw, str):
                 try:
                     data_payload = json.loads(data_raw)
-                except Exception:
+                except (json.JSONDecodeError, ValueError):
                     data_payload = {}
             data = dict(data_payload) if isinstance(data_payload, dict) else {}
             return LifecycleEvent(
@@ -346,7 +346,7 @@ class _SqliteLifecycleEventStore:
                 processed=bool(row["processed"]),
                 event_id=str(row["event_id"]),
             )
-        except Exception:
+        except (TypeError, ValueError, KeyError):
             return None
 
     def _load_rows(self, query: str, params: tuple[Any, ...]) -> list[LifecycleEvent]:
@@ -577,7 +577,7 @@ class _OrchestrationLifecycleEventStore:
             try:
                 parsed = int(value.strip())
                 return parsed if parsed >= 0 else 0
-            except Exception:
+            except ValueError:
                 return 0
         return 0
 
@@ -633,7 +633,7 @@ class _OrchestrationLifecycleEventStore:
             if isinstance(payload_raw, str):
                 try:
                     payload_data = json.loads(payload_raw)
-                except Exception:
+                except (json.JSONDecodeError, ValueError):
                     payload_data = {}
             payload = dict(payload_data) if isinstance(payload_data, dict) else {}
             data_raw = payload.get("data")
@@ -654,7 +654,7 @@ class _OrchestrationLifecycleEventStore:
                 processed=bool(row["processed"]),
                 event_id=str(row["event_id"] or ""),
             )
-        except Exception:
+        except (TypeError, ValueError, KeyError):
             return None
 
     def _load_rows(self, query: str, params: tuple[Any, ...]) -> list[LifecycleEvent]:
@@ -1051,7 +1051,9 @@ class LifecycleEventEmitter:
         for listener in self._listeners:
             try:
                 listener(append_result.event)
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: listener errors must not break emission
                 logger.exception("Error in lifecycle event listener: %s", exc)
         return append_result.event.event_id
 

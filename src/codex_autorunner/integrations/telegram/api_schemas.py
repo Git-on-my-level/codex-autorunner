@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 __all__ = [
     "BaseTelegramSchema",
@@ -109,7 +109,7 @@ def parse_update_payload(payload: dict[str, Any]) -> TelegramUpdateSchema:
 def parse_message_payload(payload: dict[str, Any]) -> Optional[TelegramMessageSchema]:
     try:
         return TelegramMessageSchema.model_validate(payload)
-    except Exception:
+    except ValidationError:
         return None
 
 
@@ -118,5 +118,5 @@ def parse_callback_query_payload(
 ) -> Optional[TelegramCallbackQuerySchema]:
     try:
         return TelegramCallbackQuerySchema.model_validate(payload)
-    except Exception:
+    except ValidationError:
         return None

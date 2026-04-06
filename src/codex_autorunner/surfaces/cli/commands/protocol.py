@@ -200,7 +200,9 @@ def register_protocol_commands(app: typer.Typer) -> None:
                             encoding="utf-8",
                         )
                         typer.echo(f"  Saved to {output_path.relative_to(repo_root)}")
-                except Exception as e:
+                except (
+                    Exception
+                ) as e:  # intentional: CLI top-level error reporter for codex schema
                     typer.echo(f"Error generating Codex schema: {e}", err=True)
                     has_errors = True
 
@@ -221,7 +223,9 @@ def register_protocol_commands(app: typer.Typer) -> None:
                         encoding="utf-8",
                     )
                     typer.echo(f"  Saved to {output_path.relative_to(repo_root)}")
-                except Exception as e:
+                except (
+                    Exception
+                ) as e:  # intentional: CLI top-level error reporter for opencode spec
                     typer.echo(f"Error generating OpenAPI spec: {e}", err=True)
                     has_errors = True
 

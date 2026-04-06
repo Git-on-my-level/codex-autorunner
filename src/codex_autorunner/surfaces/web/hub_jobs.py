@@ -113,7 +113,9 @@ class HubJobManager:
                 result = await func()
             else:
                 result = await asyncio.to_thread(func)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: job func is arbitrary user-provided callable
             duration_ms = (time.monotonic() - started) * 1000
             async with self._lock:
                 job = self._jobs.get(job_id)
@@ -188,5 +190,5 @@ class HubJobManager:
 
             dt = datetime.datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
             return dt.timestamp()
-        except Exception:
+        except (ValueError, TypeError):
             return time.time()

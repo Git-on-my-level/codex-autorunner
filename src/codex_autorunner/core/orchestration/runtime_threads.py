@@ -222,7 +222,7 @@ async def await_runtime_thread_outcome(
             )
 
         result = await collector_task
-    except Exception as exc:
+    except Exception as exc:  # intentional: harness runtime errors are unpredictable
         detail = str(exc or "").strip()
         return RuntimeThreadOutcome(
             status="error",

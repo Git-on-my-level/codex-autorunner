@@ -167,7 +167,7 @@ def invalidate_drafts_for_path(repo_root: Path, rel_path: str) -> list[str]:
     def _norm(value: str) -> str:
         try:
             return Path(value).as_posix().lstrip("./")
-        except Exception:
+        except (TypeError, ValueError):
             return value
 
     target_norm = _norm(rel_path)
@@ -215,11 +215,11 @@ def _handle_corrupt_state(path: Path, detail: str) -> None:
     notice_path = _notice_path(path)
     try:
         atomic_write(notice_path, json.dumps(notice, indent=2) + "\n")
-    except Exception:
+    except OSError:
         logger.warning("Failed to write draft corruption notice at %s", notice_path)
     try:
         atomic_write(path, json.dumps({"drafts": {}}, indent=2) + "\n")
-    except Exception:
+    except OSError:
         logger.warning("Failed to reset draft state at %s", path)
     logger.warning(
         "Corrupted file chat state detected; backup=%s notice=%s detail=%s",

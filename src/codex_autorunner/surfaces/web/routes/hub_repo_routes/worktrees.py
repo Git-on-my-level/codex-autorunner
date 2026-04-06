@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from fastapi import HTTPException
@@ -52,7 +53,13 @@ class HubWorktreeService:
                 force=force,
                 start_point=str(start_point) if start_point else None,
             )
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            subprocess.SubprocessError,
+        ) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
         return cast(dict[str, Any], self._enricher.enrich_repo(snapshot))
@@ -131,7 +138,7 @@ class HubWorktreeService:
                 archive_note=archive_note,
                 archive_profile=archive_profile,
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if isinstance(result, dict):
             return result
@@ -190,7 +197,7 @@ class HubWorktreeService:
                 archive_note=archive_note,
                 archive_profile=archive_profile,
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError, KeyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return cast(dict[str, Any], result)
 
@@ -214,6 +221,12 @@ class HubWorktreeService:
                 archive_note=archive_note,
                 archive_profile=archive_profile,
             )
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+        ) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return cast(dict[str, Any], result)

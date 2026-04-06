@@ -170,7 +170,7 @@ def _load_meta_created_at(snapshot_dir: Path) -> Optional[datetime]:
         return None
     try:
         payload = json.loads(meta_path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     if not isinstance(payload, dict):
         return None

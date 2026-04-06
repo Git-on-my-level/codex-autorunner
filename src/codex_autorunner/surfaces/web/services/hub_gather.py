@@ -137,7 +137,7 @@ def latest_dispatch(repo_root: Path, run_id: str, input_data: dict) -> Optional[
             result["turn_summary_seq"] = turn_summary_candidate["seq"]
             result["turn_summary"] = _dispatch_dict(turn_summary_candidate["dispatch"])
         return result
-    except Exception:
+    except Exception:  # intentional: best-effort dispatch resolution
         return None
 
 
@@ -224,7 +224,7 @@ def gather_hub_message_snapshot(
     if requested & {"inbox", "action_queue"}:
         try:
             snapshots = context.supervisor.list_repos()
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             snapshots = []
         repo_roots = {
             snap.id: snap.path
@@ -302,7 +302,7 @@ def gather_hub_message_snapshot(
     if "inbox" in requested:
         try:
             hub_hint_items = build_hub_capability_hints(hub_config=context.config)
-        except Exception:
+        except (AttributeError, OSError, ValueError, RuntimeError):
             hub_hint_items = []
         for item in hub_hint_items:
             item_type = str(item.get("item_type") or "")
@@ -355,7 +355,7 @@ def gather_hub_message_snapshot(
                     ).strip()
                     or repo_id,
                 )
-            except Exception:
+            except (AttributeError, OSError, ValueError, RuntimeError):
                 hint_items = []
             dismissals = _repo_dismissals(repo_id, repo_root)
             for item in hint_items:

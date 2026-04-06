@@ -657,7 +657,13 @@ class CodexAppServerClient:
         )
         try:
             resume_result = await self.thread_resume(thread_id)
-        except Exception as exc:
+        except (
+            CodexAppServerError,
+            CircuitOpenError,
+            asyncio.TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -743,7 +749,13 @@ class CodexAppServerClient:
         )
         try:
             resume_result = await self.thread_resume(thread_id)
-        except Exception as exc:
+        except (
+            CodexAppServerError,
+            CircuitOpenError,
+            asyncio.TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1072,7 +1084,14 @@ class CodexAppServerClient:
                     continue
                 await self._handle_partial_payload_lines(buffer)
             await self._finalize_read_loop(buffer, loop_state)
-        except Exception as exc:
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+            BrokenPipeError,
+        ) as exc:  # top-level read-loop error handler
             log_event(self._logger, logging.WARNING, "app_server.read.failed", exc=exc)
         finally:
             await self._handle_disconnect()
@@ -1254,7 +1273,15 @@ class CodexAppServerClient:
                     }
                 )
             )
-        except Exception as exc:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            OSError,
+            ConnectionError,
+        ) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1287,7 +1314,17 @@ class CodexAppServerClient:
                         line_len=len(text),
                         tail_size=len(self._stderr_tail),
                     )
-        except Exception as exc:
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            TypeError,
+            UnicodeDecodeError,
+            ConnectionResetError,
+            ConnectionError,
+            BrokenPipeError,
+            json.JSONDecodeError,
+        ) as exc:  # top-level read-loop error boundary, subprocess I/O + JSON decoding
             self._logger.debug("Failed to read stderr: %s", exc)
             return
 
@@ -1397,7 +1434,15 @@ class CodexAppServerClient:
             if self._approval_handler is not None:
                 try:
                     decision = await _maybe_await(self._approval_handler(message))
-                except Exception as exc:
+                except (
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    KeyError,
+                    AttributeError,
+                    OSError,
+                    ConnectionError,
+                ) as exc:
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -1450,7 +1495,15 @@ class CodexAppServerClient:
         if self._notification_handler is not None:
             try:
                 await _maybe_await(self._notification_handler(message))
-            except Exception as exc:
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                OSError,
+                ConnectionError,
+            ) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -2008,7 +2061,13 @@ class CodexAppServerClient:
             except CircuitOpenError:
                 await asyncio.sleep(60.0)
                 raise
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ConnectionError,
+                BrokenPipeError,
+                asyncio.TimeoutError,
+            ) as exc:
                 next_delay = min(
                     max(
                         self._restart_backoff_seconds * 2,
@@ -2068,7 +2127,7 @@ class CodexAppServerClient:
                     )
             try:
                 os.kill(process.pid, signal.SIGTERM)
-            except Exception:
+            except OSError:
                 try:
                     process.terminate()
                 except ProcessLookupError:
@@ -2079,7 +2138,12 @@ class CodexAppServerClient:
             except asyncio.TimeoutError:
                 pass
             await self._force_kill_process(process)
-        except Exception:
+        except (
+            OSError,
+            ProcessLookupError,
+            asyncio.TimeoutError,
+            RuntimeError,
+        ):  # intentional: process termination cleanup
             self._logger.debug(
                 "Failed to gracefully terminate app-server process",
                 exc_info=True,
@@ -2088,10 +2152,10 @@ class CodexAppServerClient:
     async def _force_kill_process(self, process: asyncio.subprocess.Process) -> None:
         try:
             os.kill(process.pid, signal.SIGKILL)
-        except Exception:
+        except OSError:
             try:
                 process.kill()
-            except Exception:
+            except OSError:
                 return
         await process.wait()
 
@@ -2106,7 +2170,7 @@ class CodexAppServerClient:
         if os.name != "nt":
             try:
                 pgid = os.getpgid(process.pid)
-            except Exception:
+            except OSError:
                 pgid = None
         record = ProcessRecord(
             kind="codex_app_server",
@@ -2122,7 +2186,7 @@ class CodexAppServerClient:
         try:
             write_process_record(workspace_root, record)
             self._process_registry_key = record.record_key()
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2145,7 +2209,7 @@ class CodexAppServerClient:
             return
         try:
             delete_process_record(workspace_root, "codex_app_server", key)
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2219,7 +2283,7 @@ def _summarize_generic_params(params: Dict[str, Any]) -> Dict[str, Any]:
 def _client_version() -> str:
     try:
         return importlib_metadata.version("codex-autorunner")
-    except Exception:
+    except importlib_metadata.PackageNotFoundError:
         return "unknown"
 
 
@@ -2243,7 +2307,7 @@ def _first_regex_group(text: str, pattern: str) -> Optional[str]:
 def _infer_metadata_from_preview(preview: bytes) -> Dict[str, Optional[str]]:
     try:
         text = preview.decode("utf-8", errors="ignore")
-    except Exception:
+    except UnicodeDecodeError:
         return {"preview": "", "method": None, "thread_id": None, "turn_id": None}
     method = _first_regex_group(text, r'"method"\s*:\s*"([^"]+)"')
     thread_id = _first_regex_group(text, r'"threadId"\s*:\s*"([^"]+)"')
@@ -2517,7 +2581,7 @@ async def _close_all_clients() -> None:
     for client in list(_CLIENT_INSTANCES):
         try:
             await client.close()
-        except Exception as exc:
+        except (RuntimeError, OSError, ConnectionError, asyncio.CancelledError) as exc:
             logger.debug("Failed to close client: %s", exc)
             continue
 

@@ -540,7 +540,7 @@ class TicketRunner:
                 turn_diff_stats = git_diff_stats(
                     self._workspace_root, from_ref=None, include_staged=True
                 )
-        except Exception:
+        except (OSError, ValueError, RuntimeError):
             # Best-effort; don't block on stats computation errors
             turn_diff_stats = None
 
@@ -574,7 +574,9 @@ class TicketRunner:
                             ),
                         },
                     )
-                except Exception:
+                except (
+                    Exception
+                ):  # intentional: best-effort event emission via callback
                     # Best-effort; do not block ticket execution on event emission.
                     pass
 

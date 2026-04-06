@@ -130,8 +130,8 @@ _SCRIPT = dedent(
     def lint_ticket(path: Path) -> List[str]:
         try:
             raw = path.read_text(encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001
-            return [f"{path}: Unable to read file ({exc})."]
+        except OSError as exc:
+            return [f\"{path}: Unable to read file ({exc}).\"]
 
         fm_yaml, fm_errors = _split_frontmatter(raw)
         if fm_errors:
@@ -148,7 +148,7 @@ _SCRIPT = dedent(
     def _read_ticket_id(path: Path) -> Optional[str]:
         try:
             raw = path.read_text(encoding="utf-8")
-        except Exception:  # noqa: BLE001
+        except OSError:
             return None
         fm_yaml, fm_errors = _split_frontmatter(raw)
         if fm_errors:
@@ -167,8 +167,8 @@ _SCRIPT = dedent(
     def _fix_ticket_id(path: Path) -> Tuple[bool, List[str]]:
         try:
             raw = path.read_text(encoding="utf-8")
-        except Exception as exc:  # noqa: BLE001
-            return False, [f"{path}: Unable to read file ({exc})."]
+        except OSError as exc:
+            return False, [f\"{path}: Unable to read file ({exc}).\"]
 
         fm_yaml, fm_errors = _split_frontmatter(raw)
         if fm_errors:

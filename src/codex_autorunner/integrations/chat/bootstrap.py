@@ -35,7 +35,9 @@ async def run_chat_bootstrap_steps(
     for step in steps:
         try:
             await step.action()
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: pluggable bootstrap actions may raise arbitrary exceptions
             level = logging.ERROR if step.required else logging.WARNING
             log_event(
                 logger,

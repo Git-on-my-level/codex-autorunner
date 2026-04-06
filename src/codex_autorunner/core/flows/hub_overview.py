@@ -78,8 +78,7 @@ def _has_active_ticket_flow(repo_root: Path) -> bool | None:
     try:
         with FlowStore(db_path) as store:
             latest = store.get_latest_flow_run(flow_type="ticket_flow")
-    except Exception:
-        # Fail open if flow state cannot be read so active work is not hidden.
+    except Exception:  # intentional: fail open so active work is not hidden
         return None
     if latest is None:
         return False
@@ -102,8 +101,7 @@ def build_hub_flow_overview_entries(
         chat_binding_counts = active_chat_binding_counts(
             hub_root=hub_root, raw_config=raw_config
         )
-    except Exception:
-        # Fail open on binding lookup errors so flow status remains visible.
+    except Exception:  # intentional: fail open on binding lookup errors
         chat_binding_counts = None
 
     manifest_repo_ids = {

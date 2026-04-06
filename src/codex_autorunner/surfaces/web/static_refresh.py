@@ -24,7 +24,7 @@ def _update_static_files(static_files: object, static_dir: Path) -> None:
             static_files.packages,  # type: ignore[attr-defined]
         )
         static_files.config_checked = False  # type: ignore[attr-defined]
-    except Exception:
+    except (AttributeError, TypeError):
         return
 
 
@@ -61,7 +61,9 @@ def refresh_static_assets(app: object) -> bool:
                     logger=logger,
                 )
                 require_static_assets(static_dir, logger)
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: best-effort refresh loop, skip failed candidates
                 if logger is not None:
                     safe_log(
                         logger,
@@ -77,7 +79,7 @@ def refresh_static_assets(app: object) -> bool:
             if old_context is not None:
                 try:
                     old_context.close()  # type: ignore[attr-defined]
-                except Exception:
+                except (OSError, RuntimeError):
                     logging.getLogger(__name__).debug(
                         "Failed to close old static assets context", exc_info=True
                     )

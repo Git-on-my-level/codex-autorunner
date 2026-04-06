@@ -38,7 +38,9 @@ def open_sqlite(path: Path, durable: bool = False) -> Iterator[sqlite3.Connectio
     try:
         yield conn
         conn.commit()
-    except Exception:
+    except (
+        Exception
+    ):  # intentional: rollback must cover any error from yielded caller code
         conn.rollback()
         raise
     finally:

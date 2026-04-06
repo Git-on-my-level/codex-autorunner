@@ -95,7 +95,9 @@ class PmaLaneWorker:
                     result.get("status") if isinstance(result, dict) else None,
                 )
                 await self._notify(item, result)
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: executor is a user-provided callback
                 self._log.exception("Failed to process PMA queue item %s", item.item_id)
                 error_result = {"status": "error", "detail": str(exc)}
                 await self._queue.fail_item(item, str(exc))
@@ -114,7 +116,7 @@ class PmaLaneWorker:
             maybe = self._on_result(item, result)
             if asyncio.iscoroutine(maybe):
                 await maybe
-        except Exception:
+        except Exception:  # intentional: on_result hook is user-provided
             self._log.exception(
                 "PMA lane result hook failed (lane_id=%s item_id=%s)",
                 self.lane_id,

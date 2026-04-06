@@ -227,7 +227,9 @@ class OpenCodeSupervisor:
             if handle.client is None:
                 raise OpenCodeSupervisorError("OpenCode client not initialized")
             return handle.client
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: cleanup handler to decrement turn on any failure
             await self.mark_turn_finished(canonical_root)
             raise
 
@@ -392,7 +394,7 @@ class OpenCodeSupervisor:
         if self._server_scope == _SCOPE_GLOBAL and handle.client is not None:
             try:
                 await handle.client.dispose_instances()
-            except Exception as exc:
+            except (httpx.HTTPError, RuntimeError, OSError) as exc:
                 log_event(
                     self._logger,
                     logging.DEBUG,
@@ -637,7 +639,7 @@ class OpenCodeSupervisor:
                         else 0
                     ),
                 )
-            except Exception as exc:
+            except (httpx.HTTPError, OSError, RuntimeError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -660,7 +662,13 @@ class OpenCodeSupervisor:
                 base_url=base_url,
                 mode=self._handle_mode(handle),
             )
-        except Exception:
+        except (
+            OSError,
+            RuntimeError,
+            httpx.HTTPError,
+            OpenCodeSupervisorError,
+            OpenCodeProtocolError,
+        ):  # startup cleanup
             handle.started = False
             process.terminate()
             try:
@@ -679,7 +687,7 @@ class OpenCodeSupervisor:
                 record = read_process_record(
                     registry_root, _PROCESS_KIND, handle.workspace_id
                 )
-            except Exception as exc:
+            except (OSError, ValueError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -788,7 +796,12 @@ class OpenCodeSupervisor:
                 return True
             except OpenCodeSupervisorAttachAuthError:
                 raise
-            except Exception as exc:
+            except (
+                OpenCodeSupervisorError,
+                httpx.HTTPError,
+                OSError,
+                RuntimeError,
+            ) as exc:  # handles attach failures for cleanup and restart
                 running = self._record_is_running(record)
                 terminated = False
                 if running:
@@ -937,7 +950,12 @@ class OpenCodeSupervisor:
                 f"OpenCode health check failed: {exc}",
                 status_code=protocol_status_code,
             ) from exc
-        except Exception:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+        ):  # ensures client cleanup before re-raising
             await self._safe_close_client(client)
             raise
 
@@ -969,7 +987,11 @@ class OpenCodeSupervisor:
                     else 0
                 ),
             )
-        except Exception as exc:
+        except (
+            httpx.HTTPError,
+            OSError,
+            RuntimeError,
+        ) as exc:  # non-critical network call
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1017,7 +1039,7 @@ class OpenCodeSupervisor:
             return pid, None
         try:
             return pid, os.getpgid(pid)
-        except Exception:
+        except OSError:
             return pid, None
 
     def _current_record_timestamp(self) -> str:
@@ -1030,7 +1052,7 @@ class OpenCodeSupervisor:
             record = read_process_record(
                 self._registry_root(workspace_root), _PROCESS_KIND, workspace_id
             )
-        except Exception:
+        except (OSError, ValueError):
             return None
         if record is None or not self._record_is_running(record):
             return None
@@ -1129,7 +1151,7 @@ class OpenCodeSupervisor:
         if os.name != "nt":
             try:
                 pgid = os.getpgid(process.pid)
-            except Exception:
+            except OSError:
                 pgid = None
         record = ProcessRecord(
             kind=_PROCESS_KIND,
@@ -1153,7 +1175,7 @@ class OpenCodeSupervisor:
             try:
                 write_process_record(registry_root, registry_record)
                 write_count += 1
-            except Exception as exc:
+            except (OSError, ValueError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1209,7 +1231,7 @@ class OpenCodeSupervisor:
         try:
             write_process_record(registry_root, updated)
             refreshed = True
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1238,7 +1260,7 @@ class OpenCodeSupervisor:
         try:
             write_process_record(registry_root, pid_record)
             refreshed = True
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1289,7 +1311,7 @@ class OpenCodeSupervisor:
                 deleted_pid=deleted_pid,
                 reason=reason,
             )
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1319,7 +1341,7 @@ class OpenCodeSupervisor:
             return
         try:
             await client.close()
-        except Exception:
+        except Exception:  # best-effort cleanup
             self._logger.debug("opencode client close failed", exc_info=True)
 
     def _build_opencode_env(self, workspace_root: Path) -> dict[str, str]:

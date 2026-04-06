@@ -125,7 +125,7 @@ async def list_opencode_models_for_picker(
         return None
     try:
         workspace_root = canonicalize_path(Path(workspace_path))
-    except Exception:
+    except (ValueError, OSError):
         return None
     if not workspace_root.exists() or not workspace_root.is_dir():
         return None
@@ -194,7 +194,7 @@ async def list_session_threads_for_picker(
 ) -> list[tuple[str, str]]:
     try:
         client = await service._client_for_workspace(str(workspace_root))
-    except Exception:
+    except Exception:  # intentional: external service call, exception types unknown
         return []
     if client is None:
         return []
@@ -205,7 +205,9 @@ async def list_session_threads_for_picker(
             limit=DISCORD_SELECT_OPTION_MAX_OPTIONS,
             max_pages=3,
         )
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: external service call, exception types unknown
         log_event(
             service._logger,
             logging.WARNING,
@@ -271,7 +273,7 @@ async def list_recent_commits_for_picker(
             capture_output=True,
             check=False,
         )
-    except Exception:
+    except OSError:
         return []
     stdout = result.stdout if isinstance(result.stdout, str) else ""
     if result.returncode not in (0, None) and not stdout.strip():

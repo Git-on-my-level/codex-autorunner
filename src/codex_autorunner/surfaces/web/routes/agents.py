@@ -108,7 +108,7 @@ def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]
     if callable(profile_getter):
         try:
             configured_profiles = profile_getter(agent_id)
-        except Exception:
+        except (ValueError, TypeError):
             configured_profiles = {}
         if isinstance(configured_profiles, dict):
             for profile_id in sorted(configured_profiles):
@@ -147,13 +147,13 @@ def _serialize_agent_profiles(request: Request, agent_id: str) -> dict[str, Any]
                 )
                 existing_ids.add(option.profile)
             profiles.sort(key=lambda p: p["id"])
-        except Exception:
+        except Exception:  # intentional: optional hermes integration
             _logger.debug("Failed to resolve hermes profile options", exc_info=True)
     default_profile = None
     if callable(default_getter):
         try:
             default_profile = default_getter(agent_id)
-        except Exception:
+        except (ValueError, TypeError):
             default_profile = None
     return {
         "default_profile": default_profile,
@@ -187,7 +187,7 @@ def build_agents_routes() -> APIRouter:
             return _serialize_model_catalog(catalog)
         except RuntimeError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        except Exception as exc:
+        except Exception as exc:  # intentional: harness error → HTTP 502
             raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @router.get("/api/agents/{agent}/turns/{turn_id}/events")

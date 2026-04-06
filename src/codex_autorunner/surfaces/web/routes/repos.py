@@ -74,7 +74,7 @@ def build_repos_routes() -> APIRouter:
         once = payload.once if payload else False
         try:
             logger.info("run/start once=%s", once)
-        except Exception:
+        except (OSError, ValueError, TypeError):
             _logger.debug("Failed to log run/start", exc_info=True)
         if payload:
             _apply_run_overrides(request, payload)
@@ -90,7 +90,7 @@ def build_repos_routes() -> APIRouter:
         logger = request.app.state.logger
         try:
             logger.info("run/stop requested")
-        except Exception:
+        except (OSError, ValueError, TypeError):
             _logger.debug("Failed to log run/stop", exc_info=True)
         manager.stop()
         return {"running": manager.running}
@@ -102,7 +102,7 @@ def build_repos_routes() -> APIRouter:
         logger = request.app.state.logger
         try:
             logger.info("run/kill requested")
-        except Exception:
+        except (OSError, ValueError, TypeError):
             _logger.debug("Failed to log run/kill", exc_info=True)
         manager.kill()
         with state_lock(engine.state_path):
@@ -133,7 +133,7 @@ def build_repos_routes() -> APIRouter:
         logger = request.app.state.logger
         try:
             logger.info("run/clear-lock requested")
-        except Exception:
+        except (OSError, ValueError, TypeError):
             _logger.debug("Failed to log run/clear-lock", exc_info=True)
         assessment = manager.clear_freeable_lock()
         if not assessment.freeable:
@@ -150,7 +150,7 @@ def build_repos_routes() -> APIRouter:
         once = payload.once if payload else False
         try:
             logger.info("run/resume once=%s", once)
-        except Exception:
+        except (OSError, ValueError, TypeError):
             _logger.debug("Failed to log run/resume", exc_info=True)
         try:
             manager.resume(once=once)
@@ -169,7 +169,7 @@ def build_repos_routes() -> APIRouter:
             )
         try:
             logger.info("run/reset requested")
-        except Exception:
+        except (OSError, ValueError, TypeError):
             _logger.debug("Failed to log run/reset", exc_info=True)
         with state_lock(engine.state_path):
             current_state = load_state(engine.state_path)

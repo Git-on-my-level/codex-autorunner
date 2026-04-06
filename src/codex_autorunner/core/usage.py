@@ -27,7 +27,7 @@ def _parse_timestamp(value: str) -> datetime:
         if value.endswith("Z"):
             value = value.replace("Z", "+00:00")
         return datetime.fromisoformat(value)
-    except Exception as exc:
+    except (ValueError, TypeError) as exc:
         raise UsageError(f"Invalid timestamp in session log: {value}") from exc
 
 
@@ -1024,7 +1024,7 @@ def parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
         return None
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except Exception as exc:
+    except (ValueError, TypeError) as exc:
         raise UsageError(
             "Use ISO timestamps such as 2025-12-01 or 2025-12-01T12:00Z"
         ) from exc

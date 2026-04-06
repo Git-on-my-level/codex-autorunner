@@ -17,6 +17,7 @@ from ...core.car_context import (
     normalize_car_context_profile,
 )
 from ...core.config import load_hub_config
+from ...core.config_contract import ConfigError
 from ...core.filebox import BOXES, list_filebox
 from ...core.filebox_lifecycle import (
     LIFECYCLE_BOXES,
@@ -92,7 +93,12 @@ def _resolve_hub_path(path: Optional[Path]) -> Path:
     start = path or Path.cwd()
     try:
         return load_hub_config(start).root
-    except Exception:
+    except (
+        OSError,
+        ValueError,
+        ConfigError,
+        AttributeError,
+    ):  # intentional: config loading fallback
         candidate = start.resolve()
         if candidate.is_file():
             parent = candidate.parent
@@ -461,7 +467,7 @@ def _fetch_agent_capabilities(
     url = _build_pma_url(config, "/agents")
     try:
         data = _request_json("GET", url, token_env=config.server_auth_token_env)
-    except Exception:
+    except Exception:  # best-effort capability fetch
         return {}
     agents = data.get("agents", []) if isinstance(data, dict) else []
     return {
@@ -502,7 +508,7 @@ def _request_json_with_status(
         parsed = response.json()
         if isinstance(parsed, dict):
             data = parsed
-    except Exception:
+    except ValueError:
         data = {}
     return response.status_code, data
 
@@ -704,7 +710,7 @@ def _record_thread_compact_audit(
                 },
             )
         )
-    except Exception as exc:
+    except (OSError, ValueError) as exc:  # intentional: non-critical audit logging
         logger.warning("Failed to record PMA thread compact audit entry: %s", exc)
 
 
@@ -854,7 +860,7 @@ def pma_chat(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -967,7 +973,7 @@ def pma_chat(
         except httpx.HTTPError as exc:
             typer.echo(f"HTTP error: {exc}", err=True)
             raise typer.Exit(code=1) from None
-        except Exception as exc:
+        except (ValueError, OSError) as exc:  # intentional: top-level error handler
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(code=1) from None
         return
@@ -979,7 +985,7 @@ def pma_chat(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1007,7 +1013,7 @@ def pma_interrupt(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1016,7 +1022,7 @@ def pma_interrupt(
         active_data = _request_json(
             "GET", active_url, token_env=config.server_auth_token_env
         )
-    except Exception:
+    except (httpx.HTTPError, ValueError, OSError):  # best-effort active data fetch
         active_data = {}
     current = active_data.get("current", {}) if isinstance(active_data, dict) else {}
     if isinstance(current, dict):
@@ -1040,7 +1046,7 @@ def pma_interrupt(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1070,7 +1076,7 @@ def pma_reset(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1086,7 +1092,7 @@ def pma_reset(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1112,7 +1118,7 @@ def pma_active(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1128,7 +1134,7 @@ def pma_active(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1191,7 +1197,7 @@ def pma_hygiene(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except OSError as exc:
         typer.echo(f"Failed to build PMA hygiene report: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1199,7 +1205,7 @@ def pma_hygiene(
     if apply:
         try:
             apply_result = apply_pma_hygiene_report(hub_root, report)
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             typer.echo(f"Failed to apply PMA hygiene cleanup: {exc}", err=True)
             raise typer.Exit(code=1) from None
 
@@ -1226,7 +1232,7 @@ def pma_agents(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1237,7 +1243,7 @@ def pma_agents(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1275,7 +1281,7 @@ def pma_models(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1295,7 +1301,7 @@ def pma_models(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1412,7 +1418,7 @@ def pma_thread_spawn(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1452,7 +1458,7 @@ def pma_thread_spawn(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError, TypeError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1524,7 +1530,7 @@ def pma_thread_list(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1579,7 +1585,7 @@ def pma_thread_info(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1625,7 +1631,7 @@ def pma_thread_status(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1715,7 +1721,7 @@ def pma_thread_send(
             token_env=config.server_auth_token_env,
             timeout=240.0 if not should_defer else 30.0,
         )
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError, OSError, TypeError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1783,7 +1789,7 @@ def pma_thread_send(
                     token_env=config.server_auth_token_env,
                     params={"limit": 1},
                 )
-            except Exception:
+            except (httpx.HTTPError, ValueError, OSError):  # best-effort status fetch
                 status_data = {}
             excerpt = str(status_data.get("latest_output_excerpt") or "").strip()
             if excerpt:
@@ -1826,7 +1832,7 @@ def pma_thread_turns(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1891,7 +1897,7 @@ def pma_thread_output(
         raise typer.Exit(code=1) from None
     except typer.Exit:
         raise
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1997,7 +2003,7 @@ def pma_thread_tail(
         raise typer.Exit(code=1) from None
     except KeyboardInterrupt:
         raise typer.Exit(code=130) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2172,7 +2178,7 @@ def pma_thread_compact(
                     {"managed_thread_id": target_id, "error": f"HTTP error: {exc}"}
                 )
                 continue
-            except Exception as exc:
+            except (json.JSONDecodeError, ValueError) as exc:
                 errors.append({"managed_thread_id": target_id, "error": str(exc)})
                 continue
             compacted.append(
@@ -2221,7 +2227,7 @@ def pma_thread_compact(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2247,7 +2253,7 @@ def pma_thread_resume(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2285,7 +2291,7 @@ def pma_thread_archive(
             err=True,
         )
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2307,7 +2313,7 @@ def pma_thread_interrupt(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2316,7 +2322,7 @@ def pma_thread_interrupt(
         thread_data = _request_json(
             "GET", thread_url, token_env=config.server_auth_token_env
         )
-    except Exception:
+    except (httpx.HTTPError, ValueError, OSError):  # best-effort thread data fetch
         logger.debug("Failed to fetch thread data for interrupt check", exc_info=True)
     else:
         thread = thread_data.get("thread", {}) if isinstance(thread_data, dict) else {}
@@ -2342,7 +2348,7 @@ def pma_thread_interrupt(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2378,7 +2384,7 @@ def pma_files(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2389,7 +2395,7 @@ def pma_files(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2514,7 +2520,7 @@ def pma_upload(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2576,7 +2582,7 @@ def pma_download(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2612,7 +2618,7 @@ def pma_delete(
     hub_root = _resolve_hub_path(path)
     try:
         config = load_hub_config(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         typer.echo(f"Failed to load hub config: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2644,7 +2650,7 @@ def pma_delete(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2666,7 +2672,7 @@ def pma_docs_show(
     hub_root = _resolve_hub_path(path)
     try:
         ensure_pma_docs(hub_root)
-    except Exception as exc:
+    except OSError as exc:
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2696,7 +2702,7 @@ def pma_context_reset(
     hub_root = _resolve_hub_path(path)
     try:
         ensure_pma_docs(hub_root)
-    except Exception as exc:
+    except OSError as exc:
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2728,7 +2734,7 @@ def pma_context_snapshot(
     hub_root = _resolve_hub_path(path)
     try:
         ensure_pma_docs(hub_root)
-    except Exception as exc:
+    except OSError as exc:
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2767,14 +2773,14 @@ def pma_context_prune(
         pma_cfg = getattr(config, "pma", None)
         if pma_cfg is not None:
             max_lines = int(getattr(pma_cfg, "active_context_max_lines", max_lines))
-    except Exception:
+    except (OSError, ValueError):  # intentional: config fallback
         logger.debug(
             "Failed to read active_context_max_lines from config", exc_info=True
         )
 
     try:
         ensure_pma_docs(hub_root)
-    except Exception as exc:
+    except OSError as exc:
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2851,7 +2857,7 @@ def pma_context_compact(
             resolved_max_lines = int(
                 getattr(pma_cfg, "active_context_max_lines", resolved_max_lines)
             )
-    except Exception:
+    except (OSError, ValueError):  # intentional: config fallback
         logger.debug(
             "Failed to read active_context_max_lines from config", exc_info=True
         )
@@ -2864,7 +2870,7 @@ def pma_context_compact(
 
     try:
         ensure_pma_docs(hub_root)
-    except Exception as exc:
+    except OSError as exc:
         typer.echo(f"Failed to ensure PMA docs: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -2971,7 +2977,7 @@ def pma_binding_list(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -3028,7 +3034,7 @@ def pma_binding_active(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
@@ -3089,7 +3095,7 @@ def pma_binding_work(
     except httpx.HTTPError as exc:
         typer.echo(f"HTTP error: {exc}", err=True)
         raise typer.Exit(code=1) from None
-    except Exception as exc:
+    except (ValueError, OSError) as exc:  # intentional: top-level error handler
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 

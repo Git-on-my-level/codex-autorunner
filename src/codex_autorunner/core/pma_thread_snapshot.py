@@ -34,14 +34,14 @@ def snapshot_pma_threads(
     try:
         store = PmaThreadStore(hub_root)
         threads = store.list_threads(limit=limit)
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         _logger.warning("Could not load PMA managed threads: %s", exc)
         return []
     try:
         chat_binding_metadata = active_chat_binding_metadata_by_thread(
             hub_root=hub_root
         )
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         _logger.warning(
             "Could not load PMA chat-binding metadata for thread snapshot: %s", exc
         )
@@ -55,7 +55,7 @@ def snapshot_pma_threads(
         if workspace_raw:
             try:
                 workspace_root = safe_relpath(Path(workspace_raw).resolve(), hub_root)
-            except Exception:
+            except (OSError, ValueError):
                 workspace_root = workspace_raw
         chat_binding = chat_binding_metadata.get(managed_thread_id, {})
         snapshot_threads.append(

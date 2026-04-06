@@ -193,7 +193,9 @@ class TopicQueue:
                         ):
                             self._current_task.cancel()
                         raise
-                except Exception as exc:
+                except (
+                    Exception
+                ) as exc:  # intentional: arbitrary async work must not crash worker
                     if future is None:
                         logger.warning(
                             "telegram detached topic queue entry failed", exc_info=exc

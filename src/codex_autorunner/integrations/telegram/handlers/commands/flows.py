@@ -226,7 +226,7 @@ class FlowCommands(TelegramCommandSupportMixin):
             return []
         try:
             manifest = load_manifest(manifest_path, hub_root)
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError):
             return []
         return [repo for repo in manifest.repos if getattr(repo, "enabled", True)]
 
@@ -566,7 +566,9 @@ class FlowCommands(TelegramCommandSupportMixin):
         except (asyncio.CancelledError, KeyboardInterrupt):
             # Let cancellations propagate so shutdowns/timeouts are not masked.
             raise
-        except Exception as exc:  # pragma: no cover - defensive
+        except (
+            Exception
+        ) as exc:  # intentional: top-level defensive handler for all flow subcommands
             log_event(
                 _logger,
                 logging.WARNING,
@@ -957,7 +959,7 @@ class FlowCommands(TelegramCommandSupportMixin):
             if isinstance(run_id, str) and run_id:
                 try:
                     health = check_worker_health(repo_root, run_id)
-                except Exception:
+                except (OSError, ValueError, KeyError, TypeError):
                     health = None
         if health is None:
             return lines
@@ -1154,7 +1156,7 @@ class FlowCommands(TelegramCommandSupportMixin):
 
         try:
             manifest = load_manifest(self._manifest_path, self._hub_root)
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError):
             await self._send_message(
                 message.chat_id,
                 "Failed to load manifest.",
@@ -1247,7 +1249,7 @@ class FlowCommands(TelegramCommandSupportMixin):
                     prefix=line_prefix,
                 )
                 status_line += duration_suffix + freshness_suffix
-            except Exception:
+            except (OSError, ValueError, KeyError, TypeError):
                 status_line = f"{line_prefix}❓ {_code(label)}: Error reading state"
             finally:
                 store.close()
@@ -1528,7 +1530,7 @@ class FlowCommands(TelegramCommandSupportMixin):
                         reply_to=message.message_id,
                     )
                     return
-                except Exception as exc:
+                except (OSError, ValueError, KeyError, TypeError) as exc:
                     await self._send_message(
                         message.chat_id,
                         f"Failed to fetch issue: {exc}",
@@ -1711,7 +1713,7 @@ You are the first ticket in a new ticket_flow run.
                 reply_to=message.message_id,
             )
             return
-        except Exception as exc:
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             await self._send_message(
                 message.chat_id,
                 f"Failed to fetch issue: {exc}",
@@ -2125,7 +2127,9 @@ You are the first ticket in a new ticket_flow run.
                     f"{result} Failed to resume run {run_id}: {exc} "
                     "Use /flow resume to continue."
                 )
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: defensive fallback after specific KeyError/ValueError catches
                 outbound_text = (
                     f"{result} Failed to resume run {run_id}: {exc} "
                     "Use /flow resume to continue."

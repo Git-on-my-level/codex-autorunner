@@ -109,7 +109,7 @@ def build_debug_text(
                 lines.append(f".codex-autorunner exists: {car_dir.exists()}")
                 flows_db = car_dir / "flows.db"
                 lines.append(f"flows.db exists: {flows_db.exists()}")
-        except Exception as exc:
+        except OSError as exc:
             lines.append(f"Path resolution error: {exc}")
 
     lines.append(f"Pending outbox items: {pending_outbox_count}")

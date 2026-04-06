@@ -209,7 +209,7 @@ def ticket_flow_inbox_preflight(repo_root: Path) -> TicketFlowInboxPreflight:
     try:
         if list_ticket_paths(ticket_dir):
             return TicketFlowInboxPreflight(is_recoverable=True)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         logger.warning("Could not inspect ticket dir for inbox preflight: %s", exc)
         return TicketFlowInboxPreflight(is_recoverable=True)
 
@@ -231,7 +231,7 @@ def spawn_ticket_flow_worker(
         out.close()
         err.close()
         logger.info("Started ticket_flow worker for %s (pid=%s)", run_id, proc.pid)
-    except Exception as exc:
+    except (OSError, RuntimeError) as exc:
         logger.warning(
             "ticket_flow.worker.spawn_failed",
             exc_info=exc,
@@ -272,7 +272,7 @@ def stop_ticket_flow_worker(repo_root: Path, run_id: str) -> None:
         pass
     except PermissionError:
         pass
-    except Exception:
+    except OSError:
         try:
             os.kill(health.pid, signal.SIGTERM)
         except OSError:

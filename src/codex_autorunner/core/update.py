@@ -119,7 +119,7 @@ def _reset_update_cache_for_retry(
         )
         _run_cmd(["git", "reset", "--hard", "FETCH_HEAD"], cwd=update_dir)
         _cleanup_update_build_artifacts(update_dir, logger)
-    except Exception as exc:
+    except (RuntimeError, OSError) as exc:
         logger.warning(
             "Aggressive update cache cleanup failed; refresh retry skipped. %s",
             exc,
@@ -203,7 +203,7 @@ def _is_systemd_user_service_active(service_name: str) -> bool:
             text=True,
             timeout=_SERVICE_STATUS_CHECK_TIMEOUT_SECONDS,
         )
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return False
     return result.returncode == 0
 
@@ -225,7 +225,7 @@ def _is_launchd_label_active(label: str) -> bool:
             text=True,
             timeout=_SERVICE_STATUS_CHECK_TIMEOUT_SECONDS,
         )
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return False
     if result.returncode != 0:
         return False
@@ -237,7 +237,7 @@ def _is_launchd_label_active(label: str) -> bool:
             continue
         try:
             pid = int(line.split("=", 1)[1].strip())
-        except Exception:
+        except (ValueError, IndexError):
             continue
         if pid > 0:
             return True
@@ -438,7 +438,7 @@ def _write_update_status(status: str, message: str, **extra) -> None:
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             existing = None
     if isinstance(existing, dict):
         for key in (
@@ -468,7 +468,7 @@ def _is_valid_git_repo(path: Path) -> bool:
             capture_output=True,
             text=True,
         )
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return False
     return result.returncode == 0
 
@@ -482,7 +482,7 @@ def _has_valid_head(path: Path) -> bool:
             capture_output=True,
             text=True,
         )
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return False
     return result.returncode == 0 and bool((result.stdout or "").strip())
 
@@ -493,7 +493,7 @@ def _read_update_status() -> Optional[dict[str, object]]:
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(payload, dict):
         return None
@@ -512,7 +512,7 @@ def _read_update_status() -> Optional[dict[str, object]]:
         )
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             return None
         return payload if isinstance(payload, dict) else None
     return payload
@@ -528,7 +528,7 @@ def _read_update_lock() -> Optional[dict[str, object]]:
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return None
     if isinstance(payload, dict):
         return payload
@@ -622,7 +622,7 @@ def _find_git_root_from_install_metadata() -> Optional[Path]:
 
     try:
         payload = json.loads(direct_url)
-    except Exception:
+    except json.JSONDecodeError:
         return None
 
     raw_url = payload.get("url")
@@ -835,7 +835,7 @@ def _system_update_worker(
                         ["git", "remote", "set-url", "origin", repo_url],
                         cwd=update_dir,
                     )
-                except Exception:
+                except (RuntimeError, OSError):
                     _run_cmd(
                         ["git", "remote", "add", "origin", repo_url],
                         cwd=update_dir,
@@ -865,7 +865,7 @@ def _system_update_worker(
             logger.info("Running checks...")
             try:
                 _run_cmd(["./scripts/check.sh"], cwd=update_dir)
-            except Exception as exc:
+            except (RuntimeError, OSError) as exc:
                 logger.warning("Checks failed; continuing with refresh. %s", exc)
 
         logger.info("Refreshing %s...", _backend_refresh_label(resolved_backend))
@@ -940,7 +940,7 @@ def _system_update_worker(
             _write_update_status(
                 "ok", "Update completed successfully.", update_target=update_target
             )
-    except Exception:
+    except Exception:  # intentional: top-level error handler
         logger.exception("System update failed")
         _write_update_status(
             "error",
@@ -1028,7 +1028,7 @@ def _spawn_update_process(
                 stdout=log_file,
                 stderr=log_file,
             )
-    except Exception:
+    except Exception:  # intentional: top-level error handler
         logger.exception("Failed to spawn update worker")
         _write_update_status(
             "error",

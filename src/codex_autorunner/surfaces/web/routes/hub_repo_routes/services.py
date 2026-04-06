@@ -28,7 +28,7 @@ class HubRepoEnricher:
             return dict(self._unbound_thread_counts_cache)
         try:
             counts = self._context.supervisor.unbound_repo_thread_counts()
-        except Exception:
+        except Exception:  # intentional: supervisor query failure is non-critical
             counts = {}
         self._unbound_thread_counts_cache = dict(counts)
         self._unbound_thread_counts_cached_at = now

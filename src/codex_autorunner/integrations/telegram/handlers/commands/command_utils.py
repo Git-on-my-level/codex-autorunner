@@ -50,7 +50,7 @@ def _build_opencode_exception_formatter(
 def _extract_error_detail_from_http_status(exc: httpx.HTTPStatusError) -> Optional[str]:
     try:
         payload = exc.response.json()
-    except Exception:
+    except (json.JSONDecodeError, ValueError):
         payload = None
     if isinstance(payload, dict):
         detail = extract_opencode_error_detail(payload)
@@ -100,7 +100,7 @@ def _format_httpx_exception(exc: Exception) -> Optional[str]:
     if isinstance(exc, httpx.HTTPStatusError):
         try:
             payload = exc.response.json()
-        except Exception:
+        except (json.JSONDecodeError, ValueError):
             payload = None
         if isinstance(payload, dict):
             detail = (

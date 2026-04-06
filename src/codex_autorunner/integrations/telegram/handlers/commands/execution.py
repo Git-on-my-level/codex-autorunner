@@ -29,6 +29,7 @@ from .....agents.opencode.runtime import (
     split_model_id,
 )
 from .....agents.registry import get_registered_agents, wrap_requested_agent_context
+from .....core.config_contract import ConfigError
 from .....core.context_awareness import (
     has_file_context_signal,
     maybe_inject_car_awareness,
@@ -313,7 +314,11 @@ def _get_thread_runtime_binding(
         return None
     try:
         return getter(thread_target_id)
-    except Exception:
+    except (
+        AttributeError,
+        TypeError,
+        RuntimeError,
+    ):  # intentional: defensive guard for dynamic dispatch
         return None
 
 
@@ -700,14 +705,21 @@ async def _finalize_telegram_managed_thread_execution(
                         run_events_dispatched += 1
                         try:
                             await on_progress_event(run_event)
-                        except Exception:
+                        except (
+                            RuntimeError,
+                            ValueError,
+                            TypeError,
+                            ConnectionError,
+                            OSError,
+                            AttributeError,
+                        ):  # intentional: best-effort
                             handlers._logger.debug(
                                 "Telegram progress event handler failed for %s",
                                 type(run_event).__name__,
                                 exc_info=True,
                             )
                             continue
-            except Exception:
+            except Exception:  # intentional: event pump handler
                 handlers._logger.warning(
                     "Telegram progress event pump failed", exc_info=True
                 )
@@ -730,7 +742,13 @@ async def _finalize_telegram_managed_thread_execution(
             timeout_seconds=TELEGRAM_PMA_TIMEOUT_SECONDS,
             execution_error_message=public_execution_error,
         )
-    except Exception:
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+        ConnectionError,
+    ):  # intentional: user-facing error display
         outcome = RuntimeThreadOutcome(
             status="error",
             assistant_text="",
@@ -770,7 +788,14 @@ async def _finalize_telegram_managed_thread_execution(
             await on_progress_event(
                 terminal_run_event_from_outcome(outcome, event_state)
             )
-        except Exception:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+            OSError,
+            AttributeError,
+        ):  # intentional: best-effort
             handlers._logger.debug(
                 "Telegram terminal progress event failed", exc_info=True
             )
@@ -818,7 +843,7 @@ async def _finalize_telegram_managed_thread_execution(
                 assistant_text=resolved_assistant_text,
             )
             transcript_turn_id = managed_turn_id
-        except Exception as exc:
+        except OSError as exc:
             handlers._logger.warning(
                 "Failed to persist Telegram transcript (thread=%s turn=%s): %s",
                 managed_thread_id,
@@ -958,7 +983,7 @@ def _ensure_telegram_managed_thread_queue_worker(
             try:
                 await begin(chat_id, thread_id)
                 began = True
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 log_event(
                     handlers._logger,
                     logging.DEBUG,
@@ -973,7 +998,7 @@ def _ensure_telegram_managed_thread_queue_worker(
             if began and callable(end):
                 try:
                     await end(chat_id, thread_id)
-                except Exception as exc:
+                except (OSError, RuntimeError, ValueError) as exc:
                     log_event(
                         handlers._logger,
                         logging.DEBUG,
@@ -1203,7 +1228,13 @@ async def _run_telegram_managed_thread_turn(
                 record.workspace_path,
                 **handlers._thread_start_kwargs(record),
             )
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+        ) as exc:  # intentional: user-facing error display
             log_event(
                 handlers._logger,
                 logging.WARNING,
@@ -1350,7 +1381,13 @@ async def _run_telegram_managed_thread_turn(
             client_request_id=(f"telegram:{topic_key}:{secrets.token_hex(6)}"),
             sandbox_policy=sandbox_policy,
         )
-    except Exception as exc:
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+        ConnectionError,
+    ) as exc:  # intentional: user-facing error display
         failure_message = _sanitize_runtime_thread_result_error(
             exc,
             public_error=public_execution_error,
@@ -1818,7 +1855,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 await client.turn_interrupt(
                     turn_handle.turn_id, thread_id=turn_handle.thread_id
                 )
-            except Exception as exc:
+            except (OSError, RuntimeError, ValueError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1981,7 +2018,13 @@ class ExecutionCommands(TelegramCommandSupportMixin):
 
         try:
             opencode_client = await supervisor.get_client(workspace_root)
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+        ) as exc:  # intentional: user-facing error display
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -2611,7 +2654,13 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                             prompt_send_ms=prompt_send_ms,
                             endpoint="/session/{id}/prompt_async",
                         )
-                    except Exception as exc:
+                    except (
+                        RuntimeError,
+                        OSError,
+                        ValueError,
+                        TypeError,
+                        ConnectionError,
+                    ) as exc:  # intentional: cleanup before re-raise
                         if timeout_task is not None:
                             timeout_task.cancel()
                             with suppress(asyncio.CancelledError):
@@ -2736,7 +2785,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     "intermediate_response", ""
                 ),
             )
-        except Exception as exc:
+        except Exception as exc:  # intentional: top-level command handler
             log_extra: dict[str, Any] = {}
             if isinstance(exc, httpx.HTTPStatusError):
                 log_extra["status_code"] = exc.response.status_code
@@ -3010,7 +3059,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                         sandbox_policy=sandbox_policy,
                         **turn_kwargs,
                     )
-                except Exception as exc:
+                except CodexAppServerResponseError as exc:
                     if (
                         pma_mode
                         and _is_missing_thread_error(exc)
@@ -3123,7 +3172,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                     turn_elapsed_seconds = time.monotonic() - turn_started_at
             finally:
                 turn_semaphore.release()
-        except Exception as exc:
+        except Exception as exc:  # intentional: top-level command handler
             if turn_handle is not None:
                 if turn_key is not None:
                     self._turn_contexts.pop(turn_key, None)
@@ -3313,16 +3362,19 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         if hub_root is None:
             return None
         supervisor = getattr(self, "_hub_supervisor", None)
-        snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
-        base_prompt = load_pma_prompt(hub_root)
-        prompt_state_key = self._pma_registry_key(record, message)
-        return format_pma_prompt(
-            base_prompt,
-            snapshot,
-            message_text,
-            hub_root=hub_root,
-            prompt_state_key=prompt_state_key,
-        )
+        try:
+            snapshot = await build_hub_snapshot(supervisor, hub_root=Path(hub_root))
+            base_prompt = load_pma_prompt(hub_root)
+            prompt_state_key = self._pma_registry_key(record, message)
+            return format_pma_prompt(
+                base_prompt,
+                snapshot,
+                message_text,
+                hub_root=hub_root,
+                prompt_state_key=prompt_state_key,
+            )
+        except (OSError, ValueError, RuntimeError, ConfigError):
+            return None
 
     async def _prepare_turn_context(
         self,

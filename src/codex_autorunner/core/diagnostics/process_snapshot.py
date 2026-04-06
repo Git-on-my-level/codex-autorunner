@@ -180,7 +180,7 @@ def get_ps_output() -> str:
         if proc.returncode != 0:
             return ""
         return proc.stdout or ""
-    except Exception:
+    except OSError:
         return ""
 
 
@@ -222,7 +222,7 @@ def enrich_with_ownership(
 
     try:
         process_records = list_process_records(repo_root)
-    except Exception:
+    except Exception:  # intentional: non-critical process enrichment
         process_records = []
 
     record_pids = {r.pid for r in process_records if r.pid is not None}

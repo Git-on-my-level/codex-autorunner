@@ -57,7 +57,9 @@ def _registered_agents(context: Any = None) -> dict[str, Any]:
         from ...agents.registry import get_registered_agents
 
         return get_registered_agents(context)
-    except Exception:
+    except (
+        Exception
+    ):  # intentional: graceful degradation when agent registry is unavailable
         return {}
 
 
@@ -147,7 +149,9 @@ def _config_hermes_profiles(context: Any) -> dict[str, Any]:
             return {}
         profiles = getter("hermes")
         return dict(profiles) if isinstance(profiles, dict) else {}
-    except Exception:
+    except (
+        Exception
+    ):  # intentional: graceful degradation when agent config resolution fails
         return {}
 
 
@@ -315,7 +319,9 @@ def chat_agent_supports_effort(agent: object, context: Any = None) -> bool:
         from ...agents.registry import get_agent_descriptor
 
         descriptor = get_agent_descriptor(normalized, context)
-    except Exception:
+    except (
+        Exception
+    ):  # intentional: graceful degradation when agent descriptor lookup fails
         descriptor = None
     if descriptor is None:
         return normalized == "codex"

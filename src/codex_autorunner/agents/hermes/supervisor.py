@@ -246,7 +246,7 @@ class HermesSupervisor:
                 await pending_task
             except asyncio.CancelledError:
                 pass
-            except Exception:
+            except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
                 self._logger.debug(
                     "Hermes approval task raised while cancelling turn %s",
                     resolved_turn_id,
@@ -352,7 +352,7 @@ class HermesSupervisor:
                 await pending_task
             except asyncio.CancelledError:
                 pass
-            except Exception:
+            except (RuntimeError, TypeError, ValueError, AttributeError, OSError):
                 self._logger.debug(
                     "Hermes approval task raised during cleanup for turn %s",
                     state.turn_id,
@@ -445,7 +445,14 @@ class HermesSupervisor:
                 reason="cancelled",
             )
             return decision
-        except Exception:
+        except (
+            RuntimeError,
+            TypeError,
+            ValueError,
+            AttributeError,
+            OSError,
+            ConnectionError,
+        ):  # intentional: user-provided approval handler may raise arbitrary errors
             task.cancel()
             self._logger.warning(
                 "Hermes approval handler raised for session=%s turn=%s request=%s",
@@ -576,7 +583,13 @@ def build_hermes_supervisor_from_config(
             if "profile" not in str(exc):
                 raise
             binary = config.agent_binary(agent_id).strip()
-    except Exception:
+    except (
+        KeyError,
+        AttributeError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ):  # intentional: config lookup may raise various errors
         return None
     if not binary:
         return None
@@ -603,7 +616,13 @@ def hermes_binary_available(
             if "profile" not in str(exc):
                 raise
             binary = config.agent_binary(agent_id).strip()
-    except Exception:
+    except (
+        KeyError,
+        AttributeError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ):  # intentional: config lookup may raise various errors
         return False
     if not binary:
         return False
@@ -642,7 +661,13 @@ def hermes_runtime_preflight(
             if "profile" not in str(exc):
                 raise
             binary = config.agent_binary(normalized_agent_id).strip()
-    except Exception:
+    except (
+        KeyError,
+        AttributeError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ):  # intentional: config lookup may raise various errors
         return RuntimePreflightResult(
             runtime_id=normalized_agent_id,
             status="missing_binary",
@@ -680,7 +705,7 @@ def hermes_runtime_preflight(
             timeout=10,
         )
         version = result.stdout.strip() if result.returncode == 0 else None
-    except Exception:
+    except (OSError, subprocess.TimeoutExpired):
         version = None
     try:
         result = subprocess.run(
@@ -699,7 +724,7 @@ def hermes_runtime_preflight(
                 message="Hermes ACP mode is not supported by this binary.",
                 fix="Install a Hermes build that supports the `hermes acp` command.",
             )
-    except Exception as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         return RuntimePreflightResult(
             runtime_id=normalized_agent_id,
             status="incompatible",

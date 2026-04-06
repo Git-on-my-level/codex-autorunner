@@ -853,7 +853,7 @@ class PmaAutomationTimerCreateRequest(Payload):
             return None
         try:
             parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        except Exception as exc:
+        except ValueError as exc:
             raise ValueError("due_at must be a valid ISO-8601 timestamp") from exc
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)

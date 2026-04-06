@@ -46,7 +46,7 @@ def get_car_version() -> str:
 
     try:
         return importlib.metadata.version("codex-autorunner")
-    except Exception:
+    except (ValueError, OSError, TypeError, RuntimeError):
         return "unknown"
 
 
@@ -121,7 +121,7 @@ def request_json(
         preview = ""
         try:
             preview = (response.text or "")[:200].strip()
-        except Exception:
+        except (OSError, ValueError, TypeError):
             preview = ""
         hint = f" body_preview={preview!r}" if preview else ""
         raise httpx.HTTPError(
@@ -272,7 +272,7 @@ def request_form_json(
         preview = ""
         try:
             preview = (response.text or "")[:200].strip()
-        except Exception:
+        except (OSError, ValueError, TypeError):
             preview = ""
         hint = f" body_preview={preview!r}" if preview else ""
         raise httpx.HTTPError(

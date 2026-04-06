@@ -101,7 +101,7 @@ def register_worktree_commands(
                 force=force,
                 start_point=start_point,
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError) as exc:
             raise_exit(str(exc), cause=exc)
         typer.echo(
             f"Created worktree {snapshot.id} (branch={snapshot.branch}) at {snapshot.path}"
@@ -248,7 +248,7 @@ def register_worktree_commands(
                     force=force,
                     archive_profile=archive_profile,
                 )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError) as exc:
             raise_exit(str(exc), cause=exc)
         _emit_cleanup_status(result)
 
@@ -324,7 +324,7 @@ def register_worktree_commands(
                     force=force,
                     archive_profile=archive_profile,
                 )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError) as exc:
             raise_exit(str(exc), cause=exc)
         _emit_cleanup_status(result)
 
@@ -375,7 +375,7 @@ def register_worktree_commands(
                 token_env=config.server_auth_token_env,
                 payload={"commands": normalized_commands},
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError) as exc:
             raise_exit(
                 f"Failed to set worktree setup commands for {repo_id}: {exc}",
                 cause=exc,

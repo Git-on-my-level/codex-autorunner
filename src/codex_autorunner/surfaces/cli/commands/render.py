@@ -256,7 +256,7 @@ def _prune_non_media_artifacts(
         try:
             resolved = artifact_path.resolve()
             is_within_output = resolved.is_relative_to(output_root)
-        except Exception:
+        except (OSError, ValueError):
             is_within_output = False
         if is_within_output and artifact_path.exists():
             artifact_path.unlink(missing_ok=True)
@@ -415,7 +415,7 @@ def _resolve_demo_target_base_url(
             yield resolved
     except ServeModeError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # intentional: serve-mode start can fail in many ways
         detail = str(exc) or "Unknown serve-mode error."
         raise ServeModeError(f"{detail} (serve context: {context_details})") from exc
     finally:

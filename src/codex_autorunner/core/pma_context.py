@@ -8,6 +8,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from ..bootstrap import ensure_pma_docs, pma_doc_path
 from .config import load_hub_config
+from .config_contract import ConfigError
 from .filebox import BOXES, empty_listing, list_filebox
 from .flows.models import flow_run_duration_seconds
 from .freshness import (
@@ -185,7 +186,7 @@ def _trim_extra(extra: Any, limit: int) -> Any:
         return _truncate(extra, limit)
     try:
         raw = json.dumps(extra, ensure_ascii=True, sort_keys=True, default=str)
-    except Exception:
+    except (ValueError, TypeError):
         raw = str(extra)
     if len(raw) <= limit:
         return extra
@@ -199,7 +200,7 @@ def _trim_extra(extra: Any, limit: int) -> Any:
 def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
     try:
         ensure_pma_docs(hub_root)
-    except Exception as exc:
+    except OSError as exc:
         _logger.warning("Could not ensure PMA docs: %s", exc)
 
     docs_max_chars = PMA_DOCS_MAX_CHARS
@@ -216,7 +217,7 @@ def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
             context_log_tail_lines = int(
                 getattr(pma_cfg, "context_log_tail_lines", context_log_tail_lines)
             )
-    except Exception as exc:
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
         _logger.warning("Could not load PMA config: %s", exc)
 
     auto_prune_state = maybe_auto_prune_active_context(
@@ -232,7 +233,7 @@ def load_pma_workspace_docs(hub_root: Path) -> dict[str, Any]:
     def _read(path: Path) -> str:
         try:
             return path.read_text(encoding="utf-8")
-        except Exception as exc:
+        except OSError as exc:
             _logger.warning("Could not read file %s: %s", path, exc)
             return ""
 
@@ -284,7 +285,7 @@ def _load_template_scan_summary(
                 str(payload.get("scanned_at", "")), max_field_chars
             ),
         }
-    except Exception as exc:
+    except (OSError, ValueError, TypeError, KeyError) as exc:
         _logger.warning("Could not load template scan summary: %s", exc)
         return None
 
@@ -325,7 +326,7 @@ def _snapshot_pma_files(
                 )
                 for e in entries
             ]
-    except Exception as exc:
+    except (OSError, KeyError, TypeError, RuntimeError) as exc:
         _logger.warning("Could not list filebox contents: %s", exc)
     return pma_files, pma_files_detail
 
@@ -433,11 +434,11 @@ def load_pma_prompt(hub_root: Path) -> str:
     path = pma_doc_path(hub_root, "prompt.md")
     try:
         ensure_pma_docs(hub_root)
-    except Exception as exc:
+    except OSError as exc:
         _logger.warning("Could not ensure PMA docs for prompt: %s", exc)
     try:
         return path.read_text(encoding="utf-8")
-    except Exception as exc:
+    except OSError as exc:
         _logger.warning("Could not read prompt file: %s", exc)
         return ""
 
@@ -462,7 +463,7 @@ def format_pma_discoverability_preamble(
     if resolved_docs is None and hub_root is not None:
         try:
             resolved_docs = load_pma_workspace_docs(hub_root)
-        except Exception as exc:
+        except (OSError, ValueError, TypeError, RuntimeError, ConfigError) as exc:
             _logger.warning("Could not load PMA workspace docs: %s", exc)
     if resolved_docs:
         prompt += _render_pma_workspace_docs(resolved_docs)
@@ -690,7 +691,7 @@ def format_pma_prompt(
     if hub_root is not None:
         try:
             pma_docs = load_pma_workspace_docs(hub_root)
-        except Exception as exc:
+        except (OSError, ValueError, TypeError, RuntimeError, ConfigError) as exc:
             _logger.warning("Could not load PMA workspace docs: %s", exc)
 
     sections = _build_prompt_sections(

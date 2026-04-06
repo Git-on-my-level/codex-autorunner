@@ -341,7 +341,7 @@ async def handle_car_model(
                 model_items = await service._list_opencode_models_for_picker(
                     workspace_path=binding.get("workspace_path")
                 )
-            except Exception as exc:
+            except Exception as exc:  # intentional: external API call for model listing
                 log_event(
                     service._logger,
                     logging.WARNING,
@@ -405,7 +405,7 @@ async def handle_car_model(
                     },
                 )
                 model_items = _coerce_model_picker_items(result)
-            except Exception as exc:
+            except Exception as exc:  # intentional: external API call for model listing
                 log_event(
                     service._logger,
                     logging.WARNING,
@@ -465,7 +465,9 @@ async def handle_car_model(
             agent=current_agent,
             limit=MODEL_SEARCH_FETCH_LIMIT,
         )
-    except Exception:
+    except (
+        Exception
+    ):  # intentional: best-effort model listing, gracefully degrades to None
         available_model_items = None
 
     if available_model_items:

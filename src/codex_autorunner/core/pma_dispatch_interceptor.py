@@ -75,7 +75,7 @@ async def _can_auto_resume_run(repo_root: Path, run_id: str) -> bool:
             if not run:
                 return False
             return run.status == FlowRunStatus.PAUSED
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         logger.warning("Failed to check run status for %s: %s", run_id, exc)
         return False
 
@@ -113,7 +113,7 @@ title: Auto-resolved by PMA
 
         return True
 
-    except Exception:
+    except OSError:
         logger.exception("Failed to write reply for run %s", run_id)
         return False
 
@@ -254,7 +254,9 @@ class PmaDispatchInterceptor:
                 notified=notified,
             )
 
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: top-level guard for complex dispatch logic
             self._logger.exception(
                 "Error processing dispatch event %s for run %s", event_id, run_id
             )
@@ -289,7 +291,7 @@ class PmaDispatchInterceptor:
                 message=message,
                 correlation_id=correlation_id,
             )
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             self._logger.exception(
                 "Failed to notify bound chat for auto-resolved dispatch run_id=%s",
                 run_id,
@@ -322,7 +324,7 @@ class PmaDispatchInterceptor:
                 message=message,
                 correlation_id=correlation_id,
             )
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             self._logger.exception(
                 "Failed to notify PMA chat for escalated dispatch run_id=%s",
                 run_id,

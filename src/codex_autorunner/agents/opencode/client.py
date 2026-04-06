@@ -149,7 +149,9 @@ class OpenCodeClient:
                     supports_prompt_async=profile.supports_prompt_async,
                     supports_global_endpoints=profile.supports_global_endpoints,
                 )
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: capability detection must not crash; any error uses defaults
                 self._logger.warning(
                     "Failed to detect API shape, assuming modern OpenCode: %s", exc
                 )
@@ -674,7 +676,9 @@ class OpenCodeClient:
                 if status_code in (404, 405):
                     continue
                 raise
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: SSE streaming can fail in many transport-layer ways; re-raised after tracking
                 last_error = exc
                 raise
         if ready_event is not None and not ready_event.is_set():
@@ -711,7 +715,7 @@ class OpenCodeClient:
                 ),
             )
             return spec
-        except Exception as exc:
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

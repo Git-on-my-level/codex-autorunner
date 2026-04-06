@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -78,7 +79,7 @@ class TelegramTicketFlowBridge:
             thread_id = None
             try:
                 _chat_id, thread_id, _scope = parse_topic_key(key)
-            except Exception:
+            except (ValueError, TypeError):
                 thread_id = None
             active_raw = getattr(record, "active_thread_id", None)
             try:
@@ -108,7 +109,7 @@ class TelegramTicketFlowBridge:
         while True:
             try:
                 await self._scan_and_notify_pauses()
-            except Exception as exc:
+            except Exception as exc:  # intentional: top-level error handler
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -165,7 +166,7 @@ class TelegramTicketFlowBridge:
             pause = await asyncio.to_thread(
                 self._load_ticket_flow_pause, workspace_root
             )
-        except Exception as exc:
+        except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -208,7 +209,7 @@ class TelegramTicketFlowBridge:
         primary_key, primary_record = primary
         try:
             chat_id, thread_id, _scope = parse_topic_key(primary_key)
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             self._logger.debug("Failed to parse topic key: %s", exc)
             for key, previous in updates:
                 await self._store.update_topic(
@@ -229,7 +230,7 @@ class TelegramTicketFlowBridge:
                 allow_resume_hint=allow_resume_hint,
             )
             self._pause_targets[str(workspace_root)] = run_id
-        except Exception as exc:
+        except (RuntimeError, OSError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -274,7 +275,7 @@ class TelegramTicketFlowBridge:
                 for repo in manifest.repos:
                     path = canonicalize_path((self._hub_root / repo.path).resolve())
                     workspace_topics.setdefault(path, [])
-            except Exception as exc:
+            except (OSError, ValueError) as exc:
                 self._logger.debug(
                     "telegram.ticket_flow.manifest_load_failed", exc_info=exc
                 )
@@ -335,7 +336,7 @@ class TelegramTicketFlowBridge:
             updated = await controller.resume_flow(run_id)
             if updated:
                 spawn_ticket_flow_worker(workspace_root, updated.id, self._logger)
-        except Exception as exc:
+        except (ConfigError, OSError, RuntimeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -363,7 +364,7 @@ class TelegramTicketFlowBridge:
             pause = await asyncio.to_thread(
                 self._load_ticket_flow_pause, workspace_root
             )
-        except Exception as exc:
+        except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -400,7 +401,7 @@ class TelegramTicketFlowBridge:
             )
             self._last_default_notification[workspace_root] = marker
             self._pause_targets[str(workspace_root)] = run_id
-        except Exception as exc:
+        except (RuntimeError, OSError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -418,7 +419,7 @@ class TelegramTicketFlowBridge:
         if raw_config is None:
             try:
                 raw_config = load_hub_config(self._hub_root).raw
-            except Exception:
+            except (ConfigError, OSError, RuntimeError, ConnectionError):
                 raw_config = {}
             self._hub_raw_config = raw_config
         try:
@@ -427,7 +428,7 @@ class TelegramTicketFlowBridge:
                 raw_config=raw_config,
                 workspace_root=workspace_root,
             )
-        except Exception as exc:
+        except (ConfigError, OSError, RuntimeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -444,7 +445,7 @@ class TelegramTicketFlowBridge:
         if raw_config is None:
             try:
                 raw_config = load_hub_config(self._hub_root).raw
-            except Exception:
+            except (ConfigError, OSError, RuntimeError, ConnectionError):
                 raw_config = {}
             self._hub_raw_config = raw_config
         try:
@@ -452,7 +453,7 @@ class TelegramTicketFlowBridge:
                 hub_root=self._hub_root,
                 raw_config=raw_config,
             )
-        except Exception as exc:
+        except (ConfigError, OSError, RuntimeError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -667,7 +668,7 @@ class TelegramTicketFlowBridge:
                     run_id=run_id,
                     seq=seq,
                 )
-        except Exception as exc:
+        except (RuntimeError, OSError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -690,7 +691,7 @@ class TelegramTicketFlowBridge:
         while True:
             try:
                 await self._scan_and_notify_terminals()
-            except Exception as exc:
+            except Exception as exc:  # intentional: top-level error handler
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -721,7 +722,7 @@ class TelegramTicketFlowBridge:
             terminal_run = await asyncio.to_thread(
                 self._load_latest_terminal_run, workspace_root
             )
-        except Exception as exc:
+        except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -753,7 +754,7 @@ class TelegramTicketFlowBridge:
         primary_key, primary_record = primary
         try:
             chat_id, thread_id, _scope = parse_topic_key(primary_key)
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             self._logger.debug("Failed to parse topic key: %s", exc)
             return
         message = self._format_terminal_notification(
@@ -775,7 +776,7 @@ class TelegramTicketFlowBridge:
                 thread_id=thread_id,
                 meta={"status": status},
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, ConnectionError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -924,7 +925,7 @@ class TelegramTicketFlowBridge:
             primary_key, _primary_record = primary
             try:
                 chat_id, thread_id, _scope = parse_topic_key(primary_key)
-            except Exception as exc:
+            except (ValueError, TypeError) as exc:
                 self._logger.debug("Failed to parse topic key: %s", exc)
             else:
                 sent = await self._send_message_with_outbox(

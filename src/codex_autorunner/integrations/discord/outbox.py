@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -111,7 +112,11 @@ class DiscordOutboxManager:
                 records = await self._store.list_outbox()
                 if records:
                     await self._flush(records)
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                sqlite3.Error,
+            ) as exc:  # outbox flush must not crash
                 self._logger.warning("discord.outbox.flush_failed: %s", exc)
 
     async def send_with_outbox(self, record: OutboxRecord) -> bool:
@@ -212,7 +217,7 @@ class DiscordOutboxManager:
                     retry_after_seconds=None,
                 )
                 return False
-        except Exception as exc:
+        except Exception as exc:  # retry boundary
             retry_after = _extract_retry_after_seconds(exc)
             await self._store.record_outbox_failure(
                 current.record_id,
@@ -233,7 +238,11 @@ class DiscordOutboxManager:
         if self._on_delivered is not None:
             try:
                 await self._on_delivered(current, delivered_message_id)
-            except Exception:
+            except (
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ):  # callback must not disrupt delivery
                 self._logger.warning(
                     "discord.outbox.delivery_callback_failed record_id=%s",
                     current.record_id,
@@ -260,7 +269,7 @@ class DiscordOutboxManager:
             return False
         try:
             binding = await self._store.get_binding(channel_id=record.channel_id)
-        except Exception:
+        except (sqlite3.Error, RuntimeError):
             return False
         workspace_raw = (
             binding.get("workspace_path") if isinstance(binding, dict) else None
@@ -280,7 +289,7 @@ class DiscordOutboxManager:
         try:
             with FlowStore(db_path, durable=durable_writes) as store:
                 return store.get_flow_run(run_id) is None
-        except Exception:
+        except (sqlite3.Error, OSError):
             return False
 
     async def _mark_inflight(self, key: str) -> bool:

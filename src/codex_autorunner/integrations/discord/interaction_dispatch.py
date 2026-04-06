@@ -148,7 +148,7 @@ async def handle_interaction(
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
         await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
-    except Exception as exc:
+    except Exception as exc:  # intentional: top-level interaction error handler
         log_event(
             service._logger,
             logging.ERROR,
@@ -342,7 +342,9 @@ async def handle_normalized_interaction(
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
         await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: top-level normalized interaction error handler
         log_event(
             service._logger,
             logging.ERROR,
@@ -671,7 +673,9 @@ async def handle_component_interaction(
     except DiscordTransientError as exc:
         user_msg = exc.user_message or "An error occurred. Please try again later."
         await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: top-level component interaction error handler
         log_event(
             service._logger,
             logging.ERROR,

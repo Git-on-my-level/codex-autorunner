@@ -55,7 +55,7 @@ def _resolve_repo_root(request: Optional[Request] = None) -> Path:
         if isinstance(repo_root, str):
             try:
                 return Path(repo_root)
-            except Exception:
+            except (TypeError, ValueError):
                 _logger.debug(
                     "Failed to convert repo_root string to Path", exc_info=True
                 )

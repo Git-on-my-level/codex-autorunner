@@ -241,7 +241,7 @@ async def handle_car_review(
             session_key=session_key,
             orchestrator_channel_key=channel_id,
         )
-    except Exception as exc:
+    except Exception as exc:  # intentional: top-level agent turn fault barrier
         log_event(
             service._logger,
             logging.WARNING,
@@ -293,7 +293,7 @@ async def handle_car_review(
             workspace_root=workspace_root,
             channel_id=channel_id,
         )
-    except Exception as exc:
+    except Exception as exc:  # intentional: best-effort outbox flush after review
         log_event(
             service._logger,
             logging.WARNING,

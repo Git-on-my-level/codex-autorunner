@@ -201,7 +201,9 @@ class LifecycleEventProcessor:
                 continue
             try:
                 self._process_event(event)
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: process_event is a user-provided callback
                 self._record_failure(event, exc)
 
 
@@ -237,7 +239,9 @@ class HubLifecycleWorker:
             while not self._stop_event.wait(self._poll_interval_seconds):
                 try:
                     self._process_once()
-                except Exception:
+                except (
+                    Exception
+                ):  # intentional: process_once is a user-provided callback
                     self._logger.exception("Error in lifecycle event processor")
 
         self._thread = threading.Thread(

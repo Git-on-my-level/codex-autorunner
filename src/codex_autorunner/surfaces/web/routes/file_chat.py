@@ -166,7 +166,12 @@ def build_file_chat_routes() -> APIRouter:
                     reasoning=reasoning,
                     on_meta=_on_meta,
                 )
-            except Exception as exc:
+            except (
+                RuntimeError,
+                asyncio.CancelledError,
+                OSError,
+                FileChatError,
+            ) as exc:  # intentional: finalize error state before re-raise
                 await _finalize_turn_state(
                     request,
                     target,
@@ -224,7 +229,7 @@ def build_file_chat_routes() -> APIRouter:
                 result = {"status": "error", "detail": "File chat failed"}
                 try:
                     result = await run_task
-                except Exception as exc:
+                except Exception as exc:  # intentional: top-level error handler
                     logger.exception("file chat task failed")
                     result = {
                         "status": "error",
@@ -261,7 +266,7 @@ def build_file_chat_routes() -> APIRouter:
                 yield format_sse(
                     "error", {"detail": result.get("detail") or "File chat failed"}
                 )
-        except Exception:
+        except Exception:  # intentional: top-level error handler
             logger.exception("file chat stream failed")
             yield format_sse("error", {"detail": "File chat failed"})
         finally:
@@ -313,7 +318,7 @@ def build_file_chat_routes() -> APIRouter:
         if thread_id:
             try:
                 await client.thread_resume(thread_id)
-            except Exception:
+            except (RuntimeError, OSError):  # intentional: thread resume fallback
                 thread_id = None
 
         if not thread_id:
@@ -340,14 +345,21 @@ def build_file_chat_routes() -> APIRouter:
         if events is not None:
             try:
                 await events.register_turn(thread_id, handle.turn_id)
-            except Exception:
+            except (
+                RuntimeError,
+                OSError,
+            ):  # intentional: non-critical event registration
                 logger.debug("file chat register_turn failed", exc_info=True)
         if on_meta is not None:
             try:
                 maybe = on_meta(agent_id, thread_id, handle.turn_id)
                 if asyncio.iscoroutine(maybe):
                     await maybe
-            except Exception:
+            except (
+                RuntimeError,
+                TypeError,
+                OSError,
+            ):  # intentional: non-critical meta callback
                 logger.debug("file chat meta callback failed", exc_info=True)
 
         turn_task = asyncio.create_task(handle.wait(timeout=None))
@@ -428,7 +440,11 @@ def build_file_chat_routes() -> APIRouter:
                 maybe = on_meta("opencode", session_id, turn_id)
                 if asyncio.iscoroutine(maybe):
                     await maybe
-            except Exception:
+            except (
+                RuntimeError,
+                TypeError,
+                OSError,
+            ):  # intentional: non-critical meta callback
                 logger.debug("file chat opencode meta failed", exc_info=True)
 
         model_payload = split_model_id(model)
@@ -445,7 +461,11 @@ def build_file_chat_routes() -> APIRouter:
                     maybe = on_usage(part)
                     if asyncio.iscoroutine(maybe):
                         await maybe
-                except Exception:
+                except (
+                    RuntimeError,
+                    TypeError,
+                    OSError,
+                ):  # intentional: non-critical usage handler
                     logger.debug("file chat usage handler failed", exc_info=True)
 
         ready_event = asyncio.Event()
@@ -485,7 +505,11 @@ def build_file_chat_routes() -> APIRouter:
             prompt_response = None
             try:
                 prompt_response = await prompt_task
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                FileChatError,
+            ) as exc:  # intentional: wraps all prompt failures
                 interrupt_event.set()
                 output_task.cancel()
                 raise FileChatError(f"OpenCode prompt failed: {exc}") from exc
@@ -686,7 +710,7 @@ def build_file_chat_routes() -> APIRouter:
     async def apply_ticket_patch(index: int, request: Request):
         try:
             body = await request.json()
-        except Exception:
+        except ValueError:
             body = {}
         payload = dict(body) if isinstance(body, dict) else {}
         payload["target"] = f"ticket:{int(index)}"
@@ -731,7 +755,12 @@ def build_file_chat_routes() -> APIRouter:
         if registry is not None:
             try:
                 cleared = bool(registry.reset_thread(thread_key))
-            except Exception:
+            except (
+                AttributeError,
+                KeyError,
+                RuntimeError,
+                OSError,
+            ):  # intentional: non-critical thread reset
                 logger.debug(
                     "ticket chat thread reset failed for key=%s",
                     thread_key,

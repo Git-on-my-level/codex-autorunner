@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from ...core.logging_utils import log_event
 from ...core.state import now_iso
-from .adapter import TelegramCallbackQuery
+from .adapter import TelegramAPIError, TelegramCallbackQuery
 from .constants import PLACEHOLDER_TEXT, TELEGRAM_MAX_MESSAGE_LENGTH
 from .helpers import (
     _format_turn_metrics,
@@ -144,7 +144,7 @@ class TelegramMessageTransport:
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
             )
-        except Exception:
+        except (TelegramAPIError, ValueError, TypeError):
             self._logger.debug("Telegram message edit failed", exc_info=True)
             return False
         return True
@@ -160,7 +160,7 @@ class TelegramMessageTransport:
                     chat_id, message_id, message_thread_id=thread_id
                 )
             )
-        except Exception:
+        except TelegramAPIError:
             return False
 
     async def _edit_callback_message(
@@ -259,7 +259,7 @@ class TelegramMessageTransport:
                 parse_mode=parse_mode,
                 reply_markup=reply_markup,
             )
-        except Exception as exc:
+        except (TelegramAPIError, ValueError, TypeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -539,7 +539,7 @@ class TelegramMessageTransport:
                 caption=caption,
             )
             return True
-        except Exception as exc:
+        except TelegramAPIError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -564,7 +564,7 @@ class TelegramMessageTransport:
                 message_id=callback.message_id,
                 text=text,
             )
-        except Exception as exc:
+        except TelegramAPIError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

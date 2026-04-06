@@ -28,9 +28,9 @@ def _call_automation_list(
     except TypeError:
         try:
             result = method()
-        except Exception:
+        except (TypeError, RuntimeError, ValueError):
             return []
-    except Exception:
+    except (RuntimeError, ValueError):
         return []
     return _coerce_automation_items(result, key=key)
 
@@ -49,7 +49,7 @@ def snapshot_pma_automation(
     }
     try:
         store = supervisor.pma_automation_store
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError):
         return out
 
     subscriptions = _call_automation_list(

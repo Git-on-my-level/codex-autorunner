@@ -164,7 +164,9 @@ def build_ticket_flow_summary(
 
     try:
         latest = _load_latest_ticket_flow_run(repo_path)
-    except Exception:
+    except (
+        Exception
+    ):  # intentional: summary degrades gracefully on any data-access failure
         return None
 
     display = build_ticket_flow_display(

@@ -791,7 +791,7 @@ class PmaAutomationStore:
                 continue
             try:
                 out.append(PmaLifecycleSubscription.from_dict(entry))
-            except Exception:
+            except (TypeError, ValueError, KeyError):
                 continue
         return out
 
@@ -807,7 +807,7 @@ class PmaAutomationStore:
                 continue
             try:
                 out.append(PmaAutomationTimer.from_dict(entry))
-            except Exception:
+            except (TypeError, ValueError, KeyError):
                 continue
         return out
 
@@ -823,7 +823,7 @@ class PmaAutomationStore:
                 continue
             try:
                 out.append(PmaAutomationWakeup.from_dict(entry))
-            except Exception:
+            except (TypeError, ValueError, KeyError):
                 continue
         return out
 
@@ -845,7 +845,7 @@ class PmaAutomationStore:
             return None
         try:
             parsed = int(value)
-        except Exception:
+        except (ValueError, TypeError):
             return None
         if parsed < 0:
             return None

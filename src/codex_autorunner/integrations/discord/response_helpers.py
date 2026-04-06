@@ -77,7 +77,9 @@ class DiscordResponder:
                 interaction_token=interaction_token,
                 payload=payload,
             )
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: best-effort followup, any failure returns False
             return False
         return True
 
@@ -146,7 +148,7 @@ class DiscordResponder:
                 interaction_token=interaction_token,
                 payload={"type": 4, "data": data},
             )
-        except (DiscordAPIError, Exception) as exc:
+        except Exception as exc:  # intentional: primary response failed, try followup
             sent_followup = await self.send_followup(
                 interaction_token=interaction_token,
                 content=content,
@@ -179,7 +181,7 @@ class DiscordResponder:
                 interaction_token=interaction_token,
                 payload=payload,
             )
-        except (DiscordAPIError, Exception) as exc:
+        except Exception as exc:  # intentional: primary response failed, try followup
             label = "ephemeral" if ephemeral else "public"
             self._logger.warning(
                 "Failed to defer %s response: %s (interaction_id=%s)",

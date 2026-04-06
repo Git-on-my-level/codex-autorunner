@@ -151,7 +151,9 @@ def execute_demo_manifest(
                     artifacts=step_artifacts,
                 )
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: browser automation can raise unpredictable playright/async exceptions
             message = str(exc).strip() or repr(exc)
             reports.append(
                 DemoStepReport(

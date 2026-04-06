@@ -203,7 +203,9 @@ class _LocalWhisperStream(TranscriptionStream):
                 ]
             self._logger.error("Local Whisper transcription failed: %s", exc)
             return [TranscriptionEvent(text="", is_final=True, error="provider_error")]
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: faster-whisper library errors are unpredictable
             self._logger.error("Local Whisper transcription failed: %s", exc)
             return [TranscriptionEvent(text="", is_final=True, error="provider_error")]
         finally:

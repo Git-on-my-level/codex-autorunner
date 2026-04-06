@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from ....core.config import load_hub_config
+from ....core.config import ConfigError, load_hub_config
 from ....core.constants import DEFAULT_UPDATE_REPO_REF, DEFAULT_UPDATE_REPO_URL
 from ....core.update import (
     UpdateInProgressError,
@@ -44,7 +44,7 @@ def _active_update_session_count(service: Any) -> int:
     try:
         orchestration_service = service._discord_thread_service()
         threads = orchestration_service.list_thread_targets(lifecycle_status="active")
-    except Exception:
+    except (AttributeError, TypeError, RuntimeError):
         return 0
     get_running_execution = getattr(
         orchestration_service, "get_running_execution", None
@@ -67,7 +67,7 @@ def _active_update_session_count(service: Any) -> int:
         try:
             if get_running_execution(thread_target_id) is not None:
                 active_count += 1
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError):
             if str(getattr(thread, "status", "") or "").strip().lower() == "running":
                 active_count += 1
     return active_count
@@ -117,7 +117,7 @@ def _dynamic_update_target_definitions(service: Any):
     if raw_config is None:
         try:
             raw_config = load_hub_config(service._config.root).raw
-        except Exception:
+        except (ConfigError, OSError, ValueError, RuntimeError):
             raw_config = {}
         service._hub_raw_config_cache = raw_config
     return _available_update_target_definitions(
@@ -355,7 +355,12 @@ async def handle_car_update(
                 text=text,
             )
         return
-    except Exception as exc:
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -465,7 +470,7 @@ async def handle_car_logout(
         return
     try:
         await client.request("account/logout", params=None)
-    except Exception as exc:
+    except (RuntimeError, ConnectionError, OSError) as exc:
         log_event(
             service._logger,
             logging.WARNING,
@@ -540,7 +545,7 @@ async def handle_car_feedback(
 
     try:
         result = await client.request("feedback/upload", params)
-    except Exception as exc:
+    except (RuntimeError, ConnectionError, OSError) as exc:
         log_event(
             service._logger,
             logging.WARNING,
@@ -597,7 +602,7 @@ async def handle_car_mention(
 
     try:
         path = canonicalize_path(path)
-    except Exception:
+    except (OSError, ValueError):
         await service._respond_ephemeral(
             interaction_id,
             interaction_token,
@@ -630,7 +635,7 @@ async def handle_car_mention(
     max_bytes = 100000
     try:
         data = path.read_bytes()
-    except Exception:
+    except OSError:
         await service._send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,

@@ -8,6 +8,7 @@ import importlib
 import json
 import logging
 import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 from importlib.util import find_spec
 from pathlib import Path
@@ -182,7 +183,7 @@ def doctor(
                     check_id=check_id,
                 )
             )
-    except Exception as e:
+    except (subprocess.SubprocessError, OSError, RuntimeError) as e:
         checks.append(
             DoctorCheck(
                 name="Git repository",
@@ -225,7 +226,7 @@ def doctor(
                 backend_orchestrator=backend_orchestrator,
                 check_id=check_id,
             )
-        except Exception as e:
+        except (ValueError, TypeError, OSError, RuntimeError) as e:
             checks.append(
                 DoctorCheck(
                     name="Config file",
@@ -349,7 +350,7 @@ def summarize_opencode_lifecycle(
 
     try:
         records = list_process_records(registry_repo_root, kind="opencode")
-    except Exception:
+    except (RuntimeError, OSError, ValueError, TypeError):
         records = []
 
     deduped_records: list[ProcessRecord] = []
@@ -398,7 +399,7 @@ def summarize_opencode_lifecycle(
         if callable(snapshot):
             try:
                 payload = snapshot()
-            except Exception:
+            except (RuntimeError, OSError, ValueError, TypeError):
                 payload = {}
             if isinstance(payload, dict):
                 raw_handles = payload.get("handles")
@@ -580,7 +581,7 @@ def _existing_opencode_supervisor(
     if callable(factory_getter):
         try:
             factory = factory_getter()
-        except Exception:
+        except (RuntimeError, OSError, ValueError, TypeError):
             factory = None
         supervisor = getattr(factory, "_opencode_supervisor", None)
         if supervisor is not None:
@@ -705,7 +706,7 @@ def _append_render_dependency_checks(
                 chromium_path = str(playwright.chromium.executable_path or "").strip()
             finally:
                 playwright.stop()
-        except Exception as exc:
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
             chromium_error = str(exc).strip() or repr(exc)
 
         if chromium_path and Path(chromium_path).exists():
@@ -986,7 +987,7 @@ def hub_destination_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
         manifest, manifest_issues = load_manifest_with_issues(
             hub_config.manifest_path, hub_config.root
         )
-    except Exception as exc:
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
         checks.append(
             DoctorCheck(
                 name="Hub destination configuration",
@@ -1165,7 +1166,7 @@ def zeroclaw_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     try:
         manifest = load_manifest(hub_config.manifest_path, hub_config.root)
-    except Exception:
+    except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
         manifest = None
 
     enabled_workspaces: list[str] = []
@@ -1178,7 +1179,7 @@ def zeroclaw_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
 
     try:
         configured_binary = hub_config.agent_binary("zeroclaw").strip()
-    except Exception:
+    except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
         configured_binary = ""
 
     explicit_binary_override = bool(
@@ -1236,7 +1237,7 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     checks: list[DoctorCheck] = []
     try:
         manifest = load_manifest(hub_config.manifest_path, hub_config.root)
-    except Exception:
+    except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
         manifest = None
 
     enabled_workspaces: list[str] = []
@@ -1256,7 +1257,7 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     for agent_id in sorted(getattr(hub_config, "agents", {}).keys()):
         try:
             backend_id = hub_config.agent_backend(agent_id)
-        except Exception:
+        except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
             backend_id = agent_id
         if str(backend_id or "").strip().lower() == "hermes":
             configured_hermes_agents.append(agent_id)
@@ -1305,7 +1306,7 @@ def hermes_doctor_checks(hub_config: HubConfig) -> list[DoctorCheck]:
     for agent_id in configured_hermes_agents:
         try:
             configured_binary = hub_config.agent_binary(agent_id).strip()
-        except Exception:
+        except (ValueError, TypeError, OSError, RuntimeError, AttributeError):
             configured_binary = ""
         is_alias = agent_id != "hermes"
         explicit_binary_override = bool(
@@ -1703,7 +1704,7 @@ class RuntimeContext:
             with open(self.log_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
                 return "".join(lines[-tail:])
-        except Exception as e:
+        except OSError as e:
             _logger.warning("Failed to tail log %s: %s", self.log_path, e)
             return ""
 
@@ -1727,7 +1728,7 @@ class RuntimeContext:
         try:
             with open(run_log_path, "r", encoding="utf-8", errors="replace") as f:
                 return f.read()
-        except Exception as e:
+        except OSError as e:
             _logger.warning("Failed to read run log block for run %s: %s", run_id, e)
             return None
 

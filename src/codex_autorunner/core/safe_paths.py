@@ -63,7 +63,7 @@ def validate_relative_posix_path(raw: str) -> PurePosixPath:
     # Parse with PurePosixPath to ensure POSIX semantics
     try:
         file_rel = PurePosixPath(raw)
-    except Exception as exc:
+    except (ValueError, TypeError) as exc:
         raise SafePathError(f"Invalid path: {exc}", path=raw) from exc
 
     # Reject absolute paths

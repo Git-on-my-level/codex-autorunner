@@ -292,7 +292,7 @@ class TranscriptMirrorStore:
             return None
         try:
             metadata_payload = json.loads(str(row["metadata_json"] or "{}"))
-        except Exception:
+        except (ValueError, TypeError):
             metadata_payload = {}
         metadata = dict(metadata_payload) if isinstance(metadata_payload, dict) else {}
         transcript_mirror_id = str(row["transcript_mirror_id"] or "").strip()

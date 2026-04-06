@@ -100,7 +100,7 @@ def _format_mtime(ts: float | None) -> str | None:
         return None
     try:
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-    except Exception:
+    except (OverflowError, OSError, ValueError):
         return None
 
 

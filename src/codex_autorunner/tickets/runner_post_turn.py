@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from ..core.file_chat_keys import ticket_instance_token
 from ..core.flows.models import FlowEventType
-from ..core.git_utils import git_diff_stats, run_git
+from ..core.git_utils import GitError, git_diff_stats, run_git
 from .files import read_ticket_frontmatter
 from .outbox import (
     archive_dispatch,
@@ -63,7 +63,7 @@ def archive_dispatch_and_create_summary(
                 from_ref=None,
                 include_staged=True,
             )
-    except Exception:
+    except Exception:  # intentional: best-effort diff stats
         turn_diff_stats = None
 
     turn_summary, turn_summary_errors = create_turn_summary(
@@ -92,7 +92,7 @@ def archive_dispatch_and_create_summary(
                 event_payload["ticket_path"] = str(current_ticket_path)
                 event_payload["ticket_key"] = ticket_instance_token(current_ticket_path)
             emit_event(FlowEventType.DIFF_UPDATED, event_payload)
-        except Exception:
+        except Exception:  # intentional: best-effort event emission
             _logger.debug("failed to emit diff_updated event", exc_info=True)
 
     return dispatch, None
@@ -171,7 +171,7 @@ def checkpoint_git(
         )
         run_git(["commit", "-m", msg], cwd=workspace_root, check=True)
         return None
-    except Exception as exc:
+    except GitError as exc:
         _logger.exception("Checkpoint commit failed")
         return str(exc)
 
@@ -186,7 +186,7 @@ def get_repo_fingerprint(workspace_root: Path) -> Optional[str]:
         if not head:
             return None
         return f"{head}\n{status}"
-    except Exception:
+    except GitError:
         return None
 
 

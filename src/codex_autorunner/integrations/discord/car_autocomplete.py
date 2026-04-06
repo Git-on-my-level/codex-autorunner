@@ -150,7 +150,7 @@ async def build_model_autocomplete_choices(
             agent=agent,
             limit=MODEL_SEARCH_FETCH_LIMIT,
         )
-    except Exception:
+    except Exception:  # intentional: graceful degradation for non-critical autocomplete
         return []
     if not model_items:
         return []

@@ -33,7 +33,9 @@ def format_pause_notification_source(
                     repo_label = f"{repo_label} ({entry.display_name})"
                 if entry.kind == "worktree" and entry.worktree_of:
                     repo_label = f"{repo_label} [worktree of {entry.worktree_of}]"
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: defensive guard for best-effort label formatting from manifest
             if logger is not None:
                 logger.debug(debug_label, exc_info=exc)
 

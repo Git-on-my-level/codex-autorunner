@@ -150,7 +150,7 @@ class HubAgentWorkspaceService:
                 display_name=display_name,
                 enabled=payload.enabled,
             )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return cast(dict[str, Any], snapshot.to_dict(self._context.config.root))
 
@@ -212,7 +212,7 @@ class HubAgentWorkspaceService:
                 enabled=enabled,
                 display_name=display_name,
             )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return await asyncio.to_thread(self._workspace_payload, workspace_id)
 
@@ -231,7 +231,7 @@ class HubAgentWorkspaceService:
                 workspace_id,
                 normalized_destination,
             )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return await asyncio.to_thread(self._workspace_payload, workspace_id)
 
@@ -251,7 +251,7 @@ class HubAgentWorkspaceService:
                 workspace_id,
                 delete_dir=False,
             )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "ok", "workspace_id": workspace_id, "delete_dir": False}
 
@@ -299,7 +299,7 @@ class HubAgentWorkspaceService:
                 workspace_id,
                 delete_dir=True,
             )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"status": "ok", "workspace_id": workspace_id, "delete_dir": True}
 

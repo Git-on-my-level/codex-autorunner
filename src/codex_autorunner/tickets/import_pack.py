@@ -438,7 +438,7 @@ def import_ticket_pack(
             try:
                 data = dict(data)
                 data.pop("depends_on", None)
-            except Exception:
+            except (TypeError, ValueError, AttributeError):
                 logger.debug(
                     "failed to strip depends_on from frontmatter", exc_info=True
                 )
@@ -513,7 +513,7 @@ def import_ticket_pack(
                         "zip_path": safe_relpath(zip_path, repo_root),
                     },
                 )
-            except Exception as exc:  # noqa: BLE001
+            except (OSError, ValueError, TypeError) as exc:
                 logger.warning(
                     "Failed to write ingest receipt at %s after import_pack: %s",
                     safe_relpath(ingest_state_path(repo_root), repo_root),

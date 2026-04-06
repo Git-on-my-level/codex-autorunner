@@ -110,7 +110,7 @@ def _resolve_ref_sha(repo_root: Path, ref: str) -> str:
 def _load_managed_runtime_module() -> Any:
     try:
         return importlib.import_module("codex_autorunner.agents.managed_runtime")
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None
 
 
@@ -140,7 +140,7 @@ def known_agent_workspace_runtime_ids() -> tuple[str, ...]:
                 continue
             try:
                 raw_ids = func()
-            except Exception:
+            except (OSError, ValueError, TypeError, RuntimeError, AttributeError):
                 continue
             normalized = tuple(
                 sorted(
@@ -247,7 +247,7 @@ class RepoSnapshot:
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         try:
             rel_path = self.path.relative_to(hub_root)
-        except Exception:
+        except ValueError:
             rel_path = self.path
         return {
             "id": self.id,
@@ -301,7 +301,7 @@ class AgentWorkspaceSnapshot:
     def to_dict(self, hub_root: Path) -> Dict[str, object]:
         try:
             rel_path = self.path.relative_to(hub_root)
-        except Exception:
+        except ValueError:
             rel_path = self.path
         return {
             "id": self.id,
@@ -360,7 +360,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
         import json
 
         payload = json.loads(data)
-    except Exception as exc:
+    except (json.JSONDecodeError, ValueError) as exc:
         logger.warning("Failed to parse hub state from %s: %s", state_path, exc)
         return HubState(
             last_scan_at=None,
@@ -415,7 +415,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 ),
             )
             repos.append(repo)
-        except Exception as exc:
+        except (ValueError, TypeError, KeyError) as exc:
             repo_id = entry.get("id", "unknown")
             logger.warning(
                 "Failed to load repo snapshot for id=%s from hub state: %s",
@@ -438,7 +438,7 @@ def load_hub_state(state_path: Path, hub_root: Path) -> HubState:
                 ),
             )
             agent_workspaces.append(workspace)
-        except Exception as exc:
+        except (ValueError, TypeError, KeyError) as exc:
             workspace_id = entry.get("id", "unknown")
             logger.warning(
                 "Failed to load agent workspace snapshot for id=%s from hub state: %s",
@@ -459,7 +459,7 @@ def save_hub_state(state_path: Path, state: HubState, hub_root: Path) -> None:
     atomic_write(state_path, json.dumps(payload, indent=2) + "\n")
     try:
         _save_pma_threads_artifact(hub_root)
-    except Exception as exc:
+    except (OSError, ValueError, TypeError) as exc:
         logger.warning("Failed to write PMA thread snapshot artifact: %s", exc)
 
 
@@ -859,7 +859,7 @@ class HubSupervisor:
     def _reconcile_startup(self) -> None:
         try:
             _, records = self._manifest_records(manifest_only=True)
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             logger.warning("Failed to load hub manifest for reconciliation: %s", exc)
             return
         for record in records:
@@ -884,7 +884,7 @@ class HubSupervisor:
                     )
                 )
                 controller.reconcile()
-            except Exception as exc:
+            except (ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
                 logger.warning(
                     "Failed to reconcile runner state for %s: %s",
                     record.absolute_path,
@@ -1071,7 +1071,7 @@ class HubSupervisor:
                 if snapshot.path.expanduser().resolve() == workspace_root:
                     target = snapshot
                     break
-            except Exception:
+            except OSError:
                 continue
 
         if target is None:
@@ -1084,7 +1084,7 @@ class HubSupervisor:
 
         try:
             execution_root = target.path.expanduser().resolve()
-        except Exception:
+        except OSError:
             return 0
 
         base_snapshot: Optional[RepoSnapshot] = target
@@ -1189,7 +1189,7 @@ class HubSupervisor:
             if workspace_root:
                 try:
                     resolved_workspace = str(Path(workspace_root).resolve())
-                except Exception:
+                except OSError:
                     resolved_workspace = ""
                 if not matched_repo_id and resolved_workspace:
                     matched_repo_id = workspace_to_repo_id.get(resolved_workspace)
@@ -1392,7 +1392,7 @@ class HubSupervisor:
             if repo_path.exists() and git_available(repo_path):
                 try:
                     is_dirty = not git_is_clean(repo_path)
-                except Exception:
+                except (GitError, OSError):
                     is_dirty = False
             if is_dirty:
                 dirty_repo_ids.append(repo_id)
@@ -1595,7 +1595,7 @@ class HubSupervisor:
         )
         try:
             starter(normalized_lane_id)
-        except Exception:
+        except (RuntimeError, OSError, ValueError, TypeError):
             logger.exception(
                 "Failed requesting PMA lane worker startup for lane_id=%s",
                 normalized_lane_id,
@@ -1646,7 +1646,7 @@ class HubSupervisor:
             }
         try:
             return processor(limit)
-        except Exception:
+        except (RuntimeError, OSError, ValueError, TypeError, sqlite3.Error):
             logger.exception("Failed processing SCM automation polling watches")
             return {
                 "due": 0,
@@ -1818,7 +1818,7 @@ class HubSupervisor:
                 from_state=transition.get("from_state"),
                 to_state=transition.get("to_state"),
             )
-        except Exception:
+        except (sqlite3.Error, OSError, ValueError, TypeError):
             logger.exception(
                 "Failed to match lifecycle subscriptions for event %s", event.event_id
             )
@@ -2081,7 +2081,7 @@ class HubSupervisor:
                 )
                 _, dupe_reason = queue.enqueue_sync(lane_id, idempotency_key, payload)
                 self._request_pma_lane_worker_start(lane_id)
-            except Exception:
+            except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
                 logger.exception(
                     "Failed to drain PMA automation wake-up %s into PMA queue",
                     wakeup_id,
@@ -2112,7 +2112,7 @@ class HubSupervisor:
         if event.data:
             try:
                 payload = json.dumps(event.data, sort_keys=True, ensure_ascii=True)
-            except Exception:
+            except (TypeError, ValueError):
                 payload = str(event.data)
             lines.append(f"data: {payload}")
         if event.event_type == LifecycleEventType.DISPATCH_CREATED:
@@ -2294,7 +2294,7 @@ class HubSupervisor:
             automation_wakeups = self._enqueue_automation_wakeups_for_lifecycle_event(
                 event
             )
-        except Exception:
+        except (sqlite3.Error, OSError, ValueError, TypeError, RuntimeError):
             logger.exception(
                 "Failed to enqueue lifecycle automation wake-ups for event %s",
                 event.event_id,
@@ -2314,7 +2314,7 @@ class HubSupervisor:
                         if snap.id == event.repo_id:
                             repo_snapshot = snap
                             break
-                except Exception:
+                except (RuntimeError, OSError, ValueError, TypeError):
                     logger.exception(
                         "Failed to get repo snapshot for repo_id=%s", event.repo_id
                     )

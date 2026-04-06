@@ -138,7 +138,9 @@ def orchestrate_workflow_services(
                 session = supervisor.wait_until_ready()
             except DemoWorkflowError:
                 raise
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: wrap unpredictable supervisor startup errors
                 raise DemoWorkflowExecutionError(
                     (
                         f"Service '{service.name}' failed readiness/startup: "
@@ -189,7 +191,7 @@ def load_demo_workflow_config(
             payload = json.loads(raw_text)
         else:
             payload = yaml.safe_load(raw_text)
-    except Exception as exc:
+    except (ValueError, yaml.YAMLError) as exc:
         raise DemoWorkflowConfigError(
             f"Unable to parse workflow config: {exc}"
         ) from exc
@@ -801,7 +803,7 @@ def _stop_supervisors(supervisors: Sequence[tuple[str, _Supervisor]]) -> None:
     for _name, supervisor in reversed(supervisors):
         try:
             supervisor.stop()
-        except Exception:
+        except Exception:  # intentional: cleanup must not raise
             continue
 
 
@@ -932,7 +934,7 @@ def _optional_path(value: Any, *, field: str) -> Optional[Path]:
 def _same_path(left: Path, right: Path) -> bool:
     try:
         return left.expanduser().resolve() == right.expanduser().resolve()
-    except Exception:
+    except (OSError, RuntimeError):
         return False
 
 

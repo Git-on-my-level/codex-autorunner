@@ -80,7 +80,7 @@ class HubRepoCrudService:
                     git_init=git_init,
                     force=force,
                 )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
         return self._enricher.enrich_repo(snapshot)
@@ -153,7 +153,7 @@ class HubRepoCrudService:
                 repo_id,
                 commands,
             )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         await self._mount_manager.refresh_mounts([snapshot], full_refresh=False)
         return self._enricher.enrich_repo(snapshot)
@@ -177,7 +177,7 @@ class HubRepoCrudService:
                 repo_id,
                 requested,
             )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
             "repo_id": repo_id,
@@ -193,7 +193,7 @@ class HubRepoCrudService:
             return await asyncio.to_thread(
                 self._context.supervisor.check_repo_removal, repo_id
             )
-        except Exception as exc:
+        except (ValueError, OSError) as exc:
             from fastapi import HTTPException
 
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -232,7 +232,7 @@ class HubRepoCrudService:
                 repo_id,
                 **remove_kwargs,
             )
-        except Exception as exc:
+        except (ValueError, OSError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         snapshots = await asyncio.to_thread(
             self._context.supervisor.list_repos, use_cache=False

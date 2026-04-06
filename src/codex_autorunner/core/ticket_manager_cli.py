@@ -119,7 +119,7 @@ def _parse_yaml(fm_yaml: Optional[str]):
         ]
     try:
         loaded = yaml.safe_load(fm_yaml)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # intentional: portable CLI script must be resilient to any YAML parsing failure  # noqa: BLE001
         return {}, [f"YAML parse error: {exc}"]
     if loaded is None or not isinstance(loaded, dict):
         return {}, ["Invalid YAML frontmatter (expected a mapping)."]

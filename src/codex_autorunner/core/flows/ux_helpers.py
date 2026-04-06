@@ -104,7 +104,7 @@ def bootstrap_check(
             if gh_available:
                 repo_info = gh.repo_info()
                 repo_slug = getattr(repo_info, "name_with_owner", None)
-        except Exception:
+        except (AttributeError, TypeError, RuntimeError, ValueError, OSError):
             gh_available = False
             repo_slug = None
 
@@ -205,7 +205,7 @@ def _derive_effective_current_ticket(
         return store.get_latest_step_progress_current_ticket(
             record.id, after_seq=last_finished
         )
-    except Exception:
+    except (RuntimeError, OSError, ValueError, TypeError, AttributeError, KeyError):
         return None
 
 
@@ -281,7 +281,7 @@ def _canonical_flow_status_state(
             store=store,
             has_pending_dispatch=False,
         )
-    except Exception:
+    except (ImportError, AttributeError, TypeError, RuntimeError, ValueError):
         run_state = None
     run_state_payload = dict(run_state) if isinstance(run_state, dict) else None
     try:
@@ -293,7 +293,7 @@ def _canonical_flow_status_state(
             store=store,
             stale_threshold_seconds=stale_threshold_seconds,
         )
-    except Exception:
+    except (RuntimeError, OSError, ValueError, TypeError, KeyError, AttributeError):
         return None
 
 
@@ -438,7 +438,7 @@ def build_flow_status_snapshot(
     if store:
         try:
             last_event_seq, last_event_at = store.get_last_event_meta(record.id)
-        except Exception:
+        except (RuntimeError, OSError, ValueError, TypeError, AttributeError):
             last_event_seq, last_event_at = None, None
     health = check_worker_health(repo_root, record.id)
 

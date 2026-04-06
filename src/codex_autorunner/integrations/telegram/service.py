@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from ...agents.opencode.supervisor import OpenCodeSupervisor
 from ...core.config import load_hub_config, load_repo_config
+from ...core.config_contract import ConfigError
 from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -57,6 +58,7 @@ from ..chat.turn_policy import PlainTextTurnContext
 from ..chat.update_notifier import ChatUpdateStatusNotifier
 from .adapter import (
     InlineButton,
+    TelegramAPIError,
     TelegramBotClient,
     TelegramCallbackQuery,
     TelegramDocument,
@@ -235,7 +237,14 @@ class TelegramBotService(
                         raw_config=load_hub_config(self._hub_root).raw,
                     ),
                 )
-            except Exception as exc:
+            except (
+                ImportError,
+                OSError,
+                ValueError,
+                TypeError,
+                RuntimeError,
+                ConfigError,
+            ) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -247,7 +256,7 @@ class TelegramBotService(
                 self._hub_thread_registry = AppServerThreadRegistry(
                     default_app_server_threads_path(self._hub_root)
                 )
-            except Exception as exc:
+            except (OSError, ValueError, TypeError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -338,7 +347,7 @@ class TelegramBotService(
         if self._voice_service is None and voice_config is not None:
             try:
                 self._voice_service = VoiceService(voice_config, logger=self._logger)
-            except Exception as exc:
+            except (OSError, ValueError, RuntimeError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -466,7 +475,7 @@ class TelegramBotService(
             for record in state.topics.values():
                 if isinstance(record.workspace_path, str) and record.workspace_path:
                     roots.add(Path(record.workspace_path).expanduser().resolve())
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -478,7 +487,7 @@ class TelegramBotService(
                 manifest = load_manifest(self._manifest_path, self._hub_root)
                 for repo in manifest.repos:
                     roots.add((self._hub_root / repo.path).resolve())
-            except Exception as exc:
+            except (ValueError, OSError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -496,7 +505,7 @@ class TelegramBotService(
             for record in state.topics.values():
                 if isinstance(record.workspace_path, str) and record.workspace_path:
                     roots.add(Path(record.workspace_path).expanduser().resolve())
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -540,7 +549,7 @@ class TelegramBotService(
                         "telegram.prewarm.client_ready",
                         workspace_root=str(workspace_root),
                     )
-                except Exception as exc:
+                except (OSError, RuntimeError, ValueError) as exc:
                     failed_count += 1
                     log_event(
                         self._logger,
@@ -572,7 +581,7 @@ class TelegramBotService(
         while True:
             try:
                 await self._run_housekeeping_cycle(config)
-            except Exception as exc:
+            except Exception as exc:  # intentional: top-level error handler
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -603,7 +612,7 @@ class TelegramBotService(
                             bytes_before=summary.bytes_before,
                             bytes_after=summary.bytes_after,
                         )
-                except Exception as exc:
+                except (ValueError, OSError) as exc:
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -776,7 +785,7 @@ class TelegramBotService(
     async def _prime_bot_identity(self) -> None:
         try:
             payload = await self._bot.get_me()
-        except Exception:
+        except TelegramAPIError:
             return
         if isinstance(payload, dict):
             username = payload.get("username")
@@ -823,7 +832,7 @@ class TelegramBotService(
                     scope=scope,
                     language_code=language_code,
                 )
-            except Exception as exc:
+            except TelegramAPIError as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -849,7 +858,7 @@ class TelegramBotService(
                     scope=scope,
                     language_code=language_code,
                 )
-            except Exception as exc:
+            except TelegramAPIError as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -917,7 +926,7 @@ class TelegramBotService(
             task.result()
         except asyncio.CancelledError:
             return
-        except Exception as exc:
+        except Exception as exc:  # intentional: top-level error handler
             log_event(self._logger, logging.WARNING, "telegram.task.failed", exc=exc)
 
     def _touch_cache_timestamp(self, cache_name: str, key: object) -> None:
@@ -1184,7 +1193,7 @@ class TelegramBotService(
                 True,
                 f"Reply archived (seq {dispatch.seq}).",
             )
-        except Exception as exc:
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
             self._logger.warning(
                 "Failed to write USER_REPLY.md from Telegram",
                 exc=exc,
@@ -1260,7 +1269,7 @@ class TelegramBotService(
                     Path(workspace_path)
                 )
                 await client.abort(session_id)
-            except Exception as exc:
+            except (RuntimeError, OSError, BrokenPipeError, ProcessLookupError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1313,7 +1322,7 @@ class TelegramBotService(
             return
         try:
             await client.turn_interrupt(turn_id, thread_id=codex_thread_id)
-        except Exception as exc:
+        except (RuntimeError, ConnectionError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1392,7 +1401,7 @@ class TelegramBotService(
                 display,
                 meta,
             )
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1414,7 +1423,7 @@ class TelegramBotService(
     ) -> Optional[str]:
         try:
             entries = self._channel_directory_store.list_entries(limit=None)
-        except Exception:
+        except OSError:
             return None
 
         for entry in entries:
@@ -1546,7 +1555,7 @@ class TelegramBotService(
             record = None
             try:
                 record = await self._store.get_topic(key)
-            except Exception as exc:
+            except (OSError, ValueError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -1565,7 +1574,7 @@ class TelegramBotService(
         self._last_update_ids[key] = update_id
         try:
             await self._maybe_persist_update_id(key, update_id)
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1624,7 +1633,7 @@ class TelegramBotService(
                         action="typing",
                         message_thread_id=thread_id,
                     )
-                except Exception as exc:
+                except TelegramAPIError as exc:
                     log_event(
                         self._logger,
                         logging.DEBUG,
@@ -1656,7 +1665,11 @@ class TelegramBotService(
             typing_coro = self._typing_indicator_loop(chat_id, thread_id)
             try:
                 self._typing_tasks[key] = self._spawn_task(typing_coro)
-            except Exception:
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+            ):  # intentional: cleanup-before-reraise
                 typing_coro.close()
                 count = self._typing_sessions.get(key, 0)
                 if count <= 1:
@@ -1792,7 +1805,7 @@ class TelegramBotService(
         try:
             chat_id, thread_id, _scope = parse_topic_key(key)
             conversation_id = topic_key(chat_id, thread_id)
-        except Exception:
+        except ValueError:
             conversation_id = None
 
         if not conversation_id:

@@ -88,14 +88,16 @@ def _repo_id_by_workspace_path(
         return {}
     try:
         manifest = load_manifest(manifest_path, hub_root)
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: manifest loading may fail in unpredictable ways
         logger.warning("Failed loading manifest for chat binding lookup: %s", exc)
         return {}
     mapping: dict[str, str] = {}
     for repo in manifest.repos:
         try:
             workspace_path = (hub_root / repo.path).resolve()
-        except Exception:
+        except (TypeError, OSError):
             continue
         mapping[str(workspace_path)] = repo.id
     return mapping
@@ -130,7 +132,7 @@ def _resolve_workspace_path(value: Any) -> str | None:
             continue
         try:
             return str(path.resolve())
-        except Exception:
+        except OSError:
             return str(path)
     return None
 
@@ -139,7 +141,7 @@ def _normalize_workspace_path(value: Any) -> str | None:
     if isinstance(value, Path):
         try:
             return str(value.resolve())
-        except Exception:
+        except OSError:
             return str(value)
     return _resolve_workspace_path(value)
 

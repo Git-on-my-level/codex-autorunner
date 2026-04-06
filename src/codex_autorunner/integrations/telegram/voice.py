@@ -87,7 +87,7 @@ class TelegramVoiceManager:
                 records = await self._store.list_pending_voice()
                 if records:
                     await self._flush(records)
-            except Exception as exc:
+            except Exception as exc:  # intentional: periodic flush loop must not crash
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -111,7 +111,9 @@ class TelegramVoiceManager:
             if not self._ready_for_attempt(current_record):
                 return False
             done = await self._process(current_record)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: voice processing has wide failure surface
             retry_after = _extract_retry_after_seconds(exc)
             await self._record_failure(record, exc, retry_after=retry_after)
             return False
@@ -405,7 +407,7 @@ class TelegramVoiceManager:
             path.unlink()
         except FileNotFoundError:
             pass
-        except Exception:
+        except OSError:
             log_event(
                 self._logger,
                 logging.WARNING,

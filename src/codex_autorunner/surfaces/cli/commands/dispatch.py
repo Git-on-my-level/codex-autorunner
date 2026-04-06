@@ -124,7 +124,12 @@ def register_dispatch_commands(
                         continue
                     fallback_status = item.get("status")
                     break
-            except Exception:
+            except (
+                httpx.HTTPError,
+                httpx.ConnectError,
+                httpx.TimeoutException,
+                OSError,
+            ):
                 fallback_status = None
 
             if run_status is None and fallback_status == "paused":

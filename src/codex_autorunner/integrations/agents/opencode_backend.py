@@ -5,7 +5,9 @@ import logging
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Optional
 
-from ...agents.opencode.client import OpenCodeClient
+import httpx
+
+from ...agents.opencode.client import OpenCodeClient, OpenCodeProtocolError
 from ...agents.opencode.event_decoder import decode_sse_event
 from ...agents.opencode.logging import OpenCodeEventFormatter
 from ...agents.opencode.runtime import (
@@ -103,7 +105,7 @@ class OpenCodeBackend(AgentBackend):
         self._client = None
         try:
             await client.close()
-        except Exception:
+        except Exception:  # intentional: cleanup must not propagate
             _logger.debug("aclose: client.close failed", exc_info=True)
 
     def close(self) -> Optional[Any]:
@@ -121,7 +123,7 @@ class OpenCodeBackend(AgentBackend):
         async def _do_close() -> None:
             try:
                 await client.close()
-            except Exception:
+            except Exception:  # intentional: cleanup must not propagate
                 _logger.debug("close: client.close failed", exc_info=True)
 
         return _do_close()
@@ -168,7 +170,7 @@ class OpenCodeBackend(AgentBackend):
                     source="backend",
                     reuse=True,
                 )
-            except Exception:
+            except (httpx.HTTPError, OpenCodeProtocolError):
                 self._session_id = None
                 log_event(
                     self._logger,
@@ -414,7 +416,11 @@ class OpenCodeBackend(AgentBackend):
                     if prompt_task is not None and prompt_task in done:
                         try:
                             prompt_response = prompt_task.result()
-                        except Exception as exc:
+                        except (
+                            httpx.HTTPError,
+                            OpenCodeProtocolError,
+                            RuntimeError,
+                        ) as exc:
                             output_task.cancel()
                             with contextlib.suppress(asyncio.CancelledError):
                                 await output_task
@@ -508,7 +514,7 @@ class OpenCodeBackend(AgentBackend):
             try:
                 await client.abort(target_session)
                 _logger.info("Interrupted OpenCode session %s", target_session)
-            except Exception as e:
+            except (httpx.HTTPError, OpenCodeProtocolError) as e:
                 _logger.warning("Failed to interrupt session: %s", e)
 
     async def final_messages(self, session_id: str) -> list[str]:
@@ -539,7 +545,9 @@ class OpenCodeBackend(AgentBackend):
                                 agent_event.data.get("final_message", "")
                             )
                         return
-        except Exception as e:
+        except (
+            Exception
+        ) as e:  # intentional: top-level error boundary yields error event
             _logger.warning("Error in event collection: %s", e)
             yield AgentEvent.error(error_message=str(e))
 
@@ -560,7 +568,9 @@ class OpenCodeBackend(AgentBackend):
                         if isinstance(run_event, Completed):
                             self._final_messages.append(run_event.final_message)
                         return
-        except Exception as e:
+        except (
+            Exception
+        ) as e:  # intentional: top-level error boundary yields error event
             _logger.warning("Error in run event collection: %s", e)
             yield Failed(timestamp=now_iso(), error_message=str(e))
 
@@ -751,7 +761,7 @@ class OpenCodeBackend(AgentBackend):
                 source="backend",
                 reuse=False,
             )
-        except Exception as exc:
+        except (httpx.HTTPError, OpenCodeProtocolError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

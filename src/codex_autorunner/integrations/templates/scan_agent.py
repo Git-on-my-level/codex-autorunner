@@ -235,7 +235,9 @@ async def run_template_scan_with_orchestrator(
                 session_key=f"template_scan:{template.blob_sha}:{attempt}",
             ):
                 events.append(event)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: backend orchestrator can raise arbitrary errors
             raise TemplateScanBackendError(str(exc)) from exc
 
         for event in events:
@@ -281,7 +283,7 @@ async def run_template_scan(
     hub_root: Any
     try:
         hub_root = load_hub_config(config.root).root
-    except Exception:
+    except (OSError, ValueError):
         hub_root = getattr(config, "root", None)
     if hub_root is None:
         raise TemplateScanBackendError("Missing hub root for scan cache writes")

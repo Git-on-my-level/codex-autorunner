@@ -98,7 +98,7 @@ async def maybe_inject_github_context(
     try:
         repo_config = load_repo_config(repo_root)
         raw_config = repo_config.raw if repo_config else None
-    except Exception:
+    except (OSError, ValueError):
         raw_config = None
 
     svc = GitHubService(repo_root, raw_config=raw_config)
@@ -131,7 +131,9 @@ async def maybe_inject_github_context(
                 link,
                 allow_cross_repo=allow_cross_repo,
             )
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: GitHub API/network errors are non-fatal, best-effort injection
             result = None
         if result and result.get("hint"):
             separator = "\n" if prompt_text.endswith("\n") else "\n\n"

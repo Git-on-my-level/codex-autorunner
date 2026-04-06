@@ -16,6 +16,7 @@ from typing import (
 )
 
 import httpx
+from pydantic import ValidationError
 
 from ...core.circuit_breaker import CircuitBreaker
 from ...core.exceptions import CodexError, PermanentError, TransientError
@@ -352,7 +353,7 @@ def is_interrupt_alias(text: Optional[str]) -> bool:
 def parse_update(update: dict[str, Any]) -> Optional[TelegramUpdate]:
     try:
         schema = parse_update_payload(update)
-    except Exception:
+    except ValidationError:
         return None
     message = _parse_message(schema.update_id, schema.message, edited=False)
     if message is None:
@@ -586,7 +587,7 @@ def _parse_photo_sizes(payload: Any) -> tuple[TelegramPhotoSize, ...]:
             continue
         try:
             schema = TelegramPhotoSizeSchema.model_validate(item)
-        except Exception:
+        except ValidationError:
             continue
         sizes.append(
             TelegramPhotoSize(
@@ -605,7 +606,7 @@ def _parse_document(payload: Any) -> Optional[TelegramDocument]:
         return None
     try:
         schema = TelegramDocumentSchema.model_validate(payload)
-    except Exception:
+    except ValidationError:
         return None
     return TelegramDocument(
         file_id=schema.file_id,
@@ -621,7 +622,7 @@ def _parse_audio(payload: Any) -> Optional[TelegramAudio]:
         return None
     try:
         schema = TelegramAudioSchema.model_validate(payload)
-    except Exception:
+    except ValidationError:
         return None
     return TelegramAudio(
         file_id=schema.file_id,
@@ -638,7 +639,7 @@ def _parse_voice(payload: Any) -> Optional[TelegramVoice]:
         return None
     try:
         schema = TelegramVoiceSchema.model_validate(payload)
-    except Exception:
+    except ValidationError:
         return None
     return TelegramVoice(
         file_id=schema.file_id,
@@ -658,7 +659,7 @@ def _parse_entities(payload: Any) -> tuple[TelegramMessageEntity, ...]:
             continue
         try:
             schema = TelegramMessageEntitySchema.model_validate(item)
-        except Exception:
+        except ValidationError:
             continue
         entities.append(
             TelegramMessageEntity(
@@ -1417,7 +1418,7 @@ class TelegramBotClient:
             return response.content
         except TelegramAPIError:
             raise
-        except Exception as exc:
+        except (httpx.HTTPError, OSError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1587,7 +1588,9 @@ class TelegramBotClient:
                 raise await self._handle_http_status_error(method, exc) from exc
             except httpx.RequestError as exc:
                 raise await self._handle_transport_error(method, exc) from exc
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: last-resort catch for unexpected errors in request pipeline
                 raise await self._handle_unexpected_error(method, exc) from exc
 
             if not isinstance(payload, dict) or not payload.get("ok"):

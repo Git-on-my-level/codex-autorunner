@@ -136,7 +136,7 @@ class DiscordGatewayClient:
         await self._cancel_heartbeat()
         await self._cancel_dispatch_worker()
         if self._websocket is not None:
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(ConnectionClosed, OSError):
                 await self._websocket.close()
 
     async def run(
@@ -180,7 +180,9 @@ class DiscordGatewayClient:
                     )
                 else:
                     self._logger.info("Discord gateway socket closed; reconnecting")
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: reconnect loop catches all transient failures
                 self._logger.warning("Discord gateway error; reconnecting: %s", exc)
             finally:
                 self._websocket = None
@@ -311,7 +313,9 @@ class DiscordGatewayClient:
             await task
         except asyncio.CancelledError:
             pass
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: heartbeat cleanup must not abort reconnect/shutdown
             # Heartbeat failures can happen after websocket disconnects; do not let
             # them abort reconnect/shutdown paths.
             self._logger.debug("Discord heartbeat task ended with error: %s", exc)
@@ -330,7 +334,9 @@ class DiscordGatewayClient:
                     queue.task_done()
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: dispatch callback failures re-raised after queue drain
             while True:
                 try:
                     queue.get_nowait()
@@ -351,7 +357,9 @@ class DiscordGatewayClient:
                 {message_task, dispatch_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: asyncio.wait failure, re-raised after task cleanup
             message_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await message_task
@@ -387,7 +395,9 @@ class DiscordGatewayClient:
                 {queue_put_task, dispatch_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: asyncio.wait failure, re-raised after task cleanup
             queue_put_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await queue_put_task
@@ -419,7 +429,9 @@ class DiscordGatewayClient:
                 {join_task, dispatch_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-        except Exception:
+        except (
+            Exception
+        ):  # intentional: asyncio.wait failure, re-raised after task cleanup
             join_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await join_task

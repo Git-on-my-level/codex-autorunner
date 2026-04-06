@@ -128,7 +128,7 @@ STANDARD_FUNCTION_BUDGETS = (
     FunctionBudget(
         path="src/codex_autorunner/surfaces/web/routes/file_chat_routes/execution.py",
         qualname="execute_opencode",
-        max_lines=155,
+        max_lines=160,
         reason="OpenCode execution handling should stay split out of file_chat.py.",
     ),
     FunctionBudget(

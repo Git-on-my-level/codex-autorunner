@@ -1485,7 +1485,7 @@ def _load_yaml_dict(path: Path) -> Dict[str, Any]:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         raise ConfigError(f"Invalid YAML in {path}: {exc}") from exc
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         raise ConfigError(f"Failed to read config file {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError(f"Config file must be a mapping: {path}")
@@ -2583,7 +2583,7 @@ def ensure_hub_config_at(start: Path) -> tuple[Path, bool]:
         from .utils import find_repo_root
 
         target_root = find_repo_root(start)
-    except Exception:
+    except Exception:  # intentional: find_repo_root may raise undocumented exceptions
         target_root = start
 
     from ..bootstrap import seed_hub_files
@@ -2644,7 +2644,7 @@ def _resolve_repo_effective_destination(
             "Failed to resolve effective destination from hub manifest: "
             f"{hub.manifest_path}: {exc}"
         ) from exc
-    except Exception as exc:
+    except Exception as exc:  # intentional: defensive guard beyond known ManifestError
         raise ConfigError(
             "Failed to resolve effective destination from hub manifest: "
             f"{hub.manifest_path}: {exc}"

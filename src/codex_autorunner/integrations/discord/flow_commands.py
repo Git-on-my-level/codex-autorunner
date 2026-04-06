@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from ...core.config import ConfigError
 from ...core.flows import (
     FlowRunRecord,
     FlowRunStatus,
@@ -186,7 +187,7 @@ async def prompt_flow_action_picker(
 ) -> None:
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         raise DiscordTransientError(
             f"Failed to open flow database: {exc}",
             user_message="Unable to access flow database. Please try again later.",
@@ -254,7 +255,7 @@ async def resolve_flow_run_input(
     run_id_value = run_id_opt.strip()
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError):
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError):
         return run_id_value
     try:
         runs = store.list_flow_runs(flow_type="ticket_flow")
@@ -397,7 +398,7 @@ async def handle_flow_status(
         return
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -624,7 +625,7 @@ async def handle_flow_runs(
 
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -733,7 +734,7 @@ async def handle_flow_issue(
             text=str(exc),
         )
         return
-    except Exception as exc:
+    except (OSError, ValueError, ConnectionError) as exc:
         await service._send_or_respond_ephemeral(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
@@ -797,7 +798,7 @@ async def handle_flow_start(
 
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -843,7 +844,7 @@ async def handle_flow_start(
             )
             try:
                 store = service._open_flow_store(workspace_root)
-            except (sqlite3.Error, OSError, RuntimeError) as exc:
+            except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
                 log_event(
                     service._logger,
                     logging.ERROR,
@@ -970,7 +971,7 @@ async def handle_flow_start(
 
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -1097,7 +1098,7 @@ async def handle_flow_restart(
         return
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -1224,7 +1225,7 @@ async def handle_flow_recover(
         return
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -1329,7 +1330,7 @@ async def handle_flow_resume(
         return
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -1457,7 +1458,7 @@ async def handle_flow_stop(
         return
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -1586,7 +1587,7 @@ async def handle_flow_archive(
         run_id_opt = ""
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -1778,7 +1779,7 @@ async def handle_flow_reply(
             return
     try:
         store = service._open_flow_store(workspace_root)
-    except (sqlite3.Error, OSError, RuntimeError) as exc:
+    except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
         log_event(
             service._logger,
             logging.ERROR,
@@ -1969,7 +1970,7 @@ async def handle_flow_button(
 
         try:
             store = service._open_flow_store(workspace_root)
-        except (sqlite3.Error, OSError, RuntimeError) as exc:
+        except (sqlite3.Error, OSError, RuntimeError, ConfigError) as exc:
             log_event(
                 service._logger,
                 logging.ERROR,

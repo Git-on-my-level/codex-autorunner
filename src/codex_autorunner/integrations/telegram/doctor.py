@@ -2,6 +2,7 @@
 
 import logging
 import os
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
@@ -523,7 +524,7 @@ def _check_stuck_turns(checks: list[DoctorCheck], state_file_path: Path) -> None
                     severity="info",
                 )
             )
-    except Exception as exc:
+    except (ImportError, sqlite3.Error, OSError) as exc:
         logger.debug("Failed to check for stuck turns: %s", exc)
         checks.append(
             DoctorCheck(

@@ -112,7 +112,9 @@ class WorkspaceAppServerSupervisor:
                     last_used_at=handle.last_used_at,
                 )
                 await handle.client.close()
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: best-effort cleanup during close_all
                 self._logger.debug("Failed to close handle: %s", exc)
                 continue
 
@@ -135,7 +137,9 @@ class WorkspaceAppServerSupervisor:
                 )
                 await handle.client.close()
                 closed += 1
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: best-effort cleanup during idle pruning
                 self._logger.debug("Failed to prune handle: %s", exc)
                 continue
         return closed
@@ -205,7 +209,7 @@ class WorkspaceAppServerSupervisor:
                     last_used_at=handle.last_used_at,
                 )
                 await handle.client.close()
-            except Exception as exc:
+            except Exception as exc:  # intentional: best-effort cleanup during eviction
                 self._logger.debug("Failed to close handle: %s", exc)
                 continue
         return handle

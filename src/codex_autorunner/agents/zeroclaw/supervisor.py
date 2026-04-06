@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Mapping, Optional, Sequence
 
-from ...core.config import HubConfig, RepoConfig
+from ...core.config import ConfigError, HubConfig, RepoConfig
 from ...core.destinations import (
     Destination,
     DockerDestination,
@@ -423,7 +423,9 @@ class ZeroClawSupervisor:
             return LocalDestination()
         try:
             return self._destination_resolver(workspace_root)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: user-provided destination resolver callback
             self._logger.warning(
                 "Falling back to local ZeroClaw launch for %s after destination resolution failure: %s",
                 workspace_root,
@@ -512,7 +514,7 @@ def build_zeroclaw_supervisor_from_config(
 ) -> Optional[ZeroClawSupervisor]:
     try:
         binary = config.agent_binary("zeroclaw")
-    except Exception:
+    except ConfigError:
         return None
     destination_resolver: Optional[Callable[[Path], Destination]] = None
     if isinstance(config, HubConfig):
@@ -556,7 +558,7 @@ def zeroclaw_runtime_preflight(
         )
     try:
         binary = config.agent_binary("zeroclaw").strip()
-    except Exception:
+    except ConfigError:
         return RuntimePreflightResult(
             runtime_id="zeroclaw",
             status="missing_binary",

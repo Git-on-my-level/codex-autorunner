@@ -562,7 +562,7 @@ def register_flow_commands(
                 typer.echo(
                     f"Managed process cleanup: killed {cleanup.killed}, signaled {cleanup.signaled}, removed {cleanup.removed} records, skipped {cleanup.skipped}"
                 )
-        except Exception as exc:
+        except (OSError, RuntimeError) as exc:
             typer.echo(f"Managed process cleanup failed: {exc}", err=True)
         normalized_run_id = _normalize_flow_run_id(run_id)
         if normalized_run_id is None:
@@ -628,7 +628,7 @@ def register_flow_commands(
                     worker_run_id,
                     artifacts_root=artifacts_root,
                 )
-            except Exception as exc:
+            except (OSError, RuntimeError) as exc:
                 typer.echo(f"Failed to register worker metadata: {exc}", err=True)
 
             agent_pool: Optional[AgentPool] = None
@@ -712,7 +712,9 @@ def register_flow_commands(
                         typer.echo(f"Flow run {worker_run_id} cancelled by signal")
                 if not shutdown_wait_task.done():
                     shutdown_wait_task.cancel()
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: top-level worker crash handler; re-raises after logging
                 exit_code_holder[0] = 1
                 last_event = None
                 try:
@@ -725,7 +727,9 @@ def register_flow_commands(
                             method = msg.get("method")
                             if isinstance(method, str) and method.strip():
                                 last_event = method.strip()
-                except Exception:
+                except (
+                    Exception
+                ):  # intentional: best-effort diagnostic during crash handling
                     last_event = None
                 write_worker_crash_info(
                     engine.repo_root,
@@ -743,7 +747,9 @@ def register_flow_commands(
                 if agent_pool is not None:
                     try:
                         await agent_pool.close_all()
-                    except Exception:
+                    except (
+                        Exception
+                    ):  # intentional: best-effort cleanup; must not mask the original error
                         typer.echo("Failed to close agent pool cleanly", err=True)
                 _write_exit_info()
 

@@ -49,7 +49,7 @@ def process_is_zombie(pid: int) -> bool:
             text=True,
             check=False,
         )
-    except Exception:
+    except (OSError, TypeError):
         logger.debug("Failed to check process status for pid %s", pid, exc_info=True)
         return False
     if result.returncode != 0:
@@ -67,7 +67,7 @@ def process_command(pid: int) -> Optional[str]:
             text=True,
             check=False,
         )
-    except Exception:
+    except (OSError, TypeError):
         logger.debug("Failed to inspect process command for pid %s", pid, exc_info=True)
         return None
     if result.returncode != 0:
@@ -289,7 +289,7 @@ def read_lock_info(lock_path: Path) -> LockInfo:
                 started_at=payload.get("started_at"),
                 host=payload.get("host"),
             )
-        except Exception:
+        except (json.JSONDecodeError, ValueError, TypeError):
             return LockInfo(pid=None, started_at=None, host=None)
     pid = int(text) if text.isdigit() else None
     return LockInfo(pid=pid, started_at=None, host=None)

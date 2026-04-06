@@ -27,6 +27,7 @@ from ..adapter import (
     QuestionCustomCallback,
     QuestionDoneCallback,
     QuestionOptionCallback,
+    TelegramAPIError,
     TelegramCallbackQuery,
     TelegramMessage,
     build_question_keyboard,
@@ -146,7 +147,7 @@ class TelegramQuestionHandlers(ChatQuestionHandlers):
                     reply_markup=keyboard,
                     parse_mode=parse_mode,
                 )
-            except Exception as exc:
+            except (TelegramAPIError, ValueError, RuntimeError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,

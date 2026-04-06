@@ -197,7 +197,9 @@ class _MlxWhisperStream(TranscriptionStream):
                 ]
             self._logger.error("MLX Whisper transcription failed: %s", exc)
             return [TranscriptionEvent(text="", is_final=True, error="provider_error")]
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: ML library (mlx-whisper) errors are unpredictable
             self._logger.error("MLX Whisper transcription failed: %s", exc)
             return [TranscriptionEvent(text="", is_final=True, error="provider_error")]
         finally:

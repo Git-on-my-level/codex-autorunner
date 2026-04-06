@@ -299,7 +299,7 @@ def archive_flow_run_artifacts(
                     policy=retention_policy,
                     preserve_paths=(Path(str(archive_plan["archive_root"])),),
                 )
-            except Exception:
+            except Exception:  # intentional: non-critical archive pruning
                 logger.warning(
                     "Failed to prune archived runs under %s",
                     repo_root / ".codex-autorunner" / "archive" / "runs",
@@ -316,7 +316,7 @@ def archive_flow_run_artifacts(
         seed_repo_files(repo_root, force=False, git_required=False)
         try:
             summary.update(_archive_ticket_flow_pma_threads(repo_root, record.id))
-        except Exception as exc:
+        except Exception as exc:  # intentional: non-critical PMA thread archiving
             summary["archived_pma_threads_error"] = (
                 str(exc).strip() or exc.__class__.__name__
             )

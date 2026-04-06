@@ -85,7 +85,9 @@ def resolve_static_dir() -> tuple[Path, Optional[ExitStack]]:
     stack = ExitStack()
     try:
         static_path = stack.enter_context(resources.as_file(static_root))
-    except Exception:
+    except (
+        Exception
+    ):  # intentional: importlib.resources can raise varied errors across Python versions
         stack.close()
         fallback = Path(__file__).resolve().parent.parent / "static"
         return fallback, None
@@ -108,7 +110,7 @@ def _iter_static_source_files(source_dir: Path) -> Iterable[Path]:
                 yield path
             except OSError:
                 continue
-    except Exception:
+    except OSError:
         return
 
 
@@ -161,7 +163,7 @@ def _iter_asset_files(static_dir: Path) -> Iterable[Path]:
                 yield path
             except OSError:
                 continue
-    except Exception:
+    except OSError:
         return
 
 
@@ -241,7 +243,7 @@ def _cleanup_temp_dir(path: Path, logger: logging.Logger) -> None:
         shutil.rmtree(path)
     except FileNotFoundError:
         return
-    except Exception as exc:
+    except OSError as exc:
         safe_log(
             logger,
             logging.WARNING,
@@ -256,7 +258,7 @@ def _acquire_cache_lock(lock_path: Path, logger: logging.Logger) -> bool:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
         return False
-    except Exception as exc:
+    except OSError as exc:
         safe_log(
             logger,
             logging.WARNING,
@@ -282,7 +284,7 @@ def _release_cache_lock(lock_path: Path, logger: logging.Logger) -> None:
         lock_path.unlink()
     except FileNotFoundError:
         return
-    except Exception as exc:
+    except OSError as exc:
         safe_log(
             logger,
             logging.WARNING,
@@ -355,7 +357,7 @@ def _prune_cache_entries(
                 try:
                     shutil.rmtree(entry)
                     entries.remove(entry)
-                except Exception as exc:
+                except OSError as exc:
                     safe_log(
                         logger,
                         logging.WARNING,
@@ -369,7 +371,7 @@ def _prune_cache_entries(
         for entry in removable[: len(entries) - max_cache_entries]:
             try:
                 shutil.rmtree(entry)
-            except Exception as exc:
+            except OSError as exc:
                 safe_log(
                     logger,
                     logging.WARNING,
@@ -417,7 +419,7 @@ def materialize_static_assets(
         return target_dir, None
     try:
         cache_root.mkdir(parents=True, exist_ok=True)
-    except Exception as exc:
+    except OSError as exc:
         safe_log(
             logger,
             logging.WARNING,
@@ -476,7 +478,7 @@ def materialize_static_assets(
                 return target_dir, None
             try:
                 shutil.rmtree(target_dir)
-            except Exception as exc:
+            except OSError as exc:
                 safe_log(
                     logger,
                     logging.WARNING,
@@ -488,7 +490,9 @@ def materialize_static_assets(
                     "Static UI assets missing; reinstall package"
                 ) from exc
         temp_dir.replace(target_dir)
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: top-level error handler for asset materialization
         _cleanup_temp_dir(temp_dir, logger)
         if static_context is not None:
             static_context.close()

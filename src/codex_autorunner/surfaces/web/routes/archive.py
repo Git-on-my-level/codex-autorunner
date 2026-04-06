@@ -182,7 +182,7 @@ def _load_meta(meta_path: Path) -> Optional[dict[str, Any]]:
         data = json.loads(raw)
         if isinstance(data, dict):
             return data
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         logger.debug("Failed to read META.json at %s: %s", meta_path, exc)
     return None
 
@@ -321,7 +321,7 @@ def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
         try:
             resolved = child.resolve(strict=False)
             resolved.relative_to(root_real)
-        except Exception:
+        except ValueError:
             continue
 
         if child.is_dir():
@@ -363,7 +363,7 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
             try:
                 resolved = candidate.resolve(strict=False)
                 resolved.relative_to(run_root.resolve(strict=False))
-            except Exception:
+            except ValueError:
                 continue
             if candidate.is_dir():
                 root_node_type: Literal["file", "folder"] = "folder"
@@ -396,7 +396,7 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
         try:
             resolved = child.resolve(strict=False)
             resolved.relative_to(root_real)
-        except Exception:
+        except ValueError:
             continue
 
         if child.is_dir():

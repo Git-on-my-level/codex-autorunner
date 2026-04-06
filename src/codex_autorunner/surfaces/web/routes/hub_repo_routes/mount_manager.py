@@ -70,13 +70,15 @@ class HubMountManager:
                 logging.INFO,
                 f"Repo app lifespan entered for {prefix}",
             )
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: arbitrary user-provided lifespan context
             self._mount_errors[prefix] = str(exc)
             try:
                 self.app.state.logger.warning(
                     "Repo lifespan failed for %s: %s", prefix, exc
                 )
-            except Exception as exc2:
+            except (RuntimeError, OSError) as exc2:
                 safe_log(
                     self.app.state.logger,
                     logging.DEBUG,
@@ -96,12 +98,18 @@ class HubMountManager:
                 logging.INFO,
                 f"Repo app lifespan exited for {prefix}",
             )
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            AttributeError,
+            TypeError,
+            ValueError,
+        ) as exc:
             try:
                 self.app.state.logger.warning(
                     "Repo lifespan shutdown failed for %s: %s", prefix, exc
                 )
-            except Exception as exc2:
+            except (RuntimeError, OSError) as exc2:
                 safe_log(
                     self.app.state.logger,
                     logging.DEBUG,
@@ -136,7 +144,7 @@ class HubMountManager:
             self._mount_errors[prefix] = str(exc)
             try:
                 self.app.state.logger.warning("Cannot mount repo %s: %s", prefix, exc)
-            except Exception as exc2:
+            except (RuntimeError, OSError) as exc2:
                 safe_log(
                     self.app.state.logger,
                     logging.DEBUG,
@@ -144,11 +152,18 @@ class HubMountManager:
                     exc=exc2,
                 )
             return False
-        except Exception as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            ImportError,
+        ) as exc:
             self._mount_errors[prefix] = str(exc)
             try:
                 self.app.state.logger.warning("Cannot mount repo %s: %s", prefix, exc)
-            except Exception as exc2:
+            except (RuntimeError, OSError) as exc2:
                 safe_log(
                     self.app.state.logger,
                     logging.DEBUG,

@@ -68,7 +68,13 @@ async def _run_prune_loop(
             await asyncio.sleep(interval_seconds)
             try:
                 await supervisor.prune_idle()
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ConnectionError,
+                ValueError,
+                TypeError,
+            ) as exc:  # intentional: background loop must not crash
                 safe_log(logger, logging.WARNING, failure_message, exc)
     except asyncio.CancelledError:
         return
@@ -155,7 +161,12 @@ def create_hub_app(
             try:
                 await recover_orphaned_managed_thread_executions(app)
                 await restart_managed_thread_queue_workers(app)
-            except Exception as exc:
+            except (
+                RuntimeError,
+                TypeError,
+                AttributeError,
+                OSError,
+            ) as exc:  # intentional: best-effort startup recovery
                 safe_log(
                     app.state.logger,
                     logging.WARNING,
@@ -172,7 +183,11 @@ def create_hub_app(
                         cleanup.removed,
                         cleanup.skipped,
                     )
-            except Exception as exc:
+            except (
+                OSError,
+                RuntimeError,
+                AttributeError,
+            ) as exc:  # intentional: best-effort startup cleanup
                 safe_log(
                     app.state.logger,
                     logging.WARNING,
@@ -191,7 +206,13 @@ def create_hub_app(
                                 reap_managed_docker_containers,
                                 logger=app.state.logger,
                             )
-                        except Exception as exc:
+                        except (
+                            RuntimeError,
+                            OSError,
+                            ConnectionError,
+                            ValueError,
+                            TypeError,
+                        ) as exc:  # intentional: background loop must not crash
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
@@ -222,7 +243,13 @@ def create_hub_app(
                                         filebox_summary.bytes_before,
                                         filebox_summary.bytes_after,
                                     )
-                            except Exception as exc:
+                            except (
+                                OSError,
+                                RuntimeError,
+                                ConnectionError,
+                                ValueError,
+                                TypeError,
+                            ) as exc:  # intentional: background loop must not crash
                                 safe_log(
                                     app.state.logger,
                                     logging.WARNING,
@@ -235,7 +262,13 @@ def create_hub_app(
                                 app.state.config.root,
                                 logger=app.state.logger,
                             )
-                        except Exception as exc:
+                        except (
+                            RuntimeError,
+                            OSError,
+                            ConnectionError,
+                            ValueError,
+                            TypeError,
+                        ) as exc:  # intentional: background loop must not crash
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
@@ -305,7 +338,11 @@ def create_hub_app(
                             fut = asyncio.run_coroutine_threadsafe(
                                 starter(app, lane_id), loop
                             )
-                        except Exception as exc:
+                        except (
+                            RuntimeError,
+                            TypeError,
+                            AttributeError,
+                        ) as exc:  # intentional: external callback must not crash
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
@@ -317,7 +354,14 @@ def create_hub_app(
                         def _on_done(done_fut) -> None:
                             try:
                                 done_fut.result()
-                            except Exception as exc:
+                            except (
+                                RuntimeError,
+                                OSError,
+                                ValueError,
+                                TypeError,
+                                AttributeError,
+                                ConnectionError,
+                            ) as exc:  # intentional: future callback must not crash
                                 safe_log(
                                     app.state.logger,
                                     logging.WARNING,
@@ -331,7 +375,7 @@ def create_hub_app(
                         register_lane_starter(_start_lane_worker)
                         registered_pma_lane_starter = True
                         pma_lane_starter_register = register_lane_starter
-                    except Exception as exc:
+                    except (RuntimeError, TypeError, AttributeError) as exc:
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
@@ -341,13 +385,19 @@ def create_hub_app(
                 if starter is not None:
                     try:
                         await starter(app, "pma:default")
-                    except Exception as exc:
+                    except (
+                        RuntimeError,
+                        TypeError,
+                        AttributeError,
+                        OSError,
+                    ) as exc:  # intentional: best-effort startup
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
                             "PMA lane worker startup failed",
                             exc,
                         )
+
             await mount_manager.start_repo_lifespans()
             startup_completed = True
             try:
@@ -361,7 +411,10 @@ def create_hub_app(
                 if registered_pma_lane_starter and callable(pma_lane_starter_register):
                     try:
                         pma_lane_starter_register(None)
-                    except Exception as exc:
+                    except (
+                        OSError,
+                        RuntimeError,
+                    ) as exc:  # intentional: cleanup must not crash
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
@@ -372,7 +425,10 @@ def create_hub_app(
                 if runtime_services is not None:
                     try:
                         await runtime_services.close()
-                    except Exception as exc:
+                    except (
+                        OSError,
+                        RuntimeError,
+                    ) as exc:  # intentional: cleanup must not crash
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
@@ -386,7 +442,10 @@ def create_hub_app(
                     if app_server_supervisor is not None:
                         try:
                             await app_server_supervisor.close_all()
-                        except Exception as exc:
+                        except (
+                            OSError,
+                            RuntimeError,
+                        ) as exc:  # intentional: cleanup must not crash
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
@@ -399,7 +458,10 @@ def create_hub_app(
                     if opencode_supervisor is not None:
                         try:
                             await opencode_supervisor.close_all()
-                        except Exception as exc:
+                        except (
+                            OSError,
+                            RuntimeError,
+                        ) as exc:  # intentional: cleanup must not crash
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,
@@ -413,7 +475,10 @@ def create_hub_app(
                 if stop_all is not None:
                     try:
                         await stop_all(app)
-                    except Exception as exc:
+                    except (
+                        OSError,
+                        RuntimeError,
+                    ) as exc:  # intentional: cleanup must not crash
                         safe_log(
                             app.state.logger,
                             logging.WARNING,
@@ -425,7 +490,10 @@ def create_hub_app(
                     if stopper is not None:
                         try:
                             await stopper(app, "pma:default")
-                        except Exception as exc:
+                        except (
+                            OSError,
+                            RuntimeError,
+                        ) as exc:  # intentional: cleanup must not crash
                             safe_log(
                                 app.state.logger,
                                 logging.WARNING,

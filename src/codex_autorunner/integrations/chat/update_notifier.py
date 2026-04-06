@@ -147,7 +147,7 @@ def mark_update_status_notified(
     updated["notify_sent_at"] = time.time()
     try:
         path.write_text(json.dumps(updated), encoding="utf-8")
-    except Exception as exc:
+    except (OSError, TypeError) as exc:
         log_event(
             logger,
             logging.WARNING,

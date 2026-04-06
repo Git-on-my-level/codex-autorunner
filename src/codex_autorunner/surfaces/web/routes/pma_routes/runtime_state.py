@@ -96,7 +96,9 @@ class PmaRuntimeState:
                 checker = supervisor.ensure_pma_safety_checker()
                 if isinstance(checker, PmaSafetyChecker):
                     return checker
-            except Exception:
+            except (
+                Exception
+            ):  # intentional: supervisor is external, fallback to local checker
                 logger.debug(
                     "Failed to get safety checker from supervisor", exc_info=True
                 )
@@ -191,7 +193,7 @@ class PmaRuntimeState:
             }
         try:
             store.save(state)
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             logger.exception("Failed to persist PMA state")
 
     def cancel_background_task(self, task: asyncio.Task[Any], *, name: str) -> None:
@@ -200,7 +202,7 @@ class PmaRuntimeState:
                 task.result()
             except asyncio.CancelledError:
                 return
-            except Exception:
+            except Exception:  # intentional: consume arbitrary task failure
                 logger.exception("PMA task failed: %s", name)
 
         if task.done():

@@ -95,10 +95,10 @@ def _extract_http_error_detail(
                 detail = json.dumps(payload, ensure_ascii=False)
         else:
             detail = json.dumps(payload, ensure_ascii=False)
-    except Exception:
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
         try:
             detail = exc.response.text
-        except Exception:
+        except (UnicodeDecodeError, ValueError):
             detail = None
 
     if detail is not None:
@@ -255,7 +255,9 @@ class _OpenAIWhisperStream(TranscriptionStream):
             latency_ms = int((time.monotonic() - started) * 1000)
             text = (result or {}).get("text", "") if isinstance(result, Mapping) else ""
             return [TranscriptionEvent(text=text, is_final=True, latency_ms=latency_ms)]
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: request_fn is injectable, surface arbitrary errors gracefully
             status_code, error_detail = _extract_http_error_detail(exc)
             if status_code is None and isinstance(exc, httpx.HTTPStatusError):
                 status_code = (

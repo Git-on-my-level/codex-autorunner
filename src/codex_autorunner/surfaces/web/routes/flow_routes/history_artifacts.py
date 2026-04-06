@@ -40,7 +40,7 @@ def get_diff_stats_by_dispatch_seq(
             data = event.data or {}
             try:
                 dispatch_seq = int(data.get("dispatch_seq") or 0)
-            except Exception:
+            except (ValueError, TypeError):
                 continue
             if dispatch_seq <= 0:
                 continue
@@ -49,14 +49,14 @@ def get_diff_stats_by_dispatch_seq(
                 "deletions": int(data.get("deletions") or 0),
                 "files_changed": int(data.get("files_changed") or 0),
             }
-    except Exception:
+    except Exception:  # intentional: best-effort store read
         _logger.debug(
             "Failed to read diff stats events for run %s", record.id, exc_info=True
         )
     finally:
         try:
             store.close()
-        except Exception:
+        except OSError:
             _logger.debug(
                 "Failed to close flow store after reading diff stats", exc_info=True
             )
@@ -96,7 +96,7 @@ def get_dispatch_history(
                 dispatch_dict["is_handoff"] = dispatch.is_handoff
                 try:
                     entry_seq = int(entry.name)
-                except Exception:
+                except ValueError:
                     entry_seq = 0
                 if entry_seq and entry_seq in diff_by_seq:
                     dispatch_dict["diff_stats"] = diff_by_seq[entry_seq]

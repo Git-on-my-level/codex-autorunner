@@ -163,7 +163,7 @@ def list_turn_timeline(hub_root, *, execution_id: str) -> list[dict[str, Any]]:
     for row in rows:
         try:
             payload = json.loads(str(row["payload_json"] or "{}"))
-        except Exception:
+        except (ValueError, TypeError):
             payload = {}
         data = dict(payload) if isinstance(payload, dict) else {}
         data.setdefault("event_id", str(row["event_id"] or ""))

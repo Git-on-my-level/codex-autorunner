@@ -485,7 +485,7 @@ def _managed_thread_harness(service: Any, agent_id: str) -> Any:
         return None
     try:
         return factory(agent_id)
-    except Exception:
+    except Exception:  # intentional: dynamic harness factory - exception types unknown
         return None
 
 
@@ -796,7 +796,9 @@ async def _build_managed_thread_tail_snapshot(
                     after_id=int(resume_after or 0),
                     limit=limit,
                 )
-            except Exception:
+            except (
+                Exception
+            ):  # intentional: dynamic harness method - exception types depend on backend
                 raw_events = []
             state = RuntimeThreadRunEventState()
             event_id_start = int(resume_after or 0)

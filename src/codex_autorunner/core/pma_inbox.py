@@ -81,7 +81,7 @@ def _record_inbox_auto_dismiss_audit(
                 },
             )
         )
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         _logger.warning(
             "Failed to record PMA inbox auto-dismiss audit entry for repo %s run %s: %s",
             repo_id,
@@ -259,7 +259,7 @@ def _inbox_resolve_repos(
 ) -> list[Any]:
     try:
         snapshots = supervisor.list_repos()
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         _logger.warning("Could not list repos for inbox: %s", exc)
         return []
     return [snap for snap in snapshots if snap.initialized and snap.exists_on_disk]
@@ -581,7 +581,7 @@ def _gather_inbox(
                     )
                     if item is not None:
                         messages.append(item)
-        except Exception as exc:
+        except (OSError, RuntimeError, ValueError) as exc:
             _logger.warning("Failed to gather inbox for repo %s: %s", snap.id, exc)
             continue
     messages.sort(key=lambda m: m.get("run_created_at") or "", reverse=True)

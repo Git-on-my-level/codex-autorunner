@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 from .....core.logging_utils import log_event
-from ...adapter import TelegramMessage
+from ...adapter import TelegramAPIError, TelegramMessage
 from ...constants import PLACEHOLDER_TEXT
 from ...state import PendingVoiceRecord
 
@@ -33,7 +33,7 @@ class VoiceCommands(TelegramCommandSupportMixin):
                 reply_to_message_id=record.message_id,
                 parse_mode=parse_mode,
             )
-        except Exception as exc:
+        except (TelegramAPIError, ValueError, RuntimeError) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

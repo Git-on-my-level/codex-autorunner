@@ -136,7 +136,7 @@ def _extract_command_context(
             after_seq=after_seq,
             limit=limit,
         )
-    except Exception:
+    except Exception:  # intentional: non-critical diagnostic extraction
         return None, None, None
     if not events:
         return None, None, None
@@ -371,7 +371,7 @@ def build_failure_payload(
     if store is not None:
         try:
             last_event_seq, last_event_at = store.get_last_event_meta(record.id)
-        except Exception as e:
+        except Exception as e:  # intentional: non-critical metadata fetch
             logger.debug(
                 "Failed to get last event meta for record %s: %s", record.id, e
             )

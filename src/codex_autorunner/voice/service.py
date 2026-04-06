@@ -89,7 +89,7 @@ class VoiceService:
         configured_provider = self._configured_provider_name()
         try:
             effective_provider = self.effective_provider_name()
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             effective_provider = configured_provider
 
         # Providers that do not use remote APIs may not require any API key.
@@ -163,7 +163,9 @@ class VoiceService:
         try:
             capture.handle_chunk(audio_bytes)
             capture.end_capture("client_stop")
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: provider boundary maps arbitrary provider errors
             raise VoiceServiceError("provider_error", str(exc)) from exc
 
         if buffer.error_reason:

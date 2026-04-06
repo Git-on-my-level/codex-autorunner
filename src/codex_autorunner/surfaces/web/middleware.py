@@ -304,7 +304,7 @@ class HostOriginMiddleware:
             return None
         try:
             return raw.decode("latin-1")
-        except Exception:
+        except UnicodeDecodeError:
             return None
 
     def _split_host_port(self, value: str) -> tuple[str, str | None]:
@@ -554,7 +554,9 @@ class RequestIdMiddleware:
 
         try:
             await self.app(scope, receive, send_wrapper)
-        except Exception as exc:
+        except (
+            Exception
+        ) as exc:  # intentional: top-level ASGI error boundary logs then re-raises
             duration_ms = (time.monotonic() - start) * 1000
             fields = {
                 "method": method,

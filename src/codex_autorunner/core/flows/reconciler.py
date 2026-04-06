@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -55,7 +56,7 @@ def _ensure_worker_not_stale(health: FlowWorkerHealth) -> None:
     if health.status in {"dead", "mismatch", "invalid"}:
         try:
             clear_worker_metadata(health.artifact_path.parent)
-        except Exception:
+        except (OSError, RuntimeError):
             _logger.debug("Failed to clear worker metadata: %s", health.artifact_path)
 
 
@@ -64,7 +65,7 @@ def _latest_app_server_event_details(
 ) -> tuple[Optional[str], Optional[str]]:
     try:
         event = store.get_last_event_by_type(run_id, FlowEventType.APP_SERVER_EVENT)
-    except Exception as exc:
+    except (sqlite3.Error, ValueError, TypeError, RuntimeError) as exc:
         _logger.debug("Failed to get last app server event: %s", exc)
         return None, None
     if event is None:
@@ -119,7 +120,7 @@ def _ensure_worker_crash_artifact(
 ) -> None:
     try:
         existing = store.get_artifacts(run_id)
-    except Exception as exc:
+    except (sqlite3.Error, ValueError, TypeError, RuntimeError) as exc:
         _logger.debug("Failed to get artifacts for %s: %s", run_id, exc)
         existing = []
     for art in existing:
@@ -144,7 +145,7 @@ def _ensure_worker_crash_artifact(
                 ),
             },
         )
-    except Exception as exc:
+    except (sqlite3.Error, ValueError, TypeError) as exc:
         _logger.warning("Failed to create crash artifact for %s: %s", run_id, exc)
 
 
@@ -321,7 +322,7 @@ def reconcile_flow_run(
                 }:
                     try:
                         _ensure_crash_dispatch(repo_root, record, crash_info=crash_info)
-                    except Exception as exc:
+                    except (OSError, ValueError, TypeError, KeyError) as exc:
                         (logger or _logger).warning(
                             "Failed to create crash dispatch for %s: %s",
                             record.id,
@@ -413,7 +414,7 @@ def reconcile_flow_run(
                         event_type=FlowEventType.FLOW_FAILED,
                         data=event_data,
                     )
-                except Exception as exc:
+                except (sqlite3.Error, ValueError, TypeError) as exc:
                     (logger or _logger).warning(
                         "Failed to emit flow_failed event for %s: %s", record.id, exc
                     )
@@ -425,7 +426,7 @@ def reconcile_flow_run(
             }:
                 try:
                     _ensure_crash_dispatch(repo_root, record, crash_info=crash_info)
-                except Exception as exc:
+                except (OSError, ValueError, TypeError, KeyError) as exc:
                     (logger or _logger).warning(
                         "Failed to create crash dispatch for %s: %s", record.id, exc
                     )
@@ -434,7 +435,7 @@ def reconcile_flow_run(
             return (updated or record), bool(updated), False
     except FileLockBusy:
         return record, False, True
-    except Exception as exc:
+    except Exception as exc:  # intentional: top-level reconcile handler must not raise
         (logger or _logger).warning("Failed to reconcile flow %s: %s", record.id, exc)
         return record, False, False
 
@@ -472,12 +473,18 @@ def reconcile_flow_runs(
                 if locked:
                     summary.locked += 1
             records.append(record)
-    except Exception as exc:
+    except (
+        sqlite3.Error,
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:  # intentional: top-level reconcile loop must not raise
         summary.errors += 1
         (logger or _logger).warning("Flow reconcile run failed: %s", exc)
     finally:
         try:
             store.close()
-        except Exception as exc:
+        except (sqlite3.Error, ValueError, TypeError) as exc:
             _logger.debug("Failed to close store: %s", exc)
     return FlowReconcileResult(records=records, summary=summary)

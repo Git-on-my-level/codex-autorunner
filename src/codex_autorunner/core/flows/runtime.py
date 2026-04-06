@@ -1,5 +1,6 @@
 import inspect
 import logging
+import sqlite3
 import uuid
 from typing import Any, Callable, Dict, Optional, Set, cast
 
@@ -69,7 +70,14 @@ class FlowRuntime:
         if self.emit_lifecycle_event:
             try:
                 self.emit_lifecycle_event(event_type, repo_id, run_id, data, origin)
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                AttributeError,
+                sqlite3.Error,
+            ) as exc:  # lifecycle callback boundary - must not crash runtime
                 _logger.exception("Error emitting lifecycle event: %s", exc)
 
     def _emit(
@@ -89,7 +97,13 @@ class FlowRuntime:
         if self.emit_event:
             try:
                 self.emit_event(event)
-            except Exception as e:
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                sqlite3.Error,
+            ) as e:  # event callback boundary
                 _logger.exception("Error emitting event: %s", e)
 
     async def run_flow(
@@ -200,7 +214,15 @@ class FlowRuntime:
 
             return record
 
-        except Exception as e:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            sqlite3.Error,
+            AttributeError,
+            KeyError,
+        ) as e:  # top-level flow boundary
             _logger.exception("Flow run %s failed with exception", run_id)
             self._emit(
                 FlowEventType.FLOW_FAILED,
@@ -287,7 +309,7 @@ class FlowRuntime:
                     return bool(marker_value)
                 try:
                     sig = inspect.signature(step_fn)
-                except Exception:
+                except (TypeError, ValueError):
                     return False
                 params = list(sig.parameters.values())
                 if any(
@@ -482,7 +504,7 @@ class FlowRuntime:
 
             return record
 
-        except Exception as e:
+        except Exception as e:  # intentional: user-defined step function
             _logger.exception("Step %s failed with exception", step_id)
             self._emit(
                 FlowEventType.STEP_FAILED,

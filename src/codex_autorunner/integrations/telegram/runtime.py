@@ -42,7 +42,7 @@ class TelegramWorkspaceAndTurnMixin:
             return None
         try:
             return canonical_workspace_root(Path(workspace_path))
-        except Exception:
+        except (OSError, ValueError):
             return None
 
     def _workspace_id_for_path(self, workspace_path: Optional[str]) -> Optional[str]:
@@ -92,7 +92,9 @@ class TelegramWorkspaceAndTurnMixin:
                 )
             try:
                 return await self._app_server_supervisor.get_client(workspace_root)
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: retry loop; get_client may raise connection/subprocess/protocol errors
                 self._log_app_server_start_failure(workspace_root, exc)
                 elapsed = time.monotonic() - started_at
                 if elapsed >= timeout:
@@ -228,13 +230,13 @@ class TelegramWorkspaceAndTurnMixin:
         if not resolved_key:
             try:
                 resolved_key = build_topic_key(chat_id, thread_id)
-            except Exception:
+            except (ValueError, TypeError):
                 resolved_key = None
         scope = None
         if resolved_key:
             try:
                 _, _, scope = parse_topic_key(resolved_key)
-            except Exception:
+            except (ValueError, TypeError):
                 scope = None
         parts = [f"chat={chat_id}"]
         thread_label = str(thread_id) if thread_id is not None else TOPIC_ROOT

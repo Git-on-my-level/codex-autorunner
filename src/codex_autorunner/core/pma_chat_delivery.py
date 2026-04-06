@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
 from ..manifest import load_manifest
 from .chat_bindings import (
     DISCORD_STATE_FILE_DEFAULT,
@@ -44,7 +46,7 @@ def _binding_matches_workspace(binding_workspace: Any, workspace_root: Path) -> 
         return canonicalize_path(Path(binding_workspace)) == canonicalize_path(
             workspace_root
         )
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return False
 
 
@@ -54,13 +56,13 @@ def _repo_id_by_workspace_path(hub_root: Path) -> dict[str, str]:
         return {}
     try:
         loaded = load_manifest(manifest_path, hub_root)
-    except Exception:
+    except (OSError, ValueError, yaml.YAMLError):
         return {}
     mapping: dict[str, str] = {}
     for repo in loaded.repos:
         try:
             workspace_path = canonicalize_path(hub_root / repo.path)
-        except Exception:
+        except (OSError, ValueError):
             continue
         mapping[str(workspace_path)] = repo.id
     return mapping
@@ -79,7 +81,7 @@ def _resolve_repo_id(
         return None
     try:
         return repo_id_by_workspace.get(str(canonicalize_path(Path(workspace_path))))
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return None
 
 
@@ -302,7 +304,7 @@ async def _deliver_bound_telegram(
                 continue
             try:
                 chat_id, thread_id, scope = parse_topic_key(surface_key)
-            except Exception:
+            except ValueError:
                 continue
             base_key = f"{chat_id}:{thread_id or 'root'}"
             if scope != await store.get_topic_scope(base_key):
@@ -510,7 +512,7 @@ async def _deliver_primary_pma_telegram(
                 continue
             try:
                 chat_id, thread_id, scope = parse_topic_key(surface_key)
-            except Exception:
+            except ValueError:
                 continue
             base_key = f"{chat_id}:{thread_id or 'root'}"
             if scope != await store.get_topic_scope(base_key):
@@ -597,7 +599,7 @@ async def deliver_pma_notification(
         return {"route": normalized_delivery, "targets": 0, "published": 0}
     try:
         raw_config = load_hub_config(hub_root).raw
-    except Exception:
+    except (OSError, ValueError, yaml.YAMLError):
         raw_config = {}
     notification_store = PmaNotificationStore(hub_root)
     payload = _notification_context_payload(

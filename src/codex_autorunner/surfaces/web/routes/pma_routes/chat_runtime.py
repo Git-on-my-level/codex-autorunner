@@ -99,7 +99,7 @@ def _resolve_agent_profile(
     if callable(profile_getter):
         try:
             available_profiles = profile_getter(agent_id) or {}
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             available_profiles = {}
     resolved_profile = _normalize_optional_text(requested_profile)
     if resolved_profile is not None:
@@ -112,7 +112,11 @@ def _resolve_agent_profile(
                     opt.profile
                     for opt in chat_hermes_profile_options(request.app.state)
                 }
-            except Exception:
+            except (
+                ImportError,
+                AttributeError,
+                RuntimeError,
+            ):  # intentional: import and call of optional integration
                 logger.debug("Failed to resolve hermes profile options", exc_info=True)
             if resolved_profile not in hermes_valid:
                 raise HTTPException(status_code=400, detail="profile is invalid")
@@ -128,7 +132,7 @@ def _resolve_agent_profile(
             fallback_profiles.append(
                 _normalize_optional_text(default_profile_getter(agent_id))
             )
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             fallback_profiles.append(None)
 
     fallback_keys: set[str] = set(available_profiles.keys())
@@ -139,7 +143,11 @@ def _resolve_agent_profile(
             fallback_keys |= {
                 opt.profile for opt in chat_hermes_profile_options(request.app.state)
             }
-        except Exception:
+        except (
+            ImportError,
+            AttributeError,
+            RuntimeError,
+        ):  # intentional: import and call of optional integration
             logger.debug(
                 "Failed to resolve hermes fallback profile options", exc_info=True
             )
@@ -331,7 +339,7 @@ async def _persist_transcript(
             metadata=metadata,
             assistant_text=assistant_text,
         )
-    except Exception:
+    except OSError:
         logger.exception("Failed to write PMA transcript")
         return None
     return {
@@ -373,7 +381,7 @@ async def _finalize_result(
             duration_ms = int(
                 (datetime.now(timezone.utc) - start_dt).total_seconds() * 1000
             )
-        except Exception:
+        except ValueError:
             logger.debug("Failed to compute PMA turn duration", exc_info=True)
 
     hub_root = request.app.state.config.root
@@ -485,7 +493,13 @@ async def _interrupt_active(
             if harness.supports("interrupt"):
                 try:
                     await harness.interrupt(hub_root, thread_id, turn_id)
-                except Exception:
+                except (
+                    RuntimeError,
+                    OSError,
+                    BrokenPipeError,
+                    ProcessLookupError,
+                    ConnectionResetError,
+                ):  # intentional: best-effort interrupt
                     logger.exception("Failed to interrupt PMA turn")
     return {
         "status": "ok",
@@ -505,7 +519,7 @@ def _cancel_background_task(task: asyncio.Task[Any], *, name: str) -> None:
                 done_task.result()
             except asyncio.CancelledError:
                 return
-            except Exception:
+            except Exception:  # intentional: top-level error handler
                 logger.exception("PMA task failed: %s", name)
 
     if task.done():
@@ -564,7 +578,11 @@ def _build_runtime_harness(
             runtime_agent = resolve_chat_runtime_agent(
                 "hermes", profile, context=request.app.state
             )
-        except Exception:
+        except (
+            ImportError,
+            AttributeError,
+            RuntimeError,
+        ):  # intentional: import and call of optional integration
             runtime_agent = agent_id
         if runtime_agent != "hermes":
             effective_agent_id = runtime_agent
@@ -582,7 +600,14 @@ def _build_runtime_harness(
                 profile=effective_profile,
             )
         )
-    except Exception as exc:
+    except (
+        RuntimeError,
+        TypeError,
+        ValueError,
+        AttributeError,
+        OSError,
+        ConnectionError,
+    ) as exc:  # intentional: harness creation can fail in arbitrary ways
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
@@ -623,7 +648,11 @@ async def _execute_harness_turn(
     if conversation_id:
         try:
             resumed = await harness.resume_conversation(hub_root, conversation_id)
-        except Exception:
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+        ):  # intentional: resume may fail, fallback to new conversation
             conversation_id = None
         else:
             resolved_conversation_id = getattr(resumed, "id", None)
@@ -657,13 +686,17 @@ async def _execute_harness_turn(
             approval_mode="on-request",
             sandbox_policy="dangerFullAccess",
         )
-    except Exception as exc:
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+    ) as exc:  # intentional: start_turn may fail, checks for retryable errors
         if not had_existing_conversation or not _requires_fresh_pma_conversation(exc):
             raise
         if thread_registry is not None and thread_key:
             try:
                 thread_registry.reset_thread(thread_key)
-            except Exception:
+            except OSError:
                 logger.debug(
                     "Failed to clear stale PMA conversation binding for %s",
                     thread_key,
@@ -701,13 +734,25 @@ async def _execute_harness_turn(
             maybe = on_meta(resolved_conversation_id, turn_id)
             if asyncio.iscoroutine(maybe):
                 await maybe
-        except Exception:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+            OSError,
+        ):  # intentional: user-provided callback
             logger.exception("pma meta callback failed")
 
     if interrupt_event.is_set():
         try:
             await harness.interrupt(hub_root, resolved_conversation_id, turn_id)
-        except Exception:
+        except (
+            RuntimeError,
+            OSError,
+            BrokenPipeError,
+            ProcessLookupError,
+            ConnectionResetError,
+        ):  # intentional: best-effort interrupt
             logger.exception("Failed to interrupt PMA runtime turn")
         return {"status": "interrupted", "detail": "PMA chat interrupted"}
 
@@ -744,19 +789,31 @@ async def _execute_harness_turn(
         if timeout_task in done:
             try:
                 await harness.interrupt(hub_root, resolved_conversation_id, turn_id)
-            except Exception:
+            except (
+                RuntimeError,
+                OSError,
+                BrokenPipeError,
+                ProcessLookupError,
+                ConnectionResetError,
+            ):  # intentional: best-effort interrupt
                 logger.exception("Failed to interrupt PMA runtime turn")
             _cancel_background_task(turn_task, name="pma.runtime.turn.wait")
             return {"status": "error", "detail": "PMA chat timed out"}
         if interrupt_task in done:
             try:
                 await harness.interrupt(hub_root, resolved_conversation_id, turn_id)
-            except Exception:
+            except (
+                RuntimeError,
+                OSError,
+                BrokenPipeError,
+                ProcessLookupError,
+                ConnectionResetError,
+            ):  # intentional: best-effort interrupt
                 logger.exception("Failed to interrupt PMA runtime turn")
             _cancel_background_task(turn_task, name="pma.runtime.turn.wait")
             return {"status": "interrupted", "detail": "PMA chat interrupted"}
         turn_result = await turn_task
-    except Exception as exc:
+    except Exception as exc:  # intentional: top-level error handler
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         _cancel_background_task(timeout_task, name="pma.runtime.timeout.wait")
@@ -853,7 +910,11 @@ async def _execute_app_server(
     if thread_id:
         try:
             await client.thread_resume(thread_id)
-        except Exception:
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+        ):  # intentional: resume may fail, fallback to new thread
             thread_id = None
 
     if not thread_id:
@@ -883,7 +944,11 @@ async def _execute_app_server(
     if callable(register_turn):
         try:
             await register_turn(thread_id, handle.turn_id)
-        except Exception:
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+        ):  # intentional: optional event registration
             logger.debug("pma chat register_turn failed", exc_info=True)
     codex_harness = CodexHarness(supervisor, events)
     if on_meta is not None:
@@ -891,13 +956,25 @@ async def _execute_app_server(
             maybe = on_meta(thread_id, handle.turn_id)
             if asyncio.iscoroutine(maybe):
                 await maybe
-        except Exception:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+            OSError,
+        ):  # intentional: user-provided callback
             logger.exception("pma meta callback failed")
 
     if interrupt_event.is_set():
         try:
             await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
-        except Exception:
+        except (
+            RuntimeError,
+            OSError,
+            BrokenPipeError,
+            ProcessLookupError,
+            ConnectionResetError,
+        ):  # intentional: best-effort interrupt
             logger.exception("Failed to interrupt Codex turn")
         return {"status": "interrupted", "detail": "PMA chat interrupted"}
 
@@ -912,14 +989,26 @@ async def _execute_app_server(
         if timeout_task in done:
             try:
                 await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
-            except Exception:
+            except (
+                RuntimeError,
+                OSError,
+                BrokenPipeError,
+                ProcessLookupError,
+                ConnectionResetError,
+            ):  # intentional: best-effort interrupt
                 logger.exception("Failed to interrupt Codex turn")
             _cancel_background_task(turn_task, name="pma.app_server.turn.wait")
             return {"status": "error", "detail": "PMA chat timed out"}
         if interrupt_task in done:
             try:
                 await codex_harness.interrupt(hub_root, thread_id, handle.turn_id)
-            except Exception:
+            except (
+                RuntimeError,
+                OSError,
+                BrokenPipeError,
+                ProcessLookupError,
+                ConnectionResetError,
+            ):  # intentional: best-effort interrupt
                 logger.exception("Failed to interrupt Codex turn")
             _cancel_background_task(turn_task, name="pma.app_server.turn.wait")
             return {"status": "interrupted", "detail": "PMA chat interrupted"}
@@ -941,7 +1030,11 @@ async def _execute_app_server(
     if callable(list_events):
         try:
             buffered = await list_events(thread_id, handle.turn_id)
-        except Exception:
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+        ):  # intentional: optional event listing
             buffered = []
         state = RuntimeThreadRunEventState()
         for entry in buffered:
@@ -1020,7 +1113,13 @@ async def _execute_opencode(
             maybe = on_meta(session_id, build_turn_id(session_id))
             if asyncio.iscoroutine(maybe):
                 await maybe
-        except Exception:
+        except (
+            RuntimeError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+            OSError,
+        ):  # intentional: user-provided callback
             logger.exception("pma meta callback failed")
 
     opencode_harness = OpenCodeHarness(supervisor)
@@ -1094,7 +1193,7 @@ async def _execute_opencode(
         prompt_response = None
         try:
             prompt_response = await prompt_task
-        except Exception as exc:
+        except (RuntimeError, OSError, ConnectionError) as exc:
             interrupt_event.set()
             _cancel_background_task(output_task, name="pma.opencode.output.collect")
             await opencode_harness.interrupt(hub_root, session_id, None)
@@ -1215,7 +1314,11 @@ async def _execute_queue_item(
                         wake_up=wake_up,
                     )
                 )
-            except Exception as exc:
+            except (
+                RuntimeError,
+                OSError,
+                ConnectionError,
+            ) as exc:  # intentional: publishing to external services
                 logger.exception(
                     "Failed publishing PMA automation result: client_turn_id=%s",
                     client_turn_id,
@@ -1343,7 +1446,11 @@ async def _execute_queue_item(
             event_prefix="web.pma.github_context",
             allow_cross_repo=True,
         )
-    except Exception as exc:
+    except (
+        OSError,
+        ValueError,
+        RuntimeError,
+    ) as exc:  # intentional: top-level error handler for prompt construction
         error_result = {
             "status": "error",
             "detail": str(exc),
@@ -1458,7 +1565,9 @@ async def _execute_queue_item(
             submit_thread_message=_submit_thread_message,
         )
         result = dict(ingress_result.thread_result or {})
-    except Exception as exc:
+    except (
+        Exception
+    ) as exc:  # intentional: top-level error handler for orchestration ingress
         error_result = {
             "status": "error",
             "detail": str(exc),
@@ -1633,7 +1742,7 @@ def build_chat_runtime_router(
             result = await asyncio.wait_for(result_future, timeout=PMA_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             return {"status": "error", "detail": "PMA chat timed out"}
-        except Exception:
+        except Exception:  # intentional: top-level error handler
             logger.exception("PMA chat error")
             return {
                 "status": "error",

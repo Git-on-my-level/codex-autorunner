@@ -10,6 +10,7 @@ from typing import Any, Awaitable, Callable, Optional
 from ...core.logging_utils import log_event
 from ...core.request_context import reset_conversation_id, set_conversation_id
 from ...core.state import now_iso
+from .adapter import TelegramAPIError
 from .constants import (
     OUTBOX_IMMEDIATE_RETRY_DELAYS,
     OUTBOX_MAX_ATTEMPTS,
@@ -102,7 +103,7 @@ class TelegramOutboxManager:
                 from .state import topic_key as build_topic_key
 
                 conversation_id = build_topic_key(record.chat_id, record.thread_id)
-            except Exception:
+            except (TypeError, ImportError):
                 self._logger.debug("outbox.restore: topic_key failed", exc_info=True)
             if conversation_id:
                 from ...core.request_context import set_conversation_id
@@ -143,7 +144,9 @@ class TelegramOutboxManager:
                 records = await self._store.list_outbox()
                 if records:
                     await self._flush(records)
-            except Exception as exc:
+            except (
+                Exception
+            ) as exc:  # intentional: top-level loop guard — must not crash
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -160,7 +163,7 @@ class TelegramOutboxManager:
         conversation_id = None
         try:
             conversation_id = topic_key(record.chat_id, record.thread_id)
-        except Exception:
+        except TypeError:
             self._logger.debug("outbox.enqueue: topic_key failed", exc_info=True)
         log_event(
             self._logger,
@@ -238,7 +241,7 @@ class TelegramOutboxManager:
             conversation_id = None
             try:
                 conversation_id = topic_key(record.chat_id, record.thread_id)
-            except Exception:
+            except TypeError:
                 self._logger.debug("outbox.process: topic_key failed", exc_info=True)
             if record.attempts >= OUTBOX_MAX_ATTEMPTS:
                 log_event(
@@ -281,7 +284,7 @@ class TelegramOutboxManager:
         conversation_id = None
         try:
             conversation_id = topic_key(record.chat_id, record.thread_id)
-        except Exception:
+        except TypeError:
             self._logger.debug("outbox.deliver: topic_key failed", exc_info=True)
         with self._conversation_context(record.chat_id, record.thread_id):
             try:
@@ -305,7 +308,7 @@ class TelegramOutboxManager:
                     )
                 if isinstance(response, int):
                     delivered_message_id = response
-            except Exception as exc:
+            except (TelegramAPIError, OSError, RuntimeError) as exc:
                 retry_after = _extract_retry_after_seconds(exc)
                 record.attempts += 1
                 record.last_error = str(exc)[:500]
@@ -341,7 +344,9 @@ class TelegramOutboxManager:
             if self._on_delivered is not None:
                 try:
                     await self._on_delivered(record, delivered_message_id)
-                except Exception:
+                except (
+                    Exception
+                ):  # intentional: user-supplied callback must not break delivery
                     log_event(
                         self._logger,
                         logging.WARNING,
@@ -403,7 +408,7 @@ class TelegramOutboxManager:
         token = None
         try:
             conversation_id = topic_key(chat_id, thread_id)
-        except Exception:
+        except TypeError:
             conversation_id = None
         if conversation_id:
             token = set_conversation_id(conversation_id)

@@ -71,7 +71,7 @@ async def run_opencode_prompt(
             source="run_prompt",
             reuse=False,
         )
-    except Exception as exc:
+    except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
         raise RuntimeError(f"Failed to create OpenCode session: {exc}") from exc
 
     async def _dispose_session() -> None:
@@ -88,7 +88,7 @@ async def run_opencode_prompt(
                 source="run_prompt",
                 reuse=False,
             )
-        except Exception as exc:
+        except (RuntimeError, OSError, BrokenPipeError) as exc:
             log_event(
                 logger or logging.getLogger(__name__),
                 logging.WARNING,
@@ -122,7 +122,7 @@ async def run_opencode_prompt(
         if config.on_turn_start is not None:
             try:
                 await config.on_turn_start(session_id, turn_id)
-            except Exception:
+            except (RuntimeError, TypeError, AttributeError):
                 if logger is not None:
                     logger.debug("on_turn_start callback failed", exc_info=True)
 
@@ -144,7 +144,7 @@ async def run_opencode_prompt(
         async def _abort_session(reason: str) -> None:
             try:
                 await client.abort(session_id)
-            except Exception as exc:
+            except (RuntimeError, OSError, BrokenPipeError, ProcessLookupError) as exc:
                 if logger is not None:
                     logger.warning(f"OpenCode abort failed ({reason}): {exc}")
 
@@ -189,7 +189,7 @@ async def run_opencode_prompt(
             if output_task.done():
                 try:
                     return await output_task
-                except Exception as exc:
+                except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
                     if not ignore_errors:
                         raise
                     if logger is not None:
@@ -212,7 +212,7 @@ async def run_opencode_prompt(
                 if logger is not None:
                     logger.warning("OpenCode output did not stop within grace period")
                 return None
-            except Exception as exc:
+            except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
                 if not ignore_errors:
                     raise
                 if logger is not None:
@@ -254,7 +254,7 @@ async def run_opencode_prompt(
                 if prompt_task in done:
                     try:
                         await prompt_task
-                    except Exception as exc:
+                    except (RuntimeError, OSError, ConnectionError, ValueError) as exc:
                         if logger is not None:
                             logger.error(f"OpenCode prompt failed: {exc}")
                         output_task.cancel()
@@ -278,7 +278,7 @@ async def run_opencode_prompt(
             if opencode_turn_started:
                 try:
                     await supervisor.mark_turn_finished(Path(config.workspace_root))
-                except Exception:
+                except (RuntimeError, OSError):
                     if logger is not None:
                         logger.debug("mark_turn_finished failed", exc_info=True)
 
@@ -288,7 +288,7 @@ async def run_opencode_prompt(
         if prompt_task.done() and not output_text:
             try:
                 prompt_response = prompt_task.result()
-            except Exception:
+            except (RuntimeError, OSError, ConnectionError, ValueError):
                 prompt_response = None
             if prompt_response is not None:
                 fallback = parse_message_response(prompt_response)

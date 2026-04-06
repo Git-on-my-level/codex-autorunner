@@ -9,7 +9,7 @@ from ...core.chat_bindings import (
     preferred_non_pma_chat_notification_source_for_workspace,
     preferred_non_pma_chat_notification_sources_by_workspace,
 )
-from ...core.config import load_hub_config, load_repo_config
+from ...core.config import ConfigError, load_hub_config, load_repo_config
 from ...core.flows import (
     FlowRunRecord,
     FlowRunStatus,
@@ -133,7 +133,7 @@ def _preferred_bound_source_for_workspace(
     if raw_config is None:
         try:
             raw_config = load_hub_config(service._config.root).raw
-        except Exception:
+        except (ConfigError, OSError, ValueError, TypeError):
             raw_config = {}
         service._hub_raw_config_cache = raw_config
     try:
@@ -142,7 +142,7 @@ def _preferred_bound_source_for_workspace(
             raw_config=raw_config,
             workspace_root=workspace_root,
         )
-    except Exception as exc:
+    except (KeyError, ValueError, TypeError) as exc:
         log_event(
             service._logger,
             logging.WARNING,
@@ -158,7 +158,7 @@ def _preferred_bound_sources_by_workspace(service: Any) -> dict[str, str]:
     if raw_config is None:
         try:
             raw_config = load_hub_config(service._config.root).raw
-        except Exception:
+        except (ConfigError, OSError, ValueError, TypeError):
             raw_config = {}
         service._hub_raw_config_cache = raw_config
     try:
@@ -166,7 +166,7 @@ def _preferred_bound_sources_by_workspace(service: Any) -> dict[str, str]:
             hub_root=service._config.root,
             raw_config=raw_config,
         )
-    except Exception as exc:
+    except (KeyError, ValueError, TypeError) as exc:
         log_event(
             service._logger,
             logging.WARNING,
@@ -262,7 +262,7 @@ async def _scan_and_enqueue_pause_notifications(service: Any) -> None:
                             "mode": snapshot.mode,
                         },
                     )
-                except Exception as exc:
+                except (OSError, ValueError, KeyError, TypeError) as exc:
                     enqueued = False
                     log_event(
                         service._logger,
@@ -349,7 +349,7 @@ async def _scan_and_enqueue_terminal_notifications(service: Any) -> None:
                 message_id=record_id,
                 meta={"status": status},
             )
-        except Exception as exc:
+        except (OSError, ValueError, KeyError, TypeError) as exc:
             log_event(
                 service._logger,
                 logging.WARNING,
@@ -376,7 +376,7 @@ async def watch_ticket_flow_pauses(service: Any) -> None:
     while True:
         try:
             await _scan_and_enqueue_pause_notifications(service)
-        except Exception as exc:
+        except Exception as exc:  # intentional: supervisor loop must never die
             log_event(
                 service._logger,
                 logging.WARNING,
@@ -390,7 +390,7 @@ async def watch_ticket_flow_terminals(service: Any) -> None:
     while True:
         try:
             await _scan_and_enqueue_terminal_notifications(service)
-        except Exception as exc:
+        except Exception as exc:  # intentional: supervisor loop must never die
             log_event(
                 service._logger,
                 logging.WARNING,

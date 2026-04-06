@@ -25,7 +25,7 @@ from .....core.logging_utils import log_event
 from .....core.state import now_iso
 from ....chat.constants import TOPIC_NOT_BOUND_MESSAGE
 from ....chat.media import IMAGE_CONTENT_TYPES, IMAGE_EXTS
-from ...adapter import TelegramMessage
+from ...adapter import TelegramAPIError, TelegramMessage
 from ...config import TelegramMediaCandidate
 from ...forwarding import format_forwarded_telegram_message_text
 from ...helpers import _path_within, format_public_error
@@ -133,7 +133,7 @@ class FilesCommands(TelegramCommandSupportMixin):
     ) -> bool:
         try:
             data = path.read_bytes()
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -152,7 +152,7 @@ class FilesCommands(TelegramCommandSupportMixin):
                 message_thread_id=thread_id,
                 reply_to_message_id=reply_to,
             )
-        except Exception as exc:
+        except TelegramAPIError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -276,7 +276,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (TelegramAPIError, RuntimeError) as exc:
             detail = self._format_telegram_download_error(exc)
             log_event(
                 self._logger,
@@ -321,7 +321,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -352,7 +352,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -518,7 +518,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (TelegramAPIError, RuntimeError) as exc:
             detail = self._format_telegram_download_error(exc)
             log_event(
                 self._logger,
@@ -565,7 +565,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -764,7 +764,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (TelegramAPIError, RuntimeError) as exc:
             detail = self._format_telegram_download_error(exc)
             log_event(
                 self._logger,
@@ -811,7 +811,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -836,7 +836,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -887,7 +887,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (TelegramAPIError, RuntimeError) as exc:
             detail = self._format_telegram_download_error(exc)
             log_event(
                 self._logger,
@@ -947,7 +947,7 @@ class FilesCommands(TelegramCommandSupportMixin):
             )
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1317,7 +1317,7 @@ class FilesCommands(TelegramCommandSupportMixin):
     ) -> bool:
         try:
             data = path.read_bytes()
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1336,7 +1336,7 @@ class FilesCommands(TelegramCommandSupportMixin):
                 message_thread_id=thread_id,
                 reply_to_message_id=reply_to,
             )
-        except Exception as exc:
+        except TelegramAPIError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,
@@ -1354,7 +1354,7 @@ class FilesCommands(TelegramCommandSupportMixin):
                 token = secrets.token_hex(3)
                 destination = sent_dir / f"{path.stem}-{token}{path.suffix}"
             path.replace(destination)
-        except Exception as exc:
+        except OSError as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

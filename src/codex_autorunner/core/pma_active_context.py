@@ -58,7 +58,7 @@ def _load_active_context_state(hub_root: Path) -> ActiveContextState:
         return _coerce_active_context_state(json.loads(raw))
     except FileNotFoundError:
         pass
-    except Exception as exc:
+    except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Could not load active context state: %s", exc)
     return {}
 
@@ -98,7 +98,7 @@ def maybe_auto_prune_active_context(
 ) -> Optional[ActiveContextState]:
     try:
         parsed_max_lines = int(max_lines)
-    except Exception:
+    except (TypeError, ValueError):
         parsed_max_lines = PMA_ACTIVE_CONTEXT_MAX_LINES
     max_lines = (
         parsed_max_lines if parsed_max_lines > 0 else PMA_ACTIVE_CONTEXT_MAX_LINES
@@ -108,7 +108,7 @@ def maybe_auto_prune_active_context(
     context_log_path = docs_dir / "context_log.md"
     try:
         active_content = active_context_path.read_text(encoding="utf-8")
-    except Exception as exc:
+    except OSError as exc:
         logger.warning("Could not read active context file: %s", exc)
         return None
     line_count = len(active_content.splitlines())
@@ -122,7 +122,7 @@ def maybe_auto_prune_active_context(
     try:
         with context_log_path.open("a", encoding="utf-8") as f:
             f.write(snapshot_content)
-    except Exception as exc:
+    except OSError as exc:
         logger.warning("Could not write to context log: %s", exc)
         return None
 
@@ -132,7 +132,7 @@ def maybe_auto_prune_active_context(
     )
     try:
         atomic_write(active_context_path, pruned_content)
-    except Exception as exc:
+    except OSError as exc:
         logger.warning("Could not write pruned active context: %s", exc)
         return None
 
@@ -144,7 +144,7 @@ def maybe_auto_prune_active_context(
     }
     try:
         _save_active_context_state(hub_root, state)
-    except Exception as exc:
+    except OSError as exc:
         logger.warning("Could not save auto-prune state: %s", exc)
     return state
 

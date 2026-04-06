@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
-from ..core.git_utils import run_git
+from ..core.git_utils import GitError, run_git
 from .agent_pool import AgentPool, AgentTurnRequest
 from .runner_types import TurnExecutionResult
 
@@ -99,7 +99,7 @@ def capture_git_state(*, workspace_root: Path) -> dict[str, Any]:
         status_before = (status_proc.stdout or "").strip() or ""
         if head_before_turn:
             repo_fingerprint_before = f"{head_before_turn}\n{status_before}"
-    except Exception:
+    except GitError:
         head_before_turn = None
         repo_fingerprint_before = None
 
@@ -131,7 +131,7 @@ def capture_git_state_after(
             agent_committed_this_turn = head_after_turn != head_before_turn
         if head_after_turn:
             repo_fingerprint_after = f"{head_after_turn}\n{status_after_turn}"
-    except Exception:
+    except GitError:
         head_after_turn = None
         clean_after_turn = None
         status_after_turn = None
