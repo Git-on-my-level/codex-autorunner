@@ -217,7 +217,13 @@ def test_cross_surface_parity_report(hub_env) -> None:
     trigger_mode_text = trigger_mode_path.read_text(encoding="utf-8")
     telegram_messages_text = telegram_messages_path.read_text(encoding="utf-8")
 
-    telegram_shell_passthrough = "def _handle_bang_shell(" in runtime_text
+    telegram_shell_passthrough = (
+        "def _handle_bang_shell(" in runtime_text
+        or "def _handle_bang_shell("
+        in Path(
+            "src/codex_autorunner/integrations/telegram/handlers/commands/shared.py"
+        ).read_text(encoding="utf-8")
+    )
     checks.append(
         ParityCheck(
             entrypoint="telegram",

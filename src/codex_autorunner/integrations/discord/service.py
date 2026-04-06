@@ -2335,6 +2335,8 @@ class DiscordBotService:
                     workspace_root
                 )
                 return await supervisor.get_client(workspace_root)
+            except ConfigError:
+                return None
             except (RuntimeError, ConnectionError, OSError) as exc:
                 log_event(
                     self._logger,
@@ -3183,7 +3185,7 @@ class DiscordBotService:
         try:
             await self._send_channel_message(channel_id, payload)
             return
-        except (DiscordAPIError, OSError) as exc:
+        except (DiscordAPIError, OSError, RuntimeError) as exc:
             outbox_record_id = (
                 record_id or f"retry:{channel_id}:{uuid.uuid4().hex[:12]}"
             )
@@ -3237,7 +3239,7 @@ class DiscordBotService:
         try:
             await self._delete_channel_message(channel_id, message_id)
             return
-        except (DiscordAPIError, OSError) as exc:
+        except (DiscordAPIError, OSError, RuntimeError) as exc:
             outbox_record_id = (
                 record_id or f"retry:delete:{channel_id}:{uuid.uuid4().hex[:12]}"
             )
