@@ -242,6 +242,7 @@ from .flow_watchers import (
 )
 from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
+from .ingress import InteractionIngress
 from .interaction_dispatch import (
     handle_component_interaction as _dispatch_component_interaction,
 )
@@ -656,6 +657,7 @@ class DiscordBotService:
                 "Update still running. Use `/car update target:status` for current state."
             ),
         )
+        self._ingress = InteractionIngress(self, logger=self._logger)
 
     async def run_forever(self) -> None:
         self._reap_managed_processes(stage="startup")
@@ -3368,6 +3370,9 @@ class DiscordBotService:
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
+            ingress_result = await self._ingress.process_raw_payload(payload)
+            if not ingress_result.accepted:
+                return
             interaction_event = self._chat_adapter.parse_interaction_event(payload)
             if interaction_event is not None:
                 await self._dispatch_chat_event(interaction_event)
