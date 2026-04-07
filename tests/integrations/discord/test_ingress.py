@@ -452,6 +452,36 @@ async def test_ack_performed_for_deferred_command() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("command_name", "subcommand_name", "expected_path"),
+    [
+        ("flow", "status", ("car", "flow", "status")),
+        ("flow", "start", ("car", "flow", "start")),
+    ],
+)
+async def test_flow_commands_ack_on_dispatch(
+    command_name: str,
+    subcommand_name: str,
+    expected_path: tuple[str, ...],
+) -> None:
+    service = _FakeService()
+    ingress = InteractionIngress(service, logger=service._logger)
+    payload = _slash_command_payload(
+        command_name=command_name,
+        subcommand_name=subcommand_name,
+    )
+    result = await ingress.process_raw_payload(payload)
+
+    assert result.accepted is True
+    assert result.context is not None
+    assert result.context.deferred is True
+    assert len(service.prepare_command_calls) == 1
+    call = service.prepare_command_calls[0]
+    assert call["command_path"] == expected_path
+    assert call["timing"] == "dispatch"
+
+
+@pytest.mark.anyio
 async def test_ack_skipped_for_immediate_command() -> None:
     service = _FakeService()
     ingress = InteractionIngress(service, logger=service._logger)

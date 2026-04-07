@@ -188,6 +188,21 @@ def _service(tmp_path: Path, rest: _FakeRest) -> DiscordBotService:
     )
 
 
+async def _prepare_flow_archive_interaction(
+    service: DiscordBotService,
+    *,
+    interaction_id: str,
+    interaction_token: str,
+) -> None:
+    prepared = await service._prepare_command_interaction(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+        command_path=("car", "flow", "archive"),
+        timing="dispatch",
+    )
+    assert prepared is True
+
+
 @pytest.mark.anyio
 async def test_flow_archive_command_deletes_run_record_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -211,11 +226,18 @@ async def test_flow_archive_command_deletes_run_record_by_default(
         "build_ticket_flow_orchestration_service",
         lambda *, workspace_root: flow_service,
     )
+    interaction_id = "interaction-1"
+    interaction_token = "token-1"
 
     try:
+        await _prepare_flow_archive_interaction(
+            service,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         await service._handle_flow_archive(
-            "interaction-1",
-            "token-1",
+            interaction_id,
+            interaction_token,
             workspace_root=workspace,
             options={"run_id": run_id},
             channel_id="channel-1",
@@ -265,11 +287,18 @@ async def test_flow_archive_command_without_run_id_uses_latest_run_without_picke
         "build_ticket_flow_orchestration_service",
         lambda *, workspace_root: flow_service,
     )
+    interaction_id = "interaction-archive-latest"
+    interaction_token = "token-archive-latest"
 
     try:
+        await _prepare_flow_archive_interaction(
+            service,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         await service._handle_flow_archive(
-            "interaction-archive-latest",
-            "token-archive-latest",
+            interaction_id,
+            interaction_token,
             workspace_root=workspace,
             options={},
             channel_id="channel-1",
@@ -311,11 +340,18 @@ async def test_flow_archive_command_without_run_id_blocks_latest_active_run(
         "build_ticket_flow_orchestration_service",
         lambda *, workspace_root: flow_service,
     )
+    interaction_id = "interaction-archive-blocked"
+    interaction_token = "token-archive-blocked"
 
     try:
+        await _prepare_flow_archive_interaction(
+            service,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
         await service._handle_flow_archive(
-            "interaction-archive-blocked",
-            "token-archive-blocked",
+            interaction_id,
+            interaction_token,
             workspace_root=workspace,
             options={},
             channel_id="channel-1",

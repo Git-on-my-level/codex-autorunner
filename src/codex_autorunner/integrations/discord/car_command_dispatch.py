@@ -299,14 +299,6 @@ async def handle_car_command(
     if command_path[:2] == ("car", "flow"):
         if command_path in {("car", "flow", "status"), ("car", "flow", "runs")}:
             action = command_path[2]
-            prepared = await service._prepare_command_interaction_or_abort(
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                command_path=command_path,
-                timing="post_private_preflight",
-            )
-            if not prepared:
-                return
             workspace_root = await service._resolve_workspace_for_flow_read(
                 interaction_id,
                 interaction_token,
@@ -326,14 +318,6 @@ async def handle_car_command(
                 workspace_root=workspace_root,
                 options=options,
             )
-            return
-        prepared = await service._prepare_command_interaction_or_abort(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            command_path=command_path,
-            timing="post_private_preflight",
-        )
-        if not prepared:
             return
         workspace_root = await service._require_bound_workspace(
             interaction_id, interaction_token, channel_id=channel_id

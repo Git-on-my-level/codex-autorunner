@@ -6035,7 +6035,7 @@ async def test_car_status_defers_before_loading_workspace_state(
         ("restart", "not bound"),
     ],
 )
-async def test_public_flow_commands_keep_private_preflight_errors_ephemeral(
+async def test_public_flow_commands_keep_dispatch_preflight_errors_ephemeral(
     tmp_path: Path,
     subcommand: str,
     expected_text: str,
@@ -6069,7 +6069,7 @@ async def test_public_flow_commands_keep_private_preflight_errors_ephemeral(
 
 
 @pytest.mark.anyio
-async def test_flow_status_defers_publicly_after_private_preflight(
+async def test_flow_status_defers_publicly_before_flow_store_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"

@@ -394,9 +394,8 @@ async def handle_flow_status(
             )
             return
     else:
-        deferred_public = await service._defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        deferred_public = (
+            service._prepared_interaction_policy(interaction_token) is not None
         )
     run_id_opt = await resolve_flow_run_input(
         service,
@@ -626,10 +625,7 @@ async def handle_flow_runs(
     workspace_root: Path,
     options: dict[str, Any],
 ) -> None:
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = service._prepared_interaction_policy(interaction_token) is not None
     raw_limit = options.get("limit")
     limit = FLOW_RUNS_DEFAULT_LIMIT
     if isinstance(raw_limit, int):
@@ -711,10 +707,7 @@ async def handle_flow_issue(
         )
         return
     issue_ref = issue_ref.strip()
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = service._prepared_interaction_policy(interaction_token) is not None
     try:
 
         def _seed_issue() -> Any:
@@ -804,9 +797,8 @@ async def handle_flow_start(
     restart_from = options.get("restart_from")
     flow_service = service._ticket_flow_orchestration_service(workspace_root)
     if deferred_public is None:
-        deferred_public = await service._defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        deferred_public = (
+            service._prepared_interaction_policy(interaction_token) is not None
         )
 
     try:
@@ -1094,9 +1086,8 @@ async def handle_flow_restart(
     deferred_public: Optional[bool] = None,
 ) -> None:
     if deferred_public is None:
-        deferred_public = await service._defer_public(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        deferred_public = (
+            service._prepared_interaction_policy(interaction_token) is not None
         )
     run_id_opt = await resolve_flow_run_input(
         service,
@@ -1221,10 +1212,7 @@ async def handle_flow_recover(
     workspace_root: Path,
     options: dict[str, Any],
 ) -> None:
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = service._prepared_interaction_policy(interaction_token) is not None
     run_id_opt = await resolve_flow_run_input(
         service,
         interaction_id,
@@ -1326,10 +1314,7 @@ async def handle_flow_resume(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
 ) -> None:
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = service._prepared_interaction_policy(interaction_token) is not None
     run_id_opt = await resolve_flow_run_input(
         service,
         interaction_id,
@@ -1454,10 +1439,7 @@ async def handle_flow_stop(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
 ) -> None:
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = service._prepared_interaction_policy(interaction_token) is not None
     run_id_opt = await resolve_flow_run_input(
         service,
         interaction_id,
@@ -1583,10 +1565,7 @@ async def handle_flow_archive(
     channel_id: Optional[str] = None,
     guild_id: Optional[str] = None,
 ) -> None:
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = service._prepared_interaction_policy(interaction_token) is not None
     confirmed = bool(options.get("confirmed"))
     run_id_opt = options.get("run_id")
     if isinstance(run_id_opt, str) and run_id_opt.strip():
@@ -1761,10 +1740,7 @@ async def handle_flow_reply(
         )
         return
 
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = service._prepared_interaction_policy(interaction_token) is not None
     run_id_opt = options.get("run_id")
     if not (isinstance(run_id_opt, str) and run_id_opt.strip()) and channel_id:
         pending_key = service._pending_interaction_scope_key(

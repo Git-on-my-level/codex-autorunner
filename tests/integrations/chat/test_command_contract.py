@@ -164,10 +164,10 @@ def test_command_contract_discord_metadata_is_present_for_registered_paths() -> 
         assert entry.discord_exposure in {"public", "operator"}
 
     by_id = {entry.id: entry for entry in COMMAND_CONTRACT}
-    assert by_id["car.flow.status"].discord_ack_timing == "post_private_preflight"
-    assert by_id["car.flow.runs"].discord_ack_timing == "post_private_preflight"
-    assert by_id["car.flow.start"].discord_ack_timing == "post_private_preflight"
-    assert by_id["car.flow.restart"].discord_ack_timing == "post_private_preflight"
+    assert by_id["car.flow.status"].discord_ack_timing == "dispatch"
+    assert by_id["car.flow.runs"].discord_ack_timing == "dispatch"
+    assert by_id["car.flow.start"].discord_ack_timing == "dispatch"
+    assert by_id["car.flow.restart"].discord_ack_timing == "dispatch"
 
 
 def test_command_contract_uses_canonical_runtime_capabilities_for_agent_linked_commands() -> (
