@@ -1195,7 +1195,6 @@ class DiscordBotService:
             ("car", "new"),
             ("car", "newt"),
             ("car", "session", "compact"),
-            ("car", "session", "interrupt"),
         }
 
     def _bypass_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
