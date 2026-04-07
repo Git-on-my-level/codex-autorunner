@@ -649,28 +649,34 @@ def _check_discord_canonicalize_command_ingress_usage(
             normalized_handlers,
             callee_name="canonicalize_command_ingress",
             required_keywords={
-                "command": lambda expr: _is_dict_get(
-                    expr,
-                    object_name="payload_data",
-                    key="command",
-                )
-                or isinstance(expr, ast.Name),
-                "options": lambda expr: _is_dict_get(
-                    expr,
-                    object_name="payload_data",
-                    key="options",
-                )
-                or isinstance(expr, ast.Name),
+                "command": lambda expr: (
+                    _is_dict_get(
+                        expr,
+                        object_name="payload_data",
+                        key="command",
+                    )
+                    or isinstance(expr, ast.Name)
+                ),
+                "options": lambda expr: (
+                    _is_dict_get(
+                        expr,
+                        object_name="payload_data",
+                        key="options",
+                    )
+                    or isinstance(expr, ast.Name)
+                ),
             },
         ),
         "interaction_call_present": _has_call_in_functions(
             interaction_handlers,
             callee_name="canonicalize_command_ingress",
             required_keywords={
-                "command_path": lambda expr: _is_name(expr, "command_path")
-                or isinstance(expr, ast.Name),
-                "options": lambda expr: _is_name(expr, "options")
-                or isinstance(expr, ast.Name),
+                "command_path": lambda expr: (
+                    _is_name(expr, "command_path") or isinstance(expr, ast.Name)
+                ),
+                "options": lambda expr: (
+                    _is_name(expr, "options") or isinstance(expr, ast.Name)
+                ),
             },
         ),
     }
@@ -759,6 +765,10 @@ def _check_discord_interaction_component_guard_paths(
         discord_service_ast,
         "_handle_normalized_interaction",
     )
+    execute_handlers = _find_functions_by_name(
+        discord_interaction_dispatch_ast,
+        "execute_ingressed_interaction",
+    )
     legacy_interaction_handlers = _find_functions_by_name(
         discord_interaction_dispatch_ast,
         "handle_interaction",
@@ -767,7 +777,9 @@ def _check_discord_interaction_component_guard_paths(
         "_handle_interaction",
     )
     interaction_handlers = (
-        normalized_interaction_handlers or legacy_interaction_handlers
+        normalized_interaction_handlers
+        or execute_handlers
+        or legacy_interaction_handlers
     )
 
     normalized_component_handlers = _find_functions_by_name(
@@ -792,7 +804,9 @@ def _check_discord_interaction_component_guard_paths(
         else "discord.component.unhandled_error"
     )
     component_missing_custom_id_functions = (
-        interaction_handlers if normalized_component_handlers else component_handlers
+        (interaction_handlers + execute_handlers)
+        if normalized_component_handlers
+        else component_handlers
     )
 
     checks = {

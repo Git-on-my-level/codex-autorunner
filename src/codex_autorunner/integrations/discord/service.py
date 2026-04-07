@@ -6549,17 +6549,21 @@ class DiscordBotService:
         user_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> None:
-        await _dispatch_component_interaction(
-            self,
+        from .ingress import IngressContext, IngressTiming, InteractionKind
+
+        ctx = IngressContext(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             channel_id=channel_id,
-            custom_id=custom_id,
-            values=values,
             guild_id=guild_id,
             user_id=user_id,
+            kind=InteractionKind.COMPONENT,
+            custom_id=custom_id,
+            values=values,
             message_id=message_id,
+            timing=IngressTiming(),
         )
+        await _dispatch_component_interaction(self, ctx)
 
     async def _bind_to_workspace_candidate(
         self,

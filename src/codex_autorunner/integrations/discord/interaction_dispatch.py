@@ -8,7 +8,7 @@ from typing import Any, Optional
 from ...core.logging_utils import log_event
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from .errors import DiscordTransientError
-from .ingress import IngressContext, InteractionKind
+from .ingress import CommandSpec, IngressContext, IngressTiming, InteractionKind
 from .interactions import (
     extract_autocomplete_command_context,
     extract_channel_id,
@@ -226,17 +226,19 @@ async def handle_normalized_interaction(
                 "I could not identify this interaction action. Please retry.",
             )
             return
-        await handle_component_interaction(
-            service,
+        ctx = IngressContext(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             channel_id=channel_id,
-            custom_id=custom_id,
-            values=payload_data.get("values"),
             guild_id=payload_data.get("guild_id"),
             user_id=event.from_user_id,
+            kind=InteractionKind.COMPONENT,
+            custom_id=custom_id,
+            values=payload_data.get("values"),
             message_id=context.message_id,
+            timing=IngressTiming(),
         )
+        await execute_ingressed_interaction(service, ctx, payload_data)
         return
 
     if payload_data.get("type") == "modal_submit":
@@ -244,13 +246,18 @@ async def handle_normalized_interaction(
         modal_values_raw = payload_data.get("values")
         custom_id = custom_id_raw if isinstance(custom_id_raw, str) else ""
         modal_values = modal_values_raw if isinstance(modal_values_raw, dict) else {}
-        await service._handle_ticket_modal_submit(
-            interaction_id,
-            interaction_token,
+        ctx = IngressContext(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
             channel_id=channel_id,
+            guild_id=payload_data.get("guild_id"),
+            user_id=event.from_user_id,
+            kind=InteractionKind.MODAL_SUBMIT,
             custom_id=custom_id,
-            values=modal_values,
+            modal_values=modal_values,
+            timing=IngressTiming(),
         )
+        await execute_ingressed_interaction(service, ctx, payload_data)
         return
 
     if payload_data.get("type") == "autocomplete":
@@ -275,15 +282,25 @@ async def handle_normalized_interaction(
             if isinstance(payload_data.get("options"), dict)
             else {}
         )
-        await service._handle_command_autocomplete(
-            interaction_id,
-            interaction_token,
+        ctx = IngressContext(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
             channel_id=channel_id,
-            command_path=command_path,
-            options=options,
+            guild_id=payload_data.get("guild_id"),
+            user_id=event.from_user_id,
+            kind=InteractionKind.AUTOCOMPLETE,
+            command_spec=CommandSpec(
+                path=command_path,
+                options=options,
+                ack_policy=None,
+                ack_timing="dispatch",
+                requires_workspace=False,
+            ),
             focused_name=focused_name,
             focused_value=focused_value,
+            timing=IngressTiming(),
         )
+        await execute_ingressed_interaction(service, ctx, payload_data)
         return
 
     ingress = canonicalize_command_ingress(
@@ -367,16 +384,16 @@ async def handle_normalized_interaction(
 
 async def handle_component_interaction(
     service: Any,
-    *,
-    interaction_id: str,
-    interaction_token: str,
-    channel_id: str,
-    custom_id: str,
-    values: Optional[list[str]] = None,
-    guild_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    message_id: Optional[str] = None,
+    ctx: IngressContext,
 ) -> None:
+    interaction_id = ctx.interaction_id
+    interaction_token = ctx.interaction_token
+    channel_id = ctx.channel_id
+    custom_id = ctx.custom_id or ""
+    values = ctx.values
+    guild_id = ctx.guild_id
+    user_id = ctx.user_id
+    message_id = ctx.message_id
     try:
         if custom_id == TICKETS_FILTER_SELECT_ID:
             await service._handle_ticket_filter_component(
@@ -594,16 +611,7 @@ async def handle_component_interaction(
             return
 
         if custom_id.startswith(f"{FLOW_ACTION_SELECT_PREFIX}:"):
-            await _handle_flow_action_select(
-                service,
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                channel_id=channel_id,
-                custom_id=custom_id,
-                values=values,
-                guild_id=guild_id,
-                user_id=user_id,
-            )
+            await _handle_flow_action_select(service, ctx)
             return
 
         if custom_id.startswith("flow:"):
@@ -698,16 +706,17 @@ async def handle_component_interaction(
 
 async def _handle_flow_action_select(
     service: Any,
-    *,
-    interaction_id: str,
-    interaction_token: str,
-    channel_id: str,
-    custom_id: str,
-    values: Optional[list[str]],
-    guild_id: Optional[str],
-    user_id: Optional[str],
+    ctx: IngressContext,
 ) -> None:
     from ...core.flows import FLOW_ACTIONS_WITH_RUN_PICKER
+
+    interaction_id = ctx.interaction_id
+    interaction_token = ctx.interaction_token
+    channel_id = ctx.channel_id
+    custom_id = ctx.custom_id or ""
+    values = ctx.values
+    guild_id = ctx.guild_id
+    user_id = ctx.user_id
 
     action = custom_id.split(":", 1)[1].strip().lower()
     if not values:
@@ -878,17 +887,19 @@ async def _handle_component_from_payload(
 
     values = extract_component_values(interaction_payload)
 
-    await handle_component_interaction(
-        service,
+    ctx = IngressContext(
         interaction_id=interaction_id,
         interaction_token=interaction_token,
         channel_id=channel_id,
-        custom_id=custom_id,
-        values=values,
         guild_id=extract_guild_id(interaction_payload),
         user_id=user_id,
+        kind=InteractionKind.COMPONENT,
+        custom_id=custom_id,
+        values=values,
         message_id=interaction_message_id,
+        timing=IngressTiming(),
     )
+    await handle_component_interaction(service, ctx)
 
 
 async def _handle_modal_submit(
@@ -1030,17 +1041,7 @@ async def execute_ingressed_interaction(
                 "I could not identify this interaction action. Please retry.",
             )
             return
-        await handle_component_interaction(
-            service,
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
-            channel_id=channel_id,
-            custom_id=ctx.custom_id or "",
-            values=ctx.values,
-            guild_id=ctx.guild_id,
-            user_id=ctx.user_id,
-            message_id=ctx.message_id,
-        )
+        await handle_component_interaction(service, ctx)
         return
 
     if ctx.kind == InteractionKind.MODAL_SUBMIT:

@@ -467,3 +467,130 @@ async def test_submit_event_preserves_arrival_order() -> None:
 
     await runner.shutdown(grace_seconds=5.0)
     assert dispatched_order == ["first", "second", "third"]
+
+
+@pytest.mark.anyio
+async def test_component_interaction_routes_through_handle_component() -> None:
+    service = _FakeService()
+    service._handle_ticket_filter_component = AsyncMock()
+    service._require_bound_workspace = AsyncMock(return_value="/tmp/ws")
+    service._handle_flow_status = AsyncMock()
+    service._handle_approval_component = AsyncMock()
+
+    ctx = _make_ctx(
+        kind=InteractionKind.COMPONENT,
+        custom_id="approval:abc",
+        values=None,
+        message_id="msg-1",
+        deferred=False,
+    )
+    payload: dict[str, Any] = {
+        "id": "inter-1",
+        "token": "token-1",
+        "channel_id": "chan-1",
+        "type": 3,
+        "data": {"custom_id": "approval:abc"},
+    }
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=5.0),
+        logger=service._logger,
+    )
+    runner.submit(ctx, payload)
+    await asyncio.sleep(0.05)
+
+    service._handle_approval_component.assert_awaited_once()
+    assert runner.active_task_count == 0
+
+
+@pytest.mark.anyio
+async def test_component_select_with_values_routes_correctly() -> None:
+    service = _FakeService()
+    service._handle_ticket_filter_component = AsyncMock()
+
+    ctx = _make_ctx(
+        kind=InteractionKind.COMPONENT,
+        custom_id="tickets_filter_select",
+        values=["open"],
+        deferred=False,
+    )
+    payload: dict[str, Any] = {
+        "id": "inter-1",
+        "token": "token-1",
+        "channel_id": "chan-1",
+        "type": 3,
+        "data": {"custom_id": "tickets_filter_select", "values": ["open"]},
+    }
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=5.0),
+        logger=service._logger,
+    )
+    runner.submit(ctx, payload)
+    await asyncio.sleep(0.05)
+
+    service._handle_ticket_filter_component.assert_awaited_once()
+    call_kwargs = service._handle_ticket_filter_component.call_args
+    assert call_kwargs[1]["values"] == ["open"]
+
+
+@pytest.mark.anyio
+async def test_component_without_custom_id_responds_error() -> None:
+    service = _FakeService()
+
+    ctx = _make_ctx(
+        kind=InteractionKind.COMPONENT,
+        custom_id=None,
+        deferred=False,
+    )
+    payload: dict[str, Any] = {
+        "id": "inter-1",
+        "token": "token-1",
+        "channel_id": "chan-1",
+        "type": 3,
+        "data": {},
+    }
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=5.0),
+        logger=service._logger,
+    )
+    runner.submit(ctx, payload)
+    await asyncio.sleep(0.05)
+
+    service._respond_ephemeral.assert_awaited()
+    call_args = service._respond_ephemeral.call_args
+    assert "could not identify" in call_args[0][2].lower()
+
+
+@pytest.mark.anyio
+async def test_unknown_component_responds_unknown_message() -> None:
+    service = _FakeService()
+
+    ctx = _make_ctx(
+        kind=InteractionKind.COMPONENT,
+        custom_id="nonexistent_button",
+        deferred=False,
+    )
+    payload: dict[str, Any] = {
+        "id": "inter-1",
+        "token": "token-1",
+        "channel_id": "chan-1",
+        "type": 3,
+        "data": {"custom_id": "nonexistent_button"},
+    }
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=5.0),
+        logger=service._logger,
+    )
+    runner.submit(ctx, payload)
+    await asyncio.sleep(0.05)
+
+    service._respond_ephemeral.assert_awaited()
+    call_args = service._respond_ephemeral.call_args
+    assert "Unknown component" in call_args[0][2]
