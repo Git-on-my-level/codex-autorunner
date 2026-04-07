@@ -303,6 +303,52 @@ def test_reaper_reaps_old_records_even_if_owner_running(
     assert kill_calls == [(5111, signal.SIGTERM), (5111, signal.SIGKILL)]
 
 
+def test_reaper_treats_zombie_owner_pid_as_not_running(
+    monkeypatch, tmp_path: Path
+) -> None:
+    rec = _record(
+        workspace_id="ws-zombie-owner",
+        pid=6111,
+        pgid=6111,
+        owner_pid=1234,
+        started_at=_started_at(hours_ago=1),
+    )
+    registry.write_process_record(tmp_path, rec)
+    monkeypatch.setattr(reaper_module, "REAPER_GRACE_SECONDS", 0.0)
+    monkeypatch.setattr(reaper_module, "REAPER_KILL_SECONDS", 0.0)
+
+    killpg_calls: list[tuple[int, int]] = []
+    kill_calls: list[tuple[int, int]] = []
+    monkeypatch.setattr(reaper_module, "_shared_pid_is_running", lambda pid: pid > 0)
+    monkeypatch.setattr(
+        reaper_module,
+        "_pid_is_zombie",
+        lambda pid: pid in {1234, 6111},
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.managed_processes.reaper._pgid_is_running",
+        lambda _pgid: False,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.killpg",
+        lambda pgid, sig: killpg_calls.append((pgid, sig)),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.process_termination.os.kill",
+        lambda pid, sig: kill_calls.append((pid, sig)),
+    )
+
+    summary = reap_managed_processes(tmp_path, max_record_age_seconds=24 * 60 * 60)
+
+    assert summary.killed == 0
+    assert summary.signaled == 0
+    assert summary.removed == 1
+    assert summary.skipped == 0
+    assert killpg_calls == [(6111, signal.SIGTERM), (6111, signal.SIGKILL)]
+    assert kill_calls == [(6111, signal.SIGTERM), (6111, signal.SIGKILL)]
+    assert registry.read_process_record(tmp_path, "opencode", "ws-zombie-owner") is None
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Requires POSIX process groups")
 def test_reaper_reaps_sigterm_ignoring_process_group(tmp_path: Path) -> None:
     parent_code = textwrap.dedent(

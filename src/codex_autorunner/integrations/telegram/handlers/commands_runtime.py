@@ -21,6 +21,7 @@ from ....core.update import (
 )
 from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
+from ...app_server.client import CodexAppServerError
 from ...chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
@@ -1636,7 +1637,14 @@ class TelegramCommandHandlers(
                 "mcpServerStatus/list",
                 {"cursor": None, "limit": DEFAULT_MCP_LIST_LIMIT},
             )
-        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+            CodexAppServerError,
+        ) as exc:
             log_event(
                 self._logger,
                 logging.WARNING,

@@ -6224,6 +6224,43 @@ class _PmaTargetsHandler(TelegramCommandHandlers):
         self.sent.append(text)
 
 
+class _McpClientStub:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    async def request(self, _method: str, _params: dict[str, object]) -> object:
+        raise self._exc
+
+
+class _McpHandler(TelegramCommandHandlers):
+    def __init__(self, record: TelegramTopicRecord, client: _McpClientStub) -> None:
+        self._logger = logging.getLogger("test")
+        self._router = _PMARouterStub(record)
+        self._client = client
+        self.sent: list[str] = []
+
+    async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        return f"{chat_id}:{thread_id}"
+
+    async def _client_for_workspace(self, _workspace_path: str) -> _McpClientStub:
+        return self._client
+
+    async def _refresh_workspace_id(
+        self, _key: str, record: TelegramTopicRecord
+    ) -> Optional[str]:
+        return record.workspace_id
+
+    async def _send_message(
+        self,
+        _chat_id: int,
+        text: str,
+        *,
+        thread_id: Optional[int],
+        reply_to: Optional[int],
+    ) -> None:
+        self.sent.append(text)
+
+
 def _make_pma_message(
     *, chat_id: int = -1001, thread_id: Optional[int] = 55
 ) -> TelegramMessage:
@@ -6237,6 +6274,41 @@ def _make_pma_message(
         date=None,
         is_topic_message=thread_id is not None,
     )
+
+
+@pytest.mark.anyio
+async def test_mcp_lists_failure_message_on_app_server_response_error() -> None:
+    record = TelegramTopicRecord(
+        workspace_path="/tmp/workspace",
+        workspace_id="workspace-1",
+    )
+    handler = _McpHandler(
+        record,
+        _McpClientStub(
+            CodexAppServerResponseError(
+                method="mcpServerStatus/list",
+                code=-32601,
+                message="method not found",
+                data=None,
+            )
+        ),
+    )
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=-1001,
+        thread_id=55,
+        from_user_id=99,
+        text="/mcp",
+        date=None,
+        is_topic_message=True,
+    )
+
+    await handler._handle_mcp(message, "", _RuntimeStub())
+
+    assert handler.sent == [
+        "Failed to list MCP servers; check logs for details. (conversation -1001:55)"
+    ]
 
 
 @pytest.mark.anyio

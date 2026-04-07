@@ -11,7 +11,12 @@ from typing import Final, Mapping
 from ..force_attestation import enforce_force_attestation
 from ..locks import process_command_matches
 from ..process_termination import terminate_record
-from ..text_utils import _parse_iso_timestamp, _pid_is_running
+from ..text_utils import (
+    _parse_iso_timestamp,
+)
+from ..text_utils import (
+    _pid_is_running as _shared_pid_is_running,
+)
 from .registry import ProcessRecord, delete_process_record, list_process_records
 
 logger = logging.getLogger("codex_autorunner.managed_processes.reaper")
@@ -37,6 +42,10 @@ def _pid_is_zombie(pid: int) -> bool:
         return False
     state = result.stdout.strip()
     return state != "" and state.split()[0].startswith("Z")
+
+
+def _pid_is_running(pid: int) -> bool:
+    return _shared_pid_is_running(pid) and not _pid_is_zombie(pid)
 
 
 def _is_older_than(record: ProcessRecord, max_age_seconds: int) -> bool:
