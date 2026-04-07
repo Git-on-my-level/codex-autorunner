@@ -136,14 +136,15 @@ def classify_events_for_run(
     run_id: str,
     *,
     is_terminal: bool,
-) -> tuple[list[dict], list[int], list[int], list[int]]:
-    """Classify flow_events for a single run.
+) -> tuple[list[dict], list[int], list[int], list[int], list[int]]:
+    """Classify flow_events and flow_telemetry for a single run.
 
-    Returns (events_to_export, app_server_seqs_to_prune, delta_seqs_to_prune, retained_seqs).
-    For active runs, nothing is prunable.
-    For terminal runs, app_server_events that are not high-signal are pruned;
-    agent_stream_delta rows are all pruned since the archive captures the
-    full wire telemetry and makes individual deltas redundant.
+    Returns:
+        events_to_export: all wire events for archival
+        events_app_server_seqs_to_prune: app_server seqs to prune from flow_events
+        telemetry_app_server_seqs_to_prune: app_server seqs to prune from flow_telemetry
+        delta_seqs_to_prune: agent_stream_delta seqs to prune from flow_events
+        retained_seqs: seqs to keep (from both tables)
     """
     conn = store._get_conn()
     rows = conn.execute(
@@ -160,8 +161,22 @@ def classify_events_for_run(
         ),
     ).fetchall()
 
+    telemetry_rows = conn.execute(
+        """
+        SELECT seq, id, run_id, event_type, timestamp, data
+        FROM flow_telemetry
+        WHERE run_id = ? AND event_type = ?
+        ORDER BY seq ASC
+        """,
+        (
+            run_id,
+            FlowEventType.APP_SERVER_EVENT.value,
+        ),
+    ).fetchall()
+
     events_to_export: list[dict] = []
-    app_server_seqs_to_prune: list[int] = []
+    events_app_server_seqs_to_prune: list[int] = []
+    telemetry_app_server_seqs_to_prune: list[int] = []
     delta_seqs_to_prune: list[int] = []
     retained_seqs: list[int] = []
 
@@ -184,6 +199,7 @@ def classify_events_for_run(
             "timestamp": row["timestamp"],
             "data": data,
             "step_id": row["step_id"],
+            "source": "flow_events",
         }
         events_to_export.append(event_record)
 
@@ -195,14 +211,47 @@ def classify_events_for_run(
             if _is_high_signal_app_server_event(data):
                 retained_seqs.append(seq)
             else:
-                app_server_seqs_to_prune.append(seq)
+                events_app_server_seqs_to_prune.append(seq)
 
         elif event_type == FlowEventType.AGENT_STREAM_DELTA.value:
             delta_seqs_to_prune.append(seq)
 
+    for row in telemetry_rows:
+        seq = row["seq"]
+        event_type = row["event_type"]
+        raw_data = row["data"]
+        try:
+            data = (
+                json.loads(raw_data) if isinstance(raw_data, str) else (raw_data or {})
+            )
+        except (json.JSONDecodeError, TypeError):
+            data = {}
+
+        event_record = {
+            "seq": seq,
+            "id": row["id"],
+            "run_id": row["run_id"],
+            "event_type": event_type,
+            "timestamp": row["timestamp"],
+            "data": data,
+            "step_id": None,
+            "source": "flow_telemetry",
+        }
+        events_to_export.append(event_record)
+
+        if not is_terminal:
+            retained_seqs.append(seq)
+            continue
+
+        if _is_high_signal_app_server_event(data):
+            retained_seqs.append(seq)
+        else:
+            telemetry_app_server_seqs_to_prune.append(seq)
+
     return (
         events_to_export,
-        app_server_seqs_to_prune,
+        events_app_server_seqs_to_prune,
+        telemetry_app_server_seqs_to_prune,
         delta_seqs_to_prune,
         retained_seqs,
     )
@@ -221,11 +270,11 @@ def plan_export(store: FlowStore) -> ExportPlan:
             plan.runs_active += 1
             continue
 
-        events, prune_app, prune_delta, retained = classify_events_for_run(
-            store, record.id, is_terminal=True
+        events, ev_app_seqs, tel_app_seqs, prune_delta, retained = (
+            classify_events_for_run(store, record.id, is_terminal=True)
         )
         plan.events_to_export += len(events)
-        plan.events_to_prune += len(prune_app) + len(prune_delta)
+        plan.events_to_prune += len(ev_app_seqs) + len(tel_app_seqs) + len(prune_delta)
         plan.events_to_retain += len(retained)
         for ev in events:
             plan.estimated_archive_bytes += len(
@@ -268,6 +317,12 @@ def _prune_events(store: FlowStore, seqs: Sequence[int]) -> int:
     return cursor.rowcount
 
 
+def _prune_telemetry(store: FlowStore, seqs: Sequence[int]) -> int:
+    if not seqs:
+        return 0
+    return store.delete_telemetry_by_seqs(list(seqs))
+
+
 def export_run(
     repo_root: Path,
     store: FlowStore,
@@ -285,8 +340,8 @@ def export_run(
             skip_reason=f"run is active ({record.status.value})",
         )
 
-    events, prune_app_seqs, prune_delta_seqs, retained_seqs = classify_events_for_run(
-        store, record.id, is_terminal=True
+    events, ev_app_seqs, tel_app_seqs, prune_delta_seqs, retained_seqs = (
+        classify_events_for_run(store, record.id, is_terminal=True)
     )
 
     if not events:
@@ -310,7 +365,7 @@ def export_run(
             archive_path=str(archive_path),
             exported_events=len(events),
             exported_bytes=estimated_bytes,
-            prunable_app_server_events=len(prune_app_seqs),
+            prunable_app_server_events=len(ev_app_seqs) + len(tel_app_seqs),
             prunable_stream_deltas=len(prune_delta_seqs),
             retained_events=len(retained_seqs),
         )
@@ -326,14 +381,16 @@ def export_run(
 
     pruned = 0
     with store.transaction():
-        pruned += _prune_events(store, prune_app_seqs)
+        pruned += _prune_events(store, ev_app_seqs)
+        pruned += _prune_telemetry(store, tel_app_seqs)
         pruned += _prune_events(store, prune_delta_seqs)
 
     _logger.info(
-        "Pruned %d redundant events for run %s (app_server=%d, deltas=%d)",
+        "Pruned %d redundant events for run %s (events_app=%d, telemetry_app=%d, deltas=%d)",
         pruned,
         record.id,
-        len(prune_app_seqs),
+        len(ev_app_seqs),
+        len(tel_app_seqs),
         len(prune_delta_seqs),
     )
 
@@ -343,7 +400,7 @@ def export_run(
         archive_path=str(archive_path),
         exported_events=len(events),
         exported_bytes=bytes_written,
-        prunable_app_server_events=len(prune_app_seqs),
+        prunable_app_server_events=len(ev_app_seqs) + len(tel_app_seqs),
         prunable_stream_deltas=len(prune_delta_seqs),
         retained_events=len(retained_seqs),
     )

@@ -71,11 +71,12 @@ def _add_event(
 def test_classify_empty_run(temp_dir):
     store = _make_store(temp_dir)
     run_id = _create_terminal_run(store)
-    events, prune_app, prune_delta, retained = classify_events_for_run(
+    events, ev_app_seqs, tel_app_seqs, prune_delta, retained = classify_events_for_run(
         store, run_id, is_terminal=True
     )
     assert events == []
-    assert prune_app == []
+    assert ev_app_seqs == []
+    assert tel_app_seqs == []
     assert prune_delta == []
     assert retained == []
 
@@ -95,11 +96,12 @@ def test_classify_active_run_nothing_prunable(temp_dir):
         FlowEventType.AGENT_STREAM_DELTA,
         {"delta": "hello", "turn_id": "t1"},
     )
-    events, prune_app, prune_delta, retained = classify_events_for_run(
+    events, ev_app_seqs, tel_app_seqs, prune_delta, retained = classify_events_for_run(
         store, run_id, is_terminal=False
     )
     assert len(events) == 2
-    assert prune_app == []
+    assert ev_app_seqs == []
+    assert tel_app_seqs == []
     assert prune_delta == []
     assert len(retained) == 2
 
@@ -113,11 +115,12 @@ def test_classify_terminal_run_prunes_non_high_signal_app_events(temp_dir):
         FlowEventType.APP_SERVER_EVENT,
         {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
     )
-    events, prune_app, prune_delta, retained = classify_events_for_run(
+    events, ev_app_seqs, tel_app_seqs, prune_delta, retained = classify_events_for_run(
         store, run_id, is_terminal=True
     )
     assert len(events) == 1
-    assert len(prune_app) == 1
+    assert len(ev_app_seqs) == 1
+    assert tel_app_seqs == []
     assert len(retained) == 0
 
 
@@ -136,11 +139,12 @@ def test_classify_terminal_run_retains_high_signal_item_completed(temp_dir):
             "turn_id": "t1",
         },
     )
-    events, prune_app, prune_delta, retained = classify_events_for_run(
+    events, ev_app_seqs, tel_app_seqs, prune_delta, retained = classify_events_for_run(
         store, run_id, is_terminal=True
     )
     assert len(events) == 1
-    assert prune_app == []
+    assert ev_app_seqs == []
+    assert tel_app_seqs == []
     assert len(retained) == 1
 
 
@@ -157,11 +161,12 @@ def test_classify_terminal_run_retains_user_role(temp_dir):
             "turn_id": "t1",
         },
     )
-    events, prune_app, prune_delta, retained = classify_events_for_run(
+    events, ev_app_seqs, tel_app_seqs, prune_delta, retained = classify_events_for_run(
         store, run_id, is_terminal=True
     )
     assert len(events) == 1
-    assert prune_app == []
+    assert ev_app_seqs == []
+    assert tel_app_seqs == []
     assert len(retained) == 1
 
 
@@ -186,11 +191,12 @@ def test_classify_terminal_run_prunes_deltas_after_high_signal(temp_dir):
         FlowEventType.AGENT_STREAM_DELTA,
         {"delta": "assistant text", "turn_id": "t1"},
     )
-    events, prune_app, prune_delta, retained = classify_events_for_run(
+    events, ev_app_seqs, tel_app_seqs, prune_delta, retained = classify_events_for_run(
         store, run_id, is_terminal=True
     )
     assert len(events) == 2
-    assert prune_app == []
+    assert ev_app_seqs == []
+    assert tel_app_seqs == []
     assert len(prune_delta) == 1
     assert len(retained) == 1
 
@@ -204,11 +210,12 @@ def test_classify_terminal_run_prunes_all_deltas(temp_dir):
         FlowEventType.AGENT_STREAM_DELTA,
         {"delta": "orphan delta", "turn_id": "t1"},
     )
-    events, prune_app, prune_delta, retained = classify_events_for_run(
+    events, ev_app_seqs, tel_app_seqs, prune_delta, retained = classify_events_for_run(
         store, run_id, is_terminal=True
     )
     assert len(events) == 1
-    assert prune_app == []
+    assert ev_app_seqs == []
+    assert tel_app_seqs == []
     assert len(prune_delta) == 1
     assert len(retained) == 0
 
@@ -545,3 +552,100 @@ def test_export_run_assistants_style_item_completed(temp_dir):
     assert result.prunable_app_server_events == 0
     assert result.prunable_stream_deltas == 1
     assert result.retained_events == 1
+
+
+def _add_telemetry(
+    store: FlowStore,
+    run_id: str,
+    event_type: FlowEventType,
+    data: dict,
+    telemetry_id: str | None = None,
+) -> None:
+    store.create_telemetry(
+        telemetry_id=telemetry_id
+        or f"tel-{event_type.value}-{data.get('turn_id', 't1')}",
+        run_id=run_id,
+        event_type=event_type,
+        data=data,
+    )
+
+
+def test_classify_terminal_run_includes_telemetry_table(temp_dir):
+    store = _make_store(temp_dir)
+    run_id = _create_terminal_run(store)
+    _add_telemetry(
+        store,
+        run_id,
+        FlowEventType.APP_SERVER_EVENT,
+        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
+        telemetry_id="tel-app-1",
+    )
+    events, ev_app_seqs, tel_app_seqs, prune_delta, retained = classify_events_for_run(
+        store, run_id, is_terminal=True
+    )
+    assert len(events) == 1
+    assert events[0]["source"] == "flow_telemetry"
+    assert ev_app_seqs == []
+    assert len(tel_app_seqs) == 1
+    assert prune_delta == []
+    assert len(retained) == 0
+
+
+def test_export_run_prunes_telemetry_rows(temp_dir):
+    store = _make_store(temp_dir)
+    run_id = _create_terminal_run(store)
+    _add_telemetry(
+        store,
+        run_id,
+        FlowEventType.APP_SERVER_EVENT,
+        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
+        telemetry_id="tel-app-1",
+    )
+
+    record = store.get_flow_run(run_id)
+    assert record is not None
+    result = export_run(temp_dir, store, record, dry_run=False)
+    assert result.exported_events == 1
+    assert result.prunable_app_server_events == 1
+    assert result.archive_path is not None
+
+    remaining = store.get_telemetry(run_id)
+    assert len(remaining) == 0
+
+
+def test_export_run_handles_both_tables(temp_dir):
+    store = _make_store(temp_dir)
+    run_id = _create_terminal_run(store)
+    _add_event(
+        store,
+        run_id,
+        FlowEventType.APP_SERVER_EVENT,
+        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
+        event_id="evt-historical-1",
+    )
+    _add_telemetry(
+        store,
+        run_id,
+        FlowEventType.APP_SERVER_EVENT,
+        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t2"},
+        telemetry_id="tel-new-1",
+    )
+    _add_event(
+        store,
+        run_id,
+        FlowEventType.AGENT_STREAM_DELTA,
+        {"delta": "chunk", "turn_id": "t1"},
+        event_id="evt-delta-1",
+    )
+
+    record = store.get_flow_run(run_id)
+    assert record is not None
+    result = export_run(temp_dir, store, record, dry_run=False)
+    assert result.exported_events == 3
+    assert result.prunable_app_server_events == 2
+    assert result.prunable_stream_deltas == 1
+
+    remaining_events = store.get_events(run_id)
+    assert len(remaining_events) == 0
+    remaining_telemetry = store.get_telemetry(run_id)
+    assert len(remaining_telemetry) == 0

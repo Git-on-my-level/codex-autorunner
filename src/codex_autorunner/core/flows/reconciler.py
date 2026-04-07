@@ -64,7 +64,7 @@ def _latest_app_server_event_details(
     store: FlowStore, run_id: str
 ) -> tuple[Optional[str], Optional[str]]:
     try:
-        event = store.get_last_event_by_type(run_id, FlowEventType.APP_SERVER_EVENT)
+        event = store.get_last_telemetry_by_type(run_id, FlowEventType.APP_SERVER_EVENT)
     except (sqlite3.Error, ValueError, TypeError, RuntimeError) as exc:
         _logger.debug("Failed to get last app server event: %s", exc)
         return None, None

@@ -720,7 +720,7 @@ def register_flow_commands(
                 exit_code_holder[0] = 1
                 last_event = None
                 try:
-                    app_event = controller.store.get_last_event_by_type(
+                    app_event = controller.store.get_last_telemetry_by_type(
                         worker_run_id, FlowEventType.APP_SERVER_EVENT
                     )
                     if app_event and isinstance(app_event.data, dict):

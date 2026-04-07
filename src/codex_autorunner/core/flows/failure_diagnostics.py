@@ -124,13 +124,13 @@ def _extract_command_context(
     if store is None:
         return None, None, None
     try:
-        last_seq = store.get_last_event_seq_by_types(
+        last_seq = store.get_last_telemetry_seq_by_types(
             run_id, [FlowEventType.APP_SERVER_EVENT]
         )
         after_seq = None
         if limit > 0 and isinstance(last_seq, int):
             after_seq = max(0, last_seq - limit)
-        events = store.get_events_by_type(
+        events = store.get_telemetry_by_type(
             run_id,
             FlowEventType.APP_SERVER_EVENT,
             after_seq=after_seq,
@@ -370,11 +370,17 @@ def build_failure_payload(
     last_event_at = None
     if store is not None:
         try:
-            last_event_seq, last_event_at = store.get_last_event_meta(record.id)
-        except Exception as e:  # intentional: non-critical metadata fetch
-            logger.debug(
-                "Failed to get last event meta for record %s: %s", record.id, e
-            )
+            ev_seq, ev_at = store.get_last_event_meta(record.id)
+        except Exception:
+            ev_seq, ev_at = None, None
+        try:
+            tel_seq, tel_at = store.get_last_telemetry_meta(record.id)
+        except Exception:
+            tel_seq, tel_at = None, None
+        candidates = [(ev_seq, ev_at), (tel_seq, tel_at)]
+        candidates = [(s, a) for s, a in candidates if s is not None]
+        if candidates:
+            last_event_seq, last_event_at = max(candidates, key=lambda x: x[0] or 0)
     payload = {
         "failed_at": failed_at or now_iso(),
         "ticket_id": ticket_id,

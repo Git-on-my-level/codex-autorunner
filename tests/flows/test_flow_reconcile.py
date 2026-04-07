@@ -111,8 +111,8 @@ def test_dead_worker_flow_failed_event_includes_last_app_event(
         status=FlowRunStatus.RUNNING,
         state={"ticket_engine": {"status": "paused"}},
     )
-    store.create_event(
-        event_id="app-last",
+    store.create_telemetry(
+        telemetry_id="app-last",
         run_id=record.id,
         event_type=FlowEventType.APP_SERVER_EVENT,
         data={

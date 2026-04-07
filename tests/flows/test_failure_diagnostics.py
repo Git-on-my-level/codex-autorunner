@@ -46,8 +46,8 @@ def test_build_failure_payload_uses_newest_app_server_events(tmp_path) -> None:
     )
 
     for idx in range(250):
-        store.create_event(
-            event_id=f"evt-{idx}",
+        store.create_telemetry(
+            telemetry_id=f"tel-{idx}",
             run_id=record.id,
             event_type=FlowEventType.APP_SERVER_EVENT,
             data={
