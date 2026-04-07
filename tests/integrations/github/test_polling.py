@@ -10,7 +10,10 @@ from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
-from codex_autorunner.integrations.github.polling import GitHubScmPollingService
+from codex_autorunner.integrations.github.polling import (
+    GitHubPollingConfig,
+    GitHubScmPollingService,
+)
 from codex_autorunner.integrations.github.service import GitHubError
 
 
@@ -1098,27 +1101,31 @@ def test_quota_state_cache_persists_across_poll_cycles(
             rate_limit_payload=_rate_limit_payload(graphql_remaining=5000),
         )
 
-    service = GitHubScmPollingService(
-        hub_root,
-        raw_config=_polling_config(),
-        github_service_factory=_factory,
-        watch_store=ScmPollingWatchStore(hub_root),
-        event_store=ScmEventStore(hub_root),
-    )
-
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
         lambda: datetime(2026, 4, 7, 10, 0, 0, tzinfo=timezone.utc),
     )
-    first = service._quota_state_for_workspace(workspace_root=repo_root, cache={})
+    first = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )._quota_state_for_workspace(workspace_root=repo_root, cache={})
 
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
         lambda: datetime(2026, 4, 7, 10, 1, 30, tzinfo=timezone.utc),
     )
-    second = service._quota_state_for_workspace(workspace_root=repo_root, cache={})
+    second = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )._quota_state_for_workspace(workspace_root=repo_root, cache={})
 
     assert first is not None
     assert second == first
@@ -1188,7 +1195,7 @@ def test_rate_limit_error_invalidates_cached_quota_state(
             pr_view_exception=pr_view_exception,
         )
 
-    service = GitHubScmPollingService(
+    first_service = GitHubScmPollingService(
         hub_root,
         raw_config=_polling_config(),
         github_service_factory=_factory,
@@ -1201,7 +1208,7 @@ def test_rate_limit_error_invalidates_cached_quota_state(
         "_utc_now",
         lambda: datetime(2026, 4, 7, 10, 0, 0, tzinfo=timezone.utc),
     )
-    first = service.process_due_watches(limit=10)
+    first = first_service.process_due_watches(limit=10)
 
     watch_store.refresh_watch(
         watch_id=watch.watch_id,
@@ -1214,11 +1221,64 @@ def test_rate_limit_error_invalidates_cached_quota_state(
         "_utc_now",
         lambda: datetime(2026, 4, 7, 10, 1, 30, tzinfo=timezone.utc),
     )
-    second = service.process_due_watches(limit=10)
+    second = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    ).process_due_watches(limit=10)
 
     assert first["rate_limited_skipped"] == 1
     assert second["polled"] == 1
     assert calls["rate_limit_status"] == 2
+
+
+def test_quota_cache_persistence_preserves_discovery_cycle_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            pr_view_payload={},
+            reviews_payload=[],
+            checks_payload=[],
+            rate_limit_payload=_rate_limit_payload(graphql_remaining=5000),
+        )
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 7, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )
+
+    assert service._claim_discovery_cycle(
+        polling_config=GitHubPollingConfig.from_mapping(_polling_config())
+    )
+    assert (
+        service._quota_state_for_workspace(workspace_root=repo_root, cache={})
+        is not None
+    )
+
+    state = github_polling.read_json(
+        hub_root / ".codex-autorunner" / "github_polling_state.json"
+    )
+    assert isinstance(state, dict)
+    assert isinstance(state.get("last_discovery_cycle_slot"), int)
+    assert state.get("quota_state_cache") is not None
 
 
 def test_process_rotates_discovery_across_candidate_workspaces(
