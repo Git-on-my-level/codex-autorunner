@@ -179,6 +179,7 @@ class _TurnState:
     completion_settle_task: Optional[asyncio.Task[None]] = None
     item_completed_count: int = 0
     completion_gap_started_at: Optional[float] = None
+    last_stream_delta_at: float = 0.0
     completion_gap_recovery_attempts: int = 0
     last_completion_gap_recovery_at: float = 0.0
 
@@ -633,6 +634,11 @@ class CodexAppServerClient:
         if completion_gap_started_at is None:
             return
         now = time.monotonic()
+        if (
+            state.last_stream_delta_at
+            and now - state.last_stream_delta_at < completion_gap_timeout
+        ):
+            return
         completion_gap_seconds = now - completion_gap_started_at
         if completion_gap_seconds < completion_gap_timeout:
             return
@@ -1732,6 +1738,7 @@ class CodexAppServerClient:
             state.agent_message_deltas[item_id] = (
                 state.agent_message_deltas.get(item_id, "") + delta
             )
+        state.last_stream_delta_at = time.monotonic()
         self._mark_notification_event(state=state, method="item/agentMessage/delta")
         _record_raw_event(state, message)
         if state.turn_completed_seen and not state.future.done():
@@ -1925,6 +1932,10 @@ class CodexAppServerClient:
                 target.completion_gap_started_at,
                 source.completion_gap_started_at,
             )
+        target.last_stream_delta_at = max(
+            target.last_stream_delta_at,
+            source.last_stream_delta_at,
+        )
         target.completion_gap_recovery_attempts = max(
             target.completion_gap_recovery_attempts,
             source.completion_gap_recovery_attempts,
