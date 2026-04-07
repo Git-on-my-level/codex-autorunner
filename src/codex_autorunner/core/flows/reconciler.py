@@ -432,6 +432,15 @@ def reconcile_flow_run(
                     )
 
             _ensure_worker_not_stale(health)
+
+            if updated is not None and updated.status.is_terminal():
+                try:
+                    from .flow_telemetry_hooks import housekeep_on_run_terminal
+
+                    housekeep_on_run_terminal(repo_root, updated.id)
+                except Exception:
+                    pass
+
             return (updated or record), bool(updated), False
     except FileLockBusy:
         return record, False, True
