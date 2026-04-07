@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import subprocess
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,14 +20,36 @@ from ...core.time_utils import now_iso
 _LOGGER = logging.getLogger(__name__)
 
 _BROKER_DB_FILENAME = "github-cli.sqlite3"
-_RATE_LIMIT_CACHE_KEY = "rate_limit_cache"
 _COOLDOWN_KEY = "cooldown"
+_CACHE_KEY_PREFIX = "cache:"
+_LEASE_KEY_PREFIX = "lease:"
 _RATE_LIMIT_CACHE_TTL_SECONDS = 30
+_AUTH_STATUS_CACHE_TTL_SECONDS = 60
+_REPO_VIEW_CACHE_TTL_SECONDS = 5 * 60
+_PULL_REQUEST_CACHE_TTL_SECONDS = 15
+_SCM_READ_CACHE_TTL_SECONDS = 20
 _RATE_LIMIT_COOLDOWN_FALLBACK_SECONDS = 5 * 60
 _BROKER_SQLITE_BUSY_TIMEOUT_MS = 5_000
+_MAX_CACHED_STDOUT_BYTES = 256_000
+_LEASE_TTL_SECONDS = 60
+_LEASE_WAIT_POLL_SECONDS = 0.05
+_LEASE_WAIT_MAX_SECONDS = 3
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 ErrorFactory = Callable[[str, int], Exception]
+
+
+@dataclass(frozen=True)
+class _BrokerStateRecord:
+    value_json: dict[str, Any]
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class _CommandCachePolicy:
+    namespace: str
+    ttl_seconds: int
+    scope: str = "cwd"
 
 
 def _utc_now() -> datetime:
@@ -89,16 +114,106 @@ def _is_rate_limit_command(args: list[str]) -> bool:
     return len(args) >= 2 and args[0] == "api" and args[1] == "rate_limit"
 
 
-def _bypass_cooldown(args: list[str]) -> bool:
-    if _is_rate_limit_command(args):
-        return True
+def _is_auth_status_command(args: list[str]) -> bool:
     return len(args) >= 2 and args[0] == "auth" and args[1] == "status"
 
 
-@dataclass(frozen=True)
-class _BrokerStateRecord:
-    value_json: dict[str, Any]
-    updated_at: str
+def _arg_value(args: list[str], flag: str) -> Optional[str]:
+    for index, value in enumerate(args):
+        if value != flag:
+            continue
+        next_index = index + 1
+        if next_index >= len(args):
+            return None
+        return args[next_index]
+    return None
+
+
+def _api_method(args: list[str]) -> str:
+    raw = _arg_value(args, "-X") or _arg_value(args, "--method") or "GET"
+    return raw.strip().upper()
+
+
+def _api_endpoint(args: list[str]) -> Optional[str]:
+    if not args or args[0] != "api":
+        return None
+    for value in args[1:]:
+        if value.startswith("-"):
+            continue
+        return value
+    return None
+
+
+def _command_cache_policy(args: list[str]) -> Optional[_CommandCachePolicy]:
+    if _is_rate_limit_command(args):
+        return _CommandCachePolicy(
+            namespace="rate_limit",
+            ttl_seconds=_RATE_LIMIT_CACHE_TTL_SECONDS,
+            scope="global",
+        )
+    if _is_auth_status_command(args):
+        return _CommandCachePolicy(
+            namespace="auth_status",
+            ttl_seconds=_AUTH_STATUS_CACHE_TTL_SECONDS,
+            scope="global",
+        )
+    if len(args) >= 2 and args[0] == "repo" and args[1] == "view":
+        return _CommandCachePolicy(
+            namespace="repo_view",
+            ttl_seconds=_REPO_VIEW_CACHE_TTL_SECONDS,
+        )
+    if len(args) >= 2 and args[0] == "pr" and args[1] in {"view", "list"}:
+        return _CommandCachePolicy(
+            namespace=f"pr_{args[1]}",
+            ttl_seconds=_PULL_REQUEST_CACHE_TTL_SECONDS,
+        )
+    if len(args) >= 2 and args[0] == "issue" and args[1] == "view":
+        return _CommandCachePolicy(
+            namespace="issue_view",
+            ttl_seconds=_SCM_READ_CACHE_TTL_SECONDS,
+        )
+    if not args or args[0] != "api" or _api_method(args) != "GET":
+        return None
+    endpoint = _api_endpoint(args)
+    if endpoint is None:
+        return None
+    if endpoint == "graphql":
+        return _CommandCachePolicy(
+            namespace="graphql",
+            ttl_seconds=_SCM_READ_CACHE_TTL_SECONDS,
+        )
+    if endpoint.endswith("/reviews"):
+        return _CommandCachePolicy(
+            namespace="reviews",
+            ttl_seconds=_SCM_READ_CACHE_TTL_SECONDS,
+        )
+    if endpoint.endswith("/comments"):
+        return _CommandCachePolicy(
+            namespace="comments",
+            ttl_seconds=_SCM_READ_CACHE_TTL_SECONDS,
+        )
+    if "/issues/" in endpoint:
+        return _CommandCachePolicy(
+            namespace="issues_api",
+            ttl_seconds=_SCM_READ_CACHE_TTL_SECONDS,
+        )
+    return None
+
+
+def _is_mutating_command(args: list[str]) -> bool:
+    if not args:
+        return False
+    if args[0] == "api":
+        return _api_method(args) in {"POST", "PUT", "PATCH", "DELETE"}
+    if args[0] == "pr" and len(args) >= 2:
+        return args[1] in {"create", "edit", "merge", "close", "reopen", "review"}
+    if args[0] == "issue" and len(args) >= 2:
+        return args[1] in {"create", "edit", "close", "reopen"}
+    return False
+
+
+def _bypass_cooldown(args: list[str]) -> bool:
+    return _is_rate_limit_command(args) or _is_auth_status_command(args)
 
 
 class GitHubCliBroker:
@@ -133,14 +248,49 @@ class GitHubCliBroker:
         traffic_class: str = "interactive",
     ) -> subprocess.CompletedProcess[str]:
         normalized_cwd = Path(cwd)
-        if _is_rate_limit_command(args):
-            cached = self._cached_rate_limit_response(args)
+        cache_policy = _command_cache_policy(args)
+        lease_key: Optional[str] = None
+        lease_owner = uuid.uuid4().hex
+        if cache_policy is not None:
+            cached = self._cached_response(
+                args,
+                cache_policy=cache_policy,
+                cwd=normalized_cwd,
+            )
             if cached is not None:
                 return cached
+            lease_key = self._lease_key(
+                args,
+                cache_policy=cache_policy,
+                cwd=normalized_cwd,
+            )
+            if not self._claim_lease(lease_key, owner=lease_owner):
+                waited = self._wait_for_cache_or_cooldown(
+                    args,
+                    cache_policy=cache_policy,
+                    cwd=normalized_cwd,
+                    timeout_seconds=timeout_seconds,
+                    traffic_class=traffic_class,
+                )
+                if waited is not None:
+                    return waited
 
         if not _bypass_cooldown(args):
-            cooldown_until = self._cooldown_until()
-            if cooldown_until is not None and cooldown_until > _utc_now():
+            cooldown_state = self._cooldown_state()
+            cooldown_until_raw = cooldown_state.get("cooldown_until")
+            cooldown_until = (
+                _parse_iso(cooldown_until_raw)
+                if isinstance(cooldown_until_raw, str)
+                else None
+            )
+            if (
+                cooldown_until is not None
+                and cooldown_until > _utc_now()
+                and self._should_block_for_cooldown(
+                    traffic_class=traffic_class,
+                    cooldown_state=cooldown_state,
+                )
+            ):
                 detail = (
                     "GitHub CLI global cooldown active until "
                     f"{cooldown_until.strftime('%Y-%m-%dT%H:%M:%SZ')}"
@@ -160,24 +310,39 @@ class GitHubCliBroker:
                 )
 
         try:
-            proc = self._runner(
-                [self._gh_path] + args,
-                cwd=normalized_cwd,
-                timeout_seconds=timeout_seconds,
-                check=check,
-            )
-        except Exception as exc:
-            if _looks_like_rate_limit(str(exc)):
-                self._record_rate_limit_hit(traffic_class=traffic_class)
-            raise
+            try:
+                proc = self._runner(
+                    [self._gh_path] + args,
+                    cwd=normalized_cwd,
+                    timeout_seconds=timeout_seconds,
+                    check=check,
+                )
+            except Exception as exc:
+                if _looks_like_rate_limit(str(exc)):
+                    self._record_rate_limit_hit(traffic_class=traffic_class)
+                raise
 
-        if proc.returncode != 0 and _looks_like_rate_limit(
-            (proc.stderr or "").strip() or (proc.stdout or "").strip()
-        ):
-            self._record_rate_limit_hit(traffic_class=traffic_class)
-        elif _is_rate_limit_command(args) and proc.returncode == 0:
-            self._store_rate_limit_cache(proc.stdout or "")
-        return proc
+            if proc.returncode != 0 and _looks_like_rate_limit(
+                (proc.stderr or "").strip() or (proc.stdout or "").strip()
+            ):
+                self._record_rate_limit_hit(traffic_class=traffic_class)
+                return proc
+            if proc.returncode != 0:
+                return proc
+
+            if cache_policy is not None:
+                self._store_cached_response(
+                    args,
+                    cache_policy=cache_policy,
+                    cwd=normalized_cwd,
+                    stdout=proc.stdout or "",
+                )
+            if _is_mutating_command(args):
+                self._invalidate_cached_responses()
+            return proc
+        finally:
+            if lease_key is not None:
+                self._release_lease(lease_key, owner=lease_owner)
 
     def _ensure_schema(self, conn) -> None:
         conn.execute(
@@ -185,6 +350,16 @@ class GitHubCliBroker:
             CREATE TABLE IF NOT EXISTS github_cli_broker_state (
                 state_key TEXT PRIMARY KEY,
                 value_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS github_cli_broker_leases (
+                lease_key TEXT PRIMARY KEY,
+                owner TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
@@ -234,10 +409,115 @@ class GitHubCliBroker:
                 (key, json.dumps(value_json, sort_keys=True), now_iso()),
             )
 
-    def _cached_rate_limit_response(
-        self, args: list[str]
+    def _delete_states_matching(self, pattern: str) -> None:
+        with open_sqlite(
+            self._db_path,
+            durable=False,
+            busy_timeout_ms=_BROKER_SQLITE_BUSY_TIMEOUT_MS,
+        ) as conn:
+            self._ensure_schema(conn)
+            conn.execute(
+                """
+                DELETE FROM github_cli_broker_state
+                 WHERE state_key LIKE ?
+                """,
+                (pattern,),
+            )
+
+    def _claim_lease(self, lease_key: str, *, owner: str) -> bool:
+        with open_sqlite(
+            self._db_path,
+            durable=False,
+            busy_timeout_ms=_BROKER_SQLITE_BUSY_TIMEOUT_MS,
+        ) as conn:
+            self._ensure_schema(conn)
+            now_timestamp = now_iso()
+            conn.execute(
+                """
+                DELETE FROM github_cli_broker_leases
+                 WHERE lease_key = ?
+                   AND expires_at <= ?
+                """,
+                (lease_key, now_timestamp),
+            )
+            cursor = conn.execute(
+                """
+                INSERT OR IGNORE INTO github_cli_broker_leases (
+                    lease_key,
+                    owner,
+                    expires_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    lease_key,
+                    owner,
+                    _iso_after_seconds(_LEASE_TTL_SECONDS),
+                    now_timestamp,
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def _release_lease(self, lease_key: str, *, owner: str) -> None:
+        with open_sqlite(
+            self._db_path,
+            durable=False,
+            busy_timeout_ms=_BROKER_SQLITE_BUSY_TIMEOUT_MS,
+        ) as conn:
+            self._ensure_schema(conn)
+            conn.execute(
+                """
+                DELETE FROM github_cli_broker_leases
+                 WHERE lease_key = ?
+                   AND owner = ?
+                """,
+                (lease_key, owner),
+            )
+
+    def _cache_key(
+        self,
+        args: list[str],
+        *,
+        cache_policy: _CommandCachePolicy,
+        cwd: Path,
+    ) -> str:
+        fingerprint = json.dumps(
+            {
+                "namespace": cache_policy.namespace,
+                "gh_path": self._gh_path,
+                "scope_id": (
+                    "global" if cache_policy.scope == "global" else str(cwd.resolve())
+                ),
+                "args": args,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+        return f"{_CACHE_KEY_PREFIX}{cache_policy.namespace}:{digest}"
+
+    def _lease_key(
+        self,
+        args: list[str],
+        *,
+        cache_policy: _CommandCachePolicy,
+        cwd: Path,
+    ) -> str:
+        return (
+            f"{_LEASE_KEY_PREFIX}"
+            f"{self._cache_key(args, cache_policy=cache_policy, cwd=cwd)}"
+        )
+
+    def _cached_response(
+        self,
+        args: list[str],
+        *,
+        cache_policy: _CommandCachePolicy,
+        cwd: Path,
     ) -> Optional[subprocess.CompletedProcess[str]]:
-        state = self._load_state(_RATE_LIMIT_CACHE_KEY)
+        state = self._load_state(
+            self._cache_key(args, cache_policy=cache_policy, cwd=cwd)
+        )
         if state is None:
             return None
         expires_at = state.value_json.get("expires_at")
@@ -258,45 +538,118 @@ class GitHubCliBroker:
             stderr="",
         )
 
-    def _store_rate_limit_cache(self, stdout: str) -> None:
-        payload = {
-            "stdout": stdout,
-            "expires_at": _iso_after_seconds(_RATE_LIMIT_CACHE_TTL_SECONDS),
-        }
-        self._write_state(_RATE_LIMIT_CACHE_KEY, payload)
+    def _store_cached_response(
+        self,
+        args: list[str],
+        *,
+        cache_policy: _CommandCachePolicy,
+        cwd: Path,
+        stdout: str,
+    ) -> None:
+        if len(stdout.encode("utf-8")) > _MAX_CACHED_STDOUT_BYTES:
+            return
+        self._write_state(
+            self._cache_key(args, cache_policy=cache_policy, cwd=cwd),
+            {
+                "stdout": stdout,
+                "expires_at": _iso_after_seconds(cache_policy.ttl_seconds),
+            },
+        )
+        if cache_policy.namespace != "rate_limit":
+            return
         reset_at = _rate_limit_reset_at(stdout)
-        if reset_at is not None:
-            try:
-                if _parse_iso(reset_at) > _utc_now():
-                    self._write_state(
-                        _COOLDOWN_KEY,
-                        {
-                            "cooldown_until": reset_at,
-                            "reason": "rate_limit_payload_exhausted",
-                        },
-                    )
-            except ValueError:
-                pass
+        if reset_at is None:
+            return
+        try:
+            if _parse_iso(reset_at) > _utc_now():
+                self._write_state(
+                    _COOLDOWN_KEY,
+                    {
+                        "cooldown_until": reset_at,
+                        "reason": "rate_limit_payload_exhausted",
+                    },
+                )
+        except ValueError:
+            pass
 
-    def _cooldown_until(self) -> Optional[datetime]:
+    def _cooldown_state(self) -> dict[str, Any]:
         state = self._load_state(_COOLDOWN_KEY)
         if state is None:
-            return None
-        cooldown_until = state.value_json.get("cooldown_until")
-        if not isinstance(cooldown_until, str):
-            return None
-        try:
-            return _parse_iso(cooldown_until)
-        except ValueError:
-            return None
+            return {}
+        return state.value_json
+
+    def _wait_for_cache_or_cooldown(
+        self,
+        args: list[str],
+        *,
+        cache_policy: _CommandCachePolicy,
+        cwd: Path,
+        timeout_seconds: int,
+        traffic_class: str,
+    ) -> Optional[subprocess.CompletedProcess[str]]:
+        deadline = time.monotonic() + min(timeout_seconds, _LEASE_WAIT_MAX_SECONDS)
+        while time.monotonic() < deadline:
+            cached = self._cached_response(
+                args,
+                cache_policy=cache_policy,
+                cwd=cwd,
+            )
+            if cached is not None:
+                return cached
+            cooldown_state = self._cooldown_state()
+            cooldown_until_raw = cooldown_state.get("cooldown_until")
+            if isinstance(cooldown_until_raw, str):
+                try:
+                    cooldown_until = _parse_iso(cooldown_until_raw)
+                except ValueError:
+                    cooldown_until = None
+                if (
+                    cooldown_until is not None
+                    and cooldown_until > _utc_now()
+                    and self._should_block_for_cooldown(
+                        traffic_class=traffic_class,
+                        cooldown_state=cooldown_state,
+                    )
+                ):
+                    raise self._error_factory(
+                        "GitHub CLI global cooldown active until "
+                        f"{cooldown_until.strftime('%Y-%m-%dT%H:%M:%SZ')}",
+                        429,
+                    )
+            time.sleep(_LEASE_WAIT_POLL_SECONDS)
+        return None
+
+    def _should_block_for_cooldown(
+        self,
+        *,
+        traffic_class: str,
+        cooldown_state: dict[str, Any],
+    ) -> bool:
+        if traffic_class != "interactive":
+            return True
+        return not (
+            cooldown_state.get("reason") == "rate_limit_hit"
+            and cooldown_state.get("traffic_class") == "polling"
+        )
+
+    def _invalidate_cached_responses(self) -> None:
+        self._delete_states_matching(f"{_CACHE_KEY_PREFIX}%")
 
     def _record_rate_limit_hit(self, *, traffic_class: str) -> None:
         reset_at: Optional[str] = None
-        cached = self._load_state(_RATE_LIMIT_CACHE_KEY)
-        if cached is not None:
-            stdout = cached.value_json.get("stdout")
-            if isinstance(stdout, str):
-                reset_at = _rate_limit_reset_at(stdout)
+        rate_limit_policy = _command_cache_policy(["api", "rate_limit"])
+        if rate_limit_policy is not None:
+            cached = self._load_state(
+                self._cache_key(
+                    ["api", "rate_limit"],
+                    cache_policy=rate_limit_policy,
+                    cwd=self._repo_root,
+                )
+            )
+            if cached is not None:
+                stdout = cached.value_json.get("stdout")
+                if isinstance(stdout, str):
+                    reset_at = _rate_limit_reset_at(stdout)
         if reset_at is None:
             reset_at = _iso_after_seconds(_RATE_LIMIT_COOLDOWN_FALLBACK_SECONDS)
         self._write_state(
