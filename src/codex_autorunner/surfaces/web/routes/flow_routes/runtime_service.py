@@ -116,6 +116,7 @@ def load_flow_run_records(
     repo_root: Path,
     *,
     flow_type: Optional[str],
+    flow_target_id: Optional[str] = None,
     reconcile: bool,
     store: Optional[FlowStore],
     safe_list_flow_runs: Callable[..., list[FlowRunRecord]],
@@ -123,11 +124,12 @@ def load_flow_run_records(
         [Path, str], OrchestrationFlowService
     ] = build_flow_orchestration_service,
 ) -> list[FlowRunRecord]:
+    listing_flow_type = flow_type or flow_target_id
     try:
         records = list_orchestration_flow_run_records(
             repo_root,
-            flow_type=flow_type or "ticket_flow",
-            flow_target_id=flow_type if flow_type else None,
+            flow_type=listing_flow_type or "ticket_flow",
+            flow_target_id=flow_target_id or flow_type,
             store=store,
             build_service=build_flow_orchestration_service_fn,
         )
@@ -138,10 +140,10 @@ def load_flow_run_records(
 
     if not records:
         if store:
-            records = store.list_flow_runs(flow_type=flow_type)
+            records = store.list_flow_runs(flow_type=listing_flow_type)
         else:
             records = safe_list_flow_runs(
-                repo_root, flow_type=flow_type, recover_stuck=reconcile
+                repo_root, flow_type=listing_flow_type, recover_stuck=reconcile
             )
 
     if reconcile and store:
@@ -155,7 +157,7 @@ def load_flow_run_records(
         ]
     if reconcile and not records:
         return safe_list_flow_runs(
-            repo_root, flow_type=flow_type, recover_stuck=reconcile
+            repo_root, flow_type=listing_flow_type, recover_stuck=reconcile
         )
     return records
 

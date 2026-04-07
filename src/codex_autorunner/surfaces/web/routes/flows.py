@@ -616,8 +616,9 @@ def _build_flow_status_response(
     repo_root: Path,
     *,
     store: Optional[FlowStore] = None,
+    lite: bool = False,
 ) -> FlowStatusResponse:
-    snapshot = build_flow_status_snapshot(repo_root, record, store)
+    snapshot = build_flow_status_snapshot(repo_root, record, store, lite=lite)
     resp = FlowStatusResponse.from_record(
         record,
         last_event_seq=snapshot["last_event_seq"],
@@ -625,7 +626,12 @@ def _build_flow_status_response(
         worker_health=snapshot["worker_health"],
     )
     resp.ticket_progress = snapshot.get("ticket_progress")
-    if snapshot.get("state") is not None:
+    if lite:
+        resp.state = {
+            "current_ticket": snapshot.get("effective_current_ticket"),
+            "status": resp.status,
+        }
+    elif snapshot.get("state") is not None:
         resp.state = snapshot["state"]
     return resp
 

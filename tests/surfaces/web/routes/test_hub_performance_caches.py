@@ -486,7 +486,7 @@ def test_hub_channel_service_reuses_ttl_cache(
 
     first = asyncio.run(service.list_chat_channels(limit=100))
     second = asyncio.run(service.list_chat_channels(query="ops", limit=10))
-    now["value"] = 111.0
+    now["value"] = 161.0
     third = asyncio.run(service.list_chat_channels(limit=100))
 
     assert [entry["key"] for entry in first["entries"]] == ["discord:chan-123:guild-1"]

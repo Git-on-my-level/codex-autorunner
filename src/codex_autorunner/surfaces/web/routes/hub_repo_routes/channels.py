@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from ...app_state import HubAppContext
 
 
-_CHANNEL_DIR_CACHE_TTL_SECONDS = 10.0
+_CHANNEL_DIR_CACHE_TTL_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
