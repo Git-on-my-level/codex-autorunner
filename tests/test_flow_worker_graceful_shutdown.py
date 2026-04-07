@@ -158,7 +158,7 @@ body
         archive_flow_run_artifacts=lambda **_kw: {},
     )
 
-    result = CliRunner().invoke(flow_app, ["--run-id", run_id])
+    result = CliRunner().invoke(flow_app, ["worker", "--run-id", run_id])
 
     assert result.exit_code == 0, result.output
     assert "stop_flow" in events

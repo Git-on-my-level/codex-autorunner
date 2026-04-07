@@ -17,6 +17,13 @@ import typer
 
 from ....core.config import ConfigError
 from ....core.flows import FlowController, FlowStore
+from ....core.flows.flow_housekeeping import (
+    FlowRetentionConfig,
+    build_plan,
+    execute_housekeep,
+    gather_stats,
+    parse_flow_retention_config,
+)
 from ....core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
 from ....core.flows.start_policy import evaluate_ticket_start_policy
 from ....core.flows.telemetry_export import export_all_runs, plan_export
@@ -1249,6 +1256,216 @@ You are the first ticket in a new ticket_flow run.
                 if result.errors:
                     for err in result.errors:
                         typer.echo(f"  Error: {err}", err=True)
+        finally:
+            store.close()
+
+    @flow_app.command("housekeep")
+    def flow_housekeep(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        stats_only: bool = typer.Option(
+            False, "--stats", help="Report DB stats only (no export/prune)"
+        ),
+        dry_run: bool = typer.Option(
+            False, "--dry-run", help="Preview export/prune without mutating"
+        ),
+        vacuum: bool = typer.Option(
+            False, "--vacuum", help="Run VACUUM after pruning to reclaim disk space"
+        ),
+        retention: Optional[str] = typer.Option(
+            None,
+            "--retention",
+            help="Override retention window (e.g. 7d, 14d, 1h). Default: 7d.",
+        ),
+        run_id: Optional[str] = typer.Option(
+            None, "--run-id", help="Target a specific run (default: all expired runs)"
+        ),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ):
+        """Export and prune expired flow telemetry to manage DB size.
+
+        Modes:
+          --stats     Report DB/run statistics without mutating anything.
+          --dry-run   Preview which runs would be exported and pruned.
+          (default)   Execute export and prune for expired terminal runs.
+          --vacuum    Additionally run VACUUM to reclaim freed pages.
+
+        Expired means a terminal run whose finished_at is older than the
+        retention window (default 7d, overridable via --retention or config).
+        Active runs are never touched.
+        """
+        engine = require_repo_config(repo, hub)
+        db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            raise_exit("Flow database not found at .codex-autorunner/flows.db")
+
+        retention_config = parse_flow_retention_config(
+            getattr(engine.config, "flow_retention", None)
+        )
+        if retention is not None:
+            from datetime import timedelta
+
+            td = parse_duration(retention)
+            assert isinstance(td, timedelta)
+            retention_config = FlowRetentionConfig(
+                retention_days=max(1, int(td.total_seconds() / 86400)),
+                vacuum_after_prune=vacuum,
+            )
+
+        store = FlowStore(db_path, durable=engine.config.durable_writes)
+        try:
+            store.initialize()
+
+            if stats_only:
+                hk_stats = gather_stats(store, db_path, retention_config)
+                payload: dict[str, Any] = {
+                    "db_path": hk_stats.db_path,
+                    "db_size_bytes": hk_stats.db_size_bytes,
+                    "runs_total": hk_stats.runs_total,
+                    "runs_active": hk_stats.runs_active,
+                    "runs_terminal": hk_stats.runs_terminal,
+                    "runs_expired": hk_stats.runs_expired,
+                    "events_total": hk_stats.events_total,
+                    "telemetry_total": hk_stats.telemetry_total,
+                    "wire_events_total": hk_stats.wire_events_total,
+                    "retention_days": retention_config.retention_days,
+                    "run_details": [
+                        {
+                            "run_id": r.run_id,
+                            "run_status": r.run_status,
+                            "flow_type": r.flow_type,
+                            "created_at": r.created_at,
+                            "finished_at": r.finished_at,
+                            "is_active": r.is_active,
+                            "is_terminal": r.is_terminal,
+                            "is_expired": r.is_expired,
+                            "events_total": r.events_total,
+                            "telemetry_total": r.telemetry_total,
+                            "wire_events": r.wire_events,
+                        }
+                        for r in hk_stats.run_details
+                    ],
+                }
+                if output_json:
+                    typer.echo(json.dumps(payload, indent=2))
+                else:
+                    typer.echo(
+                        f"DB: {hk_stats.db_path} ({hk_stats.db_size_bytes:,} bytes)"
+                    )
+                    typer.echo(
+                        f"Runs: {hk_stats.runs_total} total, "
+                        f"{hk_stats.runs_active} active, "
+                        f"{hk_stats.runs_terminal} terminal, "
+                        f"{hk_stats.runs_expired} expired"
+                    )
+                    typer.echo(
+                        f"Events: {hk_stats.events_total} total, "
+                        f"{hk_stats.telemetry_total} telemetry, "
+                        f"{hk_stats.wire_events_total} wire events"
+                    )
+                    typer.echo(f"Retention: {retention_config.retention_days}d")
+                    for r in hk_stats.run_details:
+                        flags = []
+                        if r.is_active:
+                            flags.append("active")
+                        if r.is_terminal:
+                            flags.append("terminal")
+                        if r.is_expired:
+                            flags.append("expired")
+                        flag_str = ",".join(flags) if flags else "other"
+                        typer.echo(
+                            f"  {r.run_id}: status={r.run_status} "
+                            f"[{flag_str}] "
+                            f"events={r.events_total} "
+                            f"telemetry={r.telemetry_total} "
+                            f"wire={r.wire_events}"
+                        )
+                return
+
+            target_run_ids = [run_id] if run_id else None
+
+            if dry_run:
+                hk_plan = build_plan(
+                    store, db_path, retention_config, run_ids=target_run_ids
+                )
+                plan_payload: dict[str, Any] = {
+                    "dry_run": True,
+                    "retention_days": retention_config.retention_days,
+                    "runs_to_process": len(hk_plan.runs_to_process),
+                    "runs_skipped_active": hk_plan.runs_skipped_active,
+                    "runs_skipped_not_expired": hk_plan.runs_skipped_not_expired,
+                    "events_to_export": hk_plan.events_to_export,
+                    "events_to_prune": hk_plan.events_to_prune,
+                    "estimated_export_bytes": hk_plan.estimated_export_bytes,
+                    "db_size_bytes": hk_plan.stats.db_size_bytes,
+                    "run_details": [
+                        {
+                            "run_id": r.run_id,
+                            "run_status": r.run_status,
+                            "finished_at": r.finished_at,
+                            "events_total": r.events_total,
+                            "wire_events": r.wire_events,
+                        }
+                        for r in hk_plan.runs_to_process
+                    ],
+                }
+                if output_json:
+                    typer.echo(json.dumps(plan_payload, indent=2))
+                else:
+                    typer.echo("Dry-run housekeeping plan:")
+                    typer.echo(f"  Retention: {retention_config.retention_days}d")
+                    typer.echo(f"  Runs to process: {plan_payload['runs_to_process']}")
+                    typer.echo(
+                        f"  Runs skipped (active): {plan_payload['runs_skipped_active']}"
+                    )
+                    typer.echo(
+                        f"  Runs skipped (not expired): {plan_payload['runs_skipped_not_expired']}"
+                    )
+                    typer.echo(
+                        f"  Events to export: {plan_payload['events_to_export']}"
+                    )
+                    typer.echo(f"  Events to prune: {plan_payload['events_to_prune']}")
+                    typer.echo(
+                        f"  Estimated export size: {plan_payload['estimated_export_bytes']:,} bytes"
+                    )
+                    typer.echo(f"  DB size: {plan_payload['db_size_bytes']:,} bytes")
+                    for r in hk_plan.runs_to_process:
+                        typer.echo(
+                            f"    {r.run_id}: status={r.run_status} "
+                            f"finished={r.finished_at} "
+                            f"events={r.events_total} wire={r.wire_events}"
+                        )
+                return
+
+            hk_result = execute_housekeep(
+                engine.repo_root,
+                store,
+                db_path,
+                retention_config,
+                run_ids=target_run_ids,
+                vacuum=vacuum,
+                dry_run=False,
+            )
+            result_payload = hk_result.to_dict()
+            if output_json:
+                typer.echo(json.dumps(result_payload, indent=2))
+            else:
+                typer.echo(
+                    f"Housekeep complete: {hk_result.runs_processed} run(s) processed"
+                )
+                typer.echo(
+                    f"  Exported: {hk_result.events_exported} events "
+                    f"({hk_result.exported_bytes:,} bytes)"
+                )
+                typer.echo(f"  Pruned: {hk_result.events_pruned} events")
+                if hk_result.vacuum_performed:
+                    typer.echo("  VACUUM: performed")
+                typer.echo(
+                    f"  DB size: {hk_result.db_size_before_bytes:,} -> "
+                    f"{hk_result.db_size_after_bytes:,} bytes"
+                )
+                for err in hk_result.errors:
+                    typer.echo(f"  Error: {err}", err=True)
         finally:
             store.close()
 
