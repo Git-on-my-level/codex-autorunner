@@ -5,8 +5,8 @@ interaction event off the gateway hot path while preserving arrival order.
 
 The runner maintains an internal FIFO queue drained by a single worker.
 Each queued event is dispatched through the service's existing dispatch
-chain (``_dispatch_chat_event``) which provides per-conversation ordering
-and bypass semantics.  The runner adds:
+chain (``_dispatch_chat_event``) which provides per-conversation ordering.
+The runner adds:
 
 - Guaranteed background execution (gateway returns after ingress ack)
 - Arrival-order preservation across all submitted events

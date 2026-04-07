@@ -4,6 +4,54 @@ Use this guide after `docs/AGENT_SETUP_GUIDE.md` when a user wants the interacti
 
 ---
 
+## Interaction Runtime Architecture
+
+Discord interactions follow a two-phase lifecycle: **ingress** then **background execution**.
+
+### Ingress (fast, on the gateway hot path)
+
+`InteractionIngress` is the single entry point for all interaction types (slash
+commands, component interactions, modal submits, autocomplete).  Ingress owns:
+
+- interaction parsing and normalization
+- collaboration/authz checks
+- ack policy lookup and initial response or defer emission
+- timing telemetry (`interaction_created_at -> ingress_started -> authz -> ack -> ingress_finished`)
+
+Ingress **must not** run command business logic.  After ingress acknowledges the
+interaction (either by deferring or responding immediately), control returns to
+the gateway worker immediately.
+
+### Background command runner
+
+`CommandRunner` dispatches ingressed interactions off the gateway hot path.
+Each interaction runs as an independent `asyncio.Task` with:
+
+- guaranteed background execution (gateway never blocks on a handler)
+- arrival-order preservation for events that go through the FIFO queue
+- per-command handler timeout (default 120 s, configurable via
+  `discord_bot.dispatch.handler_timeout_seconds`)
+- stall warning at 60 s (configurable via
+  `discord_bot.dispatch.handler_stalled_warning_seconds`)
+- grace-period shutdown that drains in-flight work
+
+Handler timeout, stalled warnings, and lifecycle telemetry are logged under
+event keys `discord.runner.*` and `discord.ingress.*`.
+
+### Telemetry event keys
+
+High-signal telemetry for the interaction lifecycle:
+
+| Event key | Phase |
+|---|---|
+| `discord.ingress.completed` | Ingress finished (includes `ack_delta_ms`, `gateway_to_ingress_ms`) |
+| `discord.runner.execute.start` | Handler started (includes `queue_wait_ms`, `ingress_elapsed_ms`) |
+| `discord.runner.stalled` | Handler running past stall warning threshold |
+| `discord.runner.timeout` | Handler cancelled after timeout |
+| `discord.runner.execute.done` | Handler completed (includes `total_lifecycle_ms`, `gateway_to_completion_ms`) |
+
+---
+
 ## Instructions for the Agent
 
 You are helping a user enable Discord for CAR. Keep this as an optional add-on path.
@@ -105,6 +153,9 @@ discord_bot:
     enabled: true
     timeout_ms: 120000
     max_output_chars: 3800
+  dispatch:
+    handler_timeout_seconds: 120
+    handler_stalled_warning_seconds: 60
   media:
     enabled: true
     voice: true
@@ -422,6 +473,10 @@ Default hub log path:
 High-signal Discord events/logs:
 - `discord.bot.starting`
 - `discord.commands.sync.overwrite`
+- `discord.ingress.completed` (ingress latency and ack timing per interaction)
+- `discord.runner.stalled` (handler past stall warning threshold)
+- `discord.runner.timeout` (handler cancelled after timeout)
+- `discord.runner.execute.done` (full lifecycle timing)
 - `discord.pause_watch.notified`
 - `discord.pause_watch.scan_failed`
 - `discord.outbox.send_failed`
@@ -432,7 +487,7 @@ High-signal Discord events/logs:
 Quick grep:
 
 ```bash
-rg -n "discord\\.(bot\\.starting|commands\\.sync\\.overwrite|pause_watch\\.(notified|scan_failed)|outbox\\.send_failed)|Discord gateway error" .codex-autorunner/codex-autorunner-hub.log
+rg -n "discord\\.(bot\\.starting|commands\\.sync\\.overwrite|ingress\\.(completed|ack)|runner\\.(stalled|timeout|execute)|pause_watch\\.(notified|scan_failed)|outbox\\.send_failed)|Discord gateway error" .codex-autorunner/codex-autorunner-hub.log
 ```
 
 Trace a specific failed Discord turn by conversation ID:

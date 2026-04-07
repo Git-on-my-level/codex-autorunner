@@ -67,6 +67,21 @@ Telegram auth envs (names configurable via `telegram_bot.*_env`):
 - `CAR_TELEGRAM_CHAT_ID`
 - `CAR_TELEGRAM_THREAD_ID` (optional, for topic/thread routing)
 
+## Discord bot
+
+Discord auth envs (names configurable via `discord_bot.*_env`):
+
+- `CAR_DISCORD_BOT_TOKEN`
+- `CAR_DISCORD_APP_ID`
+
+Dispatch and timeout defaults:
+
+- `discord_bot.dispatch.handler_timeout_seconds` (default `120`)
+- `discord_bot.dispatch.handler_stalled_warning_seconds` (default `60`)
+
+These control the background command runner timeout and stall-warning threshold
+for interactions after ingress has acknowledged them.
+
 ## Workspace PATH bootstrap
 
 For app-server-backed agent runtimes (web terminal/PMA and Telegram) and Discord
