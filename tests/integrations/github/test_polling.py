@@ -1300,3 +1300,59 @@ def test_process_throttles_discovery_to_one_workspace_per_cycle(
     assert first["candidate_workspaces_scanned"] == 1
     assert second["candidate_workspaces_scanned"] == 0
     assert scanned_roots == [roots[0]]
+
+
+def test_process_rotates_single_workspace_discovery_across_cycles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    roots = [hub_root / "workspace" / f"repo-{index}" for index in range(4)]
+    for root in roots:
+        root.mkdir(parents=True)
+
+    scanned_roots: list[Path] = []
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        scanned_roots.append(repo_root_arg)
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=51,
+            head_branch="feature/discovery-budget",
+            discover=False,
+        )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(
+            discovery_interval_seconds=360,
+            discovery_workspace_limit=1,
+        ),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )
+
+    monkeypatch.setattr(
+        service, "_candidate_workspace_roots", lambda: (list(roots), {}, {})
+    )
+    monkeypatch.setattr(service, "_thread_activity", lambda: ({}, {}))
+
+    for minute in (0, 6, 12, 18):
+        monkeypatch.setattr(
+            github_polling,
+            "_utc_now",
+            lambda minute=minute: datetime(
+                2026, 4, 5, 9, minute, 0, tzinfo=timezone.utc
+            ),
+        )
+        result = service.process(limit=10)
+        assert result["candidate_workspaces_scanned"] == 1
+
+    assert len(scanned_roots) == 4
+    assert len(set(scanned_roots)) == 4
+    assert set(scanned_roots) == set(roots)

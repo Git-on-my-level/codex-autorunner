@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import subprocess
 import time
 import uuid
@@ -222,16 +223,20 @@ class GitHubCliBroker:
         *,
         repo_root: Path,
         raw_config: Optional[dict[str, Any]],
+        config_root: Optional[Path],
         gh_path: str,
         runner: Runner,
         error_factory: ErrorFactory,
     ) -> None:
         self._repo_root = Path(repo_root)
+        self._config_root = (
+            Path(config_root) if config_root is not None else self._repo_root
+        )
         self._raw_config = raw_config or {}
         self._gh_path = gh_path
         self._runner = runner
         self._error_factory = error_factory
-        config_ns = SimpleNamespace(root=self._repo_root, raw=self._raw_config)
+        config_ns = SimpleNamespace(root=self._config_root, raw=self._raw_config)
         self._state_root = resolve_global_state_root(
             config=config_ns,
             repo_root=self._repo_root,
@@ -248,6 +253,7 @@ class GitHubCliBroker:
         traffic_class: str = "interactive",
     ) -> subprocess.CompletedProcess[str]:
         normalized_cwd = Path(cwd)
+        deadline = time.monotonic() + max(0, timeout_seconds)
         cache_policy = _command_cache_policy(args)
         lease_key: Optional[str] = None
         lease_owner = uuid.uuid4().hex
@@ -277,8 +283,9 @@ class GitHubCliBroker:
                     args,
                     cache_policy=cache_policy,
                     cwd=normalized_cwd,
-                    timeout_seconds=timeout_seconds,
                     traffic_class=traffic_class,
+                    check=check,
+                    deadline=deadline,
                     lease_key=lease_key,
                     lease_owner=lease_owner,
                     lease_ttl_seconds=lease_ttl_seconds,
@@ -302,30 +309,33 @@ class GitHubCliBroker:
                     cooldown_state=cooldown_state,
                 )
             ):
-                detail = (
-                    "GitHub CLI global cooldown active until "
-                    f"{cooldown_until.strftime('%Y-%m-%dT%H:%M:%SZ')}"
-                )
-                _LOGGER.info(
-                    "GitHub CLI broker blocked command during cooldown: class=%s args=%s",
-                    traffic_class,
-                    args[:2],
-                )
-                if check:
-                    raise self._error_factory(detail, 429)
-                return subprocess.CompletedProcess(
-                    [self._gh_path] + args,
-                    1,
-                    stdout="",
-                    stderr=detail,
+                return self._failed_command_result(
+                    args,
+                    detail=(
+                        "GitHub CLI global cooldown active until "
+                        f"{cooldown_until.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                    ),
+                    status_code=429,
+                    check=check,
                 )
 
         try:
             try:
+                remaining_timeout_seconds = self._remaining_timeout_seconds(deadline)
+                if remaining_timeout_seconds is None:
+                    return self._failed_command_result(
+                        args,
+                        detail=(
+                            "GitHub CLI broker timed out before command execution "
+                            f"after waiting {timeout_seconds}s"
+                        ),
+                        status_code=504,
+                        check=check,
+                    )
                 proc = self._runner(
                     [self._gh_path] + args,
                     cwd=normalized_cwd,
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=remaining_timeout_seconds,
                     check=check,
                 )
             except Exception as exc:
@@ -589,19 +599,47 @@ class GitHubCliBroker:
             return {}
         return state.value_json
 
+    def _failed_command_result(
+        self,
+        args: list[str],
+        *,
+        detail: str,
+        status_code: int,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if "global cooldown active" in detail:
+            _LOGGER.info(
+                "GitHub CLI broker blocked command during cooldown: args=%s",
+                args[:2],
+            )
+        if check:
+            raise self._error_factory(detail, status_code)
+        return subprocess.CompletedProcess(
+            [self._gh_path] + args,
+            1,
+            stdout="",
+            stderr=detail,
+        )
+
+    def _remaining_timeout_seconds(self, deadline: float) -> Optional[int]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        return max(1, int(math.ceil(remaining)))
+
     def _wait_for_cache_or_cooldown(
         self,
         args: list[str],
         *,
         cache_policy: _CommandCachePolicy,
         cwd: Path,
-        timeout_seconds: int,
         traffic_class: str,
+        check: bool,
+        deadline: float,
         lease_key: str,
         lease_owner: str,
         lease_ttl_seconds: int,
     ) -> Optional[subprocess.CompletedProcess[str]]:
-        _ = timeout_seconds
         while True:
             cached = self._cached_response(
                 args,
@@ -625,18 +663,38 @@ class GitHubCliBroker:
                         cooldown_state=cooldown_state,
                     )
                 ):
-                    raise self._error_factory(
-                        "GitHub CLI global cooldown active until "
-                        f"{cooldown_until.strftime('%Y-%m-%dT%H:%M:%SZ')}",
-                        429,
+                    return self._failed_command_result(
+                        args,
+                        detail=(
+                            "GitHub CLI global cooldown active until "
+                            f"{cooldown_until.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+                        ),
+                        status_code=429,
+                        check=check,
                     )
             if self._claim_lease(
                 lease_key,
                 owner=lease_owner,
                 ttl_seconds=lease_ttl_seconds,
             ):
+                cached = self._cached_response(
+                    args,
+                    cache_policy=cache_policy,
+                    cwd=cwd,
+                )
+                if cached is not None:
+                    self._release_lease(lease_key, owner=lease_owner)
+                    return cached
                 return None
-            time.sleep(_LEASE_WAIT_POLL_SECONDS)
+            remaining_timeout_seconds = self._remaining_timeout_seconds(deadline)
+            if remaining_timeout_seconds is None:
+                return self._failed_command_result(
+                    args,
+                    detail="GitHub CLI broker timed out while waiting for shared cache lease",
+                    status_code=504,
+                    check=check,
+                )
+            time.sleep(min(_LEASE_WAIT_POLL_SECONDS, deadline - time.monotonic()))
 
     def _should_block_for_cooldown(
         self,

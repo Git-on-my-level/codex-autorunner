@@ -476,6 +476,7 @@ class GitHubScmPollingService:
                 return GitHubService(
                     repo_root,
                     service_raw_config,
+                    config_root=self._hub_root,
                     traffic_class="polling",
                 )
 
@@ -569,14 +570,15 @@ class GitHubScmPollingService:
         counts["invalid_bindings_skipped"] += invalid_bindings
 
         if self._claim_discovery_cycle(polling_config=polling_config):
+            discovery_limit = max(
+                1,
+                min(limit, polling_config.discovery_workspace_limit),
+            )
             prioritized_roots = self._prioritized_discovery_roots(
                 candidate_roots=candidate_roots,
                 workspace_activity=workspace_activity,
                 polling_config=polling_config,
-            )
-            discovery_limit = max(
-                1,
-                min(limit, polling_config.discovery_workspace_limit),
+                discovery_limit=discovery_limit,
             )
             for workspace_root in prioritized_roots[:discovery_limit]:
                 counts["candidate_workspaces_scanned"] += 1
@@ -1015,6 +1017,7 @@ class GitHubScmPollingService:
         candidate_roots: list[Path],
         workspace_activity: Mapping[str, datetime],
         polling_config: GitHubPollingConfig,
+        discovery_limit: int,
     ) -> list[Path]:
         if len(candidate_roots) <= 1:
             return list(candidate_roots)
@@ -1025,12 +1028,13 @@ class GitHubScmPollingService:
             )
             grouped.setdefault(activity_key[0], []).append(root)
         cycle_index = int(_utc_now().timestamp()) // max(
-            1, polling_config.interval_seconds
+            1, polling_config.discovery_interval_seconds
         )
+        rotation_offset = cycle_index * max(1, discovery_limit)
         ordered: list[Path] = []
         for group_key in sorted(grouped):
             bucket = grouped[group_key]
-            ordered.extend(_rotated(bucket, offset=cycle_index))
+            ordered.extend(_rotated(bucket, offset=rotation_offset))
         return ordered
 
     def _repair_active_watch(

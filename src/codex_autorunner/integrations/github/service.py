@@ -367,11 +367,13 @@ class GitHubService:
         repo_root: Path,
         raw_config: Optional[dict] = None,
         *,
+        config_root: Optional[Path] = None,
         traffic_class: str = "interactive",
         gh_broker: Optional[GitHubCliBroker] = None,
         gh_runner: Optional[Callable[..., subprocess.CompletedProcess[str]]] = None,
     ):
         self.repo_root = repo_root
+        self.config_root = Path(config_root) if config_root is not None else repo_root
         self.raw_config = raw_config or {}
         self.github_path = repo_root / ".codex-autorunner" / "github.json"
         self.gh_path, self.gh_override = self._load_gh_path()
@@ -380,6 +382,7 @@ class GitHubService:
         self._gh_broker = gh_broker or GitHubCliBroker(
             repo_root=self.repo_root,
             raw_config=self.raw_config if isinstance(self.raw_config, dict) else None,
+            config_root=self.config_root,
             gh_path=self.gh_path,
             runner=self._gh_runner,
             error_factory=lambda message, status_code: GitHubError(

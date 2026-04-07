@@ -5,10 +5,13 @@ import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+import codex_autorunner.integrations.github.broker as github_broker
+from codex_autorunner.integrations.github.broker import GitHubCliBroker
 from codex_autorunner.integrations.github.service import GitHubError, GitHubService
 
 
@@ -46,6 +49,54 @@ def test_rate_limit_status_uses_shared_broker_cache_across_instances(
     assert first == payload
     assert second == payload
     assert calls["count"] == 1
+
+
+def test_rate_limit_cache_uses_config_root_for_relative_global_state(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_one = hub_root / "workspace" / "repo-one"
+    repo_two = hub_root / "workspace" / "repo-two"
+    repo_one.mkdir(parents=True)
+    repo_two.mkdir(parents=True)
+    calls = {"count": 0}
+    payload = {
+        "resources": {
+            "core": {"remaining": 4999, "limit": 5000, "reset": 2147483647},
+            "graphql": {"remaining": 4999, "limit": 5000, "reset": 2147483647},
+        }
+    }
+
+    def _runner(
+        args: list[str], *, cwd: Path, timeout_seconds: int, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        _ = cwd, timeout_seconds, check
+        calls["count"] += 1
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+
+    raw_config = {"state_roots": {"global": ".shared-state"}}
+    service_one = GitHubService(
+        repo_one,
+        raw_config=raw_config,
+        config_root=hub_root,
+        gh_runner=_runner,
+    )
+    service_two = GitHubService(
+        repo_two,
+        raw_config=raw_config,
+        config_root=hub_root,
+        gh_runner=_runner,
+    )
+
+    assert service_one.rate_limit_status() == payload
+    assert service_two.rate_limit_status() == payload
+    assert calls["count"] == 1
+    assert (hub_root / ".shared-state" / "github" / "github-cli.sqlite3").exists()
 
 
 def test_rate_limit_hit_sets_shared_cooldown_across_instances(
@@ -317,3 +368,103 @@ def test_slow_concurrent_cached_read_waits_for_shared_lease(
     assert first["title"] == "Shared cached result"
     assert second["title"] == "Shared cached result"
     assert runner_calls["count"] == 1
+
+
+def test_waiting_cacheable_read_respects_check_false_on_cooldown(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    def _runner(
+        args: list[str], *, cwd: Path, timeout_seconds: int, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        raise AssertionError(f"runner should not execute: {args}")
+
+    broker = GitHubCliBroker(
+        repo_root=repo_root,
+        raw_config={},
+        config_root=repo_root,
+        gh_path="gh",
+        runner=_runner,
+        error_factory=lambda message, status_code: GitHubError(
+            message, status_code=status_code
+        ),
+    )
+    args = ["pr", "view", "17", "--json", "number,title"]
+    cache_policy = github_broker._command_cache_policy(args)
+    assert cache_policy is not None
+    lease_key = broker._lease_key(args, cache_policy=cache_policy, cwd=repo_root)
+    assert broker._claim_lease(lease_key, owner="other-owner", ttl_seconds=60)
+    broker._write_state(
+        "cooldown",
+        {
+            "cooldown_until": (
+                datetime.now(timezone.utc) + timedelta(minutes=5)
+            ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "reason": "rate_limit_hit",
+            "traffic_class": "polling",
+        },
+    )
+
+    proc = broker.run(
+        args,
+        cwd=repo_root,
+        timeout_seconds=5,
+        check=False,
+        traffic_class="polling",
+    )
+
+    assert proc.returncode == 1
+    assert "global cooldown active" in proc.stderr
+
+
+def test_waiting_cacheable_read_honors_timeout_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CAR_GLOBAL_STATE_ROOT", str(tmp_path / "global-state"))
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    clock = {"now": 1000.0}
+
+    def _monotonic() -> float:
+        return clock["now"]
+
+    def _sleep(seconds: float) -> None:
+        clock["now"] += seconds
+
+    monkeypatch.setattr(github_broker.time, "monotonic", _monotonic)
+    monkeypatch.setattr(github_broker.time, "sleep", _sleep)
+
+    def _runner(
+        args: list[str], *, cwd: Path, timeout_seconds: int, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        raise AssertionError(f"runner should not execute: {args}")
+
+    broker = GitHubCliBroker(
+        repo_root=repo_root,
+        raw_config={},
+        config_root=repo_root,
+        gh_path="gh",
+        runner=_runner,
+        error_factory=lambda message, status_code: GitHubError(
+            message, status_code=status_code
+        ),
+    )
+    args = ["pr", "view", "17", "--json", "number,title"]
+    cache_policy = github_broker._command_cache_policy(args)
+    assert cache_policy is not None
+    lease_key = broker._lease_key(args, cache_policy=cache_policy, cwd=repo_root)
+    assert broker._claim_lease(lease_key, owner="other-owner", ttl_seconds=60)
+
+    with pytest.raises(
+        GitHubError, match="timed out while waiting for shared cache lease"
+    ):
+        broker.run(
+            args,
+            cwd=repo_root,
+            timeout_seconds=1,
+            check=True,
+            traffic_class="polling",
+        )
