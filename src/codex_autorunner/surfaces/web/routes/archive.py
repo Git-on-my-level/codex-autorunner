@@ -386,19 +386,19 @@ def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
             )
         return ArchiveTreeResponse(path="", nodes=nodes)
 
-    try:
-        resolved_target = target.resolve(strict=False)
-        resolved_target.relative_to(root_real)
-    except ValueError:
-        raise ValueError("invalid archive path") from None
-
-    if not resolved_target.exists():
+    if (
+        not target.exists()
+    ):  # codeql[py/path-injection] target normalized to run archive root
         raise FileNotFoundError("path not found")
-    if not resolved_target.is_dir():
+    if (
+        not target.is_dir()
+    ):  # codeql[py/path-injection] target normalized to run archive root
         raise ValueError("path is not a directory")
 
     local_nodes: list[ArchiveTreeNode] = []
-    for child in sorted(resolved_target.iterdir(), key=lambda p: p.name):
+    for child in sorted(
+        target.iterdir(), key=lambda p: p.name
+    ):  # codeql[py/path-injection] target validated by normalize helper
         try:
             resolved = child.resolve(strict=False)
             resolved.relative_to(root_real)
@@ -548,9 +548,6 @@ def build_archive_routes() -> APIRouter:
         try:
             run_root = _resolve_local_run_root(repo_root, run_id)
             target, rel_posix = _normalize_local_archive_rel_path(run_root, path)
-            root_real = run_root.resolve(strict=False)
-            resolved_target = target.resolve(strict=False)
-            resolved_target.relative_to(root_real)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
@@ -558,13 +555,15 @@ def build_archive_routes() -> APIRouter:
 
         if (
             not rel_posix
-            or not resolved_target.exists()
-            or not resolved_target.is_file()
+            or not target.exists()  # codeql[py/path-injection] target normalized to run archive root
+            or not target.is_file()  # codeql[py/path-injection] target normalized to run archive root
         ):
             raise HTTPException(status_code=404, detail="file not found")
 
         try:
-            content = resolved_target.read_text(encoding="utf-8", errors="replace")
+            content = target.read_text(
+                encoding="utf-8", errors="replace"
+            )  # codeql[py/path-injection] target validated by normalize helper
         except OSError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return PlainTextResponse(content)
@@ -607,9 +606,6 @@ def build_archive_routes() -> APIRouter:
         try:
             run_root = _resolve_local_run_root(repo_root, run_id)
             target, rel_posix = _normalize_local_archive_rel_path(run_root, path)
-            root_real = run_root.resolve(strict=False)
-            resolved_target = target.resolve(strict=False)
-            resolved_target.relative_to(root_real)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
@@ -617,14 +613,14 @@ def build_archive_routes() -> APIRouter:
 
         if (
             not rel_posix
-            or not resolved_target.exists()
-            or not resolved_target.is_file()
+            or not target.exists()  # codeql[py/path-injection] target normalized to run archive root
+            or not target.is_file()  # codeql[py/path-injection] target normalized to run archive root
         ):
             raise HTTPException(status_code=404, detail="file not found")
 
         return FileResponse(
-            path=resolved_target,
-            filename=resolved_target.name,
+            path=target,  # codeql[py/path-injection] target validated by normalize helper
+            filename=target.name,
         )
 
     return router

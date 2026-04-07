@@ -636,7 +636,7 @@ class WorktreeManager:
         branch_name = entry.branch or "unknown"
         try:
             has_active_chat_binding = self._has_active_chat_binding(worktree_repo_id)
-        except (OSError, ValueError, KeyError) as exc:
+        except (OSError, ValueError, KeyError, RuntimeError) as exc:
             if not force:
                 raise ValueError(
                     "Unable to verify active chat bindings for "
@@ -807,7 +807,7 @@ class WorktreeManager:
             try:
                 if self._has_active_chat_binding(entry.id):
                     continue
-            except (OSError, ValueError, KeyError) as exc:
+            except (OSError, ValueError, KeyError, RuntimeError) as exc:
                 logger.warning(
                     "cleanup_all: chat binding check failed for %s",
                     entry.id,

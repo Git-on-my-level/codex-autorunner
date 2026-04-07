@@ -185,6 +185,13 @@ def test_local_archive_tree_reads_any_archived_run_content(tmp_path: Path) -> No
     assert read.status_code == 200
     assert read.text.strip() == "Local archived context"
 
+    download = client.get(
+        "/api/archive/local/download",
+        params={"run_id": "run-123", "path": "contextspace/active_context.md"},
+    )
+    assert download.status_code == 200
+    assert download.content == b"Local archived context"
+
 
 def test_local_archive_symlink_escape_is_rejected(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
