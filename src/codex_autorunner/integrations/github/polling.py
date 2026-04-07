@@ -33,6 +33,9 @@ _COLD_INTERVAL_SECONDS_FLOOR = 60 * 60
 _RATE_LIMIT_MIN_REMAINING = 100
 _RATE_LIMIT_RATIO_FLOOR = 0.02
 _RATE_LIMIT_BACKOFF_SECONDS = 15 * 60
+_RATE_LIMIT_QUOTA_CACHE_TTL_SECONDS = 10 * 60
+_RATE_LIMIT_QUOTA_NEAR_LIMIT_FALLBACK_TTL_SECONDS = 60
+_RATE_LIMIT_QUOTA_ERROR_CACHE_TTL_SECONDS = 30
 _RATE_LIMIT_RESOURCES = ("graphql", "core")
 _LOGGER = logging.getLogger(__name__)
 
@@ -126,6 +129,12 @@ class _GitHubQuotaState:
     @property
     def reset_at(self) -> Optional[str]:
         return _timestamp_from_epoch(self.reset_epoch)
+
+
+@dataclass(frozen=True)
+class _CachedQuotaState:
+    value: Optional[_GitHubQuotaState]
+    expires_at: datetime
 
 
 def _quota_state_from_payload(
@@ -487,6 +496,7 @@ class GitHubScmPollingService:
         self._polling_state_path = (
             self._hub_root / ".codex-autorunner" / "github_polling_state.json"
         )
+        self._quota_state_cache: dict[str, _CachedQuotaState] = {}
 
     def arm_watch(
         self,
@@ -521,6 +531,8 @@ class GitHubScmPollingService:
                     binding.pr_number,
                     exc_info=True,
                 )
+                if _is_rate_limit_error(exc):
+                    self._invalidate_quota_state_cache()
                 scheduled_next_poll_at = (
                     _iso_after_seconds(_RATE_LIMIT_BACKOFF_SECONDS)
                     if _is_rate_limit_error(exc)
@@ -782,6 +794,7 @@ class GitHubScmPollingService:
                 snapshot = _build_snapshot(binding=binding, service=github)
             except Exception as exc:
                 if _is_rate_limit_error(exc):
+                    self._invalidate_quota_state_cache()
                     self._watch_store.refresh_watch(
                         watch_id=watch.watch_id,
                         next_poll_at=_rate_limit_backoff_until(quota_state),
@@ -1001,6 +1014,13 @@ class GitHubScmPollingService:
         cache_key = "global"
         if cache_key in cache:
             return cache[cache_key]
+        now = _utc_now()
+        persisted = self._quota_state_cache.get(cache_key)
+        if persisted is not None:
+            if persisted.expires_at > now:
+                cache[cache_key] = persisted.value
+                return persisted.value
+            self._quota_state_cache.pop(cache_key, None)
         try:
             github = self._github_service_factory(
                 workspace_root,
@@ -1009,7 +1029,39 @@ class GitHubScmPollingService:
             cache[cache_key] = _quota_state_from_payload(github.rate_limit_status())
         except Exception:
             cache[cache_key] = None
+        self._quota_state_cache[cache_key] = _CachedQuotaState(
+            value=cache[cache_key],
+            expires_at=self._quota_state_cache_expiry(cache[cache_key], now=now),
+        )
         return cache[cache_key]
+
+    def _quota_state_cache_expiry(
+        self,
+        quota_state: Optional[_GitHubQuotaState],
+        *,
+        now: Optional[datetime] = None,
+    ) -> datetime:
+        current = now or _utc_now()
+        if quota_state is None:
+            return current + timedelta(
+                seconds=_RATE_LIMIT_QUOTA_ERROR_CACHE_TTL_SECONDS
+            )
+        if not quota_state.near_limit:
+            return current + timedelta(seconds=_RATE_LIMIT_QUOTA_CACHE_TTL_SECONDS)
+        reset_at = quota_state.reset_at
+        if reset_at is not None:
+            reset_timestamp = _parse_iso(reset_at)
+            if reset_timestamp > current:
+                return min(
+                    reset_timestamp,
+                    current + timedelta(seconds=_RATE_LIMIT_QUOTA_CACHE_TTL_SECONDS),
+                )
+        return current + timedelta(
+            seconds=_RATE_LIMIT_QUOTA_NEAR_LIMIT_FALLBACK_TTL_SECONDS
+        )
+
+    def _invalidate_quota_state_cache(self, *, cache_key: str = "global") -> None:
+        self._quota_state_cache.pop(cache_key, None)
 
     def _prioritized_discovery_roots(
         self,
