@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+DISCORD_EPOCH_MS = 1420070400000
+
 
 def _as_id(value: object) -> str | None:
     if value is None:
@@ -97,6 +99,22 @@ def extract_interaction_id(interaction_payload: dict[str, Any]) -> Optional[str]
 
 def extract_interaction_token(interaction_payload: dict[str, Any]) -> Optional[str]:
     return _as_id(interaction_payload.get("token"))
+
+
+def extract_interaction_created_at(
+    interaction_payload: dict[str, Any],
+) -> Optional[float]:
+    interaction_id = extract_interaction_id(interaction_payload)
+    if interaction_id is None:
+        return None
+    try:
+        snowflake = int(interaction_id)
+    except (TypeError, ValueError):
+        return None
+    if snowflake <= 0:
+        return None
+    created_at_ms = (snowflake >> 22) + DISCORD_EPOCH_MS
+    return created_at_ms / 1000.0
 
 
 def extract_channel_id(interaction_payload: dict[str, Any]) -> Optional[str]:

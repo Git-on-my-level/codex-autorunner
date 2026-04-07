@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -3808,6 +3809,76 @@ async def test_normalized_interaction_status_defers_before_reading_active_flow(
 
 
 @pytest.mark.anyio
+async def test_service_routes_slash_command_timeout_followup_through_runner(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._command_runner._config = replace(
+        service._command_runner._config,
+        timeout_seconds=0.01,
+        stalled_warning_seconds=None,
+    )
+
+    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
+        await asyncio.sleep(60)
+
+    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert "timed out" in rest.followup_messages[0]["payload"]["content"].lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_routes_slash_command_error_followup_through_runner(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _failing_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("boom")
+
+    service._handle_car_command = _failing_handle_car_command  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "unexpected error" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -4508,22 +4579,110 @@ async def test_car_review_custom_without_instructions_returns_guidance(
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    deferred = False
-
-    async def _fake_defer_ephemeral(*_args: Any, **_kwargs: Any) -> bool:
-        nonlocal deferred
-        deferred = True
-        return True
-
-    service._defer_ephemeral = _fake_defer_ephemeral  # type: ignore[assignment]
 
     try:
         await service.run_forever()
-        assert deferred is True
-        assert len(rest.interaction_responses) == 0
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "provide custom review instructions" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_reset_uses_prepared_interaction_state(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    service._remember_prepared_interaction_policy(
+        interaction_token="token-1",
+        policy="defer_ephemeral",
+    )
+
+    async def _unexpected_defer(*_args: Any, **_kwargs: Any) -> bool:
+        raise AssertionError("handler should use ingress-prepared interaction state")
+
+    async def _fake_reset_thread_binding(**_kwargs: Any) -> tuple[bool, str]:
+        return True, "thread-2"
+
+    service._defer_ephemeral = _unexpected_defer  # type: ignore[assignment]
+    service._reset_discord_thread_binding = _fake_reset_thread_binding  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_reset(
+            "inter-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "reset repo thread state" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_status_uses_prepared_interaction_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    service._remember_prepared_interaction_policy(
+        interaction_token="token-1",
+        policy="defer_ephemeral",
+    )
+
+    async def _unexpected_defer(*_args: Any, **_kwargs: Any) -> bool:
+        raise AssertionError("handler should use ingress-prepared interaction state")
+
+    service._defer_ephemeral = _unexpected_defer  # type: ignore[assignment]
+    monkeypatch.setattr(
+        discord_service_module,
+        "_read_update_status",
+        lambda: {"status": "running", "repo_ref": "main"},
+    )
+
+    try:
+        await service._handle_car_update_status(
+            interaction_id="inter-1",
+            interaction_token="token-1",
+        )
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "running" in content
+        assert "ref: main" in content
     finally:
         await store.close()
 
@@ -5176,11 +5335,11 @@ async def test_on_dispatch_backgrounds_interaction_handling(
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def _slow_handle(_event: Any, _context: Any) -> None:
+    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
         started.set()
         await release.wait()
 
-    service._handle_chat_event = _slow_handle  # type: ignore[assignment]
+    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
 
     try:
         dispatch_task = asyncio.create_task(
@@ -5197,7 +5356,7 @@ async def test_on_dispatch_backgrounds_interaction_handling(
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         await asyncio.wait_for(started.wait(), timeout=1.0)
         release.set()
-        await asyncio.wait_for(service._dispatcher.wait_idle(), timeout=1.0)
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=1.0)
     finally:
         await service._shutdown()
         await store.close()

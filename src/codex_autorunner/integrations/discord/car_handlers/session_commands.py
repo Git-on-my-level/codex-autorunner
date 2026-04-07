@@ -23,6 +23,24 @@ from ..rendering import format_discord_message
 _logger = logging.getLogger(__name__)
 
 
+async def _interaction_deferred(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+    *,
+    public: bool = False,
+) -> bool:
+    if service._prepared_interaction_policy(interaction_token) is not None:
+        return True
+    defer_fn = service._defer_public if public else service._defer_ephemeral
+    return bool(
+        await defer_fn(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+    )
+
+
 async def handle_car_new(
     service: Any,
     interaction_id: str,
@@ -32,9 +50,11 @@ async def handle_car_new(
 ) -> None:
     from ..service import log_event
 
-    deferred = await service._defer_public(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
+    deferred = await _interaction_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+        public=True,
     )
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
@@ -169,9 +189,11 @@ async def handle_car_newt(
 ) -> None:
     from ..service import log_event, reset_branch_from_origin_main
 
-    deferred = await service._defer_public(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
+    deferred = await _interaction_deferred(
+        service,
+        interaction_id,
+        interaction_token,
+        public=True,
     )
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
@@ -383,10 +405,7 @@ async def handle_car_resume(
     channel_id: str,
     options: dict[str, Any],
 ) -> None:
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
         text = format_discord_message(
@@ -621,12 +640,15 @@ async def handle_car_reset(
 ) -> None:
     from ..service import log_event
 
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+
     binding = await service._store.get_binding(channel_id=channel_id)
     if binding is None:
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Channel not bound. Use /car bind first.",
+        await service._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text="Channel not bound. Use /car bind first.",
         )
         return
 
@@ -642,10 +664,11 @@ async def handle_car_reset(
         if pma_enabled:
             workspace_root = canonicalize_path(Path(service._config.root))
         else:
-            await service._respond_ephemeral(
-                interaction_id,
-                interaction_token,
-                "Binding is invalid. Run `/car bind path:<workspace>`.",
+            await service._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text="Binding is invalid. Run `/car bind path:<workspace>`.",
             )
             return
 
@@ -695,20 +718,25 @@ async def handle_car_reset(
             agent_profile=agent_profile,
             exc=exc,
         )
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Failed to reset Discord thread state.",
+        await service._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text="Failed to reset Discord thread state.",
         )
         return
     await service._store.clear_pending_compact_seed(channel_id=channel_id)
     mode_label = "PMA" if pma_enabled else "repo"
     state_label = "cleared previous thread" if had_previous else "fresh state"
 
-    await service._respond_ephemeral(
-        interaction_id,
-        interaction_token,
-        f"Reset {mode_label} thread state ({state_label}) for `{service._format_agent_state(agent, agent_profile)}`.",
+    await service._send_or_respond_ephemeral(
+        interaction_id=interaction_id,
+        interaction_token=interaction_token,
+        deferred=deferred,
+        text=(
+            f"Reset {mode_label} thread state ({state_label}) for "
+            f"`{service._format_agent_state(agent, agent_profile)}`."
+        ),
     )
 
 
@@ -733,10 +761,7 @@ async def handle_car_archive(
     if workspace_root is None:
         return
 
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
 
     try:
         target = resolve_workspace_archive_target(
@@ -888,10 +913,7 @@ async def handle_car_interrupt(
         text = format_discord_message("No active turn to interrupt.")
         await service._respond_ephemeral(interaction_id, interaction_token, text)
         return
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
     try:
         stop_outcome = await orchestration_service.stop_thread(
             current_thread.thread_target_id

@@ -38,6 +38,12 @@ _DRAIN_SENTINEL: object = object()
 
 
 @dataclass(frozen=True)
+class QueuedIngressInteraction:
+    ctx: IngressContext
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class RunnerConfig:
     timeout_seconds: float = DEFAULT_HANDLER_TIMEOUT_SECONDS
     stalled_warning_seconds: Optional[float] = DEFAULT_STALLED_WARNING_SECONDS
@@ -90,6 +96,14 @@ class CommandRunner:
         self._ensure_started()
         self._queue.put_nowait(event)
 
+    def submit_ingressed(
+        self,
+        ctx: IngressContext,
+        payload: dict[str, Any],
+    ) -> None:
+        self._ensure_started()
+        self._queue.put_nowait(QueuedIngressInteraction(ctx=ctx, payload=payload))
+
     async def shutdown(self, *, grace_seconds: float = 5.0) -> None:
         if self._drain_task is not None and not self._drain_task.done():
             await self._queue.put(_DRAIN_SENTINEL)
@@ -129,12 +143,27 @@ class CommandRunner:
                     return
                 try:
                     started_at = time.monotonic()
-                    log_event(
-                        self._logger,
-                        logging.DEBUG,
-                        "discord.runner.dispatch.start",
-                    )
-                    await self._service._dispatch_chat_event(item)
+                    if isinstance(item, QueuedIngressInteraction):
+                        log_event(
+                            self._logger,
+                            logging.DEBUG,
+                            "discord.runner.execute.start",
+                            interaction_id=item.ctx.interaction_id,
+                            kind=item.ctx.kind.value,
+                            command=(
+                                ":".join(item.ctx.command_spec.path)
+                                if item.ctx.command_spec
+                                else item.ctx.kind.value
+                            ),
+                        )
+                        await self._run_with_lifecycle(item.ctx, item.payload)
+                    else:
+                        log_event(
+                            self._logger,
+                            logging.DEBUG,
+                            "discord.runner.dispatch.start",
+                        )
+                        await self._service._dispatch_chat_event(item)
                 except Exception as exc:
                     log_event(
                         self._logger,

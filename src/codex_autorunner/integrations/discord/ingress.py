@@ -32,6 +32,7 @@ from .interactions import (
     extract_component_custom_id,
     extract_component_values,
     extract_guild_id,
+    extract_interaction_created_at,
     extract_interaction_id,
     extract_interaction_token,
     extract_modal_custom_id,
@@ -111,6 +112,7 @@ class InteractionIngress:
                 rejection_reason="normalization_failed",
             )
         ctx.timing = IngressTiming(
+            interaction_created_at=ctx.timing.interaction_created_at,
             ingress_started_at=now,
         )
 
@@ -175,6 +177,7 @@ class InteractionIngress:
 
         guild_id = extract_guild_id(payload)
         user_id = extract_user_id(payload)
+        created_at = extract_interaction_created_at(payload)
         message_id: Optional[str] = None
         message_data = payload.get("message")
         if isinstance(message_data, dict):
@@ -195,6 +198,7 @@ class InteractionIngress:
                 custom_id=custom_id,
                 values=values,
                 message_id=message_id,
+                timing=IngressTiming(interaction_created_at=created_at),
             )
 
         if is_modal_submit_interaction(payload):
@@ -209,6 +213,7 @@ class InteractionIngress:
                 kind=InteractionKind.MODAL_SUBMIT,
                 custom_id=custom_id,
                 modal_values=modal_values,
+                timing=IngressTiming(interaction_created_at=created_at),
             )
 
         if is_autocomplete_interaction(payload):
@@ -238,6 +243,7 @@ class InteractionIngress:
                 ),
                 focused_name=focused_name,
                 focused_value=focused_value,
+                timing=IngressTiming(interaction_created_at=created_at),
             )
 
         command_path, options = extract_command_path_and_options(payload)
@@ -259,6 +265,7 @@ class InteractionIngress:
                 if command_path
                 else None
             ),
+            timing=IngressTiming(interaction_created_at=created_at),
         )
 
     def _check_authorization(self, ctx: IngressContext) -> bool:
@@ -344,8 +351,14 @@ class InteractionIngress:
         if t.ingress_started_at is not None and t.ingress_finished_at is not None:
             elapsed_ms = (t.ingress_finished_at - t.ingress_started_at) * 1000
             ack_delta_ms: Optional[float] = None
+            gateway_to_ingress_ms: Optional[float] = None
             if t.ingress_started_at is not None and t.ack_finished_at is not None:
                 ack_delta_ms = (t.ack_finished_at - t.ingress_started_at) * 1000
+            if t.interaction_created_at is not None:
+                gateway_to_ingress_ms = max(
+                    0.0,
+                    (time.time() - t.interaction_created_at) * 1000,
+                )
             log_event(
                 self._logger,
                 logging.DEBUG,
@@ -355,6 +368,11 @@ class InteractionIngress:
                 ingress_elapsed_ms=round(elapsed_ms, 1),
                 ack_delta_ms=(
                     round(ack_delta_ms, 1) if ack_delta_ms is not None else None
+                ),
+                gateway_to_ingress_ms=(
+                    round(gateway_to_ingress_ms, 1)
+                    if gateway_to_ingress_ms is not None
+                    else None
                 ),
                 deferred=ctx.deferred,
                 command_path=(

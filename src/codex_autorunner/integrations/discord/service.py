@@ -3389,9 +3389,11 @@ class DiscordBotService:
             ingress_result = await self._ingress.process_raw_payload(payload)
             if not ingress_result.accepted:
                 return
-            interaction_event = self._chat_adapter.parse_interaction_event(payload)
-            if interaction_event is not None:
-                self._command_runner.submit_event(interaction_event)
+            if ingress_result.context is not None:
+                self._command_runner.submit_ingressed(
+                    ingress_result.context,
+                    payload,
+                )
             return
         if event_type == "MESSAGE_CREATE":
             await self._record_channel_directory_seen_from_message_payload(payload)

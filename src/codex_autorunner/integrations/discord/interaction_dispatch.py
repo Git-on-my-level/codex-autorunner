@@ -1023,6 +1023,13 @@ async def execute_ingressed_interaction(
         return
 
     if ctx.kind == InteractionKind.COMPONENT:
+        if not ctx.custom_id:
+            await service._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not identify this interaction action. Please retry.",
+            )
+            return
         await handle_component_interaction(
             service,
             interaction_id=interaction_id,
@@ -1048,6 +1055,13 @@ async def execute_ingressed_interaction(
 
     command_path = ctx.command_spec.path if ctx.command_spec else ()
     options = ctx.command_spec.options if ctx.command_spec else {}
+    if not command_path:
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "I could not parse this interaction. Please retry the command.",
+        )
+        return
 
     try:
         if command_path[:1] == ("car",):

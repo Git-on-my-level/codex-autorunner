@@ -134,6 +134,7 @@ class _FakeService:
 
 def _slash_command_payload(
     *,
+    interaction_id: str = "inter-1",
     command_name: str = "car",
     subcommand_name: str = "status",
     options: Optional[dict[str, Any]] = None,
@@ -142,7 +143,7 @@ def _slash_command_payload(
         {"type": 3, "name": k, "value": v} for k, v in (options or {}).items()
     ]
     return {
-        "id": "inter-1",
+        "id": interaction_id,
         "token": "token-1",
         "channel_id": "chan-1",
         "guild_id": "guild-1",
@@ -576,6 +577,24 @@ async def test_timing_recorded_on_success() -> None:
     assert t.ingress_started_at <= t.authz_finished_at
     assert t.authz_finished_at <= t.ack_finished_at
     assert t.ack_finished_at <= t.ingress_finished_at
+
+
+@pytest.mark.anyio
+async def test_timing_records_created_timestamp_from_snowflake() -> None:
+    service = _FakeService()
+    ingress = InteractionIngress(service, logger=service._logger)
+    created_at_ms = 1_700_000_000_000
+    snowflake = str((created_at_ms - 1420070400000) << 22)
+    payload = _slash_command_payload(interaction_id=snowflake)
+
+    result = await ingress.process_raw_payload(payload)
+
+    assert result.accepted is True
+    assert result.context is not None
+    assert result.context.timing.interaction_created_at == pytest.approx(
+        created_at_ms / 1000.0,
+        abs=0.001,
+    )
 
 
 @pytest.mark.anyio

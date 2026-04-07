@@ -19,6 +19,21 @@ COMPACT_SUMMARY_PROMPT = (
 )
 
 
+async def _interaction_deferred(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+) -> bool:
+    if service._prepared_interaction_policy(interaction_token) is not None:
+        return True
+    return bool(
+        await service._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+    )
+
+
 async def handle_car_compact(
     service: Any,
     interaction_id: str,
@@ -105,10 +120,7 @@ async def handle_car_compact(
         )
         return
 
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
 
     interaction_text: Optional[str] = None
     previous_thread_id = current_thread.thread_target_id
