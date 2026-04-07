@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 import threading
 
+import pytest
+
 from codex_autorunner.core.flows.store import FlowStore
 
 
@@ -147,3 +149,57 @@ def test_flow_store_get_latest_flow_run_uses_newest_matching_record(tmp_path):
 
     assert latest is not None
     assert latest.id == "newer-run"
+
+
+def test_flow_store_connect_readonly_uses_read_only_sqlite_mode(tmp_path, monkeypatch):
+    db_path = tmp_path / "flows.db"
+    with FlowStore(db_path) as store:
+        store.create_flow_run(
+            "test-run-1",
+            "test_flow",
+            input_data={},
+            state={},
+            metadata={},
+        )
+
+    original_connect = sqlite3.connect
+    connect_calls: list[tuple[object, bool]] = []
+
+    def tracking_connect(*args, **kwargs):
+        connect_calls.append((args[0], bool(kwargs.get("uri"))))
+        return original_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", tracking_connect)
+
+    store = FlowStore.connect_readonly(db_path)
+    try:
+        store.initialize()
+        runs = store.list_flow_runs()
+    finally:
+        store.close()
+
+    assert len(runs) == 1
+    assert runs[0].id == "test-run-1"
+    assert any(
+        "?mode=ro" in str(target) and used_uri for target, used_uri in connect_calls
+    )
+
+
+def test_flow_store_readonly_transaction_is_rejected(tmp_path):
+    db_path = tmp_path / "flows.db"
+    with FlowStore(db_path) as store:
+        store.create_flow_run(
+            "test-run-1",
+            "test_flow",
+            input_data={},
+            state={},
+            metadata={},
+        )
+
+    store = FlowStore.connect_readonly(db_path)
+    try:
+        with pytest.raises(RuntimeError, match="read-only"):
+            with store.transaction():
+                pass
+    finally:
+        store.close()

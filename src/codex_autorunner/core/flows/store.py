@@ -8,7 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, cast
 
-from ..sqlite_utils import SQLITE_PRAGMAS, SQLITE_PRAGMAS_DURABLE
+from ..sqlite_utils import (
+    DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
+    SQLITE_PRAGMAS,
+    SQLITE_PRAGMAS_DURABLE,
+)
 from ..time_utils import now_iso
 from .app_server_event_compaction import normalize_persisted_event_data
 from .models import (
@@ -23,16 +27,30 @@ _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 2
 UNSET = object()
+_SQLITE_PRAGMAS_READONLY = (
+    "PRAGMA foreign_keys=ON;",
+    f"PRAGMA busy_timeout={DEFAULT_SQLITE_BUSY_TIMEOUT_MS};",
+    "PRAGMA temp_store=MEMORY;",
+    "PRAGMA query_only=ON;",
+)
 
 
 class FlowStore:
-    def __init__(self, db_path: Path, durable: bool = False):
+    def __init__(self, db_path: Path, durable: bool = False, *, readonly: bool = False):
         self.db_path = db_path
         self._durable = durable
+        self._readonly = readonly
         self._local: threading.local = threading.local()
 
+    @classmethod
+    def connect_readonly(cls, db_path: Path) -> FlowStore:
+        return cls(db_path, readonly=True)
+
     def __enter__(self) -> FlowStore:
-        self.initialize()
+        if self._readonly:
+            self._get_conn()
+        else:
+            self.initialize()
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -40,23 +58,38 @@ class FlowStore:
 
     def _get_conn(self) -> sqlite3.Connection:
         if not hasattr(self._local, "conn"):
-            # Ensure parent directory exists so sqlite can create/open file.
-            try:
-                self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            except OSError:
-                # Let sqlite raise a clearer error below if directory creation failed.
-                pass
-            self._local.conn = sqlite3.connect(
-                self.db_path, check_same_thread=False, isolation_level=None
-            )
+            if self._readonly:
+                uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+                self._local.conn = sqlite3.connect(
+                    uri,
+                    uri=True,
+                    check_same_thread=False,
+                    isolation_level=None,
+                )
+            else:
+                # Ensure parent directory exists so sqlite can create/open file.
+                try:
+                    self.db_path.parent.mkdir(parents=True, exist_ok=True)
+                except OSError:
+                    # Let sqlite raise a clearer error below if directory creation failed.
+                    pass
+                self._local.conn = sqlite3.connect(
+                    self.db_path, check_same_thread=False, isolation_level=None
+                )
             self._local.conn.row_factory = sqlite3.Row
-            pragmas = SQLITE_PRAGMAS_DURABLE if self._durable else SQLITE_PRAGMAS
+            pragmas = (
+                _SQLITE_PRAGMAS_READONLY
+                if self._readonly
+                else (SQLITE_PRAGMAS_DURABLE if self._durable else SQLITE_PRAGMAS)
+            )
             for pragma in pragmas:
                 self._local.conn.execute(pragma)
         return cast(sqlite3.Connection, self._local.conn)
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Connection, None, None]:
+        if self._readonly:
+            raise RuntimeError("FlowStore is read-only")
         conn = self._get_conn()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -67,6 +100,9 @@ class FlowStore:
             raise
 
     def initialize(self) -> None:
+        if self._readonly:
+            self._get_conn()
+            return
         with self.transaction() as conn:
             self._create_schema(conn)
             self._ensure_schema_version(conn)

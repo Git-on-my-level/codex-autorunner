@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
+import threading
+import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .....core.chat_bindings import active_chat_binding_counts_by_source
@@ -21,6 +25,18 @@ if TYPE_CHECKING:
     from .services import HubRepoEnricher
 
 REPO_LISTING_SECTIONS = frozenset({"repos", "agent_workspaces", "freshness"})
+_REPO_LISTING_RESPONSE_CACHE_TTL_SECONDS = 20.0
+
+
+@dataclass(frozen=True)
+class _RepoListingCacheEntry:
+    fingerprint: tuple[Any, ...]
+    expires_at: float
+    payload: dict[str, Any]
+
+
+def _monotonic() -> float:
+    return time.monotonic()
 
 
 def normalize_repo_listing_sections(raw: Optional[str]) -> set[str]:
@@ -49,6 +65,10 @@ class HubRepoListingService:
         self._context = context
         self._mount_manager = mount_manager
         self._enricher = enricher
+        self._response_cache: dict[tuple[str, ...], _RepoListingCacheEntry] = {}
+        self._response_cache_lock = threading.Lock()
+        self._response_refresh_tasks: dict[tuple[str, ...], asyncio.Task[None]] = {}
+        self._response_refresh_tasks_lock = threading.Lock()
 
     async def _enrich_repos(
         self,
@@ -84,7 +104,74 @@ class HubRepoListingService:
             )
             return {}
 
-    async def list_repos(
+    def _response_cache_fingerprint(self, *, requested: set[str]) -> tuple[Any, ...]:
+        supervisor_state = getattr(self._context.supervisor, "state", None)
+        pinned_parent_repo_ids = (
+            getattr(supervisor_state, "pinned_parent_repo_ids", []) or []
+        )
+        return (
+            tuple(sorted(requested)),
+            getattr(supervisor_state, "last_scan_at", None),
+            tuple(pinned_parent_repo_ids),
+        )
+
+    def _store_response_cache(
+        self,
+        *,
+        cache_key: tuple[str, ...],
+        fingerprint: tuple[Any, ...],
+        payload: dict[str, Any],
+    ) -> None:
+        with self._response_cache_lock:
+            self._response_cache[cache_key] = _RepoListingCacheEntry(
+                fingerprint=fingerprint,
+                expires_at=_monotonic() + _REPO_LISTING_RESPONSE_CACHE_TTL_SECONDS,
+                payload=copy.deepcopy(payload),
+            )
+
+    def _schedule_response_refresh(
+        self,
+        *,
+        cache_key: tuple[str, ...],
+        fingerprint: tuple[Any, ...],
+        requested: set[str],
+    ) -> None:
+        with self._response_refresh_tasks_lock:
+            task = self._response_refresh_tasks.get(cache_key)
+            if task is not None and not task.done():
+                return
+
+            async def _refresh() -> None:
+                payload = await self._build_listing_payload(sections=requested)
+                self._store_response_cache(
+                    cache_key=cache_key,
+                    fingerprint=fingerprint,
+                    payload=payload,
+                )
+
+            task = asyncio.create_task(_refresh())
+            self._response_refresh_tasks[cache_key] = task
+
+        def _cleanup(done_task: asyncio.Task[None]) -> None:
+            with self._response_refresh_tasks_lock:
+                current = self._response_refresh_tasks.get(cache_key)
+                if current is done_task:
+                    self._response_refresh_tasks.pop(cache_key, None)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # intentional: background refresh is best-effort
+                safe_log(
+                    self._context.logger,
+                    logging.WARNING,
+                    "Hub list_repos background refresh failed",
+                    exc=exc,
+                )
+
+        task.add_done_callback(_cleanup)
+
+    async def _build_listing_payload(
         self, *, sections: Optional[set[str]] = None
     ) -> dict[str, Any]:
         safe_log(self._context.logger, logging.INFO, "Hub list_repos")
@@ -175,6 +262,33 @@ class HubRepoListingService:
             payload["agent_workspaces"] = agent_workspaces
         return payload
 
+    async def list_repos(
+        self, *, sections: Optional[set[str]] = None
+    ) -> dict[str, Any]:
+        requested = set(sections or REPO_LISTING_SECTIONS)
+        cache_key = tuple(sorted(requested))
+        fingerprint = self._response_cache_fingerprint(requested=requested)
+        now = _monotonic()
+        with self._response_cache_lock:
+            cached = self._response_cache.get(cache_key)
+        if cached is not None and cached.fingerprint == fingerprint:
+            if cached.expires_at > now:
+                return copy.deepcopy(cached.payload)
+            self._schedule_response_refresh(
+                cache_key=cache_key,
+                fingerprint=fingerprint,
+                requested=requested,
+            )
+            return copy.deepcopy(cached.payload)
+
+        payload = await self._build_listing_payload(sections=requested)
+        self._store_response_cache(
+            cache_key=cache_key,
+            fingerprint=fingerprint,
+            payload=payload,
+        )
+        return payload
+
     async def scan_repos(self) -> dict[str, Any]:
         safe_log(self._context.logger, logging.INFO, "Hub scan_repos")
         snapshots = await asyncio.to_thread(self._context.supervisor.scan)
@@ -206,7 +320,7 @@ class HubRepoListingService:
                 None,
             )
         )
-        return {
+        payload = {
             "generated_at": generated_at,
             "last_scan_at": self._context.supervisor.state.last_scan_at,
             "pinned_parent_repo_ids": self._context.supervisor.state.pinned_parent_repo_ids,
@@ -236,6 +350,14 @@ class HubRepoListingService:
             "repos": repos,
             "agent_workspaces": agent_workspaces,
         }
+        self._store_response_cache(
+            cache_key=tuple(sorted(REPO_LISTING_SECTIONS)),
+            fingerprint=self._response_cache_fingerprint(
+                requested=set(REPO_LISTING_SECTIONS)
+            ),
+            payload=payload,
+        )
+        return payload
 
     async def scan_repos_job(self) -> dict[str, Any]:
         async def _run_scan():

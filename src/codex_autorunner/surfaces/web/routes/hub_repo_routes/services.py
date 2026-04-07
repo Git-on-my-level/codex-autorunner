@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from .mount_manager import HubMountManager
 
 
-_REPO_ENRICH_CACHE_TTL_SECONDS = 2.0
+_REPO_ENRICH_CACHE_TTL_SECONDS = 45.0
 
 
 @dataclass(frozen=True)
@@ -83,7 +83,6 @@ class HubRepoEnricher:
             int(stale_threshold_seconds or 0),
             self._path_stat_fingerprint(car_root),
             self._path_stat_fingerprint(car_root / "tickets"),
-            self._path_stat_fingerprint(car_root / "flows.db"),
             self._path_stat_fingerprint(car_root / "runs"),
         )
 
@@ -94,7 +93,6 @@ class HubRepoEnricher:
         stale_threshold_seconds: Optional[int],
     ) -> dict[str, Any]:
         from .....core.archive import has_car_state
-        from .....core.config import load_repo_config
         from .....core.flows.models import flow_run_duration_seconds
         from .....core.flows.store import FlowStore
         from .....core.pma_context import (
@@ -124,8 +122,7 @@ class HubRepoEnricher:
         store: Optional[FlowStore] = None
         if db_path.exists():
             try:
-                config = load_repo_config(snapshot.path)
-                store = FlowStore(db_path, durable=config.durable_writes)
+                store = FlowStore.connect_readonly(db_path)
                 store.initialize()
             except Exception:  # intentional: best-effort store reuse only
                 store = None
