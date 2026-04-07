@@ -163,7 +163,12 @@ def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -
     )
 
 
-def _polling_config(*, profile: str | None = None) -> dict[str, object]:
+def _polling_config(
+    *,
+    profile: str | None = None,
+    discovery_interval_seconds: int = 360,
+    discovery_workspace_limit: int = 1,
+) -> dict[str, object]:
     reactions: dict[str, object] = {}
     if profile is not None:
         reactions["profile"] = profile
@@ -172,6 +177,8 @@ def _polling_config(*, profile: str | None = None) -> dict[str, object]:
             "automation": {
                 "polling": {
                     "enabled": True,
+                    "discovery_interval_seconds": discovery_interval_seconds,
+                    "discovery_workspace_limit": discovery_workspace_limit,
                     "watch_window_minutes": 30,
                     "interval_seconds": 90,
                 },
@@ -1095,7 +1102,10 @@ def test_process_rotates_discovery_across_candidate_workspaces(
     watch_store = ScmPollingWatchStore(hub_root)
     service = GitHubScmPollingService(
         hub_root,
-        raw_config=_polling_config(),
+        raw_config=_polling_config(
+            discovery_interval_seconds=180,
+            discovery_workspace_limit=2,
+        ),
         github_service_factory=_factory,
         watch_store=watch_store,
         event_store=ScmEventStore(hub_root),
@@ -1121,12 +1131,20 @@ def test_process_rotates_discovery_across_candidate_workspaces(
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
+        lambda: datetime(2026, 4, 5, 8, 1, 0, tzinfo=timezone.utc),
+    )
+    skipped = service.process(limit=2)
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
         lambda: datetime(2026, 4, 5, 8, 3, 0, tzinfo=timezone.utc),
     )
     second = service.process(limit=2)
 
     assert first["candidate_workspaces_scanned"] == 2
     assert first["bindings_discovered"] == 0
+    assert skipped["candidate_workspaces_scanned"] == 0
     assert second["candidate_workspaces_scanned"] == 2
     assert second["bindings_discovered"] == 1
     binding = PrBindingStore(hub_root).get_binding_by_pr(
@@ -1226,3 +1244,59 @@ def test_process_due_watches_continues_after_rate_limited_watch(
     assert result["polled"] == 1
     assert result["errors"] == 0
     assert result["rate_limited_skipped"] == 1
+
+
+def test_process_throttles_discovery_to_one_workspace_per_cycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    roots = [hub_root / "workspace" / f"repo-{index}" for index in range(3)]
+    for root in roots:
+        root.mkdir(parents=True)
+
+    scanned_roots: list[Path] = []
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        scanned_roots.append(repo_root_arg)
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=51,
+            head_branch="feature/discovery-budget",
+            discover=False,
+        )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(
+            discovery_interval_seconds=360,
+            discovery_workspace_limit=1,
+        ),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )
+
+    monkeypatch.setattr(
+        service,
+        "_candidate_workspace_roots",
+        lambda: (list(roots), {}, {}),
+    )
+    monkeypatch.setattr(service, "_thread_activity", lambda: ({}, {}))
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 5, 9, 0, 0, tzinfo=timezone.utc),
+    )
+
+    first = service.process(limit=10)
+    second = service.process(limit=10)
+
+    assert first["candidate_workspaces"] == 3
+    assert first["candidate_workspaces_scanned"] == 1
+    assert second["candidate_workspaces_scanned"] == 0
+    assert scanned_roots == [roots[0]]

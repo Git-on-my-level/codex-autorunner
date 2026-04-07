@@ -143,6 +143,8 @@
         "merged": true
       },
       "polling": {
+        "discovery_interval_seconds": 360,
+        "discovery_workspace_limit": 1,
         "enabled": false,
         "interval_seconds": 90,
         "watch_window_minutes": 30

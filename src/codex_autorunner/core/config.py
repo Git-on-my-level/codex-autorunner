@@ -367,6 +367,8 @@ def _default_github_automation_section() -> Dict[str, Any]:
         },
         "polling": {
             "enabled": False,
+            "discovery_interval_seconds": 360,
+            "discovery_workspace_limit": 1,
             "watch_window_minutes": 30,
             "interval_seconds": 90,
         },

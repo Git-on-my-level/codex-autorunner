@@ -840,7 +840,12 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
                     raise ConfigError(
                         "github.automation.polling.enabled must be boolean"
                     )
-                for field in ("watch_window_minutes", "interval_seconds"):
+                for field in (
+                    "watch_window_minutes",
+                    "interval_seconds",
+                    "discovery_interval_seconds",
+                    "discovery_workspace_limit",
+                ):
                     value = polling.get(field)
                     if value is not None and not _is_strict_int(value):
                         raise ConfigError(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import uuid
@@ -16,6 +17,7 @@ from ...core.scm_polling_watches import ScmPollingWatch, ScmPollingWatchStore
 from ...core.scm_reaction_types import ScmReactionConfig
 from ...core.text_utils import _mapping, _normalize_text
 from ...core.time_utils import now_iso
+from ...core.utils import atomic_write, read_json
 from ...manifest import ManifestError, load_manifest
 
 _FAILED_CHECK_CONCLUSIONS = frozenset(
@@ -224,6 +226,8 @@ class GitHubPollingConfig:
     enabled: bool = False
     watch_window_minutes: int = 30
     interval_seconds: int = 90
+    discovery_interval_seconds: int = 6 * 60
+    discovery_workspace_limit: int = 1
 
     @classmethod
     def from_mapping(cls, raw_config: object) -> "GitHubPollingConfig":
@@ -233,6 +237,8 @@ class GitHubPollingConfig:
         enabled = polling.get("enabled")
         watch_window_minutes = polling.get("watch_window_minutes")
         interval_seconds = polling.get("interval_seconds")
+        discovery_interval_seconds = polling.get("discovery_interval_seconds")
+        discovery_workspace_limit = polling.get("discovery_workspace_limit")
         return cls(
             enabled=bool(enabled) if isinstance(enabled, bool) else False,
             watch_window_minutes=(
@@ -244,6 +250,22 @@ class GitHubPollingConfig:
                 int(interval_seconds)
                 if isinstance(interval_seconds, int) and interval_seconds > 0
                 else 90
+            ),
+            discovery_interval_seconds=(
+                int(discovery_interval_seconds)
+                if (
+                    isinstance(discovery_interval_seconds, int)
+                    and discovery_interval_seconds > 0
+                )
+                else 6 * 60
+            ),
+            discovery_workspace_limit=(
+                int(discovery_workspace_limit)
+                if (
+                    isinstance(discovery_workspace_limit, int)
+                    and discovery_workspace_limit > 0
+                )
+                else 1
             ),
         )
 
@@ -450,10 +472,20 @@ class GitHubScmPollingService:
         if github_service_factory is None:
             from .service import GitHubService
 
-            github_service_factory = GitHubService
+            def _default_github_service_factory(repo_root, service_raw_config):
+                return GitHubService(
+                    repo_root,
+                    service_raw_config,
+                    traffic_class="polling",
+                )
+
+            github_service_factory = _default_github_service_factory
         self._github_service_factory = github_service_factory
         self._watch_store = watch_store or ScmPollingWatchStore(self._hub_root)
         self._event_store = event_store or ScmEventStore(self._hub_root)
+        self._polling_state_path = (
+            self._hub_root / ".codex-autorunner" / "github_polling_state.json"
+        )
 
     def arm_watch(
         self,
@@ -536,32 +568,41 @@ class GitHubScmPollingService:
         )
         counts["invalid_bindings_skipped"] += invalid_bindings
 
-        prioritized_roots = self._prioritized_discovery_roots(
-            candidate_roots=candidate_roots,
-            workspace_activity=workspace_activity,
-            polling_config=polling_config,
-        )
-        for workspace_root in prioritized_roots[: max(1, limit)]:
-            counts["candidate_workspaces_scanned"] += 1
-            try:
-                github = self._github_service_factory(
-                    workspace_root,
-                    self._raw_config if isinstance(self._raw_config, dict) else None,
-                )
-                binding = github.discover_pr_binding(cwd=workspace_root)
-            except Exception:
-                _LOGGER.warning(
-                    "Failed discovering polling binding for workspace %s",
-                    workspace_root,
-                    exc_info=True,
-                )
-                counts["discovery_errors"] += 1
-                continue
-            if binding is None or binding.pr_state not in _ACTIVE_PR_STATES:
-                continue
-            if binding.binding_id not in active_bindings:
-                counts["bindings_discovered"] += 1
-            active_bindings[binding.binding_id] = binding
+        if self._claim_discovery_cycle(polling_config=polling_config):
+            prioritized_roots = self._prioritized_discovery_roots(
+                candidate_roots=candidate_roots,
+                workspace_activity=workspace_activity,
+                polling_config=polling_config,
+            )
+            discovery_limit = max(
+                1,
+                min(limit, polling_config.discovery_workspace_limit),
+            )
+            for workspace_root in prioritized_roots[:discovery_limit]:
+                counts["candidate_workspaces_scanned"] += 1
+                try:
+                    github = self._github_service_factory(
+                        workspace_root,
+                        (
+                            self._raw_config
+                            if isinstance(self._raw_config, dict)
+                            else None
+                        ),
+                    )
+                    binding = github.discover_pr_binding(cwd=workspace_root)
+                except Exception:
+                    _LOGGER.warning(
+                        "Failed discovering polling binding for workspace %s",
+                        workspace_root,
+                        exc_info=True,
+                    )
+                    counts["discovery_errors"] += 1
+                    continue
+                if binding is None or binding.pr_state not in _ACTIVE_PR_STATES:
+                    continue
+                if binding.binding_id not in active_bindings:
+                    counts["bindings_discovered"] += 1
+                active_bindings[binding.binding_id] = binding
 
         repo_slug_cache: dict[str, Optional[str]] = {}
         quota_state_cache: dict[str, Optional[_GitHubQuotaState]] = {}
@@ -1237,6 +1278,28 @@ class GitHubScmPollingService:
             self._hub_root,
             reaction_config=reaction_config or self._raw_config,
         )
+
+    def _claim_discovery_cycle(self, *, polling_config: GitHubPollingConfig) -> bool:
+        discovery_interval_seconds = max(1, polling_config.discovery_interval_seconds)
+        cycle_slot = int(_utc_now().timestamp()) // discovery_interval_seconds
+        state = read_json(self._polling_state_path) or {}
+        last_cycle_slot = state.get("last_discovery_cycle_slot")
+        if isinstance(last_cycle_slot, int) and last_cycle_slot == cycle_slot:
+            return False
+        self._polling_state_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(
+            self._polling_state_path,
+            json.dumps(
+                {
+                    "last_discovery_cycle_slot": cycle_slot,
+                    "last_discovery_claimed_at": now_iso(),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+        )
+        return True
 
 
 def build_hub_scm_poll_processor(

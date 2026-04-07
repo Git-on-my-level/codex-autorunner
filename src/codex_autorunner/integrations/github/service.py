@@ -5,7 +5,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 from ...core.git_utils import (
     GitError,
@@ -28,6 +28,7 @@ from ...core.utils import (
     resolve_executable,
     subprocess_env,
 )
+from .broker import GitHubCliBroker
 from .polling import GitHubScmPollingService
 
 logger = logging.getLogger(__name__)
@@ -361,11 +362,30 @@ def _normalize_binding_pr_state(state: Any, *, is_draft: Any = False) -> Optiona
 
 
 class GitHubService:
-    def __init__(self, repo_root: Path, raw_config: Optional[dict] = None):
+    def __init__(
+        self,
+        repo_root: Path,
+        raw_config: Optional[dict] = None,
+        *,
+        traffic_class: str = "interactive",
+        gh_broker: Optional[GitHubCliBroker] = None,
+        gh_runner: Optional[Callable[..., subprocess.CompletedProcess[str]]] = None,
+    ):
         self.repo_root = repo_root
         self.raw_config = raw_config or {}
         self.github_path = repo_root / ".codex-autorunner" / "github.json"
         self.gh_path, self.gh_override = self._load_gh_path()
+        self.traffic_class = traffic_class
+        self._gh_runner = gh_runner or _run
+        self._gh_broker = gh_broker or GitHubCliBroker(
+            repo_root=self.repo_root,
+            raw_config=self.raw_config if isinstance(self.raw_config, dict) else None,
+            gh_path=self.gh_path,
+            runner=self._gh_runner,
+            error_factory=lambda message, status_code: GitHubError(
+                message, status_code=status_code
+            ),
+        )
 
     def _binding_context(self) -> tuple[Optional[Path], Optional[str]]:
         return find_hub_binding_context(self.repo_root)
@@ -423,11 +443,12 @@ class GitHubService:
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         try:
-            return _run(
-                [self.gh_path] + args,
+            return self._gh_broker.run(
+                args,
                 cwd=cwd or self.repo_root,
                 timeout_seconds=timeout_seconds,
                 check=check,
+                traffic_class=self.traffic_class,
             )
         except GitHubError as exc:
             if "Missing binary:" in str(exc):
