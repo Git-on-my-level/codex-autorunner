@@ -91,10 +91,6 @@ def _normalize_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
     return candidate, rel_posix
 
 
-def _normalize_local_archive_rel_path(base: Path, rel_path: str) -> tuple[Path, str]:
-    return _normalize_archive_rel_path(base, rel_path)
-
-
 def _resolve_snapshot_root(
     repo_root: Path,
     snapshot_id: str,
@@ -354,7 +350,7 @@ def _list_tree(snapshot_root: Path, rel_path: str) -> ArchiveTreeResponse:
 
 
 def _list_local_tree(run_root: Path, rel_path: str) -> ArchiveTreeResponse:
-    target, rel_posix = _normalize_local_archive_rel_path(run_root, rel_path)
+    target, rel_posix = _normalize_archive_rel_path(run_root, rel_path)
     root_real = run_root.resolve(strict=False)
     if not rel_posix:
         nodes: list[ArchiveTreeNode] = []
@@ -547,7 +543,7 @@ def build_archive_routes() -> APIRouter:
         repo_root = request.app.state.engine.repo_root
         try:
             run_root = _resolve_local_run_root(repo_root, run_id)
-            target, rel_posix = _normalize_local_archive_rel_path(run_root, path)
+            target, rel_posix = _normalize_archive_rel_path(run_root, path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
@@ -605,7 +601,7 @@ def build_archive_routes() -> APIRouter:
         repo_root = request.app.state.engine.repo_root
         try:
             run_root = _resolve_local_run_root(repo_root, run_id)
-            target, rel_posix = _normalize_local_archive_rel_path(run_root, path)
+            target, rel_posix = _normalize_archive_rel_path(run_root, path)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
