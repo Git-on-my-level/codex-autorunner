@@ -11,7 +11,7 @@ import traceback
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional, cast
+from typing import Any, Callable, Optional, cast
 
 import typer
 
@@ -19,6 +19,7 @@ from ....core.config import ConfigError
 from ....core.flows import FlowController, FlowStore
 from ....core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
 from ....core.flows.start_policy import evaluate_ticket_start_policy
+from ....core.flows.telemetry_export import export_all_runs, plan_export
 from ....core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
 from ....core.flows.worker_process import (
     check_worker_health,
@@ -64,6 +65,7 @@ def _stale_terminal_runs(records: list[FlowRunRecord]) -> list[FlowRunRecord]:
 def register_flow_commands(
     flow_app: typer.Typer,
     ticket_flow_app: typer.Typer,
+    telemetry_app: typer.Typer,
     *,
     require_repo_config: Callable[[Optional[Path], Optional[Path]], RuntimeContext],
     raise_exit: Callable[..., None],
@@ -1140,6 +1142,115 @@ You are the first ticket in a new ticket_flow run.
         engine: RuntimeContext, ticket_dir: Path
     ) -> PreflightReport:
         return _ticket_flow_preflight(engine, ticket_dir)
+
+    @telemetry_app.command("export")
+    def telemetry_export(
+        repo: Optional[Path] = typer.Option(None, "--repo", help="Repo path"),
+        hub: Optional[Path] = typer.Option(None, "--hub", help="Hub root path"),
+        dry_run: bool = typer.Option(
+            False, "--dry-run", help="Preview what would be exported/pruned"
+        ),
+        run_id: Optional[str] = typer.Option(
+            None, "--run-id", help="Export a specific run (default: all terminal runs)"
+        ),
+        output_json: bool = typer.Option(False, "--json", help="Emit JSON output"),
+    ):
+        """Export wire telemetry from flow_events for terminal runs.
+
+        Writes per-run JSONL.GZ archives under .codex-autorunner/flows/{run_id}/
+        and prunes redundant rows from the database. Use --dry-run to preview.
+        """
+        engine = require_repo_config(repo, hub)
+        db_path = engine.repo_root / ".codex-autorunner" / "flows.db"
+        if not db_path.exists():
+            raise_exit("Flow database not found at .codex-autorunner/flows.db")
+
+        store = FlowStore(db_path, durable=engine.config.durable_writes)
+        try:
+            store.initialize()
+            if dry_run:
+                plan = plan_export(store)
+                payload: dict[str, Any] = {
+                    "dry_run": True,
+                    "runs_total": plan.runs_total,
+                    "runs_terminal": plan.runs_terminal,
+                    "runs_active": plan.runs_active,
+                    "events_to_export": plan.events_to_export,
+                    "events_to_prune": plan.events_to_prune,
+                    "events_to_retain": plan.events_to_retain,
+                    "estimated_archive_bytes": plan.estimated_archive_bytes,
+                }
+                if output_json:
+                    typer.echo(json.dumps(payload, indent=2))
+                else:
+                    typer.echo("Dry-run telemetry export plan:")
+                    typer.echo(f"  Runs total: {plan.runs_total}")
+                    typer.echo(f"  Runs terminal: {plan.runs_terminal}")
+                    typer.echo(f"  Runs active (skipped): {plan.runs_active}")
+                    typer.echo(f"  Events to export: {plan.events_to_export}")
+                    typer.echo(f"  Events to prune: {plan.events_to_prune}")
+                    typer.echo(f"  Events to retain: {plan.events_to_retain}")
+                    typer.echo(
+                        f"  Estimated archive size: {plan.estimated_archive_bytes:,} bytes"
+                    )
+                return
+
+            run_ids = [run_id] if run_id else None
+            result = export_all_runs(
+                engine.repo_root, store, dry_run=False, run_ids=run_ids
+            )
+            export_payload: dict[str, Any] = {
+                "dry_run": False,
+                "runs_exported": sum(1 for r in result.records if not r.skipped),
+                "runs_skipped": sum(1 for r in result.records if r.skipped),
+                "total_exported_events": result.total_exported_events,
+                "total_pruned_events": result.total_pruned_events,
+                "total_exported_bytes": result.total_exported_bytes,
+                "archive_files": result.archive_files,
+                "errors": result.errors,
+                "run_details": [
+                    {
+                        "run_id": r.run_id,
+                        "run_status": r.run_status,
+                        "skipped": r.skipped,
+                        "skip_reason": r.skip_reason,
+                        "exported_events": r.exported_events,
+                        "exported_bytes": r.exported_bytes,
+                        "pruned_app_server_events": r.prunable_app_server_events,
+                        "pruned_stream_deltas": r.prunable_stream_deltas,
+                        "retained_events": r.retained_events,
+                        "archive_path": r.archive_path,
+                    }
+                    for r in result.records
+                ],
+            }
+            if output_json:
+                typer.echo(json.dumps(export_payload, indent=2))
+            else:
+                typer.echo(
+                    f"Exported {export_payload['runs_exported']} run(s), "
+                    f"{export_payload['total_exported_events']} events, "
+                    f"{export_payload['total_exported_bytes']:,} bytes"
+                )
+                typer.echo(
+                    f"Pruned {export_payload['total_pruned_events']} redundant events"
+                )
+                for r in result.records:
+                    if r.skipped:
+                        typer.echo(
+                            f"  Skipped {r.run_id} ({r.run_status}): {r.skip_reason}"
+                        )
+                    else:
+                        typer.echo(
+                            f"  {r.run_id}: exported={r.exported_events} "
+                            f"pruned={r.prunable_app_server_events + r.prunable_stream_deltas} "
+                            f"retained={r.retained_events}"
+                        )
+                if result.errors:
+                    for err in result.errors:
+                        typer.echo(f"  Error: {err}", err=True)
+        finally:
+            store.close()
 
     return {
         "PreflightCheck": PreflightCheck,  # type: ignore[dict-item]

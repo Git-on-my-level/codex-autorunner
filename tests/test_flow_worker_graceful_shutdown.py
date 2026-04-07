@@ -142,9 +142,11 @@ body
 
     flow_app = flow_module.typer.Typer(add_completion=False)
     ticket_flow_app = flow_module.typer.Typer(add_completion=False)
+    telemetry_app = flow_module.typer.Typer(add_completion=False)
     flow_module.register_flow_commands(
         flow_app,
         ticket_flow_app,
+        telemetry_app,
         require_repo_config=lambda _repo, _hub: engine,
         raise_exit=lambda msg, **_kw: (_ for _ in ()).throw(RuntimeError(msg)),
         build_agent_pool=lambda _cfg: _FakeAgentPool(),

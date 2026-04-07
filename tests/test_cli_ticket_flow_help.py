@@ -75,7 +75,9 @@ def _build_ticket_flow_app(
         def list_active_flow_runs(self, *, flow_target_id=None):  # noqa: ANN001
             return []
 
-        async def start_flow_run(self, flow_target_id, *, input_data=None, metadata=None, run_id=None):  # type: ignore[no-untyped-def]
+        async def start_flow_run(
+            self, flow_target_id, *, input_data=None, metadata=None, run_id=None
+        ):  # type: ignore[no-untyped-def]
             _ = (flow_target_id, input_data, metadata)
             return FlowRunTarget(
                 run_id=run_id or "run-1",
@@ -100,9 +102,11 @@ def _build_ticket_flow_app(
 
     flow_app = typer.Typer(add_completion=False)
     ticket_flow_app = typer.Typer(add_completion=False)
+    telemetry_app = typer.Typer(add_completion=False)
     flow_module.register_flow_commands(
         flow_app,
         ticket_flow_app,
+        telemetry_app,
         require_repo_config=lambda _repo, _hub: engine,
         raise_exit=lambda msg, **_kw: (_ for _ in ()).throw(RuntimeError(msg)),
         build_agent_pool=lambda _cfg: None,
