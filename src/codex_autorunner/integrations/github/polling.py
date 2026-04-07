@@ -33,6 +33,9 @@ _COLD_INTERVAL_SECONDS_FLOOR = 60 * 60
 _RATE_LIMIT_MIN_REMAINING = 100
 _RATE_LIMIT_RATIO_FLOOR = 0.02
 _RATE_LIMIT_BACKOFF_SECONDS = 15 * 60
+_RATE_LIMIT_QUOTA_CACHE_TTL_SECONDS = 10 * 60
+_RATE_LIMIT_QUOTA_NEAR_LIMIT_FALLBACK_TTL_SECONDS = 60
+_RATE_LIMIT_QUOTA_ERROR_CACHE_TTL_SECONDS = 30
 _RATE_LIMIT_RESOURCES = ("graphql", "core")
 _LOGGER = logging.getLogger(__name__)
 
@@ -126,6 +129,69 @@ class _GitHubQuotaState:
     @property
     def reset_at(self) -> Optional[str]:
         return _timestamp_from_epoch(self.reset_epoch)
+
+
+@dataclass(frozen=True)
+class _CachedQuotaState:
+    value: Optional[_GitHubQuotaState]
+    expires_at: datetime
+
+
+def _cached_quota_state_from_mapping(value: Any) -> Optional[_CachedQuotaState]:
+    payload = _mapping(value)
+    expires_at_raw = _normalize_text(payload.get("expires_at"))
+    if expires_at_raw is None:
+        return None
+    try:
+        expires_at = _parse_iso(expires_at_raw)
+    except ValueError:
+        return None
+    quota_state_payload = _mapping(payload.get("value"))
+    resource = _normalize_text(quota_state_payload.get("resource"))
+    remaining = _normalize_non_negative_int(quota_state_payload.get("remaining"))
+    limit = _normalize_positive_int(quota_state_payload.get("limit"))
+    reset_epoch = _normalize_positive_int(quota_state_payload.get("reset_epoch"))
+    near_limit_raw = quota_state_payload.get("near_limit")
+    if not quota_state_payload:
+        return _CachedQuotaState(value=None, expires_at=expires_at)
+    if (
+        resource is None
+        or remaining is None
+        or limit is None
+        or not isinstance(near_limit_raw, bool)
+    ):
+        return None
+    return _CachedQuotaState(
+        value=_GitHubQuotaState(
+            resource=resource,
+            remaining=remaining,
+            limit=limit,
+            reset_epoch=reset_epoch,
+            near_limit=near_limit_raw,
+        ),
+        expires_at=expires_at,
+    )
+
+
+def _cached_quota_state_to_mapping(
+    value: Optional[_CachedQuotaState],
+) -> Optional[dict[str, Any]]:
+    if value is None:
+        return None
+    quota_state = value.value
+    payload: dict[str, Any] = {
+        "expires_at": value.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "value": None,
+    }
+    if quota_state is not None:
+        payload["value"] = {
+            "resource": quota_state.resource,
+            "remaining": quota_state.remaining,
+            "limit": quota_state.limit,
+            "reset_epoch": quota_state.reset_epoch,
+            "near_limit": quota_state.near_limit,
+        }
+    return payload
 
 
 def _quota_state_from_payload(
@@ -521,6 +587,8 @@ class GitHubScmPollingService:
                     binding.pr_number,
                     exc_info=True,
                 )
+                if _is_rate_limit_error(exc):
+                    self._invalidate_quota_state_cache()
                 scheduled_next_poll_at = (
                     _iso_after_seconds(_RATE_LIMIT_BACKOFF_SECONDS)
                     if _is_rate_limit_error(exc)
@@ -782,6 +850,7 @@ class GitHubScmPollingService:
                 snapshot = _build_snapshot(binding=binding, service=github)
             except Exception as exc:
                 if _is_rate_limit_error(exc):
+                    self._invalidate_quota_state_cache()
                     self._watch_store.refresh_watch(
                         watch_id=watch.watch_id,
                         next_poll_at=_rate_limit_backoff_until(quota_state),
@@ -1001,6 +1070,13 @@ class GitHubScmPollingService:
         cache_key = "global"
         if cache_key in cache:
             return cache[cache_key]
+        now = _utc_now()
+        persisted = self._read_cached_quota_state(cache_key=cache_key)
+        if persisted is not None:
+            if persisted.expires_at > now:
+                cache[cache_key] = persisted.value
+                return persisted.value
+            self._invalidate_quota_state_cache(cache_key=cache_key)
         try:
             github = self._github_service_factory(
                 workspace_root,
@@ -1009,7 +1085,83 @@ class GitHubScmPollingService:
             cache[cache_key] = _quota_state_from_payload(github.rate_limit_status())
         except Exception:
             cache[cache_key] = None
+        self._write_cached_quota_state(
+            cache_key=cache_key,
+            value=_CachedQuotaState(
+                value=cache[cache_key],
+                expires_at=self._quota_state_cache_expiry(cache[cache_key], now=now),
+            ),
+        )
         return cache[cache_key]
+
+    def _quota_state_cache_expiry(
+        self,
+        quota_state: Optional[_GitHubQuotaState],
+        *,
+        now: Optional[datetime] = None,
+    ) -> datetime:
+        current = now or _utc_now()
+        if quota_state is None:
+            return current + timedelta(
+                seconds=_RATE_LIMIT_QUOTA_ERROR_CACHE_TTL_SECONDS
+            )
+        if not quota_state.near_limit:
+            return current + timedelta(seconds=_RATE_LIMIT_QUOTA_CACHE_TTL_SECONDS)
+        reset_at = quota_state.reset_at
+        if reset_at is not None:
+            reset_timestamp = _parse_iso(reset_at)
+            if reset_timestamp > current:
+                return min(
+                    reset_timestamp,
+                    current + timedelta(seconds=_RATE_LIMIT_QUOTA_CACHE_TTL_SECONDS),
+                )
+        return current + timedelta(
+            seconds=_RATE_LIMIT_QUOTA_NEAR_LIMIT_FALLBACK_TTL_SECONDS
+        )
+
+    def _invalidate_quota_state_cache(self, *, cache_key: str = "global") -> None:
+        state = self._read_polling_state()
+        quota_state_cache = _mapping(state.get("quota_state_cache"))
+        if cache_key not in quota_state_cache:
+            return
+        updated_cache = dict(quota_state_cache)
+        updated_cache.pop(cache_key, None)
+        state["quota_state_cache"] = updated_cache
+        self._write_polling_state(state)
+
+    def _read_polling_state(self) -> dict[str, Any]:
+        state = read_json(self._polling_state_path) or {}
+        return dict(state) if isinstance(state, dict) else {}
+
+    def _write_polling_state(self, state: Mapping[str, Any]) -> None:
+        self._polling_state_path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(
+            self._polling_state_path,
+            json.dumps(state, indent=2, sort_keys=True) + "\n",
+        )
+
+    def _read_cached_quota_state(
+        self, *, cache_key: str
+    ) -> Optional[_CachedQuotaState]:
+        state = self._read_polling_state()
+        quota_state_cache = _mapping(state.get("quota_state_cache"))
+        return _cached_quota_state_from_mapping(quota_state_cache.get(cache_key))
+
+    def _write_cached_quota_state(
+        self,
+        *,
+        cache_key: str,
+        value: _CachedQuotaState,
+    ) -> None:
+        state = self._read_polling_state()
+        quota_state_cache = dict(_mapping(state.get("quota_state_cache")))
+        serialized = _cached_quota_state_to_mapping(value)
+        if serialized is None:
+            quota_state_cache.pop(cache_key, None)
+        else:
+            quota_state_cache[cache_key] = serialized
+        state["quota_state_cache"] = quota_state_cache
+        self._write_polling_state(state)
 
     def _prioritized_discovery_roots(
         self,
@@ -1286,23 +1438,13 @@ class GitHubScmPollingService:
     def _claim_discovery_cycle(self, *, polling_config: GitHubPollingConfig) -> bool:
         discovery_interval_seconds = max(1, polling_config.discovery_interval_seconds)
         cycle_slot = int(_utc_now().timestamp()) // discovery_interval_seconds
-        state = read_json(self._polling_state_path) or {}
+        state = self._read_polling_state()
         last_cycle_slot = state.get("last_discovery_cycle_slot")
         if isinstance(last_cycle_slot, int) and last_cycle_slot == cycle_slot:
             return False
-        self._polling_state_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(
-            self._polling_state_path,
-            json.dumps(
-                {
-                    "last_discovery_cycle_slot": cycle_slot,
-                    "last_discovery_claimed_at": now_iso(),
-                },
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-        )
+        state["last_discovery_cycle_slot"] = cycle_slot
+        state["last_discovery_claimed_at"] = now_iso()
+        self._write_polling_state(state)
         return True
 
 
