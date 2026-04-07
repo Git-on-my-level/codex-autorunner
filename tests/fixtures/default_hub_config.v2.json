@@ -3,6 +3,9 @@
     "codex": {
       "binary": "codex"
     },
+    "hermes": {
+      "binary": "hermes"
+    },
     "opencode": {
       "binary": "opencode",
       "subagent_models": {
@@ -11,9 +14,6 @@
     },
     "zeroclaw": {
       "binary": "zeroclaw"
-    },
-    "hermes": {
-      "binary": "hermes"
     }
   },
   "app_server": {
@@ -75,7 +75,7 @@
     },
     "dispatch": {
       "handler_stalled_warning_seconds": 60.0,
-      "handler_timeout_seconds": null
+      "handler_timeout_seconds": 120.0
     },
     "enabled": false,
     "intents": 33281,
@@ -207,7 +207,6 @@
     "cleanup_require_archive": true,
     "context_log_tail_lines": 120,
     "default_agent": "codex",
-    "profile": null,
     "docs_max_chars": 12000,
     "enabled": true,
     "filebox_inbox_max_age_days": 7,
@@ -219,6 +218,7 @@
     "max_text_chars": 10000,
     "max_upload_bytes": 10000000,
     "model": null,
+    "profile": null,
     "reactive_debounce_seconds": 300,
     "reactive_enabled": true,
     "reactive_event_types": [
@@ -282,6 +282,13 @@
           "notify_chat": "allow",
           "post_pr_comment": "deny"
         },
+        "polling": {
+          "discovery_interval_seconds": 360,
+          "discovery_workspace_limit": 1,
+          "enabled": false,
+          "interval_seconds": 90,
+          "watch_window_minutes": 30
+        },
         "reactions": {
           "approved_and_green": true,
           "changes_requested": true,
@@ -289,15 +296,8 @@
           "delivery_failure_escalation_threshold": 3,
           "duplicate_escalation_threshold": 3,
           "enabled": true,
-          "review_comment": true,
-          "merged": true
-        },
-        "polling": {
-          "discovery_interval_seconds": 360,
-          "discovery_workspace_limit": 1,
-          "enabled": false,
-          "interval_seconds": 90,
-          "watch_window_minutes": 30
+          "merged": true,
+          "review_comment": true
         },
         "webhook_ingress": {
           "enabled": false,

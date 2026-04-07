@@ -204,6 +204,8 @@ from .collaboration_helpers import (
     collaboration_probe_text,
 )
 from .command_registry import sync_commands
+from .command_runner import CommandRunner as _CommandRunner
+from .command_runner import RunnerConfig as _RunnerConfig
 from .commands import build_application_commands
 from .components import (
     DISCORD_BUTTON_STYLE_SUCCESS,
@@ -658,6 +660,18 @@ class DiscordBotService:
             ),
         )
         self._ingress = InteractionIngress(self, logger=self._logger)
+        self._command_runner = _CommandRunner(
+            self,
+            config=_RunnerConfig(
+                timeout_seconds=(
+                    config.dispatch.handler_timeout_seconds
+                    if config.dispatch.handler_timeout_seconds is not None
+                    else 120.0
+                ),
+                stalled_warning_seconds=config.dispatch.handler_stalled_warning_seconds,
+            ),
+            logger=self._logger,
+        )
 
     async def run_forever(self) -> None:
         self._reap_managed_processes(stage="startup")
@@ -702,6 +716,7 @@ class DiscordBotService:
                 )
             await self._gateway.run(self._on_dispatch)
         finally:
+            await self._command_runner.shutdown()
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._dispatcher.wait_idle()
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
@@ -3156,6 +3171,7 @@ class DiscordBotService:
                 task.cancel()
             await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
             self._background_tasks.clear()
+        await self._command_runner.shutdown()
         if self._owns_gateway:
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._gateway.stop()
@@ -3375,12 +3391,13 @@ class DiscordBotService:
                 return
             interaction_event = self._chat_adapter.parse_interaction_event(payload)
             if interaction_event is not None:
-                await self._dispatch_chat_event(interaction_event)
-        elif event_type == "MESSAGE_CREATE":
+                self._command_runner.submit_event(interaction_event)
+            return
+        if event_type == "MESSAGE_CREATE":
             await self._record_channel_directory_seen_from_message_payload(payload)
             message_event = self._chat_adapter.parse_message_event(payload)
             if message_event is not None:
-                await self._dispatch_chat_event(message_event)
+                self._command_runner.submit_event(message_event)
 
     async def _record_channel_directory_seen_from_message_payload(
         self, payload: dict[str, Any]

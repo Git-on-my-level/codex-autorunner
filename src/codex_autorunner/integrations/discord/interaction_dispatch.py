@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ...core.logging_utils import log_event
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from .errors import DiscordTransientError
+from .ingress import IngressContext, InteractionKind
 from .interactions import (
     extract_autocomplete_command_context,
     extract_channel_id,
@@ -989,3 +990,106 @@ async def _handle_autocomplete_from_payload(
         focused_name=focused_name,
         focused_value=focused_value,
     )
+
+
+async def execute_ingressed_interaction(
+    service: Any,
+    ctx: IngressContext,
+    payload: dict[str, Any],
+) -> None:
+    """Route an ingress-acknowledged interaction to its handler.
+
+    Unlike handle_interaction / handle_normalized_interaction, this entry
+    point skips authz checks and ack/defer because ingress already
+    completed those steps.  It is the required execution path for
+    interactions submitted to the CommandRunner.
+    """
+    interaction_id = ctx.interaction_id
+    interaction_token = ctx.interaction_token
+    channel_id = ctx.channel_id
+
+    if ctx.kind == InteractionKind.AUTOCOMPLETE:
+        command_path = ctx.command_spec.path if ctx.command_spec else ()
+        options = ctx.command_spec.options if ctx.command_spec else {}
+        await service._handle_command_autocomplete(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            command_path=command_path,
+            options=options,
+            focused_name=ctx.focused_name,
+            focused_value=ctx.focused_value or "",
+        )
+        return
+
+    if ctx.kind == InteractionKind.COMPONENT:
+        await handle_component_interaction(
+            service,
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            channel_id=channel_id,
+            custom_id=ctx.custom_id or "",
+            values=ctx.values,
+            guild_id=ctx.guild_id,
+            user_id=ctx.user_id,
+            message_id=ctx.message_id,
+        )
+        return
+
+    if ctx.kind == InteractionKind.MODAL_SUBMIT:
+        await service._handle_ticket_modal_submit(
+            interaction_id,
+            interaction_token,
+            channel_id=channel_id,
+            custom_id=ctx.custom_id or "",
+            values=ctx.modal_values or {},
+        )
+        return
+
+    command_path = ctx.command_spec.path if ctx.command_spec else ()
+    options = ctx.command_spec.options if ctx.command_spec else {}
+
+    try:
+        if command_path[:1] == ("car",):
+            await service._handle_car_command(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                guild_id=ctx.guild_id,
+                user_id=ctx.user_id,
+                command_path=command_path,
+                options=options,
+            )
+        elif command_path[:1] == ("pma",):
+            await service._handle_pma_command(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                guild_id=ctx.guild_id,
+                command_path=command_path,
+                options=options,
+            )
+        else:
+            await service._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Command not implemented yet for Discord.",
+            )
+    except DiscordTransientError as exc:
+        user_msg = exc.user_message or "An error occurred. Please try again later."
+        await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
+    except Exception as exc:
+        log_event(
+            service._logger,
+            logging.ERROR,
+            "discord.runner.handler_error",
+            command_path=command_path,
+            channel_id=channel_id,
+            interaction_id=interaction_id,
+            exc=exc,
+        )
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "An unexpected error occurred. Please try again later.",
+        )
