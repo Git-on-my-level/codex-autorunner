@@ -61,6 +61,7 @@ class _FlowServiceStub:
         self.resume_calls: list[str] = []
         self.stop_calls: list[str] = []
         self.reconcile_calls: list[str] = []
+        self.archive_calls: list[dict[str, object]] = []
 
     async def resume_flow_run(
         self, run_id: str, *, force: bool = False
@@ -76,6 +77,19 @@ class _FlowServiceStub:
         self.reconcile_calls.append(run_id)
         return SimpleNamespace(run_id=run_id, status="running"), True, False
 
+    def archive_flow_run(
+        self, run_id: str, *, force: bool = False, delete_run: bool = True
+    ) -> dict[str, object]:
+        self.archive_calls.append(
+            {"run_id": run_id, "force": force, "delete_run": delete_run}
+        )
+        return {
+            "run_id": run_id,
+            "archived_tickets": 0,
+            "archived_runs": True,
+            "archived_contextspace": False,
+        }
+
 
 class _FlowCallbackHandler(FlowCommands):
     def __init__(
@@ -88,6 +102,7 @@ class _FlowCallbackHandler(FlowCommands):
         self._store = _TopicStoreStub(repo_root)
         self.answers: list[str] = []
         self.rendered: list[tuple[Path, str | None, str | None]] = []
+        self.edits: list[tuple[str, dict[str, object] | None]] = []
 
     async def _resolve_topic_key(self, _chat_id: int, _thread_id: int | None) -> str:
         return "topic"
@@ -114,6 +129,16 @@ class _FlowCallbackHandler(FlowCommands):
         }:
             return str(self._repo_root), arg
         return None
+
+    async def _edit_callback_message(
+        self,
+        _callback: TelegramCallbackQuery,
+        text: str,
+        *,
+        reply_markup: dict[str, object] | None = None,
+    ) -> bool:
+        self.edits.append((text, reply_markup))
+        return True
 
 
 def _init_store(repo_root: Path) -> FlowStore:
@@ -211,6 +236,38 @@ async def test_flow_callback_recover_latest_active(
     assert flow_service.reconcile_calls == [run_id]
     assert handler.answers == ["Working..."]
     assert handler.rendered
+
+
+@pytest.mark.anyio
+async def test_flow_callback_archive_updates_message_while_archiving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _init_store(tmp_path)
+    run_id = str(uuid.uuid4())
+    _create_run(store, run_id, FlowRunStatus.COMPLETED)
+    store.close()
+
+    flow_service = _FlowServiceStub()
+    monkeypatch.setattr(
+        flows_module,
+        "build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    handler = _FlowCallbackHandler(tmp_path)
+    await handler._handle_flow_callback(_callback(), FlowCallback(action="archive"))
+
+    assert flow_service.archive_calls == [
+        {"run_id": run_id, "force": False, "delete_run": True}
+    ]
+    assert handler.answers == ["Working..."]
+    assert handler.edits == [
+        (
+            f"Archiving run `{run_id}`. This can take a few seconds.",
+            {"inline_keyboard": []},
+        )
+    ]
+    assert handler.rendered == [(tmp_path, None, None)]
 
 
 @pytest.mark.anyio
