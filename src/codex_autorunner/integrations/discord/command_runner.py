@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Set
 
 from ...core.logging_utils import log_event
-from .ingress import IngressContext
+from .ingress import IngressContext, IngressTiming
 from .interaction_dispatch import (
     execute_ingressed_interaction,
 )
@@ -209,6 +209,7 @@ class CommandRunner:
         command_label = (
             ":".join(ctx.command_spec.path) if ctx.command_spec else ctx.kind.value
         )
+        ingress_elapsed_ms = self._ingress_elapsed_ms(ctx)
         log_event(
             self._logger,
             logging.DEBUG,
@@ -216,6 +217,21 @@ class CommandRunner:
             interaction_id=ctx.interaction_id,
             kind=ctx.kind.value,
             command=command_label,
+            queue_wait_ms=(
+                round((started_at - ctx.timing.ingress_finished_at) * 1000, 1)
+                if ctx.timing.ingress_finished_at is not None
+                else None
+            ),
+            ingress_elapsed_ms=ingress_elapsed_ms,
+        )
+
+        ctx.timing = IngressTiming(
+            interaction_created_at=ctx.timing.interaction_created_at,
+            ingress_started_at=ctx.timing.ingress_started_at,
+            authz_finished_at=ctx.timing.authz_finished_at,
+            ack_finished_at=ctx.timing.ack_finished_at,
+            ingress_finished_at=ctx.timing.ingress_finished_at,
+            execution_started_at=started_at,
         )
 
         handler_task: Optional[asyncio.Task[None]] = None
@@ -255,13 +271,28 @@ class CommandRunner:
                 stall_task.cancel()
                 with contextlib_suppress(asyncio.CancelledError):
                     await stall_task
-            elapsed_ms = (time.monotonic() - started_at) * 1000
+            finished_at = time.monotonic()
+            ctx.timing = IngressTiming(
+                interaction_created_at=ctx.timing.interaction_created_at,
+                ingress_started_at=ctx.timing.ingress_started_at,
+                authz_finished_at=ctx.timing.authz_finished_at,
+                ack_finished_at=ctx.timing.ack_finished_at,
+                ingress_finished_at=ctx.timing.ingress_finished_at,
+                execution_started_at=ctx.timing.execution_started_at,
+                execution_finished_at=finished_at,
+            )
+            execution_ms = (finished_at - started_at) * 1000
+            total_ms = self._total_lifecycle_ms(ctx, finished_at)
             log_event(
                 self._logger,
                 logging.DEBUG,
                 "discord.runner.execute.done",
                 interaction_id=ctx.interaction_id,
-                elapsed_ms=round(elapsed_ms, 1),
+                elapsed_ms=round(execution_ms, 1),
+                total_lifecycle_ms=round(total_ms, 1) if total_ms is not None else None,
+                gateway_to_completion_ms=self._gateway_to_completion_ms(
+                    ctx, finished_at
+                ),
             )
 
     async def _execute_body(
@@ -281,6 +312,7 @@ class CommandRunner:
         command_label = (
             ":".join(ctx.command_spec.path) if ctx.command_spec else ctx.kind.value
         )
+        gateway_to_timeout_ms = self._gateway_to_completion_ms(ctx, time.monotonic())
         log_event(
             self._logger,
             logging.ERROR,
@@ -289,6 +321,7 @@ class CommandRunner:
             command=command_label,
             timeout_seconds=self._config.timeout_seconds,
             elapsed_ms=round(elapsed_ms, 1),
+            gateway_to_timeout_ms=gateway_to_timeout_ms,
         )
         handler_task.cancel()
         handler_task.add_done_callback(
@@ -362,6 +395,28 @@ class CommandRunner:
                 interaction_id=ctx.interaction_id,
                 exc=exc,
             )
+
+    @staticmethod
+    def _ingress_elapsed_ms(ctx: IngressContext) -> Optional[float]:
+        t = ctx.timing
+        if t.ingress_started_at is not None and t.ingress_finished_at is not None:
+            return round((t.ingress_finished_at - t.ingress_started_at) * 1000, 1)
+        return None
+
+    @staticmethod
+    def _total_lifecycle_ms(ctx: IngressContext, now: float) -> Optional[float]:
+        t = ctx.timing
+        if t.ingress_started_at is None:
+            return None
+        return (now - t.ingress_started_at) * 1000
+
+    @staticmethod
+    def _gateway_to_completion_ms(ctx: IngressContext, now: float) -> Optional[float]:
+        t = ctx.timing
+        if t.interaction_created_at is None:
+            return None
+        wall_now = time.time()
+        return round(max(0.0, (wall_now - t.interaction_created_at) * 1000), 1)
 
 
 def contextlib_suppress(*exc_types: type) -> Any:

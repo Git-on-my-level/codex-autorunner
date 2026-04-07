@@ -58,6 +58,8 @@ class IngressTiming:
     authz_finished_at: Optional[float] = None
     ack_finished_at: Optional[float] = None
     ingress_finished_at: Optional[float] = None
+    execution_started_at: Optional[float] = None
+    execution_finished_at: Optional[float] = None
 
 
 @dataclass(frozen=True)
