@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -5363,6 +5364,169 @@ async def test_car_newt_resets_current_workspace_branch_and_session(
         assert "Model: default" in content
         assert "Effort: default" in content
     finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_dispatch_deferred_slash_commands_ack_before_prior_handler_finishes(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    first = _interaction(name="newt", options=[])
+    first["id"] = "inter-1"
+    first["token"] = "token-1"
+    second = _interaction(name="newt", options=[])
+    second["id"] = "inter-2"
+    second["token"] = "token-2"
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([first, second])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    started: list[str] = []
+    release_first = asyncio.Event()
+
+    async def _fake_handle_newt(
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        guild_id: str | None,
+    ) -> None:
+        _ = interaction_token, channel_id, guild_id
+        started.append(interaction_id)
+        if interaction_id == "inter-1":
+            await release_first.wait()
+
+    service._handle_car_newt = _fake_handle_newt  # type: ignore[assignment]
+
+    task = asyncio.create_task(service.run_forever())
+    try:
+        for _ in range(50):
+            if len(rest.interaction_responses) >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+        assert [item["interaction_id"] for item in rest.interaction_responses] == [
+            "inter-1",
+            "inter-2",
+        ]
+        assert [item["payload"]["type"] for item in rest.interaction_responses] == [
+            5,
+            5,
+        ]
+        assert started == ["inter-1"]
+
+        release_first.set()
+        await asyncio.wait_for(task, timeout=1.0)
+        assert started == ["inter-1", "inter-2"]
+    finally:
+        release_first.set()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_dispatch_deferred_session_interrupt_acks_before_prior_handler_finishes(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    first = _interaction_path(command_path=("car", "session", "interrupt"), options=[])
+    first["id"] = "inter-1"
+    first["token"] = "token-1"
+    second = _interaction_path(command_path=("car", "session", "interrupt"), options=[])
+    second["id"] = "inter-2"
+    second["token"] = "token-2"
+
+    rest = _FakeRest()
+    gateway = _FakeGateway([first, second])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    started: list[str] = []
+    release_first = asyncio.Event()
+
+    async def _fake_handle_interrupt(
+        interaction_id: str,
+        interaction_token: str,
+        *,
+        channel_id: str,
+        source: str = "unknown",
+        source_command: str | None = None,
+        source_user_id: str | None = None,
+        **_kwargs: Any,
+    ) -> None:
+        _ = interaction_token, channel_id, source, source_command, source_user_id
+        started.append(interaction_id)
+        if interaction_id == "inter-1":
+            await release_first.wait()
+
+    service._handle_car_interrupt = _fake_handle_interrupt  # type: ignore[assignment]
+
+    task = asyncio.create_task(service.run_forever())
+    try:
+        for _ in range(50):
+            if len(rest.interaction_responses) >= 2:
+                break
+            await asyncio.sleep(0.01)
+
+        assert [item["interaction_id"] for item in rest.interaction_responses] == [
+            "inter-1",
+            "inter-2",
+        ]
+        assert [item["payload"]["type"] for item in rest.interaction_responses] == [
+            5,
+            5,
+        ]
+        assert started == ["inter-1"]
+
+        release_first.set()
+        await asyncio.wait_for(task, timeout=1.0)
+        assert started == ["inter-1", "inter-2"]
+    finally:
+        release_first.set()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await store.close()
 
 

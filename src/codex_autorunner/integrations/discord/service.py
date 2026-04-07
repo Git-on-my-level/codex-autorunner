@@ -1189,9 +1189,14 @@ class DiscordBotService:
             )
         return result.command_allowed
 
-    def _uses_background_command_dispatch(self, command_path: tuple[str, ...]) -> bool:
+    def _queues_command_after_dispatch_ack(self, command_path: tuple[str, ...]) -> bool:
         normalized_path = self._normalize_discord_command_path(command_path)
-        return normalized_path == ("car", "session", "compact")
+        return normalized_path in {
+            ("car", "new"),
+            ("car", "newt"),
+            ("car", "session", "compact"),
+            ("car", "session", "interrupt"),
+        }
 
     def _bypass_predicate(self, event: ChatEvent, context: DispatchContext) -> bool:
         if isinstance(event, ChatInteractionEvent):
@@ -1211,7 +1216,7 @@ class DiscordBotService:
                 if isinstance(command_raw, str)
                 else ()
             )
-            return not self._uses_background_command_dispatch(command_path)
+            return not self._queues_command_after_dispatch_ack(command_path)
         return False
 
     async def _handle_normalized_interaction(
