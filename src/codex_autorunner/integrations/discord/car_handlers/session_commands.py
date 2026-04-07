@@ -174,11 +174,6 @@ async def handle_car_new(
     )
 
 
-# Keep a source-level reference because DiscordBotService imports this helper
-# lazily and dead-code heuristics do not track that import path reliably.
-_HANDLE_CAR_NEW = handle_car_new
-
-
 async def handle_car_newt(
     service: Any,
     interaction_id: str,

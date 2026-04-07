@@ -249,9 +249,6 @@ from .interaction_dispatch import (
     handle_component_interaction as _dispatch_component_interaction,
 )
 from .interaction_dispatch import (
-    handle_interaction as _dispatch_interaction,
-)
-from .interaction_dispatch import (
     handle_normalized_interaction as _dispatch_normalized_interaction,
 )
 from .message_turns import (
@@ -3554,14 +3551,6 @@ class DiscordBotService:
                 return normalized
         return None
 
-    async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
-        await _dispatch_interaction(self, interaction_payload)
-
-    async def _handle_autocomplete_interaction(
-        self, interaction_payload: dict[str, Any]
-    ) -> None:
-        await _dispatch_interaction(self, interaction_payload)
-
     async def _handle_bind(
         self,
         interaction_id: str,
@@ -4590,11 +4579,6 @@ class DiscordBotService:
                     workspace_path=str(workspace_root),
                 )
                 break
-
-    async def _handle_modal_submit_interaction(
-        self, interaction_payload: dict[str, Any]
-    ) -> None:
-        await _dispatch_interaction(self, interaction_payload)
 
     async def _handle_ticket_modal_submit(
         self,
@@ -6531,11 +6515,6 @@ class DiscordBotService:
             components=components,
             ephemeral=False,
         )
-
-    async def _handle_component_interaction(
-        self, interaction_payload: dict[str, Any]
-    ) -> None:
-        await _dispatch_interaction(self, interaction_payload)
 
     async def _handle_component_interaction_normalized(
         self,

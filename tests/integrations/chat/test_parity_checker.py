@@ -129,9 +129,7 @@ def test_parity_checker_fails_when_update_route_is_missing(tmp_path: Path) -> No
 def test_parity_checker_fails_when_known_prefix_can_leak_to_generic_fallback(
     tmp_path: Path,
 ) -> None:
-    repo_root = _write_fixture_repo(
-        tmp_path, include_interaction_pma_prefix_guard=False
-    )
+    repo_root = _write_fixture_repo(tmp_path, include_normalized_pma_prefix_guard=False)
 
     results_by_id = {
         result.id: result for result in run_parity_checks(repo_root=repo_root)
@@ -139,9 +137,7 @@ def test_parity_checker_fails_when_known_prefix_can_leak_to_generic_fallback(
 
     fallback_check = results_by_id["discord.no_generic_fallback_leak"]
     assert not fallback_check.passed
-    assert (
-        "interaction_pma_prefix_guard" in fallback_check.metadata["failed_predicates"]
-    )
+    assert "normalized_pma_prefix_guard" in fallback_check.metadata["failed_predicates"]
 
 
 def test_parity_checker_fails_when_component_fallback_is_missing(
@@ -353,7 +349,7 @@ def _write_fixture_repo(
     *,
     include_car_model_route: bool = True,
     include_car_update_route: bool = True,
-    include_interaction_pma_prefix_guard: bool = True,
+    include_normalized_pma_prefix_guard: bool = True,
     include_canonicalize_usage: bool = True,
     include_discord_turn_policy: bool = True,
     include_telegram_turn_policy: bool = True,
@@ -374,7 +370,7 @@ def _write_fixture_repo(
     discord_service = _build_discord_service_fixture(
         include_car_model_route=include_car_model_route,
         include_car_update_route=include_car_update_route,
-        include_interaction_pma_prefix_guard=include_interaction_pma_prefix_guard,
+        include_normalized_pma_prefix_guard=include_normalized_pma_prefix_guard,
         include_canonicalize_usage=include_canonicalize_usage,
         include_discord_turn_policy=include_discord_turn_policy,
         include_pma_status_route_in_normalized=include_pma_status_route_in_normalized,
@@ -417,7 +413,7 @@ def _build_discord_service_fixture(
     *,
     include_car_model_route: bool,
     include_car_update_route: bool,
-    include_interaction_pma_prefix_guard: bool,
+    include_normalized_pma_prefix_guard: bool,
     include_canonicalize_usage: bool,
     include_discord_turn_policy: bool,
     include_pma_status_route_in_normalized: bool,
@@ -491,31 +487,46 @@ def _build_discord_service_fixture(
         """
         if ingress is not None and ingress.command_path[:1] == ("car",):
             return
+"""
+        + (
+            """
         elif ingress is not None and ingress.command_path[:1] == ("pma",):
             return
 """
+            if include_normalized_pma_prefix_guard
+            else ""
+        )
         if not use_early_ingress_none_guard_in_normalized
         else """
         if ingress is None:
             return
         if ingress.command_path[:1] == ("car",):
             return
+"""
+        + (
+            """
         elif ingress.command_path[:1] == ("pma",):
             return
 """
+            if include_normalized_pma_prefix_guard
+            else ""
+        )
     )
     if use_truthy_ingress_guard_in_normalized:
         normalized_prefix_guard = """
         if ingress and ingress.command_path[:1] == ("car",):
             return
+""" + (
+            """
         elif ingress and ingress.command_path[:1] == ("pma",):
             return
 """
+            if include_normalized_pma_prefix_guard
+            else ""
+        )
 
-    interaction_pma_guard = (
+    interaction_pma_guard_placeholder = (
         '        if ingress.command_path[:1] == ("pma",):\n            return\n'
-        if include_interaction_pma_prefix_guard
-        else ""
     )
 
     car_model_route = (
@@ -696,7 +707,7 @@ def _handle_interaction(command_path: tuple[str, ...], options: dict[str, object
         if ingress.command_path[:1] == ("car",):
             return
 """
-        + interaction_pma_guard
+        + interaction_pma_guard_placeholder
         + """
         _respond_ephemeral(
             "interaction-id",
