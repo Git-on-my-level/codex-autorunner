@@ -12,6 +12,12 @@ from typing import Any
 
 import pytest
 
+from codex_autorunner.core.filebox import (
+    inbox_dir,
+    outbox_dir,
+    outbox_pending_dir,
+    outbox_sent_dir,
+)
 from codex_autorunner.core.flows import FlowRunStatus
 from codex_autorunner.core.update import UpdateInProgressError
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
@@ -1479,6 +1485,158 @@ async def test_service_ids_reports_collaboration_snippet(tmp_path: Path) -> None
         assert "default_mode: command_only" in content
         assert "channel_id: channel-1" in content
         assert "mode: silent" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_files_inbox_lists_workspace_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    inbox = inbox_dir(workspace)
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "notes.txt").write_text("hello", encoding="utf-8")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_interaction_path(command_path=("car", "files", "inbox"), options=[])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert "Inbox (1 file(s)):" in content
+        assert "notes.txt" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_files_outbox_lists_pending_and_sent_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outbox_root = outbox_dir(workspace)
+    pending = outbox_pending_dir(workspace)
+    sent = outbox_sent_dir(workspace)
+    outbox_root.mkdir(parents=True, exist_ok=True)
+    pending.mkdir(parents=True, exist_ok=True)
+    sent.mkdir(parents=True, exist_ok=True)
+    (outbox_root / "summary.txt").write_text("summary", encoding="utf-8")
+    (pending / "pending.txt").write_text("pending", encoding="utf-8")
+    (sent / "sent.txt").write_text("sent", encoding="utf-8")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_interaction_path(command_path=("car", "files", "outbox"), options=[])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert "Outbox root (1 file(s)):" in content
+        assert "summary.txt" in content
+        assert "Outbox pending (1 file(s)):" in content
+        assert "pending.txt" in content
+        assert "Outbox sent (1 file(s)):" in content
+        assert "sent.txt" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_files_clear_deletes_requested_outbox_targets(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    inbox = inbox_dir(workspace)
+    pending = outbox_pending_dir(workspace)
+    sent = outbox_sent_dir(workspace)
+    inbox.mkdir(parents=True, exist_ok=True)
+    pending.mkdir(parents=True, exist_ok=True)
+    sent.mkdir(parents=True, exist_ok=True)
+    inbox_file = inbox / "keep.txt"
+    pending_file = pending / "pending.txt"
+    sent_file = sent / "sent.txt"
+    inbox_file.write_text("keep", encoding="utf-8")
+    pending_file.write_text("pending", encoding="utf-8")
+    sent_file.write_text("sent", encoding="utf-8")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction_path(
+                command_path=("car", "files", "clear"),
+                options=[{"type": 3, "name": "target", "value": "outbox"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert "Deleted 2 file(s)." in content
+        assert inbox_file.exists()
+        assert not pending_file.exists()
+        assert not sent_file.exists()
     finally:
         await store.close()
 
