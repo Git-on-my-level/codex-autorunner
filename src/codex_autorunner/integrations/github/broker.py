@@ -31,9 +31,9 @@ _SCM_READ_CACHE_TTL_SECONDS = 20
 _RATE_LIMIT_COOLDOWN_FALLBACK_SECONDS = 5 * 60
 _BROKER_SQLITE_BUSY_TIMEOUT_MS = 5_000
 _MAX_CACHED_STDOUT_BYTES = 256_000
-_LEASE_TTL_SECONDS = 60
+_LEASE_MIN_TTL_SECONDS = 60
+_LEASE_TTL_GRACE_SECONDS = 5
 _LEASE_WAIT_POLL_SECONDS = 0.05
-_LEASE_WAIT_MAX_SECONDS = 3
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 ErrorFactory = Callable[[str, int], Exception]
@@ -251,6 +251,10 @@ class GitHubCliBroker:
         cache_policy = _command_cache_policy(args)
         lease_key: Optional[str] = None
         lease_owner = uuid.uuid4().hex
+        lease_ttl_seconds = max(
+            _LEASE_MIN_TTL_SECONDS,
+            timeout_seconds + _LEASE_TTL_GRACE_SECONDS,
+        )
         if cache_policy is not None:
             cached = self._cached_response(
                 args,
@@ -264,13 +268,20 @@ class GitHubCliBroker:
                 cache_policy=cache_policy,
                 cwd=normalized_cwd,
             )
-            if not self._claim_lease(lease_key, owner=lease_owner):
+            if not self._claim_lease(
+                lease_key,
+                owner=lease_owner,
+                ttl_seconds=lease_ttl_seconds,
+            ):
                 waited = self._wait_for_cache_or_cooldown(
                     args,
                     cache_policy=cache_policy,
                     cwd=normalized_cwd,
                     timeout_seconds=timeout_seconds,
                     traffic_class=traffic_class,
+                    lease_key=lease_key,
+                    lease_owner=lease_owner,
+                    lease_ttl_seconds=lease_ttl_seconds,
                 )
                 if waited is not None:
                     return waited
@@ -424,7 +435,7 @@ class GitHubCliBroker:
                 (pattern,),
             )
 
-    def _claim_lease(self, lease_key: str, *, owner: str) -> bool:
+    def _claim_lease(self, lease_key: str, *, owner: str, ttl_seconds: int) -> bool:
         with open_sqlite(
             self._db_path,
             durable=False,
@@ -452,7 +463,7 @@ class GitHubCliBroker:
                 (
                     lease_key,
                     owner,
-                    _iso_after_seconds(_LEASE_TTL_SECONDS),
+                    _iso_after_seconds(ttl_seconds),
                     now_timestamp,
                 ),
             )
@@ -586,9 +597,12 @@ class GitHubCliBroker:
         cwd: Path,
         timeout_seconds: int,
         traffic_class: str,
+        lease_key: str,
+        lease_owner: str,
+        lease_ttl_seconds: int,
     ) -> Optional[subprocess.CompletedProcess[str]]:
-        deadline = time.monotonic() + min(timeout_seconds, _LEASE_WAIT_MAX_SECONDS)
-        while time.monotonic() < deadline:
+        _ = timeout_seconds
+        while True:
             cached = self._cached_response(
                 args,
                 cache_policy=cache_policy,
@@ -616,8 +630,13 @@ class GitHubCliBroker:
                         f"{cooldown_until.strftime('%Y-%m-%dT%H:%M:%SZ')}",
                         429,
                     )
+            if self._claim_lease(
+                lease_key,
+                owner=lease_owner,
+                ttl_seconds=lease_ttl_seconds,
+            ):
+                return None
             time.sleep(_LEASE_WAIT_POLL_SECONDS)
-        return None
 
     def _should_block_for_cooldown(
         self,

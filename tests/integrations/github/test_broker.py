@@ -257,3 +257,63 @@ def test_concurrent_cached_read_uses_single_shared_runner_call(
     assert first["title"] == "Shared cached result"
     assert second["title"] == "Shared cached result"
     assert runner_calls["count"] == 1
+
+
+def test_slow_concurrent_cached_read_waits_for_shared_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CAR_GLOBAL_STATE_ROOT", str(tmp_path / "global-state"))
+    repo_root = tmp_path / "repo"
+    runner_calls = {"count": 0}
+    release_first_call = threading.Event()
+    first_call_started = threading.Event()
+
+    def _runner(
+        args: list[str], *, cwd: Path, timeout_seconds: int, check: bool
+    ) -> subprocess.CompletedProcess[str]:
+        _ = cwd, timeout_seconds, check
+        runner_calls["count"] += 1
+        if runner_calls["count"] == 1:
+            first_call_started.set()
+            assert release_first_call.wait(timeout=5.0)
+            time.sleep(3.2)
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            stdout=json.dumps(
+                {
+                    "number": 17,
+                    "title": "Shared cached result",
+                    "state": "OPEN",
+                    "author": {"login": "reviewer"},
+                    "labels": [],
+                    "files": [],
+                    "additions": 0,
+                    "deletions": 0,
+                    "changedFiles": 0,
+                    "headRefName": "feature/test",
+                    "baseRefName": "main",
+                    "headRefOid": "abc123",
+                    "isDraft": False,
+                    "url": "https://github.com/acme/widgets/pull/17",
+                    "body": "cached body",
+                }
+            ),
+            stderr="",
+        )
+
+    service_one = GitHubService(repo_root, raw_config={}, gh_runner=_runner)
+    service_two = GitHubService(repo_root, raw_config={}, gh_runner=_runner)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(service_one.pr_view, number=17)
+        assert first_call_started.wait(timeout=2.0)
+        second_future = executor.submit(service_two.pr_view, number=17)
+        release_first_call.set()
+        first = first_future.result(timeout=6.0)
+        second = second_future.result(timeout=6.0)
+
+    assert first["title"] == "Shared cached result"
+    assert second["title"] == "Shared cached result"
+    assert runner_calls["count"] == 1
