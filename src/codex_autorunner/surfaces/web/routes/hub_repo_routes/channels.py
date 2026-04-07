@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import sqlite3
+import time
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -42,9 +45,19 @@ if TYPE_CHECKING:
     from ...app_state import HubAppContext
 
 
+_CHANNEL_DIR_CACHE_TTL_SECONDS = 10.0
+
+
+@dataclass(frozen=True)
+class _ChannelDirectoryCacheEntry:
+    expires_at: float
+    rows: list[dict[str, Any]]
+
+
 class HubChannelService:
     def __init__(self, context: HubAppContext) -> None:
         self._context = context
+        self._channel_dir_cache: Optional[_ChannelDirectoryCacheEntry] = None
 
     def _state_db_path(self, section: str, default_path: str) -> Path:
         raw = (
@@ -985,7 +998,9 @@ class HubChannelService:
         return payload
 
     async def list_chat_channels(
-        self, query: Optional[str] = None, limit: int = 100
+        self,
+        query: Optional[str] = None,
+        limit: int = 100,
     ) -> dict[str, Any]:
         from fastapi import HTTPException
 
@@ -994,6 +1009,17 @@ class HubChannelService:
         if limit > 1000:
             raise HTTPException(status_code=400, detail="limit must be <= 1000")
 
+        rows = await self._list_cached_channel_rows()
+        query_text = (query or "").strip().lower()
+        if query_text:
+            rows = [
+                row for row in rows if self._channel_row_matches_query(row, query_text)
+            ]
+        if limit >= 0:
+            rows = rows[:limit]
+        return {"entries": rows}
+
+    async def _build_channel_rows(self) -> list[dict[str, Any]]:
         store = ChannelDirectoryStore(self._context.config.root)
         entries = await asyncio.to_thread(store.list_entries, query=None, limit=None)
         snapshots: list[Any] = []
@@ -1348,17 +1374,23 @@ class HubChannelService:
                             "timestamp": usage_payload.get("timestamp"),
                         }
             rows.append(thread_row)
-        query_text = (query or "").strip().lower()
-        if query_text:
-            rows = [
-                row for row in rows if self._channel_row_matches_query(row, query_text)
-            ]
         rows.sort(
             key=lambda item: self._timestamp_rank(item.get("seen_at")), reverse=True
         )
-        if limit >= 0:
-            rows = rows[:limit]
-        return {"entries": rows}
+        return rows
+
+    async def _list_cached_channel_rows(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        cached = self._channel_dir_cache
+        if cached is not None and cached.expires_at > now:
+            return copy.deepcopy(cached.rows)
+
+        rows = await self._build_channel_rows()
+        self._channel_dir_cache = _ChannelDirectoryCacheEntry(
+            expires_at=time.monotonic() + _CHANNEL_DIR_CACHE_TTL_SECONDS,
+            rows=copy.deepcopy(rows),
+        )
+        return rows
 
 
 def build_hub_channel_router(context: HubAppContext) -> APIRouter:

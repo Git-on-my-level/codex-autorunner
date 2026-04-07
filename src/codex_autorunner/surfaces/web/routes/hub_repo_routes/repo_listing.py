@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .....core.chat_bindings import active_chat_binding_counts_by_source
 from .....core.freshness import (
@@ -50,6 +50,23 @@ class HubRepoListingService:
         self._mount_manager = mount_manager
         self._enricher = enricher
 
+    async def _enrich_repos(
+        self,
+        snapshots: list[Any],
+        chat_binding_counts: dict[str, int],
+        chat_binding_counts_by_source: dict[str, dict[str, int]],
+    ) -> list[dict[str, Any]]:
+        tasks = [
+            asyncio.to_thread(
+                self._enricher.enrich_repo,
+                snap,
+                chat_binding_counts,
+                chat_binding_counts_by_source,
+            )
+            for snap in snapshots
+        ]
+        return cast(list[dict[str, Any]], await asyncio.gather(*tasks))
+
     def _active_chat_binding_counts_by_source(self) -> dict[str, dict[str, int]]:
         try:
             return active_chat_binding_counts_by_source(
@@ -95,12 +112,11 @@ class HubRepoListingService:
                 for repo_id, source_counts in chat_binding_counts_by_source.items()
             }
             await self._mount_manager.refresh_mounts(snapshots)
-            repos = [
-                self._enricher.enrich_repo(
-                    snap, chat_binding_counts, chat_binding_counts_by_source
-                )
-                for snap in snapshots
-            ]
+            repos = await self._enrich_repos(
+                snapshots,
+                chat_binding_counts,
+                chat_binding_counts_by_source,
+            )
             if needs_agent_workspaces:
                 agent_workspace_snapshots = results[2]
                 agent_workspaces = [
@@ -173,12 +189,11 @@ class HubRepoListingService:
             for repo_id, source_counts in chat_binding_counts_by_source.items()
         }
         await self._mount_manager.refresh_mounts(snapshots)
-        repos = [
-            self._enricher.enrich_repo(
-                snap, chat_binding_counts, chat_binding_counts_by_source
-            )
-            for snap in snapshots
-        ]
+        repos = await self._enrich_repos(
+            snapshots,
+            chat_binding_counts,
+            chat_binding_counts_by_source,
+        )
         agent_workspaces = [
             workspace.to_dict(self._context.config.root)
             for workspace in agent_workspace_snapshots

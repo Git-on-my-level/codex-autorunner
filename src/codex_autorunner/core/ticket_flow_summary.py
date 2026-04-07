@@ -59,6 +59,12 @@ def _load_latest_ticket_flow_run(repo_path: Path) -> Optional[FlowRunRecord]:
         return get_latest_ticket_flow_run(store)
 
 
+def _load_latest_ticket_flow_run_from_store(
+    store: FlowStore,
+) -> Optional[FlowRunRecord]:
+    return get_latest_ticket_flow_run(store)
+
+
 def build_ticket_flow_display(
     *,
     status: Optional[str],
@@ -122,6 +128,7 @@ def build_ticket_flow_summary(
     repo_path: Path,
     *,
     include_failure: bool,
+    store: Optional[FlowStore] = None,
 ) -> Optional[dict[str, Any]]:
     ticket_dir = repo_path / ".codex-autorunner" / "tickets"
     ticket_paths = list_ticket_paths(ticket_dir)
@@ -163,7 +170,11 @@ def build_ticket_flow_summary(
     pr_url = open_pr_ticket_url
 
     try:
-        latest = _load_latest_ticket_flow_run(repo_path)
+        latest = (
+            _load_latest_ticket_flow_run_from_store(store)
+            if store is not None
+            else _load_latest_ticket_flow_run(repo_path)
+        )
     except (
         Exception
     ):  # intentional: summary degrades gracefully on any data-access failure
