@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
 from codex_autorunner.integrations.github.polling import GitHubScmPollingService
-from codex_autorunner.integrations.github.service import GitHubError
+from codex_autorunner.integrations.github.service import GitHubError, RepoInfo
 
 
 class _GitHubServiceStub:
@@ -99,7 +100,7 @@ class _DiscoveringGitHubServiceStub(_GitHubServiceStub):
         raw_config: dict | None = None,
         *,
         hub_root: Path,
-        repo_id: str,
+        repo_id: str | None,
         repo_slug: str,
         pr_number: int,
         head_branch: str,
@@ -128,6 +129,12 @@ class _DiscoveringGitHubServiceStub(_GitHubServiceStub):
         self._pr_state = pr_state
         self._discover = discover
 
+    def repo_info(self) -> RepoInfo:
+        return RepoInfo(
+            name_with_owner=self._repo_slug,
+            url=f"https://github.com/{self._repo_slug}",
+        )
+
     def discover_pr_binding(self, *, branch=None, cwd=None):
         _ = branch, cwd
         if not self._discover:
@@ -141,6 +148,45 @@ class _DiscoveringGitHubServiceStub(_GitHubServiceStub):
             head_branch=self._head_branch,
             base_branch=self._base_branch,
         )
+
+
+def _write_discord_binding(
+    db_path: Path,
+    *,
+    channel_id: str,
+    workspace_path: str,
+    repo_id: str | None = None,
+    updated_at: str = "2026-03-30T00:00:00Z",
+) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_bindings (
+                    channel_id TEXT PRIMARY KEY,
+                    workspace_path TEXT,
+                    repo_id TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO channel_bindings (
+                    channel_id, workspace_path, repo_id, updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    workspace_path=excluded.workspace_path,
+                    repo_id=excluded.repo_id,
+                    updated_at=excluded.updated_at
+                """,
+                (channel_id, workspace_path, repo_id, updated_at),
+            )
+    finally:
+        conn.close()
 
 
 def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -> None:
@@ -886,6 +932,61 @@ def test_process_arms_watch_for_existing_binding_without_discovery(
     assert watch.workspace_root == str(repo_root.resolve())
 
 
+def test_process_discovers_external_pr_binding_from_discord_bound_unregistered_workspace(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "worktrees" / "repo-1--discord-1"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/base", repo_id="repo-1")
+    _write_discord_binding(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="discord-chan-1",
+        workspace_path=str(repo_root.resolve()),
+        repo_id=None,
+    )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id=None,
+            repo_slug="acme/widgets",
+            pr_number=43,
+            head_branch="feature/missing-watch",
+            discover=repo_root_arg == repo_root,
+        )
+
+    raw_config = _polling_config()
+    raw_config["discord_bot"] = {"enabled": True}
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=raw_config,
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["candidate_workspaces"] == 1
+    assert result["bindings_discovered"] == 1
+    assert result["watches_armed"] == 1
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=43,
+    )
+    assert binding is not None
+    assert binding.repo_id is None
+    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert watch is not None
+    assert watch.state == "active"
+    assert watch.workspace_root == str(repo_root.resolve())
+
+
 def test_process_repairs_active_watch_workspace_root_without_resetting_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -1124,21 +1225,21 @@ def test_process_rotates_discovery_across_candidate_workspaces(
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
-        lambda: datetime(2026, 4, 5, 8, 0, 0, tzinfo=timezone.utc),
+        lambda: datetime(2099, 4, 5, 8, 0, 0, tzinfo=timezone.utc),
     )
     first = service.process(limit=2)
 
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
-        lambda: datetime(2026, 4, 5, 8, 1, 0, tzinfo=timezone.utc),
+        lambda: datetime(2099, 4, 5, 8, 1, 0, tzinfo=timezone.utc),
     )
     skipped = service.process(limit=2)
 
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
-        lambda: datetime(2026, 4, 5, 8, 3, 0, tzinfo=timezone.utc),
+        lambda: datetime(2099, 4, 5, 8, 3, 0, tzinfo=timezone.utc),
     )
     second = service.process(limit=2)
 

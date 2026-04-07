@@ -9,6 +9,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
+from ...core.chat_bindings import (
+    preferred_non_pma_chat_notification_sources_by_workspace,
+)
 from ...core.orchestration.sqlite import open_orchestration_sqlite
 from ...core.pma_thread_store import PmaThreadStore
 from ...core.pr_bindings import PrBinding, PrBindingStore
@@ -1116,6 +1119,17 @@ class GitHubScmPollingService:
                 repo_id=_normalize_text(thread.get("repo_id")),
                 thread_target_id=_normalize_text(thread.get("managed_thread_id")),
             )
+        try:
+            preferred_chat_sources = (
+                preferred_non_pma_chat_notification_sources_by_workspace(
+                    hub_root=self._hub_root,
+                    raw_config=self._raw_config,
+                )
+            )
+        except Exception:
+            preferred_chat_sources = {}
+        for workspace_root in preferred_chat_sources:
+            add_root(Path(workspace_root))
         return roots, workspaces_by_repo_id, workspaces_by_thread_id
 
     def _resolve_workspace_root_for_binding(
