@@ -27,6 +27,9 @@ _logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 2
 UNSET = object()
+_REQUIRED_SCHEMA_TABLES = frozenset(
+    {"schema_info", "flow_runs", "flow_events", "flow_artifacts"}
+)
 _SQLITE_PRAGMAS_READONLY = (
     "PRAGMA foreign_keys=ON;",
     f"PRAGMA busy_timeout={DEFAULT_SQLITE_BUSY_TIMEOUT_MS};",
@@ -101,11 +104,33 @@ class FlowStore:
 
     def initialize(self) -> None:
         if self._readonly:
-            self._get_conn()
+            self._validate_readonly_schema(self._get_conn())
             return
         with self.transaction() as conn:
             self._create_schema(conn)
             self._ensure_schema_version(conn)
+
+    def _validate_readonly_schema(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table' AND name IN (?, ?, ?, ?)
+            """,
+            tuple(sorted(_REQUIRED_SCHEMA_TABLES)),
+        ).fetchall()
+        present_tables = {str(row["name"]) for row in rows}
+        missing_tables = sorted(_REQUIRED_SCHEMA_TABLES - present_tables)
+        if missing_tables:
+            missing_text = ", ".join(missing_tables)
+            raise RuntimeError(
+                f"FlowStore read-only schema check failed; missing tables: {missing_text}"
+            )
+        result = conn.execute("SELECT version FROM schema_info").fetchone()
+        if result is None:
+            raise RuntimeError(
+                "FlowStore read-only schema check failed; missing schema version"
+            )
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute(

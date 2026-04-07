@@ -203,3 +203,15 @@ def test_flow_store_readonly_transaction_is_rejected(tmp_path):
                 pass
     finally:
         store.close()
+
+
+def test_flow_store_readonly_initialize_rejects_missing_schema(tmp_path):
+    db_path = tmp_path / "flows.db"
+    sqlite3.connect(db_path).close()
+
+    store = FlowStore.connect_readonly(db_path)
+    try:
+        with pytest.raises(RuntimeError, match="missing tables"):
+            store.initialize()
+    finally:
+        store.close()

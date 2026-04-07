@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .....core.chat_bindings import active_chat_binding_counts_by_source
@@ -37,6 +38,14 @@ class _RepoListingCacheEntry:
 
 def _monotonic() -> float:
     return time.monotonic()
+
+
+def _path_stat_fingerprint(path: Path) -> tuple[bool, Optional[int], Optional[int]]:
+    try:
+        stat = path.stat()
+    except OSError:
+        return (False, None, None)
+    return (True, int(stat.st_mtime_ns), int(stat.st_size))
 
 
 def normalize_repo_listing_sections(raw: Optional[str]) -> set[str]:
@@ -109,10 +118,16 @@ class HubRepoListingService:
         pinned_parent_repo_ids = (
             getattr(supervisor_state, "pinned_parent_repo_ids", []) or []
         )
+        manifest_path = getattr(self._context.config, "manifest_path", None)
         return (
             tuple(sorted(requested)),
             getattr(supervisor_state, "last_scan_at", None),
             tuple(pinned_parent_repo_ids),
+            (
+                _path_stat_fingerprint(manifest_path)
+                if isinstance(manifest_path, Path)
+                else None
+            ),
         )
 
     def _store_response_cache(

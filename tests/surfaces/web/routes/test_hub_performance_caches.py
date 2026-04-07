@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
+from codex_autorunner.core.flows.store import FlowStore
 from codex_autorunner.core.hub import LockStatus, RepoSnapshot, RepoStatus
 from codex_autorunner.surfaces.web.routes.hub_repo_routes import (
     channels as hub_channels_module,
@@ -203,7 +204,14 @@ def test_hub_repo_enricher_reuses_single_flow_store_per_repo_state(
     repo_root = hub_root / "demo"
     car_root = repo_root / ".codex-autorunner"
     (car_root / "tickets").mkdir(parents=True, exist_ok=True)
-    (car_root / "flows.db").touch()
+    with FlowStore(car_root / "flows.db") as store:
+        store.create_flow_run(
+            "r1",
+            "ticket_flow",
+            input_data={},
+            state={},
+            metadata={},
+        )
     snapshot = _repo_snapshot(repo_root)
     context = SimpleNamespace(
         config=SimpleNamespace(
@@ -217,10 +225,6 @@ def test_hub_repo_enricher_reuses_single_flow_store_per_repo_state(
 
     monkeypatch.setattr(
         "codex_autorunner.core.archive.has_car_state", lambda _path: True
-    )
-    monkeypatch.setattr(
-        "codex_autorunner.core.config.load_repo_config",
-        lambda _repo_root: SimpleNamespace(durable_writes=False),
     )
 
     def fake_ticket_flow_summary(
@@ -387,6 +391,60 @@ def test_hub_repo_listing_service_reuses_stale_response_while_refreshing(
         assert refreshed["repos"][0]["call"] == 2
 
     asyncio.run(run_scenario())
+
+
+def test_hub_repo_listing_service_invalidates_cache_when_manifest_changes(
+    tmp_path: Path,
+) -> None:
+    class _AsyncMountManager:
+        async def refresh_mounts(self, _snapshots) -> None:
+            return None
+
+    snapshot = _repo_snapshot(tmp_path / "repo-1", repo_id="repo-1")
+    manifest_path = tmp_path / ".codex-autorunner" / "manifest.yml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text("repos:\n  - id: repo-1\n", encoding="utf-8")
+    calls = {"enrich_repo": 0}
+
+    def enrich_repo(
+        _snapshot, chat_binding_counts: dict[str, int], chat_binding_counts_by_source
+    ) -> dict[str, object]:
+        assert chat_binding_counts == {}
+        assert chat_binding_counts_by_source == {}
+        calls["enrich_repo"] += 1
+        return {"repo_id": "repo-1", "call": calls["enrich_repo"]}
+
+    context = SimpleNamespace(
+        config=SimpleNamespace(
+            root=tmp_path,
+            raw={},
+            manifest_path=manifest_path,
+            pma=SimpleNamespace(freshness_stale_threshold_seconds=None),
+        ),
+        supervisor=SimpleNamespace(
+            list_repos=lambda: [snapshot],
+            state=SimpleNamespace(
+                last_scan_at="2026-04-05T00:00:00Z",
+                pinned_parent_repo_ids=[],
+            ),
+        ),
+        logger=logging.getLogger(__name__),
+    )
+    listing_service = HubRepoListingService(
+        context,
+        _AsyncMountManager(),  # type: ignore[arg-type]
+        SimpleNamespace(enrich_repo=enrich_repo),
+    )
+
+    first = asyncio.run(listing_service.list_repos(sections={"repos"}))
+    manifest_path.write_text(
+        "repos:\n  - id: repo-1\n  - id: repo-2\n", encoding="utf-8"
+    )
+    second = asyncio.run(listing_service.list_repos(sections={"repos"}))
+
+    assert first["repos"][0]["call"] == 1
+    assert second["repos"][0]["call"] == 2
+    assert calls["enrich_repo"] == 2
 
 
 def test_hub_channel_service_reuses_ttl_cache(
