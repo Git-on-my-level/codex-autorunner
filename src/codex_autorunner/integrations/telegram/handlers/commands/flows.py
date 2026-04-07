@@ -152,6 +152,10 @@ class FlowCommands(TelegramCommandSupportMixin):
             "archive. Archive it anyway?"
         )
 
+    @staticmethod
+    def _flow_archive_in_progress_text(run_id: object) -> str:
+        return f"Archiving run {_code(run_id)}. This can take a few seconds."
+
     def _build_flow_archive_confirmation_keyboard(
         self,
         run_id: str,
@@ -816,6 +820,11 @@ class FlowCommands(TelegramCommandSupportMixin):
                 else:
                     try:
                         await _answer_once("Working...")
+                        await self._edit_callback_message(
+                            callback,
+                            self._flow_archive_in_progress_text(record.id),
+                            reply_markup={"inline_keyboard": []},
+                        )
                         summary = flow_service.archive_flow_run(
                             record.id,
                             force=ticket_flow_archive_requires_force(record),

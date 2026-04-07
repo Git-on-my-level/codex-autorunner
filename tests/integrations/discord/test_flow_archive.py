@@ -372,6 +372,8 @@ async def test_flow_archive_button_deletes_run_record_by_default(
         {"run_id": run_id, "force": False, "delete_run": True}
     ]
     assert rest.interaction_responses[0]["payload"]["type"] == 6
+    assert len(rest.followup_messages) == 1
+    assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
     edited = rest.edited_original_interaction_responses[0]["payload"]
     assert "Archived run" in edited["content"]
     assert edited["components"] == []
@@ -504,9 +506,10 @@ async def test_flow_archive_button_keeps_original_card_on_validation_error(
 
     assert rest.interaction_responses[0]["payload"]["type"] == 6
     assert rest.edited_original_interaction_responses == []
-    assert len(rest.followup_messages) == 1
+    assert len(rest.followup_messages) == 2
+    assert "Archiving run" in rest.followup_messages[0]["payload"]["content"]
     assert (
-        rest.followup_messages[0]["payload"]["content"]
+        rest.followup_messages[1]["payload"]["content"]
         == "Can only archive completed/stopped/failed flows"
     )
 

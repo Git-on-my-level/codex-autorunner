@@ -67,6 +67,10 @@ def flow_archive_prompt_text(record: FlowRunRecord) -> str:
     )
 
 
+def flow_archive_in_progress_text(run_id: str) -> str:
+    return f"Archiving run {run_id}... This can take a few seconds."
+
+
 def build_flow_archive_confirmation_components(
     run_id: str,
     *,
@@ -2070,6 +2074,10 @@ async def handle_flow_button(
             )
             return
 
+        await service._send_followup_ephemeral(
+            interaction_token=interaction_token,
+            content=flow_archive_in_progress_text(target.id),
+        )
         try:
             summary = await asyncio.to_thread(
                 flow_service.archive_flow_run,
