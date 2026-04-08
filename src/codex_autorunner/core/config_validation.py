@@ -1031,6 +1031,7 @@ def _validate_repo_config(cfg: Dict[str, Any], *, root: Path) -> None:
             raise ConfigError("static_assets.max_cache_age_days must be an integer")
         if max_cache_age_days < 0:
             raise ConfigError("static_assets.max_cache_age_days must be >= 0")
+    _validate_flow_retention_config(cfg)
     _validate_housekeeping_config(cfg)
     _validate_collaboration_policy_config(cfg)
     _validate_telegram_bot_config(cfg)
@@ -1163,6 +1164,28 @@ def _validate_optional_int_ge(
                 raise ConfigError(f"{path}.{key} must be > 0")
             else:
                 raise ConfigError(f"{path}.{key} must be >= {min_value}")
+
+
+def _validate_flow_retention_config(cfg: Dict[str, Any]) -> None:
+    flow_retention = cfg.get("flow_retention")
+    if flow_retention is None:
+        return
+    if not isinstance(flow_retention, dict):
+        raise ConfigError("flow_retention must be a mapping")
+    retention_days = flow_retention.get("retention_days")
+    if retention_days is not None:
+        if not _is_strict_int(retention_days):
+            raise ConfigError("flow_retention.retention_days must be an integer")
+        if retention_days <= 0:
+            raise ConfigError("flow_retention.retention_days must be > 0")
+    sweep_interval_seconds = flow_retention.get("sweep_interval_seconds")
+    if sweep_interval_seconds is not None:
+        if not _is_strict_int(sweep_interval_seconds):
+            raise ConfigError(
+                "flow_retention.sweep_interval_seconds must be an integer"
+            )
+        if sweep_interval_seconds <= 0:
+            raise ConfigError("flow_retention.sweep_interval_seconds must be > 0")
 
 
 def _validate_housekeeping_config(cfg: Dict[str, Any]) -> None:

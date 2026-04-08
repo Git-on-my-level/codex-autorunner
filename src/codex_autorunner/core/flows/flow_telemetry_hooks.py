@@ -52,7 +52,6 @@ def _run_housekeep(
     repo_root: Path,
     *,
     run_ids: Optional[Sequence[str]] = None,
-    vacuum: bool = False,
     include_all_terminal: bool = False,
 ) -> Optional[HousekeepResult]:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
@@ -75,7 +74,6 @@ def _run_housekeep(
             db_path,
             retention,
             run_ids=run_ids,
-            vacuum=vacuum or retention.vacuum_after_prune,
             dry_run=False,
             include_all_terminal=include_all_terminal,
         )
@@ -121,7 +119,7 @@ def housekeep_on_worktree_cleanup(
     to prune before the worktree disappears.
     """
     _logger.info("housekeep_on_worktree_cleanup repo=%s", repo_root.name)
-    return _run_housekeep(repo_root, vacuum=True, include_all_terminal=True)
+    return _run_housekeep(repo_root, include_all_terminal=True)
 
 
 @dataclasses.dataclass

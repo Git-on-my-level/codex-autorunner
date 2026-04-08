@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp
 
+from ...core.config import parse_flow_retention_config
 from ...core.filebox_retention import (
     prune_filebox_root,
     resolve_filebox_retention_policy,
@@ -373,6 +374,12 @@ def create_hub_app(
 
                 tasks.append(asyncio.create_task(_managed_docker_reaper_loop()))
                 tasks.append(asyncio.create_task(_housekeeping_loop()))
+                flow_retention_defaults = parse_flow_retention_config(
+                    app.state.config.repo_defaults.get("flow_retention")
+                    if isinstance(app.state.config.repo_defaults, dict)
+                    else None
+                )
+                flow_sweep_interval = flow_retention_defaults.sweep_interval_seconds
 
                 async def _flow_telemetry_sweep_loop():
                     await asyncio.sleep(initial_delay)
@@ -407,7 +414,7 @@ def create_hub_app(
                                 "Flow telemetry sweep failed",
                                 exc,
                             )
-                        await asyncio.sleep(interval)
+                        await asyncio.sleep(flow_sweep_interval)
 
                 tasks.append(asyncio.create_task(_flow_telemetry_sweep_loop()))
             app_server_supervisor = cast(

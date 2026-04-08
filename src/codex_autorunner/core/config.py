@@ -44,27 +44,30 @@ from .utils import atomic_write
 logger = logging.getLogger("codex_autorunner.core.config")
 
 _DEFAULT_FLOW_RETENTION_DAYS = 7
+_DEFAULT_FLOW_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
 
 
 @dataclasses.dataclass(frozen=True)
 class FlowRetentionConfig:
     retention_days: int = _DEFAULT_FLOW_RETENTION_DAYS
-    vacuum_after_prune: bool = False
+    sweep_interval_seconds: int = _DEFAULT_FLOW_SWEEP_INTERVAL_SECONDS
 
 
 def parse_flow_retention_config(raw: Optional[Dict[str, Any]]) -> FlowRetentionConfig:
     if not isinstance(raw, dict):
         return FlowRetentionConfig()
     retention_days = raw.get("retention_days")
-    vacuum_after_prune = raw.get("vacuum_after_prune")
+    sweep_interval_seconds = raw.get("sweep_interval_seconds")
     return FlowRetentionConfig(
         retention_days=(
             int(retention_days)
             if retention_days is not None
             else _DEFAULT_FLOW_RETENTION_DAYS
         ),
-        vacuum_after_prune=(
-            bool(vacuum_after_prune) if vacuum_after_prune is not None else False
+        sweep_interval_seconds=(
+            int(sweep_interval_seconds)
+            if sweep_interval_seconds is not None
+            else _DEFAULT_FLOW_SWEEP_INTERVAL_SECONDS
         ),
     )
 
@@ -760,7 +763,7 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
     "housekeeping": _default_housekeeping_section(include_repo_review_runs=True),
     "flow_retention": {
         "retention_days": 7,
-        "vacuum_after_prune": False,
+        "sweep_interval_seconds": 86400,
     },
     "storage": {
         "durable_writes": False,
@@ -785,6 +788,7 @@ REPO_DEFAULT_KEYS = {
     "review",
     "opencode",
     "usage",
+    "flow_retention",
 }
 DEFAULT_REPO_DEFAULTS = {
     key: json.loads(json.dumps(DEFAULT_REPO_CONFIG[key])) for key in REPO_DEFAULT_KEYS

@@ -1268,9 +1268,6 @@ You are the first ticket in a new ticket_flow run.
         dry_run: bool = typer.Option(
             False, "--dry-run", help="Preview export/prune without mutating"
         ),
-        vacuum: bool = typer.Option(
-            False, "--vacuum", help="Run VACUUM after pruning to reclaim disk space"
-        ),
         retention: Optional[str] = typer.Option(
             None,
             "--retention",
@@ -1287,7 +1284,7 @@ You are the first ticket in a new ticket_flow run.
           --stats     Report DB/run statistics without mutating anything.
           --dry-run   Preview which runs would be exported and pruned.
           (default)   Execute export and prune for expired terminal runs.
-          --vacuum    Additionally run VACUUM to reclaim freed pages.
+          VACUUM runs automatically when pruning deletes rows.
 
         Expired means a terminal run whose finished_at is older than the
         retention window (default 7d, overridable via --retention or config).
@@ -1315,7 +1312,7 @@ You are the first ticket in a new ticket_flow run.
                 )
             retention_config = FlowRetentionConfig(
                 retention_days=total_seconds // 86400,
-                vacuum_after_prune=vacuum,
+                sweep_interval_seconds=retention_config.sweep_interval_seconds,
             )
 
         store = FlowStore(db_path, durable=engine.config.durable_writes)
@@ -1449,7 +1446,6 @@ You are the first ticket in a new ticket_flow run.
                 db_path,
                 retention_config,
                 run_ids=target_run_ids,
-                vacuum=vacuum or retention_config.vacuum_after_prune,
                 dry_run=False,
             )
             result_payload = hk_result.to_dict()
