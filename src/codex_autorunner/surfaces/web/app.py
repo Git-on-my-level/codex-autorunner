@@ -54,9 +54,45 @@ from .static_assets import (
 
 __all__ = ["create_app", "create_hub_app", "create_repo_app"]
 
+_DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS = float(
+    parse_flow_retention_config(None).sweep_interval_seconds
+)
+
 
 class _IdlePrunable(Protocol):
     async def prune_idle(self) -> None: ...
+
+
+def _resolve_hub_flow_sweep_interval_seconds(
+    repo_defaults: object, logger: logging.Logger
+) -> float:
+    if not isinstance(repo_defaults, dict):
+        return _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS
+    flow_retention = repo_defaults.get("flow_retention")
+    if flow_retention is None:
+        return _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS
+    if not isinstance(flow_retention, dict):
+        logger.warning(
+            "Ignoring invalid hub repo_defaults.flow_retention=%r; using default flow sweep interval %s",
+            flow_retention,
+            int(_DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS),
+        )
+        return _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS
+    sweep_interval_seconds = flow_retention.get("sweep_interval_seconds")
+    if sweep_interval_seconds is None:
+        return _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS
+    if (
+        not isinstance(sweep_interval_seconds, int)
+        or isinstance(sweep_interval_seconds, bool)
+        or sweep_interval_seconds <= 0
+    ):
+        logger.warning(
+            "Ignoring invalid hub repo_defaults.flow_retention.sweep_interval_seconds=%r; using default %s",
+            sweep_interval_seconds,
+            int(_DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS),
+        )
+        return _DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS
+    return float(sweep_interval_seconds)
 
 
 async def _run_prune_loop(
@@ -374,12 +410,10 @@ def create_hub_app(
 
                 tasks.append(asyncio.create_task(_managed_docker_reaper_loop()))
                 tasks.append(asyncio.create_task(_housekeeping_loop()))
-                flow_retention_defaults = parse_flow_retention_config(
-                    app.state.config.repo_defaults.get("flow_retention")
-                    if isinstance(app.state.config.repo_defaults, dict)
-                    else None
+                flow_sweep_interval = _resolve_hub_flow_sweep_interval_seconds(
+                    app.state.config.repo_defaults,
+                    app.state.logger,
                 )
-                flow_sweep_interval = flow_retention_defaults.sweep_interval_seconds
 
                 async def _flow_telemetry_sweep_loop():
                     await asyncio.sleep(initial_delay)
