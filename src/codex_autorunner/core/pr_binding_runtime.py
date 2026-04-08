@@ -262,7 +262,7 @@ def backfill_pr_binding_thread_target_ids(
             )
             for binding in bindings:
                 counts["bindings_matched"] += 1
-                if binding.thread_target_id not in {None, managed_thread_id}:
+                if binding.thread_target_id is not None:
                     continue
                 updated = binding_store.attach_thread_target(
                     provider=binding.provider,

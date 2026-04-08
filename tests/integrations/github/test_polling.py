@@ -390,6 +390,49 @@ def test_backfill_binding_thread_targets_claims_active_matching_thread(
     assert binding.thread_target_id == thread["managed_thread_id"]
 
 
+def test_backfill_binding_thread_targets_skips_already_bound_binding(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True)
+    thread = PmaThreadStore(hub_root).create_thread(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        metadata={"head_branch": "feature/backfill"},
+    )
+    original = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/backfill",
+        base_branch="main",
+        thread_target_id=str(thread["managed_thread_id"]),
+    )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+    )
+
+    counts = service.backfill_binding_thread_targets(limit=10)
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+    )
+
+    assert counts["threads_scanned"] == 1
+    assert counts["bindings_matched"] == 1
+    assert counts["bindings_updated"] == 0
+    assert binding is not None
+    assert binding.thread_target_id == thread["managed_thread_id"]
+    assert binding.updated_at == original.updated_at
+
+
 def test_process_due_watches_emits_only_new_review_and_check_transitions(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
