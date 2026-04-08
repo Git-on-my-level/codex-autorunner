@@ -20,7 +20,7 @@ from .....core.state import now_iso
 from .....core.utils import canonicalize_path, resolve_opencode_binary
 from .....manifest import load_manifest
 from ....app_server import is_missing_thread_error
-from ....app_server.client import CodexAppServerClient
+from ....app_server.client import CodexAppServerClient, CodexAppServerError
 from ....chat.agents import (
     build_agent_switch_state,
     chat_agent_supports_effort,
@@ -437,7 +437,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             return None
         try:
             result = await client.thread_resume(thread_id)
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError, CodexAppServerError) as exc:
             if is_missing_thread_error(exc):
                 log_event(
                     self._logger,
@@ -1625,7 +1625,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                     record.workspace_path,
                     **self._thread_start_kwargs(record),
                 )
-            except (OSError, RuntimeError, ValueError) as exc:
+            except (OSError, RuntimeError, ValueError, CodexAppServerError) as exc:
                 log_event(
                     self._logger,
                     logging.WARNING,
@@ -2928,7 +2928,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             return
         try:
             result = await client.thread_resume(thread_id)
-        except (OSError, RuntimeError, ValueError) as exc:
+        except (OSError, RuntimeError, ValueError, CodexAppServerError) as exc:
             if is_missing_thread_error(exc):
                 log_event(
                     self._logger,

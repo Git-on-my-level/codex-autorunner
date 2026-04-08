@@ -161,6 +161,7 @@ class FakeBot:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
         self.documents: list[dict[str, object]] = []
+        self.deleted_messages: list[dict[str, object]] = []
 
     async def send_message(
         self,
@@ -250,6 +251,22 @@ class FakeBot:
         disable_web_page_preview: bool = True,
     ) -> dict[str, object]:
         return {}
+
+    async def delete_message(
+        self,
+        chat_id: int,
+        message_id: int,
+        *,
+        message_thread_id: Optional[int] = None,
+    ) -> bool:
+        self.deleted_messages.append(
+            {
+                "chat_id": chat_id,
+                "thread_id": message_thread_id,
+                "message_id": message_id,
+            }
+        )
+        return True
 
 
 @pytest.mark.anyio
