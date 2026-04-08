@@ -216,6 +216,56 @@ async def test_message_create_uses_negative_lookup_cache_for_missing_names(
 
 
 @pytest.mark.anyio
+async def test_message_create_concurrent_rest_resolution_deduplicates_lookups(
+    tmp_path: Path,
+) -> None:
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway(),
+    )
+
+    async def _slow_get_channel(*, channel_id: str) -> dict[str, Any]:
+        rest.get_channel_calls.append(channel_id)
+        await asyncio.sleep(0.01)
+        return {
+            "id": channel_id,
+            "guild_id": "guild-9",
+            "name": "renamed-room",
+        }
+
+    async def _slow_get_guild(*, guild_id: str) -> dict[str, Any]:
+        rest.get_guild_calls.append(guild_id)
+        await asyncio.sleep(0.01)
+        return {"id": guild_id, "name": "CAR HQ"}
+
+    rest.get_channel = _slow_get_channel  # type: ignore[assignment]
+    rest.get_guild = _slow_get_guild  # type: ignore[assignment]
+
+    payload = {
+        "id": "m-5",
+        "channel_id": "channel-9",
+        "guild_id": "guild-9",
+        "content": "hello",
+        "author": {"id": "user-1", "bot": False},
+    }
+
+    await asyncio.gather(
+        service._record_channel_directory_seen_from_message_payload(dict(payload)),
+        service._record_channel_directory_seen_from_message_payload(dict(payload)),
+    )
+
+    entries = ChannelDirectoryStore(tmp_path).list_entries(limit=None)
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["display"] == "CAR HQ / #renamed-room"
+    assert rest.get_channel_calls == ["channel-9"]
+    assert rest.get_guild_calls == ["guild-9"]
+
+
+@pytest.mark.anyio
 async def test_message_create_dispatch_does_not_wait_for_channel_directory_lookup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

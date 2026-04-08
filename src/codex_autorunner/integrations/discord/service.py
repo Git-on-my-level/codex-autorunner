@@ -594,6 +594,8 @@ class DiscordBotService:
         self._channel_directory_store = ChannelDirectoryStore(self._config.root)
         self._guild_name_cache: dict[str, str] = {}
         self._channel_name_cache: dict[str, str] = {}
+        self._guild_name_lookups: dict[str, asyncio.Task[Optional[str]]] = {}
+        self._channel_name_lookups: dict[str, asyncio.Task[Optional[str]]] = {}
         self._hub_raw_config_cache: Optional[dict[str, Any]] = None
         self._hub_config_path: Optional[Path] = None
         generated_hub_config = self._config.root / ".codex-autorunner" / "config.yml"
@@ -3490,56 +3492,79 @@ class DiscordBotService:
         if not callable(fetch):
             self._channel_name_cache[channel_id] = ""
             return None
-        try:
-            payload = await fetch(channel_id=channel_id)
-        except (DiscordAPIError, OSError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.channel_directory.channel_lookup_failed",
-                channel_id=channel_id,
-                exc=exc,
-            )
-            self._channel_name_cache[channel_id] = ""
-            return None
-        if not isinstance(payload, dict):
-            self._channel_name_cache[channel_id] = ""
-            return None
-        channel_label = self._first_non_empty_text(payload.get("name"))
-        if channel_label is None:
-            self._channel_name_cache[channel_id] = ""
-            return None
-        normalized = channel_label.lstrip("#")
-        self._channel_name_cache[channel_id] = normalized
+        in_flight = self._channel_name_lookups.get(channel_id)
+        if in_flight is None:
 
-        return normalized
+            async def _load_channel_name() -> Optional[str]:
+                try:
+                    payload = await fetch(channel_id=channel_id)
+                except (DiscordAPIError, OSError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.channel_directory.channel_lookup_failed",
+                        channel_id=channel_id,
+                        exc=exc,
+                    )
+                    self._channel_name_cache[channel_id] = ""
+                    return None
+                if not isinstance(payload, dict):
+                    self._channel_name_cache[channel_id] = ""
+                    return None
+                channel_label = self._first_non_empty_text(payload.get("name"))
+                if channel_label is None:
+                    self._channel_name_cache[channel_id] = ""
+                    return None
+                normalized = channel_label.lstrip("#")
+                self._channel_name_cache[channel_id] = normalized
+                return normalized
+
+            in_flight = asyncio.create_task(_load_channel_name())
+            self._channel_name_lookups[channel_id] = in_flight
+        try:
+            return await in_flight
+        finally:
+            if self._channel_name_lookups.get(channel_id) is in_flight:
+                self._channel_name_lookups.pop(channel_id, None)
 
     async def _resolve_guild_name(self, guild_id: str) -> Optional[str]:
         fetch = getattr(self._rest, "get_guild", None)
         if not callable(fetch):
             self._guild_name_cache[guild_id] = ""
             return None
+        in_flight = self._guild_name_lookups.get(guild_id)
+        if in_flight is None:
+
+            async def _load_guild_name() -> Optional[str]:
+                try:
+                    payload = await fetch(guild_id=guild_id)
+                except (DiscordAPIError, OSError) as exc:
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "discord.channel_directory.guild_lookup_failed",
+                        guild_id=guild_id,
+                        exc=exc,
+                    )
+                    self._guild_name_cache[guild_id] = ""
+                    return None
+                if not isinstance(payload, dict):
+                    self._guild_name_cache[guild_id] = ""
+                    return None
+                guild_label = self._first_non_empty_text(payload.get("name"))
+                if guild_label is None:
+                    self._guild_name_cache[guild_id] = ""
+                    return None
+                self._guild_name_cache[guild_id] = guild_label
+                return guild_label
+
+            in_flight = asyncio.create_task(_load_guild_name())
+            self._guild_name_lookups[guild_id] = in_flight
         try:
-            payload = await fetch(guild_id=guild_id)
-        except (DiscordAPIError, OSError) as exc:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "discord.channel_directory.guild_lookup_failed",
-                guild_id=guild_id,
-                exc=exc,
-            )
-            self._guild_name_cache[guild_id] = ""
-            return None
-        if not isinstance(payload, dict):
-            self._guild_name_cache[guild_id] = ""
-            return None
-        guild_label = self._first_non_empty_text(payload.get("name"))
-        if guild_label is None:
-            self._guild_name_cache[guild_id] = ""
-            return None
-        self._guild_name_cache[guild_id] = guild_label
-        return guild_label
+            return await in_flight
+        finally:
+            if self._guild_name_lookups.get(guild_id) is in_flight:
+                self._guild_name_lookups.pop(guild_id, None)
 
     @staticmethod
     def _nested_text(payload: dict[str, Any], key: str, field: str) -> Optional[str]:
