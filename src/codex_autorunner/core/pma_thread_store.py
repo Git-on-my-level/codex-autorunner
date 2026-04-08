@@ -8,6 +8,7 @@ from typing import Any, Iterator, Optional
 
 from .config import load_hub_config
 from .freshness import parse_iso_datetime, resolve_stale_threshold_seconds
+from .git_utils import git_branch
 from .locks import file_lock
 from .managed_thread_status import (
     ManagedThreadStatusReason,
@@ -102,6 +103,23 @@ def _normalize_request_kind(value: Any) -> str:
 def _sanitize_thread_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any]:
     payload = dict(metadata or {})
     payload.pop(_BACKEND_RUNTIME_INSTANCE_ID_KEY, None)
+    return payload
+
+
+def _workspace_head_branch(workspace_root: Path) -> Optional[str]:
+    return _coerce_text(git_branch(workspace_root))
+
+
+def _enrich_thread_metadata_for_workspace(
+    metadata: Optional[dict[str, Any]],
+    *,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    payload = _sanitize_thread_metadata(metadata)
+    if _coerce_text(payload.get("head_branch")) is None:
+        head_branch = _workspace_head_branch(workspace_root)
+        if head_branch is not None:
+            payload["head_branch"] = head_branch
     return payload
 
 
@@ -716,7 +734,10 @@ class PmaThreadStore:
             )
         )
         normalized_backend_thread_id = _coerce_text(backend_thread_id)
-        metadata_payload = _sanitize_thread_metadata(metadata)
+        metadata_payload = _enrich_thread_metadata_for_workspace(
+            metadata,
+            workspace_root=workspace,
+        )
         backend_runtime_instance_id = _coerce_text(
             (metadata or {}).get(_BACKEND_RUNTIME_INSTANCE_ID_KEY)
             if isinstance(metadata, dict)
@@ -916,6 +937,69 @@ class PmaThreadStore:
             backend_thread_id=backend_thread_id,
             backend_runtime_instance_id=resolved_runtime_instance_id,
         )
+
+    def update_thread_metadata(
+        self,
+        managed_thread_id: str,
+        metadata: dict[str, Any],
+    ) -> Optional[dict[str, Any]]:
+        metadata_patch = _sanitize_thread_metadata(metadata)
+        if not metadata_patch:
+            return self.get_thread(managed_thread_id)
+        changed_at = now_iso()
+        with self._write_conn() as conn:
+            thread = self._fetch_thread(conn, managed_thread_id)
+            if thread is None:
+                return None
+            current_metadata = _sanitize_thread_metadata(
+                dict(thread.get("metadata") or {})
+            )
+            updated_metadata = dict(current_metadata)
+            updated_metadata.update(metadata_patch)
+            if updated_metadata == current_metadata:
+                return thread
+            with conn:
+                conn.execute(
+                    """
+                    UPDATE orch_thread_targets
+                       SET metadata_json = ?,
+                           updated_at = ?
+                     WHERE thread_target_id = ?
+                    """,
+                    (
+                        _json_dumps(updated_metadata),
+                        changed_at,
+                        managed_thread_id,
+                    ),
+                )
+            return self._fetch_thread(conn, managed_thread_id)
+
+    def refresh_thread_head_branch(
+        self,
+        managed_thread_id: str,
+        *,
+        workspace_root: Optional[Path] = None,
+    ) -> Optional[str]:
+        thread = self.get_thread(managed_thread_id)
+        if thread is None:
+            return None
+        metadata = dict(thread.get("metadata") or {})
+        fallback_branch = _coerce_text(metadata.get("head_branch"))
+        resolved_workspace = workspace_root
+        if resolved_workspace is None:
+            workspace_text = _coerce_text(thread.get("workspace_root"))
+            if workspace_text is not None:
+                resolved_workspace = Path(workspace_text)
+        if resolved_workspace is None:
+            return fallback_branch
+        head_branch = _workspace_head_branch(resolved_workspace)
+        if head_branch is None:
+            return fallback_branch
+        self.update_thread_metadata(
+            managed_thread_id,
+            {"head_branch": head_branch},
+        )
+        return head_branch
 
     def update_thread_after_turn(
         self,

@@ -14,6 +14,7 @@ from ...core.chat_bindings import (
 )
 from ...core.orchestration.sqlite import open_orchestration_sqlite
 from ...core.pma_thread_store import PmaThreadStore
+from ...core.pr_binding_runtime import backfill_pr_binding_thread_target_ids
 from ...core.pr_bindings import PrBinding, PrBindingStore
 from ...core.scm_events import ScmEventStore
 from ...core.scm_polling_watches import ScmPollingWatch, ScmPollingWatchStore
@@ -916,25 +917,29 @@ class GitHubScmPollingService:
             "candidate_workspaces": 0,
             "candidate_workspaces_scanned": 0,
             "bindings_discovered": 0,
+            "bindings_backfilled": 0,
             "watches_armed": 0,
             "discovery_errors": 0,
             "invalid_bindings_skipped": 0,
             "rate_limited_skipped": 0,
         }
         discovery_counts = self.discover_and_arm_missing_watches(limit=limit)
+        backfill_counts = self.backfill_binding_thread_targets(limit=max(limit, 200))
         due_counts = self.process_due_watches(limit=limit)
         for key, value in discovery_counts.items():
             counts[key] = counts.get(key, 0) + int(value)
+        counts["bindings_backfilled"] += int(backfill_counts["bindings_updated"])
         for key, value in due_counts.items():
             counts[key] = counts.get(key, 0) + int(value)
         _LOGGER.info(
             "GitHub SCM poll cycle: scanned=%s/%s discovered=%s armed=%s "
-            "due=%s polled=%s emitted=%s rate_limited=%s invalid_bindings=%s "
+            "backfilled=%s due=%s polled=%s emitted=%s rate_limited=%s invalid_bindings=%s "
             "closed=%s expired=%s errors=%s",
             counts["candidate_workspaces_scanned"],
             counts["candidate_workspaces"],
             counts["bindings_discovered"],
             counts["watches_armed"],
+            counts["bindings_backfilled"],
             counts["due"],
             counts["polled"],
             counts["events_emitted"],
@@ -945,6 +950,12 @@ class GitHubScmPollingService:
             counts["errors"] + counts["discovery_errors"],
         )
         return counts
+
+    def backfill_binding_thread_targets(self, *, limit: int = 200) -> dict[str, int]:
+        return backfill_pr_binding_thread_target_ids(
+            self._hub_root,
+            limit=limit,
+        )
 
     def _active_bindings(self, *, limit: int) -> tuple[dict[str, PrBinding], int]:
         active_bindings: dict[str, PrBinding] = {}

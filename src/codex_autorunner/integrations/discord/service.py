@@ -137,6 +137,7 @@ from ...integrations.chat.command_contract import command_contract_entry_for_pat
 from ...integrations.chat.command_diagnostics import (
     ActiveFlowInfo,
 )
+from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from ...integrations.chat.dispatcher import (
     ChatDispatcher,
     DispatchContext,
@@ -789,18 +790,16 @@ class DiscordBotService:
         interaction_token = payload_data.get("_discord_token")
         if not isinstance(interaction_token, str) or not interaction_token.strip():
             return True
-        command_raw = payload_data.get("command")
-        command_path = (
-            tuple(part for part in str(command_raw).split(":") if part)
-            if isinstance(command_raw, str)
-            else ()
+        ingress = canonicalize_command_ingress(
+            command=payload_data.get("command"),
+            options=payload_data.get("options"),
         )
-        if not command_path:
+        if ingress is None:
             return True
         return await self._prepare_command_interaction_or_abort(
             interaction_id=event.interaction.interaction_id,
             interaction_token=interaction_token,
-            command_path=self._normalize_discord_command_path(command_path),
+            command_path=self._normalize_discord_command_path(ingress.command_path),
             timing="dispatch",
         )
 

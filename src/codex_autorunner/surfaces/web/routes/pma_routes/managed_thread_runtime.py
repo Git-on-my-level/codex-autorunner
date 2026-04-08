@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,6 +56,7 @@ from .....core.pma_thread_store import (
 )
 from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.ports.run_event import Completed, Failed, RunEvent
+from .....core.pr_binding_runtime import claim_pr_binding_for_thread
 from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
 from .....integrations.app_server.event_buffer import AppServerEventBuffer
@@ -65,6 +67,7 @@ from .....integrations.discord.rendering import (
 )
 from .....integrations.discord.state import DiscordStateStore
 from .....integrations.discord.state import OutboxRecord as DiscordOutboxRecord
+from .....integrations.github.service import GitHubError, GitHubService
 from .....integrations.telegram.state import OutboxRecord as TelegramOutboxRecord
 from .....integrations.telegram.state import TelegramStateStore, parse_topic_key
 from ...schemas import PmaManagedThreadMessageRequest
@@ -100,6 +103,10 @@ PMA_TIMEOUT_SECONDS = 7200
 PMA_MAX_TEXT = PMA_DEFAULT_MAX_TEXT_CHARS
 BOUND_CHAT_SURFACE_KINDS = frozenset({"discord", "telegram"})
 BOUND_CHAT_CLIENT_TURN_PREFIXES = ("discord:", "telegram:")
+_GITHUB_PR_URL_RE = re.compile(
+    r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+",
+    re.IGNORECASE,
+)
 
 
 def _build_managed_thread_orchestration_service(
@@ -270,6 +277,153 @@ def _interrupt_failure_payload(
         "error": detail,
         **delivery_payload,
     }
+
+
+def _runtime_output_suggests_pr_open(
+    assistant_text: str,
+    raw_events: tuple[Any, ...],
+) -> bool:
+    message = str(assistant_text or "")
+    if _GITHUB_PR_URL_RE.search(message):
+        return True
+    lowered_message = message.lower()
+    if "pull request" in lowered_message or re.search(
+        r"\bpr\s*#?\d+\b", lowered_message
+    ):
+        return True
+    for raw_event in raw_events:
+        try:
+            serialized = json.dumps(raw_event, sort_keys=True)
+        except TypeError:
+            serialized = str(raw_event)
+        if _GITHUB_PR_URL_RE.search(serialized):
+            return True
+        lowered_event = serialized.lower()
+        if "gh pr create" in lowered_event or "pull request" in lowered_event:
+            return True
+    return False
+
+
+def _claim_existing_branch_binding_for_thread(
+    *,
+    hub_root: Path,
+    thread_store: PmaThreadStore,
+    thread: dict[str, Any],
+    managed_thread_id: str,
+    workspace_root: Path,
+) -> bool:
+    repo_id = normalize_optional_text(thread.get("repo_id"))
+    if repo_id is None:
+        return False
+    head_branch = thread_store.refresh_thread_head_branch(
+        managed_thread_id,
+        workspace_root=workspace_root,
+    )
+    if head_branch is None:
+        metadata = thread.get("metadata")
+        if isinstance(metadata, dict):
+            head_branch = normalize_optional_text(metadata.get("head_branch"))
+    if head_branch is None:
+        return False
+
+    from .....core.pr_bindings import PrBindingStore
+
+    binding_store = PrBindingStore(hub_root)
+    claimed = False
+    for pr_state in ("open", "draft"):
+        bindings = binding_store.list_bindings(
+            provider="github",
+            repo_id=repo_id,
+            pr_state=pr_state,
+            head_branch=head_branch,
+            limit=20,
+        )
+        for binding in bindings:
+            if binding.thread_target_id not in {None, managed_thread_id}:
+                continue
+            updated = binding_store.attach_thread_target(
+                provider=binding.provider,
+                repo_slug=binding.repo_slug,
+                pr_number=binding.pr_number,
+                thread_target_id=managed_thread_id,
+            )
+            if updated is not None and updated.thread_target_id == managed_thread_id:
+                claimed = True
+    return claimed
+
+
+def _claim_discovered_pr_binding_for_thread(
+    *,
+    request: Request,
+    thread: dict[str, Any],
+    managed_thread_id: str,
+    workspace_root: Path,
+) -> bool:
+    raw_config = getattr(getattr(request.app.state, "config", None), "raw", {})
+    try:
+        github = GitHubService(
+            workspace_root,
+            raw_config=raw_config if isinstance(raw_config, dict) else None,
+            config_root=request.app.state.config.root,
+            traffic_class="background",
+        )
+        summary = github.discover_pr_binding_summary(cwd=workspace_root)
+    except (GitHubError, OSError, RuntimeError, ValueError):
+        logger.debug(
+            "Managed-thread PR discovery failed (managed_thread_id=%s, workspace_root=%s)",
+            managed_thread_id,
+            workspace_root,
+            exc_info=True,
+        )
+        return False
+    if not isinstance(summary, dict):
+        return False
+    repo_slug = normalize_optional_text(summary.get("repo_slug"))
+    pr_number = summary.get("pr_number")
+    pr_state = normalize_optional_text(summary.get("pr_state"))
+    if repo_slug is None or not isinstance(pr_number, int) or pr_state is None:
+        return False
+    claimed = claim_pr_binding_for_thread(
+        request.app.state.config.root,
+        provider="github",
+        repo_slug=repo_slug,
+        repo_id=normalize_optional_text(thread.get("repo_id")),
+        pr_number=pr_number,
+        pr_state=pr_state,
+        head_branch=normalize_optional_text(summary.get("head_branch")),
+        base_branch=normalize_optional_text(summary.get("base_branch")),
+        thread_target_id=managed_thread_id,
+    )
+    return claimed is not None and claimed.thread_target_id == managed_thread_id
+
+
+def _self_claim_pr_bindings_for_managed_thread(
+    request: Request,
+    *,
+    thread_store: PmaThreadStore,
+    thread: dict[str, Any],
+    managed_thread_id: str,
+    workspace_root: Path,
+    assistant_text: str,
+    raw_events: tuple[Any, ...],
+) -> None:
+    hub_root = request.app.state.config.root
+    if _claim_existing_branch_binding_for_thread(
+        hub_root=hub_root,
+        thread_store=thread_store,
+        thread=thread,
+        managed_thread_id=managed_thread_id,
+        workspace_root=workspace_root,
+    ):
+        return
+    if not _runtime_output_suggests_pr_open(assistant_text, raw_events):
+        return
+    _claim_discovered_pr_binding_for_thread(
+        request=request,
+        thread=thread,
+        managed_thread_id=managed_thread_id,
+        workspace_root=workspace_root,
+    )
 
 
 def _interrupt_recovered_lost_backend_payload(
@@ -668,6 +822,22 @@ async def _run_managed_thread_execution(
         or current_backend_thread_id
     )
     if outcome.status == "ok":
+        try:
+            _self_claim_pr_bindings_for_managed_thread(
+                request,
+                thread_store=thread_store,
+                thread=current_thread_row,
+                managed_thread_id=managed_thread_id,
+                workspace_root=started.workspace_root,
+                assistant_text=outcome.assistant_text,
+                raw_events=tuple(merged_raw_events),
+            )
+        except Exception:
+            logger.exception(
+                "Managed-thread PR binding self-claim failed (managed_thread_id=%s, managed_turn_id=%s)",
+                managed_thread_id,
+                current_turn_id,
+            )
         timeline_events.append(
             Completed(timestamp=now_iso(), final_message=outcome.assistant_text)
         )

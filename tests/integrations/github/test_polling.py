@@ -8,6 +8,7 @@ import pytest
 
 import codex_autorunner.integrations.github.polling as github_polling
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
@@ -347,6 +348,46 @@ def test_arm_watch_captures_baseline_and_minimal_noise_profile(
     assert watch.reaction_config["review_comment"] is True
     assert watch.reaction_config["approved_and_green"] is False
     assert watch.reaction_config["merged"] is False
+
+
+def test_backfill_binding_thread_targets_claims_active_matching_thread(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True)
+    thread = PmaThreadStore(hub_root).create_thread(
+        "codex",
+        workspace_root,
+        repo_id="repo-1",
+        metadata={"head_branch": "feature/backfill"},
+    )
+    PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/backfill",
+        base_branch="main",
+    )
+
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+    )
+
+    counts = service.backfill_binding_thread_targets(limit=10)
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+    )
+
+    assert counts["threads_scanned"] == 1
+    assert counts["bindings_updated"] == 1
+    assert binding is not None
+    assert binding.thread_target_id == thread["managed_thread_id"]
 
 
 def test_process_due_watches_emits_only_new_review_and_check_transitions(

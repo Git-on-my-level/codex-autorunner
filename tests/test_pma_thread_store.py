@@ -62,6 +62,23 @@ def test_create_list_get_thread(tmp_path: Path) -> None:
     assert normalized_listed[0]["managed_thread_id"] == created["managed_thread_id"]
 
 
+def test_create_thread_enriches_head_branch_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store.git_branch",
+        lambda repo_root: "feature/pr-binding",
+    )
+
+    created = PmaThreadStore(hub_root).create_thread("codex", workspace_root)
+
+    assert created["metadata"]["head_branch"] == "feature/pr-binding"
+
+
 def test_backend_thread_binding_is_shared_across_store_instances(
     tmp_path: Path,
 ) -> None:

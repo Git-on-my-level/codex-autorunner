@@ -542,6 +542,8 @@ def normalize_runtime_thread_message(
                 state.reasoning_buffers.pop(key, None)
             return []
         if item_type == "agentMessage":
+            if _is_commentary_agent_message(item):
+                return []
             content = _extract_agent_message_text(item)
             if not content:
                 return []
@@ -773,6 +775,9 @@ def _assistant_stream_events(
     *,
     timestamp: Optional[str] = None,
 ) -> list[RunEvent]:
+    phase = str(params.get("phase") or "").strip().lower()
+    if phase == "commentary":
+        return []
     content = _extract_output_delta(params)
     if not content:
         return []
@@ -1220,6 +1225,10 @@ def _extract_agent_message_text(item: dict[str, Any]) -> str:
         if parts:
             return "".join(parts)
     return ""
+
+
+def _is_commentary_agent_message(item: dict[str, Any]) -> bool:
+    return str(item.get("phase") or "").strip().lower() == "commentary"
 
 
 def _extract_usage(params: dict[str, Any]) -> Optional[dict[str, Any]]:

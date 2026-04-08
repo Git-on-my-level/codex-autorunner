@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..manifest import ManifestError, load_manifest
+from .git_utils import git_branch
 from .pma_thread_store import PmaThreadStore
 from .pr_bindings import PrBinding, PrBindingStore
 from .text_utils import _mapping, _normalize_text
@@ -14,6 +15,7 @@ _BRANCH_METADATA_KEYS = ("head_branch", "branch", "git_branch")
 _THREAD_TARGET_ID_KEYS = ("thread_target_id", "managed_thread_id")
 _CONTEXT_MAPPING_KEYS = ("manual_context", "scm", "scm_context", "context")
 _RECENT_TERMINAL_THREAD_LOOKBACK = timedelta(hours=24)
+_ACTIVE_PR_STATES = ("open", "draft")
 
 
 def _parse_timestamp(value: Any) -> Optional[datetime]:
@@ -71,7 +73,10 @@ def thread_matches_branch(thread: Mapping[str, Any], *, head_branch: str) -> boo
             candidate = _normalize_text(context.get(key))
             if candidate == head_branch:
                 return True
-    return False
+    workspace_root = _normalize_text(thread.get("workspace_root"))
+    if workspace_root is None:
+        return False
+    return _normalize_text(git_branch(Path(workspace_root))) == head_branch
 
 
 def explicit_thread_target_id(payload: Mapping[str, Any]) -> Optional[str]:
@@ -181,8 +186,103 @@ def upsert_pr_binding(
     )
 
 
+def claim_pr_binding_for_thread(
+    hub_root: Path,
+    *,
+    provider: str,
+    repo_slug: str,
+    pr_number: int,
+    pr_state: str,
+    thread_target_id: str,
+    repo_id: Optional[str] = None,
+    head_branch: Optional[str] = None,
+    base_branch: Optional[str] = None,
+) -> Optional[PrBinding]:
+    store = PrBindingStore(hub_root)
+    existing_binding = store.get_binding_by_pr(
+        provider=provider,
+        repo_slug=repo_slug,
+        pr_number=pr_number,
+    )
+    normalized_thread_target_id = _normalize_text(thread_target_id)
+    if normalized_thread_target_id is None:
+        return existing_binding
+    if (
+        existing_binding is not None
+        and existing_binding.thread_target_id is not None
+        and existing_binding.thread_target_id != normalized_thread_target_id
+    ):
+        return existing_binding
+    return upsert_pr_binding(
+        hub_root,
+        provider=provider,
+        repo_slug=repo_slug,
+        repo_id=repo_id,
+        pr_number=pr_number,
+        pr_state=pr_state,
+        head_branch=head_branch,
+        base_branch=base_branch,
+        existing_binding=existing_binding,
+        thread_target_id=normalized_thread_target_id,
+    )
+
+
+def backfill_pr_binding_thread_target_ids(
+    hub_root: Path,
+    *,
+    limit: int = 200,
+) -> dict[str, int]:
+    store = PmaThreadStore(hub_root)
+    binding_store = PrBindingStore(hub_root)
+    counts = {
+        "threads_scanned": 0,
+        "bindings_matched": 0,
+        "bindings_updated": 0,
+    }
+    for thread in store.list_threads(status="active", limit=limit):
+        managed_thread_id = _normalize_text(thread.get("managed_thread_id"))
+        repo_id = _normalize_text(thread.get("repo_id"))
+        if managed_thread_id is None or repo_id is None:
+            continue
+        counts["threads_scanned"] += 1
+        head_branch = store.refresh_thread_head_branch(managed_thread_id)
+        if head_branch is None:
+            head_branch = _normalize_text(
+                _mapping(thread.get("metadata")).get("head_branch")
+            )
+        if head_branch is None:
+            continue
+        for pr_state in _ACTIVE_PR_STATES:
+            bindings = binding_store.list_bindings(
+                provider="github",
+                repo_id=repo_id,
+                pr_state=pr_state,
+                head_branch=head_branch,
+                limit=20,
+            )
+            for binding in bindings:
+                counts["bindings_matched"] += 1
+                if binding.thread_target_id not in {None, managed_thread_id}:
+                    continue
+                updated = binding_store.attach_thread_target(
+                    provider=binding.provider,
+                    repo_slug=binding.repo_slug,
+                    pr_number=binding.pr_number,
+                    thread_target_id=managed_thread_id,
+                )
+                if (
+                    updated is not None
+                    and updated.thread_target_id == managed_thread_id
+                    and binding.thread_target_id != managed_thread_id
+                ):
+                    counts["bindings_updated"] += 1
+    return counts
+
+
 __all__ = [
+    "backfill_pr_binding_thread_target_ids",
     "binding_summary",
+    "claim_pr_binding_for_thread",
     "explicit_thread_target_id",
     "find_hub_binding_context",
     "resolve_thread_target_id",
