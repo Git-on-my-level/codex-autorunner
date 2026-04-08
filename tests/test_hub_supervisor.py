@@ -24,6 +24,8 @@ from codex_autorunner.core.config import (
     load_hub_config,
 )
 from codex_autorunner.core.destinations import default_car_docker_container_name
+from codex_autorunner.core.flows import FlowStore
+from codex_autorunner.core.flows.models import FlowRunStatus
 from codex_autorunner.core.force_attestation import FORCE_ATTESTATION_REQUIRED_PHRASE
 from codex_autorunner.core.git_utils import run_git
 from codex_autorunner.core.hub import HubSupervisor, RepoStatus
@@ -191,6 +193,24 @@ def _write_discord_binding(hub_root: Path, *, channel_id: str, repo_id: str) -> 
             )
     finally:
         conn.close()
+
+
+def _seed_flow_run(repo_root: Path, run_id: str, status: FlowRunStatus) -> None:
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with FlowStore(db_path) as store:
+        store.initialize()
+        store.create_flow_run(
+            run_id,
+            "ticket_flow",
+            input_data={
+                "workspace_root": str(repo_root),
+                "runs_dir": ".codex-autorunner/runs",
+            },
+            state={},
+            metadata={},
+        )
+        store.update_flow_run_status(run_id, status)
 
 
 def test_scan_writes_hub_state(tmp_path: Path):
@@ -1357,6 +1377,64 @@ def test_hub_supervisor_cleanup_all_dry_run_does_not_archive_threads(
     assert (
         store.get_thread(thread["managed_thread_id"])["lifecycle_status"] == "archived"
     )
+
+
+def test_cleanup_all_archives_all_terminal_flow_statuses(tmp_path: Path) -> None:
+    hub_root = tmp_path / "hub"
+    cfg = json.loads(json.dumps(DEFAULT_HUB_CONFIG))
+    write_test_config(hub_root / CONFIG_FILENAME, cfg)
+    supervisor = HubSupervisor(
+        load_hub_config(hub_root),
+        backend_factory_builder=build_agent_backend_factory,
+        app_server_supervisor_factory_builder=build_app_server_supervisor_factory,
+        backend_orchestrator_builder=build_backend_orchestrator,
+    )
+    base = supervisor.create_repo("base")
+    _init_git_repo(base.path)
+
+    statuses = {
+        "completed": FlowRunStatus.COMPLETED,
+        "failed": FlowRunStatus.FAILED,
+        "stopped": FlowRunStatus.STOPPED,
+        "superseded": FlowRunStatus.SUPERSEDED,
+    }
+    for index, (suffix, status) in enumerate(statuses.items(), start=1):
+        run_id = f"11111111-1111-1111-1111-{index:012d}"
+        _seed_flow_run(base.path, run_id, status)
+        run_dir = base.path / ".codex-autorunner" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / f"{suffix}.txt").write_text(f"{suffix}\n", encoding="utf-8")
+        flow_dir = base.path / ".codex-autorunner" / "flows" / run_id
+        flow_dir.mkdir(parents=True, exist_ok=True)
+        (flow_dir / "worker.exit.json").write_text("{}", encoding="utf-8")
+
+    result = supervisor.cleanup_all(dry_run=False)
+
+    assert result["flow_runs"]["archived_count"] == 4
+    assert result["flow_runs"]["by_repo"] == [{"repo_id": base.id, "count": 4}]
+    with FlowStore(base.path / ".codex-autorunner" / "flows.db") as store:
+        store.initialize()
+        assert store.list_flow_runs(flow_type="ticket_flow") == []
+    for index, suffix in enumerate(statuses, start=1):
+        run_id = f"11111111-1111-1111-1111-{index:012d}"
+        assert (
+            base.path
+            / ".codex-autorunner"
+            / "archive"
+            / "runs"
+            / run_id
+            / "archived_runs"
+            / f"{suffix}.txt"
+        ).read_text(encoding="utf-8") == f"{suffix}\n"
+        assert (
+            base.path
+            / ".codex-autorunner"
+            / "archive"
+            / "runs"
+            / run_id
+            / "flow_state"
+            / "worker.exit.json"
+        ).read_text(encoding="utf-8") == "{}"
 
 
 def test_cleanup_all_skips_worktree_when_binding_lookup_raises_runtime_error(

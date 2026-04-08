@@ -217,6 +217,139 @@ def _build_flow_archive_entries(
     return entries, summary
 
 
+def _build_run_scoped_archive_entries(
+    repo_root: Path,
+    *,
+    run_id: str,
+    run_dir: Path,
+) -> tuple[list[ArchiveEntrySpec], dict[str, Any]]:
+    archive_root = flow_run_archive_root(repo_root, run_id)
+    flow_state_root = flow_run_artifacts_root(repo_root, run_id)
+    target_runs_dir = _next_archive_dir(archive_root / "archived_runs")
+    target_flow_state_dir = archive_root / "flow_state"
+    if target_flow_state_dir.exists():
+        target_flow_state_dir = _next_archive_dir(target_flow_state_dir)
+    entries = [
+        ArchiveEntrySpec(
+            label=target_runs_dir.relative_to(archive_root).as_posix(),
+            source=run_dir,
+            dest=target_runs_dir,
+            mode="move",
+            required=False,
+        ),
+        ArchiveEntrySpec(
+            label=target_flow_state_dir.relative_to(archive_root).as_posix(),
+            source=flow_state_root,
+            dest=target_flow_state_dir,
+            mode="move",
+            required=False,
+        ),
+    ]
+    summary: dict[str, Any] = {
+        "archive_root": str(archive_root),
+        "archived_runs_dir": str(target_runs_dir),
+        "archived_flow_state_dir": str(target_flow_state_dir),
+    }
+    return entries, summary
+
+
+def _archive_run_scoped_artifacts(
+    repo_root: Path,
+    *,
+    record: Any,
+) -> dict[str, Any]:
+    run_paths = resolve_outbox_paths(
+        workspace_root=repo_root,
+        run_id=record.id,
+    )
+    run_dir = run_paths.run_dir
+    entries, archive_plan = _build_run_scoped_archive_entries(
+        repo_root, run_id=record.id, run_dir=run_dir
+    )
+    execution = execute_archive_entries(entries, worktree_root=repo_root)
+    moved_paths = set(execution.moved_paths)
+    summary: dict[str, Any] = {
+        "run_id": record.id,
+        "status": record.status.value,
+        "run_dir": str(run_dir),
+        "run_dir_exists": run_dir.exists() and run_dir.is_dir(),
+        "archive_dir": archive_plan["archive_root"],
+        "archived_runs_dir": archive_plan["archived_runs_dir"],
+        "archived_flow_state_dir": archive_plan["archived_flow_state_dir"],
+        "archived_runs": "archived_runs" in moved_paths
+        or any(path.startswith("archived_runs_") for path in moved_paths),
+        "archived_flow_state": "flow_state" in moved_paths
+        or any(path.startswith("flow_state_") for path in moved_paths),
+        "archived_paths": sorted(execution.moved_paths),
+        "missing_paths": list(execution.missing_paths),
+    }
+    return summary
+
+
+def archive_terminal_flow_runs(
+    repo_root: Path,
+    *,
+    store: FlowStore,
+    exclude_run_ids: frozenset[str] | None = None,
+    delete_run: bool = True,
+) -> dict[str, Any]:
+    excluded = exclude_run_ids or frozenset()
+    records = [
+        record
+        for record in store.list_flow_runs(flow_type="ticket_flow")
+        if record.status.is_terminal() and record.id not in excluded
+    ]
+    archived_run_ids: list[str] = []
+    archived_run_summaries: list[dict[str, Any]] = []
+    archived_pma_thread_ids: list[str] = []
+    deleted_run_ids: list[str] = []
+    failed_runs: list[dict[str, str]] = []
+    for record in records:
+        try:
+            run_summary = _archive_run_scoped_artifacts(repo_root, record=record)
+        except Exception as exc:  # intentional: sibling cleanup must stay best-effort
+            logger.warning(
+                "Failed to archive terminal sibling run %s",
+                record.id,
+                exc_info=exc,
+            )
+            failed_runs.append(
+                {
+                    "run_id": record.id,
+                    "error": str(exc).strip() or exc.__class__.__name__,
+                }
+            )
+            continue
+
+        archived_run_ids.append(record.id)
+        archived_run_summaries.append(run_summary)
+        try:
+            pma_summary = _archive_ticket_flow_pma_threads(repo_root, record.id)
+        except Exception as exc:  # intentional: best-effort sibling PMA cleanup
+            logger.warning(
+                "Failed to archive PMA threads for terminal sibling run %s",
+                record.id,
+                exc_info=exc,
+            )
+        else:
+            archived_pma_thread_ids.extend(
+                pma_summary.get("archived_pma_thread_ids", []) or []
+            )
+        if delete_run and store.delete_flow_run(record.id):
+            deleted_run_ids.append(record.id)
+    return {
+        "archived_run_ids": archived_run_ids,
+        "archived_run_count": len(archived_run_ids),
+        "deleted_run_ids": deleted_run_ids,
+        "deleted_run_count": len(deleted_run_ids),
+        "archived_pma_thread_ids": archived_pma_thread_ids,
+        "archived_pma_thread_count": len(archived_pma_thread_ids),
+        "archived_runs": archived_run_summaries,
+        "failed_runs": failed_runs,
+        "failed_run_count": len(failed_runs),
+    }
+
+
 def archive_flow_run_artifacts(
     repo_root: Path,
     *,
@@ -323,12 +456,20 @@ def archive_flow_run_artifacts(
 
         if delete_run:
             summary["deleted_run"] = bool(store.delete_flow_run(record.id))
+            summary["related_terminal_cleanup"] = archive_terminal_flow_runs(
+                repo_root,
+                store=store,
+                exclude_run_ids=frozenset({record.id}),
+                delete_run=True,
+            )
 
         return summary
 
 
 __all__ = [
     "_build_flow_archive_entries",
+    "_build_run_scoped_archive_entries",
+    "archive_terminal_flow_runs",
     "archive_flow_run_artifacts",
     "flow_run_archive_root",
     "flow_run_artifacts_root",
