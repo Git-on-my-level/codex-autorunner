@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from codex_autorunner.core.pma_automation_store import PmaAutomationThreadNotFoundError
 from codex_autorunner.surfaces.web.schemas import PmaManagedThreadCreateRequest
 from codex_autorunner.surfaces.web.services.pma.common import (
     build_idempotency_key,
@@ -233,3 +234,37 @@ async def test_managed_thread_automation_client_normalizes_required_unavailable_
             idempotency_key=None,
             required=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_managed_thread_automation_client_downgrades_optional_missing_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    client = ManagedThreadAutomationClient(request, lambda: None)
+
+    async def _fake_get_store(_request, _runtime_state, *, required):
+        assert required is False
+        return object()
+
+    async def _fake_create(_store, _method_names, _payload):
+        raise PmaAutomationThreadNotFoundError("thread-1")
+
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.get_automation_store",
+        _fake_get_store,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.surfaces.web.services.pma.managed_thread_followup.call_store_create_with_payload",
+        _fake_create,
+    )
+
+    created = await client.create_terminal_followup(
+        managed_thread_id="thread-1",
+        lane_id=None,
+        notify_once=True,
+        idempotency_key=None,
+        required=False,
+    )
+
+    assert created is None

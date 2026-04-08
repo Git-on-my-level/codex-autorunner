@@ -1114,7 +1114,6 @@ def test_managed_thread_crud_routes_use_orchestration_service(
         lambda self, action_type, *, managed_thread_id=None, payload_json=None: 1,
     )
 
-    _set_default_terminal_followup(hub_env.hub_root, False)
     app = create_hub_app(hub_env.hub_root)
     with TestClient(app) as client:
         create_resp = client.post(
@@ -1134,6 +1133,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
         archive_resp = client.post("/hub/pma/threads/thread-orch-1/archive")
 
     assert create_resp.status_code == 200
+    assert "notification" not in create_resp.json()
     assert list_resp.status_code == 200
     assert get_resp.status_code == 200
     assert resume_resp.status_code == 200

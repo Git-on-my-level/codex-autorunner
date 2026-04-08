@@ -5,6 +5,7 @@ from typing import Any, Literal, Optional
 
 from fastapi import HTTPException, Request
 
+from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from ...routes.pma_routes.automation_adapter import (
     call_store_create_with_payload,
     get_automation_store,
@@ -137,6 +138,10 @@ class ManagedThreadAutomationClient:
             raise ManagedThreadAutomationUnavailable(
                 "Automation action unavailable"
             ) from exc
+        except PmaAutomationThreadNotFoundError:
+            if not required:
+                return None
+            raise
 
         if isinstance(created, dict) and "subscription" in created:
             return created
