@@ -87,13 +87,21 @@ class FlowRuntime:
         data: Optional[Dict[str, Any]] = None,
         step_id: Optional[str] = None,
     ) -> None:
-        event = self.store.create_event(
-            event_id=str(uuid.uuid4()),
-            run_id=run_id,
-            event_type=event_type,
-            data=data or {},
-            step_id=step_id,
-        )
+        if event_type == FlowEventType.APP_SERVER_EVENT:
+            event = self.store.create_telemetry(
+                telemetry_id=str(uuid.uuid4()),
+                run_id=run_id,
+                event_type=event_type,
+                data=data or {},
+            )
+        else:
+            event = self.store.create_event(
+                event_id=str(uuid.uuid4()),
+                run_id=run_id,
+                event_type=event_type,
+                data=data or {},
+                step_id=step_id,
+            )
         if self.emit_event:
             try:
                 self.emit_event(event)

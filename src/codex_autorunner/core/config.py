@@ -43,6 +43,32 @@ from .utils import atomic_write
 
 logger = logging.getLogger("codex_autorunner.core.config")
 
+_DEFAULT_FLOW_RETENTION_DAYS = 7
+
+
+@dataclasses.dataclass(frozen=True)
+class FlowRetentionConfig:
+    retention_days: int = _DEFAULT_FLOW_RETENTION_DAYS
+    vacuum_after_prune: bool = False
+
+
+def parse_flow_retention_config(raw: Optional[Dict[str, Any]]) -> FlowRetentionConfig:
+    if not isinstance(raw, dict):
+        return FlowRetentionConfig()
+    retention_days = raw.get("retention_days")
+    vacuum_after_prune = raw.get("vacuum_after_prune")
+    return FlowRetentionConfig(
+        retention_days=(
+            int(retention_days)
+            if retention_days is not None
+            else _DEFAULT_FLOW_RETENTION_DAYS
+        ),
+        vacuum_after_prune=(
+            bool(vacuum_after_prune) if vacuum_after_prune is not None else False
+        ),
+    )
+
+
 DOTENV_AVAILABLE = True
 try:
     from dotenv import dotenv_values, load_dotenv
@@ -732,6 +758,10 @@ DEFAULT_REPO_CONFIG: Dict[str, Any] = {
         "max_cache_age_days": 30,
     },
     "housekeeping": _default_housekeeping_section(include_repo_review_runs=True),
+    "flow_retention": {
+        "retention_days": 7,
+        "vacuum_after_prune": False,
+    },
     "storage": {
         "durable_writes": False,
     },
@@ -1232,6 +1262,7 @@ class RepoConfig(AgentConfigMixin):
     voice: VoiceConfigSection
     static_assets: StaticAssetsConfig
     housekeeping: HousekeepingConfig
+    flow_retention: FlowRetentionConfig
     durable_writes: bool
     templates: TemplatesConfig
     effective_destination: DestinationConfigSection = dataclasses.field(
@@ -2807,6 +2838,7 @@ def _build_repo_config(config_path: Path, cfg: Dict[str, Any]) -> RepoConfig:
             cfg.get("static_assets"), root, DEFAULT_REPO_CONFIG["static_assets"]
         ),
         housekeeping=parse_housekeeping_config(cfg.get("housekeeping")),
+        flow_retention=parse_flow_retention_config(cfg.get("flow_retention")),
         durable_writes=durable_writes,
         templates=_parse_templates_config(
             cfg.get("templates"), DEFAULT_HUB_CONFIG.get("templates")

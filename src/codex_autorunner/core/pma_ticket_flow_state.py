@@ -476,45 +476,55 @@ def build_ticket_flow_run_state(
 
 
 def get_latest_ticket_flow_run_state_with_record(
-    repo_root: Path, repo_id: str
+    repo_root: Path,
+    repo_id: str,
+    *,
+    store: Optional[FlowStore] = None,
 ) -> tuple[Optional[TicketFlowRunState], Optional[FlowRunRecord]]:
+    def _load_from_store(
+        active_store: FlowStore,
+    ) -> tuple[Optional[TicketFlowRunState], Optional[FlowRunRecord]]:
+        records = active_store.list_flow_runs(flow_type="ticket_flow")
+        if not records:
+            return None, None
+        record = select_authoritative_run_record(records)
+        if record is None:
+            return None, None
+        latest = _latest_dispatch(
+            repo_root,
+            str(record.id),
+            dict(record.input_data or {}),
+            max_text_chars=PMA_MAX_TEXT,
+        )
+        reply_seq = _latest_reply_history_seq(
+            repo_root, str(record.id), dict(record.input_data or {})
+        )
+        latest_payload = latest if isinstance(latest, dict) else {}
+        has_dispatch, reason = _resolve_paused_dispatch_state(
+            repo_root=repo_root,
+            record_status=record.status,
+            latest_payload=latest_payload,
+            latest_reply_seq=reply_seq,
+        )
+        run_state = build_ticket_flow_run_state(
+            repo_root=repo_root,
+            repo_id=repo_id,
+            record=record,
+            store=active_store,
+            has_pending_dispatch=has_dispatch,
+            dispatch_state_reason=reason,
+        )
+        return run_state, record
+
     db_path = repo_root / ".codex-autorunner" / "flows.db"
-    if not db_path.exists():
+    if store is None and not db_path.exists():
         return None, None
     try:
+        if store is not None:
+            return _load_from_store(store)
         config = load_repo_config(repo_root)
-        with FlowStore(db_path, durable=config.durable_writes) as store:
-            records = store.list_flow_runs(flow_type="ticket_flow")
-            if not records:
-                return None, None
-            record = select_authoritative_run_record(records)
-            if record is None:
-                return None, None
-            latest = _latest_dispatch(
-                repo_root,
-                str(record.id),
-                dict(record.input_data or {}),
-                max_text_chars=PMA_MAX_TEXT,
-            )
-            reply_seq = _latest_reply_history_seq(
-                repo_root, str(record.id), dict(record.input_data or {})
-            )
-            latest_payload = latest if isinstance(latest, dict) else {}
-            has_dispatch, reason = _resolve_paused_dispatch_state(
-                repo_root=repo_root,
-                record_status=record.status,
-                latest_payload=latest_payload,
-                latest_reply_seq=reply_seq,
-            )
-            run_state = build_ticket_flow_run_state(
-                repo_root=repo_root,
-                repo_id=repo_id,
-                record=record,
-                store=store,
-                has_pending_dispatch=has_dispatch,
-                dispatch_state_reason=reason,
-            )
-            return run_state, record
+        with FlowStore(db_path, durable=config.durable_writes) as local_store:
+            return _load_from_store(local_store)
     except (
         Exception
     ) as exc:  # intentional: top-level guard spanning config, db, fs, and validation errors

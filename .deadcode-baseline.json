@@ -2,6 +2,7 @@
   "findings": [
     "python:class:src/codex_autorunner/core/supervisor_protocol.py:7:AppServerSupervisorProtocol",
     "python:class:src/codex_autorunner/integrations/app_server/logging.py:72:AppServerEventFormatter",
+    "python:function:src/codex_autorunner/core/flows/telemetry_export.py:93:_is_wire_telemetry_event",
     "python:function:src/codex_autorunner/core/git_utils.py:110:git_ls_files",
     "python:function:src/codex_autorunner/core/git_utils.py:138:git_diff_name_status",
     "python:function:src/codex_autorunner/core/git_utils.py:156:git_status_porcelain",

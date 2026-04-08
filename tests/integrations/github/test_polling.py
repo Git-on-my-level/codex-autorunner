@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,8 +11,11 @@ from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
-from codex_autorunner.integrations.github.polling import GitHubScmPollingService
-from codex_autorunner.integrations.github.service import GitHubError
+from codex_autorunner.integrations.github.polling import (
+    GitHubPollingConfig,
+    GitHubScmPollingService,
+)
+from codex_autorunner.integrations.github.service import GitHubError, RepoInfo
 
 
 class _GitHubServiceStub:
@@ -99,7 +103,7 @@ class _DiscoveringGitHubServiceStub(_GitHubServiceStub):
         raw_config: dict | None = None,
         *,
         hub_root: Path,
-        repo_id: str,
+        repo_id: str | None,
         repo_slug: str,
         pr_number: int,
         head_branch: str,
@@ -128,6 +132,12 @@ class _DiscoveringGitHubServiceStub(_GitHubServiceStub):
         self._pr_state = pr_state
         self._discover = discover
 
+    def repo_info(self) -> RepoInfo:
+        return RepoInfo(
+            name_with_owner=self._repo_slug,
+            url=f"https://github.com/{self._repo_slug}",
+        )
+
     def discover_pr_binding(self, *, branch=None, cwd=None):
         _ = branch, cwd
         if not self._discover:
@@ -141,6 +151,45 @@ class _DiscoveringGitHubServiceStub(_GitHubServiceStub):
             head_branch=self._head_branch,
             base_branch=self._base_branch,
         )
+
+
+def _write_discord_binding(
+    db_path: Path,
+    *,
+    channel_id: str,
+    workspace_path: str,
+    repo_id: str | None = None,
+    updated_at: str = "2026-03-30T00:00:00Z",
+) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        with conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS channel_bindings (
+                    channel_id TEXT PRIMARY KEY,
+                    workspace_path TEXT,
+                    repo_id TEXT,
+                    updated_at TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO channel_bindings (
+                    channel_id, workspace_path, repo_id, updated_at
+                )
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    workspace_path=excluded.workspace_path,
+                    repo_id=excluded.repo_id,
+                    updated_at=excluded.updated_at
+                """,
+                (channel_id, workspace_path, repo_id, updated_at),
+            )
+    finally:
+        conn.close()
 
 
 def _write_manifest(hub_root: Path, *, repo_rel: str, repo_id: str = "repo-1") -> None:
@@ -886,6 +935,61 @@ def test_process_arms_watch_for_existing_binding_without_discovery(
     assert watch.workspace_root == str(repo_root.resolve())
 
 
+def test_process_discovers_external_pr_binding_from_discord_bound_unregistered_workspace(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "worktrees" / "repo-1--discord-1"
+    repo_root.mkdir(parents=True)
+    _write_manifest(hub_root, repo_rel="workspace/base", repo_id="repo-1")
+    _write_discord_binding(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        channel_id="discord-chan-1",
+        workspace_path=str(repo_root.resolve()),
+        repo_id=None,
+    )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _DiscoveringGitHubServiceStub:
+        return _DiscoveringGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id=None,
+            repo_slug="acme/widgets",
+            pr_number=43,
+            head_branch="feature/missing-watch",
+            discover=repo_root_arg == repo_root,
+        )
+
+    raw_config = _polling_config()
+    raw_config["discord_bot"] = {"enabled": True}
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=raw_config,
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["candidate_workspaces"] == 1
+    assert result["bindings_discovered"] == 1
+    assert result["watches_armed"] == 1
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=43,
+    )
+    assert binding is not None
+    assert binding.repo_id is None
+    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert watch is not None
+    assert watch.state == "active"
+    assert watch.workspace_root == str(repo_root.resolve())
+
+
 def test_process_repairs_active_watch_workspace_root_without_resetting_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -1078,6 +1182,206 @@ def test_process_defers_baseline_when_rate_limit_budget_is_low(
     assert watch.last_error_text == "GitHub rate-limit budget low; baseline deferred"
 
 
+def test_quota_state_cache_persists_across_poll_cycles(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"count": 0}
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _GitHubServiceStub:
+        calls["count"] += 1
+        return _GitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            pr_view_payload={},
+            reviews_payload=[],
+            checks_payload=[],
+            rate_limit_payload=_rate_limit_payload(graphql_remaining=5000),
+        )
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 7, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    first = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )._quota_state_for_workspace(workspace_root=repo_root, cache={})
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 7, 10, 1, 30, tzinfo=timezone.utc),
+    )
+    second = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )._quota_state_for_workspace(workspace_root=repo_root, cache={})
+
+    assert first is not None
+    assert second == first
+    assert calls["count"] == 1
+
+
+def test_rate_limit_error_invalidates_cached_quota_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+    binding = PrBindingStore(hub_root).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=49,
+        pr_state="open",
+        head_branch="feature/rate-limit-reset",
+        base_branch="main",
+    )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    watch = watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        repo_id=binding.repo_id,
+        pr_number=binding.pr_number,
+        workspace_root=str(repo_root.resolve()),
+        thread_target_id=binding.thread_target_id,
+        poll_interval_seconds=90,
+        next_poll_at="2026-04-07T10:00:00Z",
+        expires_at="2099-04-07T11:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"baseline_pending": True},
+    )
+    assert watch is not None
+
+    calls = {"rate_limit_status": 0}
+    should_raise = {"value": True}
+
+    class _CountingGitHubServiceStub(_GitHubServiceStub):
+        def rate_limit_status(self) -> dict[str, object]:
+            calls["rate_limit_status"] += 1
+            return super().rate_limit_status()
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _GitHubServiceStub:
+        pr_view_exception = None
+        if should_raise["value"]:
+            pr_view_exception = GitHubError(
+                "Command failed: gh pr view 49 --json ...: API rate limit exceeded",
+                status_code=429,
+            )
+        return _CountingGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": "abc123",
+            },
+            reviews_payload=[],
+            checks_payload=[],
+            rate_limit_payload=_rate_limit_payload(graphql_remaining=5000),
+            pr_view_exception=pr_view_exception,
+        )
+
+    first_service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 7, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    first = first_service.process_due_watches(limit=10)
+
+    watch_store.refresh_watch(
+        watch_id=watch.watch_id,
+        next_poll_at="2026-04-07T10:01:30Z",
+    )
+    should_raise["value"] = False
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 7, 10, 1, 30, tzinfo=timezone.utc),
+    )
+    second = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    ).process_due_watches(limit=10)
+
+    assert first["rate_limited_skipped"] == 1
+    assert second["polled"] == 1
+    assert calls["rate_limit_status"] == 2
+
+
+def test_quota_cache_persistence_preserves_discovery_cycle_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "workspace" / "repo"
+    repo_root.mkdir(parents=True)
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            pr_view_payload={},
+            reviews_payload=[],
+            checks_payload=[],
+            rate_limit_payload=_rate_limit_payload(graphql_remaining=5000),
+        )
+
+    monkeypatch.setattr(
+        github_polling,
+        "_utc_now",
+        lambda: datetime(2026, 4, 7, 10, 0, 0, tzinfo=timezone.utc),
+    )
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=ScmPollingWatchStore(hub_root),
+        event_store=ScmEventStore(hub_root),
+    )
+
+    assert service._claim_discovery_cycle(
+        polling_config=GitHubPollingConfig.from_mapping(_polling_config())
+    )
+    assert (
+        service._quota_state_for_workspace(workspace_root=repo_root, cache={})
+        is not None
+    )
+
+    state = github_polling.read_json(
+        hub_root / ".codex-autorunner" / "github_polling_state.json"
+    )
+    assert isinstance(state, dict)
+    assert isinstance(state.get("last_discovery_cycle_slot"), int)
+    assert state.get("quota_state_cache") is not None
+
+
 def test_process_rotates_discovery_across_candidate_workspaces(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1124,21 +1428,21 @@ def test_process_rotates_discovery_across_candidate_workspaces(
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
-        lambda: datetime(2026, 4, 5, 8, 0, 0, tzinfo=timezone.utc),
+        lambda: datetime(2099, 4, 5, 8, 0, 0, tzinfo=timezone.utc),
     )
     first = service.process(limit=2)
 
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
-        lambda: datetime(2026, 4, 5, 8, 1, 0, tzinfo=timezone.utc),
+        lambda: datetime(2099, 4, 5, 8, 1, 0, tzinfo=timezone.utc),
     )
     skipped = service.process(limit=2)
 
     monkeypatch.setattr(
         github_polling,
         "_utc_now",
-        lambda: datetime(2026, 4, 5, 8, 3, 0, tzinfo=timezone.utc),
+        lambda: datetime(2099, 4, 5, 8, 3, 0, tzinfo=timezone.utc),
     )
     second = service.process(limit=2)
 

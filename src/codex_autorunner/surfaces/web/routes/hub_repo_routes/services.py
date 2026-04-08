@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,7 +12,7 @@ if TYPE_CHECKING:
     from .mount_manager import HubMountManager
 
 
-_REPO_ENRICH_CACHE_TTL_SECONDS = 2.0
+_REPO_ENRICH_CACHE_TTL_SECONDS = 45.0
 
 
 @dataclass(frozen=True)
@@ -27,27 +28,32 @@ class HubRepoEnricher:
         self._mount_manager = mount_manager
         self._unbound_thread_counts_cache: Optional[dict[str, int]] = None
         self._unbound_thread_counts_cached_at = 0.0
+        self._unbound_thread_counts_lock = threading.Lock()
         self._repo_state_cache: dict[str, _RepoEnrichmentCacheEntry] = {}
+        self._repo_state_cache_lock = threading.Lock()
 
     def invalidate_runtime_caches(self) -> None:
-        self._unbound_thread_counts_cache = None
-        self._unbound_thread_counts_cached_at = 0.0
-        self._repo_state_cache.clear()
+        with self._unbound_thread_counts_lock:
+            self._unbound_thread_counts_cache = None
+            self._unbound_thread_counts_cached_at = 0.0
+        with self._repo_state_cache_lock:
+            self._repo_state_cache.clear()
 
     def _unbound_repo_thread_counts(self) -> dict[str, int]:
-        now = time.monotonic()
-        if (
-            self._unbound_thread_counts_cache is not None
-            and now - self._unbound_thread_counts_cached_at < 1.0
-        ):
-            return dict(self._unbound_thread_counts_cache)
-        try:
-            counts = self._context.supervisor.unbound_repo_thread_counts()
-        except Exception:  # intentional: supervisor query failure is non-critical
-            counts = {}
-        self._unbound_thread_counts_cache = dict(counts)
-        self._unbound_thread_counts_cached_at = now
-        return dict(counts)
+        with self._unbound_thread_counts_lock:
+            now = time.monotonic()
+            if (
+                self._unbound_thread_counts_cache is not None
+                and now - self._unbound_thread_counts_cached_at < 1.0
+            ):
+                return dict(self._unbound_thread_counts_cache)
+            try:
+                counts = self._context.supervisor.unbound_repo_thread_counts()
+            except Exception:  # intentional: supervisor query failure is non-critical
+                counts = {}
+            self._unbound_thread_counts_cache = dict(counts)
+            self._unbound_thread_counts_cached_at = now
+            return dict(counts)
 
     def _path_stat_fingerprint(
         self, path: Path
@@ -77,7 +83,6 @@ class HubRepoEnricher:
             int(stale_threshold_seconds or 0),
             self._path_stat_fingerprint(car_root),
             self._path_stat_fingerprint(car_root / "tickets"),
-            self._path_stat_fingerprint(car_root / "flows.db"),
             self._path_stat_fingerprint(car_root / "runs"),
         )
 
@@ -89,6 +94,7 @@ class HubRepoEnricher:
     ) -> dict[str, Any]:
         from .....core.archive import has_car_state
         from .....core.flows.models import flow_run_duration_seconds
+        from .....core.flows.store import FlowStore
         from .....core.pma_context import (
             get_latest_ticket_flow_run_state_with_record,
         )
@@ -112,51 +118,78 @@ class HubRepoEnricher:
         if not (snapshot.initialized and snapshot.exists_on_disk):
             return payload
 
-        ticket_flow = build_ticket_flow_summary(snapshot.path, include_failure=True)
-        payload["ticket_flow"] = ticket_flow
-        if isinstance(ticket_flow, dict):
-            payload["ticket_flow_display"] = build_ticket_flow_display(
-                status=(
-                    str(ticket_flow.get("status"))
-                    if ticket_flow.get("status") is not None
+        db_path = snapshot.path / ".codex-autorunner" / "flows.db"
+        store: Optional[FlowStore] = None
+        if db_path.exists():
+            try:
+                store = FlowStore.connect_readonly(db_path)
+                store.initialize()
+            except Exception:  # intentional: best-effort store reuse only
+                store = None
+
+        try:
+            ticket_flow = build_ticket_flow_summary(
+                snapshot.path,
+                include_failure=True,
+                store=store,
+            )
+            payload["ticket_flow"] = ticket_flow
+            if isinstance(ticket_flow, dict):
+                payload["ticket_flow_display"] = build_ticket_flow_display(
+                    status=(
+                        str(ticket_flow.get("status"))
+                        if ticket_flow.get("status") is not None
+                        else None
+                    ),
+                    done_count=int(ticket_flow.get("done_count") or 0),
+                    total_count=int(ticket_flow.get("total_count") or 0),
+                    run_id=(
+                        str(ticket_flow.get("run_id"))
+                        if ticket_flow.get("run_id")
+                        else None
+                    ),
+                )
+            else:
+                payload["ticket_flow_display"] = build_ticket_flow_display(
+                    status=None,
+                    done_count=0,
+                    total_count=0,
+                    run_id=None,
+                )
+            run_state, run_record = get_latest_ticket_flow_run_state_with_record(
+                snapshot.path,
+                snapshot.id,
+                store=store,
+            )
+            payload["run_state"] = run_state
+            if run_record is not None:
+                if str(snapshot.last_run_id) != str(run_record.id):
+                    payload["last_exit_code"] = None
+                payload["last_run_id"] = run_record.id
+                payload["last_run_started_at"] = run_record.started_at
+                payload["last_run_finished_at"] = run_record.finished_at
+                payload["last_run_duration_seconds"] = flow_run_duration_seconds(
+                    run_record
+                )
+            payload["canonical_state_v1"] = build_canonical_state_v1(
+                repo_root=snapshot.path,
+                repo_id=snapshot.id,
+                run_state=payload["run_state"],
+                record=run_record,
+                store=store,
+                preferred_run_id=(
+                    str(snapshot.last_run_id)
+                    if snapshot.last_run_id is not None
                     else None
                 ),
-                done_count=int(ticket_flow.get("done_count") or 0),
-                total_count=int(ticket_flow.get("total_count") or 0),
-                run_id=(
-                    str(ticket_flow.get("run_id"))
-                    if ticket_flow.get("run_id")
-                    else None
-                ),
+                stale_threshold_seconds=stale_threshold_seconds,
             )
-        else:
-            payload["ticket_flow_display"] = build_ticket_flow_display(
-                status=None,
-                done_count=0,
-                total_count=0,
-                run_id=None,
-            )
-        run_state, run_record = get_latest_ticket_flow_run_state_with_record(
-            snapshot.path, snapshot.id
-        )
-        payload["run_state"] = run_state
-        if run_record is not None:
-            if str(snapshot.last_run_id) != str(run_record.id):
-                payload["last_exit_code"] = None
-            payload["last_run_id"] = run_record.id
-            payload["last_run_started_at"] = run_record.started_at
-            payload["last_run_finished_at"] = run_record.finished_at
-            payload["last_run_duration_seconds"] = flow_run_duration_seconds(run_record)
-        payload["canonical_state_v1"] = build_canonical_state_v1(
-            repo_root=snapshot.path,
-            repo_id=snapshot.id,
-            run_state=payload["run_state"],
-            record=run_record,
-            preferred_run_id=(
-                str(snapshot.last_run_id) if snapshot.last_run_id is not None else None
-            ),
-            stale_threshold_seconds=stale_threshold_seconds,
-        )
+        finally:
+            if store is not None:
+                try:
+                    store.close()
+                except Exception:
+                    pass
         return payload
 
     def _repo_state_payload(
@@ -171,22 +204,24 @@ class HubRepoEnricher:
             snapshot,
             stale_threshold_seconds=stale_threshold_seconds,
         )
-        cached = self._repo_state_cache.get(cache_key)
-        if (
-            cached is not None
-            and cached.expires_at > now
-            and cached.fingerprint == fingerprint
-        ):
-            return copy.deepcopy(cached.payload)
+        with self._repo_state_cache_lock:
+            cached = self._repo_state_cache.get(cache_key)
+            if (
+                cached is not None
+                and cached.expires_at > now
+                and cached.fingerprint == fingerprint
+            ):
+                return copy.deepcopy(cached.payload)
         payload = self._compute_repo_state_payload(
             snapshot,
             stale_threshold_seconds=stale_threshold_seconds,
         )
-        self._repo_state_cache[cache_key] = _RepoEnrichmentCacheEntry(
-            fingerprint=fingerprint,
-            expires_at=now + _REPO_ENRICH_CACHE_TTL_SECONDS,
-            payload=copy.deepcopy(payload),
-        )
+        with self._repo_state_cache_lock:
+            self._repo_state_cache[cache_key] = _RepoEnrichmentCacheEntry(
+                fingerprint=fingerprint,
+                expires_at=now + _REPO_ENRICH_CACHE_TTL_SECONDS,
+                payload=copy.deepcopy(payload),
+            )
         return payload
 
     def enrich_repo(

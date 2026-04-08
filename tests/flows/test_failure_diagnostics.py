@@ -46,8 +46,8 @@ def test_build_failure_payload_uses_newest_app_server_events(tmp_path) -> None:
     )
 
     for idx in range(250):
-        store.create_event(
-            event_id=f"evt-{idx}",
+        store.create_telemetry(
+            telemetry_id=f"tel-{idx}",
             run_id=record.id,
             event_type=FlowEventType.APP_SERVER_EVENT,
             data={
@@ -74,6 +74,54 @@ def test_build_failure_payload_uses_newest_app_server_events(tmp_path) -> None:
     assert payload["failure_reason_code"] == "unknown"
     assert "last_event_seq" in payload
     assert payload["last_event_seq"] is not None
+
+
+def test_build_failure_payload_prefers_latest_timestamp_across_tables(tmp_path) -> None:
+    store = FlowStore(tmp_path / "flows.db")
+    store.initialize()
+    record = store.create_flow_run(
+        run_id="run-failure-diag-ts",
+        flow_type="ticket_flow",
+        input_data={},
+    )
+    store.create_event(
+        event_id="evt-older",
+        run_id=record.id,
+        event_type=FlowEventType.STEP_PROGRESS,
+        data={"message": "older"},
+    )
+    store.create_telemetry(
+        telemetry_id="tel-newer",
+        run_id=record.id,
+        event_type=FlowEventType.APP_SERVER_EVENT,
+        data={
+            "message": {
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "commandExecution",
+                        "command": "cmd-newer",
+                        "exitCode": 7,
+                        "stderr": "stderr-newer",
+                    }
+                },
+            }
+        },
+    )
+
+    conn = store._get_conn()
+    conn.execute(
+        "UPDATE flow_events SET timestamp = ? WHERE id = ?",
+        ("2026-03-21T00:00:20Z", "evt-older"),
+    )
+    conn.execute(
+        "UPDATE flow_telemetry SET timestamp = ? WHERE id = ?",
+        ("2026-03-21T00:00:30Z", "tel-newer"),
+    )
+
+    payload = build_failure_payload(record, store=store)
+
+    assert payload["last_event_at"] == "2026-03-21T00:00:30Z"
 
 
 def test_derive_failure_reason_code_oom() -> None:

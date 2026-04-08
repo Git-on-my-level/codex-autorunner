@@ -4,7 +4,12 @@ import logging
 from typing import Any, Optional
 
 from ..coercion import coerce_int
-from .models import FailureReasonCode, FlowEventType, FlowRunRecord
+from .models import (
+    FailureReasonCode,
+    FlowEventType,
+    FlowRunRecord,
+    parse_flow_timestamp,
+)
 from .store import FlowStore, now_iso
 
 logger = logging.getLogger(__name__)
@@ -124,13 +129,13 @@ def _extract_command_context(
     if store is None:
         return None, None, None
     try:
-        last_seq = store.get_last_event_seq_by_types(
+        last_seq = store.get_last_telemetry_seq_by_types(
             run_id, [FlowEventType.APP_SERVER_EVENT]
         )
         after_seq = None
         if limit > 0 and isinstance(last_seq, int):
             after_seq = max(0, last_seq - limit)
-        events = store.get_events_by_type(
+        events = store.get_telemetry_by_type(
             run_id,
             FlowEventType.APP_SERVER_EVENT,
             after_seq=after_seq,
@@ -370,10 +375,27 @@ def build_failure_payload(
     last_event_at = None
     if store is not None:
         try:
-            last_event_seq, last_event_at = store.get_last_event_meta(record.id)
-        except Exception as e:  # intentional: non-critical metadata fetch
-            logger.debug(
-                "Failed to get last event meta for record %s: %s", record.id, e
+            ev_seq, ev_at = store.get_last_event_meta(record.id)
+        except Exception:
+            ev_seq, ev_at = None, None
+        try:
+            tel_seq, tel_at = store.get_last_telemetry_meta(record.id)
+        except Exception:
+            tel_seq, tel_at = None, None
+        candidates = []
+        if ev_at is not None:
+            candidates.append((ev_seq, ev_at, parse_flow_timestamp(ev_at)))
+        if tel_at is not None:
+            candidates.append((tel_seq, tel_at, parse_flow_timestamp(tel_at)))
+        candidates = [
+            (seq, timestamp, parsed)
+            for seq, timestamp, parsed in candidates
+            if timestamp is not None and parsed is not None
+        ]
+        if candidates:
+            last_event_seq, last_event_at, _ = max(
+                candidates,
+                key=lambda x: (x[2], x[0] if x[0] is not None else -1),
             )
     payload = {
         "failed_at": failed_at or now_iso(),

@@ -384,6 +384,74 @@ async def test_item_completed_without_item_id_prunes_matching_stale_delta(
 
 
 @pytest.mark.anyio
+async def test_item_completed_without_item_id_clears_matching_active_item(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.active_item_ids.update({"item-1", "item-2"})
+        partial_delta = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-1",
+            "delta": "final",
+        }
+        completed_item_without_id = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "item": {"type": "agentMessage", "text": "final reply"},
+        }
+
+        await client._handle_notification_agent_message_delta(
+            {"method": "item/agentMessage/delta", "params": partial_delta},
+            partial_delta,
+        )
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": completed_item_without_id},
+            completed_item_without_id,
+        )
+
+        assert state.active_item_ids == {"item-2"}
+        assert state.agent_message_deltas == {}
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_item_completed_without_item_id_clears_lone_active_item(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        started_item = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "tool-1",
+            "item": {"type": "commandExecution"},
+        }
+        completed_item_without_id = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "item": {"type": "commandExecution"},
+        }
+
+        await client._handle_notification_item_started(
+            {"method": "item/started", "params": started_item},
+            started_item,
+        )
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": completed_item_without_id},
+            completed_item_without_id,
+        )
+
+        assert state.active_item_ids == set()
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_turn_completed_settles_before_returning_final_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1050,6 +1118,66 @@ async def test_live_progress_refreshes_completion_gap_window(
 
 
 @pytest.mark.anyio
+async def test_active_item_started_blocks_completion_gap_recovery(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+        turn_stall_timeout_seconds=10.0,
+        turn_stall_poll_interval_seconds=0.02,
+        turn_stall_recovery_min_interval_seconds=0.0,
+        turn_completion_gap_timeout_seconds=0.05,
+    )
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.status = "running"
+        state.item_completed_count = 3
+        state.completion_gap_started_at = time.monotonic() - 1.0
+        resume_calls = 0
+
+        async def _resume(thread_id: str, **kwargs: object) -> dict[str, object]:
+            nonlocal resume_calls
+            _ = thread_id, kwargs
+            resume_calls += 1
+            return {}
+
+        client.thread_resume = _resume  # type: ignore[method-assign]
+
+        await client._handle_notification_item_started(
+            {
+                "method": "item/started",
+                "params": {
+                    "turnId": "turn-1",
+                    "threadId": "thread-1",
+                    "itemId": "tool-1",
+                    "item": {"type": "commandExecution"},
+                },
+            },
+            {
+                "turnId": "turn-1",
+                "threadId": "thread-1",
+                "itemId": "tool-1",
+                "item": {"type": "commandExecution"},
+            },
+        )
+
+        assert state.active_item_ids == {"tool-1"}
+        state.last_event_at = time.monotonic() - 1.0
+        state.completion_gap_started_at = time.monotonic() - 1.0
+
+        await client._maybe_reconcile_turn_completion_gap(
+            state,
+            turn_id="turn-1",
+            thread_id="thread-1",
+        )
+
+        assert resume_calls == 0
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_turn_hint_progress_refreshes_completion_gap_window(
     tmp_path: Path,
 ) -> None:
@@ -1091,6 +1219,33 @@ async def test_turn_hint_progress_refreshes_completion_gap_window(
         )
 
         assert resume_calls == 0
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_merge_turn_state_keeps_latest_event_timestamp_and_active_items(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+    )
+    try:
+        target = client._ensure_turn_state("turn-1", "thread-1")
+        source = client._ensure_pending_turn_state("turn-1")
+        target.last_event_at = time.monotonic() - 5.0
+        target.last_method = "item/completed"
+        target.active_item_ids.add("item-1")
+        source.last_event_at = time.monotonic() - 1.0
+        source.last_method = "item/started"
+        source.active_item_ids.add("item-2")
+
+        client._merge_turn_state(target, source)
+
+        assert target.last_event_at == source.last_event_at
+        assert target.last_method == "item/started"
+        assert target.active_item_ids == {"item-1", "item-2"}
     finally:
         await client.close()
 

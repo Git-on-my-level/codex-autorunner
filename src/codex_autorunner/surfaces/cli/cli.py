@@ -138,6 +138,9 @@ flow_app = typer.Typer(
 ticket_flow_app = typer.Typer(
     add_completion=False, help="Canonical ticket_flow workflow commands."
 )
+telemetry_app = typer.Typer(
+    add_completion=False, help="Flow telemetry export and cleanup commands."
+)
 
 
 def _version_callback(value: bool) -> None:
@@ -287,6 +290,11 @@ flow_app.add_typer(
     name="ticket_flow",
     help="Legacy alias of `ticket-flow` (canonical: `car ticket-flow ...`).",
 )
+flow_app.add_typer(
+    telemetry_app,
+    name="telemetry",
+    help="Flow telemetry management.",
+)
 app.add_typer(pma_cli_app, name="pma")
 register_root_commands(app)
 register_describe_commands(
@@ -299,6 +307,7 @@ register_describe_commands(
 FLOW_COMMANDS = register_flow_commands(
     flow_app,
     ticket_flow_app,
+    telemetry_app,
     require_repo_config=_require_repo_config,
     raise_exit=_raise_exit,
     build_agent_pool=build_agent_pool,
