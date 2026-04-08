@@ -26,7 +26,7 @@ from ....core.flows.flow_housekeeping import (
 )
 from ....core.flows.models import FlowEventType, FlowRunRecord, FlowRunStatus
 from ....core.flows.start_policy import evaluate_ticket_start_policy
-from ....core.flows.telemetry_export import export_all_runs, plan_export
+from ....core.flows.telemetry_export import export_all_runs
 from ....core.flows.ux_helpers import build_flow_status_snapshot, ensure_worker
 from ....core.flows.worker_process import (
     check_worker_health,
@@ -1176,29 +1176,28 @@ You are the first ticket in a new ticket_flow run.
         try:
             store.initialize()
             if dry_run:
-                plan = plan_export(store)
+                run_ids = [run_id] if run_id else None
+                result = export_all_runs(
+                    engine.repo_root,
+                    store,
+                    dry_run=True,
+                    run_ids=run_ids,
+                )
                 payload: dict[str, Any] = {
                     "dry_run": True,
-                    "runs_total": plan.runs_total,
-                    "runs_terminal": plan.runs_terminal,
-                    "runs_active": plan.runs_active,
-                    "events_to_export": plan.events_to_export,
-                    "events_to_prune": plan.events_to_prune,
-                    "events_to_retain": plan.events_to_retain,
-                    "estimated_archive_bytes": plan.estimated_archive_bytes,
+                    **result.dry_run_summary(),
                 }
                 if output_json:
                     typer.echo(json.dumps(payload, indent=2))
                 else:
                     typer.echo("Dry-run telemetry export plan:")
-                    typer.echo(f"  Runs total: {plan.runs_total}")
-                    typer.echo(f"  Runs terminal: {plan.runs_terminal}")
-                    typer.echo(f"  Runs active (skipped): {plan.runs_active}")
-                    typer.echo(f"  Events to export: {plan.events_to_export}")
-                    typer.echo(f"  Events to prune: {plan.events_to_prune}")
-                    typer.echo(f"  Events to retain: {plan.events_to_retain}")
+                    typer.echo(f"  Runs to export: {payload['runs_total']}")
+                    typer.echo(f"  Runs skipped: {payload['runs_skipped']}")
+                    typer.echo(f"  Events to export: {payload['events_to_export']}")
+                    typer.echo(f"  Events to prune: {payload['events_to_prune']}")
+                    typer.echo(f"  Events to retain: {payload['events_to_retain']}")
                     typer.echo(
-                        f"  Estimated archive size: {plan.estimated_archive_bytes:,} bytes"
+                        f"  Estimated archive size: {payload['estimated_bytes']:,} bytes"
                     )
                 return
 
@@ -1275,7 +1274,7 @@ You are the first ticket in a new ticket_flow run.
         retention: Optional[str] = typer.Option(
             None,
             "--retention",
-            help="Override retention window (e.g. 7d, 14d, 1h). Default: 7d.",
+            help="Override retention window (e.g. 7d, 14d). Default: 7d.",
         ),
         run_id: Optional[str] = typer.Option(
             None, "--run-id", help="Target a specific run (default: all expired runs)"
@@ -1307,8 +1306,13 @@ You are the first ticket in a new ticket_flow run.
 
             td = parse_duration(retention)
             assert isinstance(td, timedelta)
+            total_seconds = int(td.total_seconds())
+            if total_seconds <= 0 or total_seconds % 86400 != 0:
+                raise_exit(
+                    "--retention must be a positive whole-day duration such as 7d or 14d."
+                )
             retention_config = FlowRetentionConfig(
-                retention_days=max(1, int(td.total_seconds() / 86400)),
+                retention_days=total_seconds // 86400,
                 vacuum_after_prune=vacuum,
             )
 

@@ -4,7 +4,12 @@ import logging
 from typing import Any, Optional
 
 from ..coercion import coerce_int
-from .models import FailureReasonCode, FlowEventType, FlowRunRecord
+from .models import (
+    FailureReasonCode,
+    FlowEventType,
+    FlowRunRecord,
+    parse_flow_timestamp,
+)
 from .store import FlowStore, now_iso
 
 logger = logging.getLogger(__name__)
@@ -377,10 +382,21 @@ def build_failure_payload(
             tel_seq, tel_at = store.get_last_telemetry_meta(record.id)
         except Exception:
             tel_seq, tel_at = None, None
-        candidates = [(ev_seq, ev_at), (tel_seq, tel_at)]
-        candidates = [(s, a) for s, a in candidates if s is not None]
+        candidates = []
+        if ev_at is not None:
+            candidates.append((ev_seq, ev_at, parse_flow_timestamp(ev_at)))
+        if tel_at is not None:
+            candidates.append((tel_seq, tel_at, parse_flow_timestamp(tel_at)))
+        candidates = [
+            (seq, timestamp, parsed)
+            for seq, timestamp, parsed in candidates
+            if timestamp is not None and parsed is not None
+        ]
         if candidates:
-            last_event_seq, last_event_at = max(candidates, key=lambda x: x[0] or 0)
+            last_event_seq, last_event_at, _ = max(
+                candidates,
+                key=lambda x: (x[2], x[0] if x[0] is not None else -1),
+            )
     payload = {
         "failed_at": failed_at or now_iso(),
         "ticket_id": ticket_id,

@@ -53,6 +53,7 @@ def _run_housekeep(
     *,
     run_ids: Optional[Sequence[str]] = None,
     vacuum: bool = False,
+    include_all_terminal: bool = False,
 ) -> Optional[HousekeepResult]:
     db_path = repo_root / ".codex-autorunner" / "flows.db"
     if not db_path.exists():
@@ -76,6 +77,7 @@ def _run_housekeep(
             run_ids=run_ids,
             vacuum=vacuum or retention.vacuum_after_prune,
             dry_run=False,
+            include_all_terminal=include_all_terminal,
         )
         if result.runs_processed > 0:
             _logger.info(
@@ -115,11 +117,11 @@ def housekeep_on_worktree_cleanup(
 ) -> Optional[HousekeepResult]:
     """Housekeeping before worktree archive or removal.
 
-    Targets all expired terminal runs for the repo, not just one run,
-    because this is the last chance to prune before the worktree disappears.
+    Targets all terminal runs for the repo because this is the last chance
+    to prune before the worktree disappears.
     """
     _logger.info("housekeep_on_worktree_cleanup repo=%s", repo_root.name)
-    return _run_housekeep(repo_root)
+    return _run_housekeep(repo_root, vacuum=True, include_all_terminal=True)
 
 
 @dataclasses.dataclass

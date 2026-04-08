@@ -7,6 +7,7 @@ Both the manual CLI (`car flow housekeep`) and future automatic hooks
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,7 +16,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from ..config import FlowRetentionConfig, parse_flow_retention_config
 from .models import FlowEventType, FlowRunRecord, parse_flow_timestamp
 from .store import FlowStore
-from .telemetry_export import export_all_runs, plan_export
+from .telemetry_export import classify_events_for_run, export_all_runs
 
 _logger = logging.getLogger(__name__)
 
@@ -219,6 +220,7 @@ def build_plan(
     retention_config: FlowRetentionConfig,
     *,
     run_ids: Optional[Sequence[str]] = None,
+    include_all_terminal: bool = False,
 ) -> HousekeepPlan:
     stats = gather_stats(store, db_path, retention_config)
     plan = HousekeepPlan(stats=stats)
@@ -232,15 +234,25 @@ def build_plan(
         if not run_stat.is_terminal:
             plan.runs_skipped_active += 1
             continue
-        if not run_stat.is_expired:
+        if not include_all_terminal and not run_stat.is_expired:
             plan.runs_skipped_not_expired += 1
             continue
         plan.runs_to_process.append(run_stat)
 
-    export_plan = plan_export(store)
-    plan.events_to_export = export_plan.events_to_export
-    plan.events_to_prune = export_plan.events_to_prune
-    plan.estimated_export_bytes = export_plan.estimated_archive_bytes
+    for run_stat in plan.runs_to_process:
+        record = store.get_flow_run(run_stat.run_id)
+        if record is None:
+            continue
+        events, ev_app_seqs, tel_app_seqs, prune_delta, _retained = (
+            classify_events_for_run(store, record.id, is_terminal=True)
+        )
+        plan.events_to_export += len(events)
+        plan.events_to_prune += len(ev_app_seqs) + len(tel_app_seqs) + len(prune_delta)
+        run_stat.estimated_export_bytes = sum(
+            len(json.dumps(event, ensure_ascii=False).encode("utf-8"))
+            for event in events
+        )
+        plan.estimated_export_bytes += run_stat.estimated_export_bytes
 
     return plan
 
@@ -254,8 +266,15 @@ def execute_housekeep(
     run_ids: Optional[Sequence[str]] = None,
     vacuum: bool = False,
     dry_run: bool = False,
+    include_all_terminal: bool = False,
 ) -> HousekeepResult:
-    plan = build_plan(store, db_path, retention_config, run_ids=run_ids)
+    plan = build_plan(
+        store,
+        db_path,
+        retention_config,
+        run_ids=run_ids,
+        include_all_terminal=include_all_terminal,
+    )
 
     result = HousekeepResult(
         plan=plan,

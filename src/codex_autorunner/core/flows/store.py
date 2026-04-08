@@ -28,7 +28,7 @@ _logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 3
 UNSET = object()
 _REQUIRED_SCHEMA_TABLES = frozenset(
-    {"schema_info", "flow_runs", "flow_events", "flow_artifacts", "flow_telemetry"}
+    {"schema_info", "flow_runs", "flow_events", "flow_artifacts"}
 )
 _SQLITE_PRAGMAS_READONLY = (
     "PRAGMA foreign_keys=ON;",
@@ -111,25 +111,33 @@ class FlowStore:
             self._ensure_schema_version(conn)
 
     def _validate_readonly_schema(self, conn: sqlite3.Connection) -> None:
+        try:
+            result = conn.execute("SELECT version FROM schema_info").fetchone()
+        except sqlite3.Error as exc:
+            raise RuntimeError(
+                "FlowStore read-only schema check failed; missing schema version"
+            ) from exc
+        if result is None:
+            raise RuntimeError(
+                "FlowStore read-only schema check failed; missing schema version"
+            )
+        schema_version = int(result[0])
+        required_tables = set(_REQUIRED_SCHEMA_TABLES)
+        if schema_version >= 3:
+            required_tables.add("flow_telemetry")
         rows = conn.execute(
             """
             SELECT name
             FROM sqlite_master
-            WHERE type = 'table' AND name IN (?, ?, ?, ?, ?)
-            """,
-            tuple(sorted(_REQUIRED_SCHEMA_TABLES)),
+            WHERE type = 'table'
+            """
         ).fetchall()
         present_tables = {str(row["name"]) for row in rows}
-        missing_tables = sorted(_REQUIRED_SCHEMA_TABLES - present_tables)
+        missing_tables = sorted(required_tables - present_tables)
         if missing_tables:
             missing_text = ", ".join(missing_tables)
             raise RuntimeError(
                 f"FlowStore read-only schema check failed; missing tables: {missing_text}"
-            )
-        result = conn.execute("SELECT version FROM schema_info").fetchone()
-        if result is None:
-            raise RuntimeError(
-                "FlowStore read-only schema check failed; missing schema version"
             )
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
@@ -767,7 +775,7 @@ class FlowStore:
         data: Optional[Dict[str, Any]] = None,
     ) -> FlowEvent:
         timestamp = now_iso()
-        normalized_data = normalize_persisted_event_data(event_type, data)
+        normalized_data = dict(data or {})
 
         with self.transaction() as conn:
             conn.execute(

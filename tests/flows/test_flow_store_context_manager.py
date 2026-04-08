@@ -211,7 +211,29 @@ def test_flow_store_readonly_initialize_rejects_missing_schema(tmp_path):
 
     store = FlowStore.connect_readonly(db_path)
     try:
-        with pytest.raises(RuntimeError, match="missing tables"):
+        with pytest.raises(RuntimeError, match="missing schema version"):
             store.initialize()
+    finally:
+        store.close()
+
+
+def test_flow_store_readonly_initialize_accepts_pre_telemetry_schema(tmp_path):
+    db_path = tmp_path / "flows.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE schema_info (version INTEGER NOT NULL PRIMARY KEY)")
+        conn.execute("INSERT INTO schema_info (version) VALUES (2)")
+        conn.execute("CREATE TABLE flow_runs (id TEXT PRIMARY KEY)")
+        conn.execute(
+            "CREATE TABLE flow_events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT)"
+        )
+        conn.execute("CREATE TABLE flow_artifacts (id TEXT PRIMARY KEY)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = FlowStore.connect_readonly(db_path)
+    try:
+        store.initialize()
     finally:
         store.close()

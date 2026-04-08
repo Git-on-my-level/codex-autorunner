@@ -13,23 +13,6 @@ from .store import FlowStore
 
 _logger = logging.getLogger(__name__)
 
-_WIRE_EVENT_TYPES = frozenset(
-    {FlowEventType.APP_SERVER_EVENT, FlowEventType.AGENT_STREAM_DELTA}
-)
-
-_RETAINED_RECORD_METHODS = frozenset(
-    {
-        "item/completed",
-        "message.updated",
-        "message.completed",
-        "message.part.updated",
-    }
-)
-
-_HIGH_SIGNAL_ITEM_TYPES = frozenset(
-    {"agentMessage", "commandExecution", "fileSearch", "functionCall", "reasoning"}
-)
-
 
 @dataclass
 class ExportRecord:
@@ -43,18 +26,6 @@ class ExportRecord:
     retained_events: int = 0
     skipped: bool = False
     skip_reason: Optional[str] = None
-
-
-@dataclass
-class ExportPlan:
-    runs_total: int = 0
-    runs_terminal: int = 0
-    runs_active: int = 0
-    runs_skipped: int = 0
-    events_to_export: int = 0
-    events_to_prune: int = 0
-    events_to_retain: int = 0
-    estimated_archive_bytes: int = 0
 
 
 @dataclass
@@ -88,47 +59,6 @@ class ExportResult:
                 for r in self.records
             ],
         }
-
-
-def _is_wire_telemetry_event(event_type: str) -> bool:
-    try:
-        return FlowEventType(event_type) in _WIRE_EVENT_TYPES
-    except ValueError:
-        return False
-
-
-def _is_retained_app_server_event(data: Dict[str, Any]) -> bool:
-    message = data.get("message") if isinstance(data, dict) else None
-    if not isinstance(message, dict):
-        return False
-    method = str(message.get("method") or "").strip()
-    if method in _RETAINED_RECORD_METHODS:
-        return True
-    return False
-
-
-def _extract_item_type(data: Dict[str, Any]) -> Optional[str]:
-    message = data.get("message") if isinstance(data, dict) else None
-    if not isinstance(message, dict):
-        return None
-    params = message.get("params")
-    if not isinstance(params, dict):
-        return None
-    item = params.get("item")
-    if not isinstance(item, dict):
-        return None
-    return item.get("type")
-
-
-def _is_high_signal_app_server_event(data: Dict[str, Any]) -> bool:
-    if _is_retained_app_server_event(data):
-        item_type = _extract_item_type(data)
-        if item_type and item_type in _HIGH_SIGNAL_ITEM_TYPES:
-            return True
-    role = data.get("role")
-    if isinstance(role, str) and role.strip() == "user":
-        return True
-    return False
 
 
 def classify_events_for_run(
@@ -208,11 +138,7 @@ def classify_events_for_run(
             continue
 
         if event_type == FlowEventType.APP_SERVER_EVENT.value:
-            if _is_high_signal_app_server_event(data):
-                retained_seqs.append(seq)
-            else:
-                events_app_server_seqs_to_prune.append(seq)
-
+            events_app_server_seqs_to_prune.append(seq)
         elif event_type == FlowEventType.AGENT_STREAM_DELTA.value:
             delta_seqs_to_prune.append(seq)
 
@@ -243,10 +169,7 @@ def classify_events_for_run(
             retained_seqs.append(seq)
             continue
 
-        if _is_high_signal_app_server_event(data):
-            retained_seqs.append(seq)
-        else:
-            telemetry_app_server_seqs_to_prune.append(seq)
+        telemetry_app_server_seqs_to_prune.append(seq)
 
     return (
         events_to_export,
@@ -255,33 +178,6 @@ def classify_events_for_run(
         delta_seqs_to_prune,
         retained_seqs,
     )
-
-
-def plan_export(store: FlowStore) -> ExportPlan:
-    """Build an export plan without mutating anything."""
-    plan = ExportPlan()
-    records = store.list_flow_runs()
-    plan.runs_total = len(records)
-
-    for record in records:
-        if record.status.is_terminal():
-            plan.runs_terminal += 1
-        else:
-            plan.runs_active += 1
-            continue
-
-        events, ev_app_seqs, tel_app_seqs, prune_delta, retained = (
-            classify_events_for_run(store, record.id, is_terminal=True)
-        )
-        plan.events_to_export += len(events)
-        plan.events_to_prune += len(ev_app_seqs) + len(tel_app_seqs) + len(prune_delta)
-        plan.events_to_retain += len(retained)
-        for ev in events:
-            plan.estimated_archive_bytes += len(
-                json.dumps(ev, ensure_ascii=False).encode("utf-8")
-            )
-
-    return plan
 
 
 def _archive_path_for_run(
@@ -458,11 +354,9 @@ def export_all_runs(
 
 
 __all__ = [
-    "ExportPlan",
     "ExportRecord",
     "ExportResult",
     "classify_events_for_run",
     "export_all_runs",
     "export_run",
-    "plan_export",
 ]

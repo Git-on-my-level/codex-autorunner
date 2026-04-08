@@ -51,6 +51,16 @@ def _create_expired_run(store: FlowStore, run_id: str = "run-old") -> str:
     return record.id
 
 
+def _create_recent_terminal_run(store: FlowStore, run_id: str = "run-recent") -> str:
+    record = store.create_flow_run(
+        run_id=run_id, flow_type="ticket_flow", input_data={}
+    )
+    store.update_flow_run_status(
+        record.id, status=FlowRunStatus.COMPLETED, finished_at="2099-01-01T00:00:00Z"
+    )
+    return record.id
+
+
 def _create_active_run(store: FlowStore, run_id: str = "run-active") -> str:
     record = store.create_flow_run(
         run_id=run_id, flow_type="ticket_flow", input_data={}
@@ -165,6 +175,30 @@ class TestHousekeepOnWorktreeCleanup:
             FlowEventType.APP_SERVER_EVENT,
             {"message": {"method": "test", "params": {}}, "turn_id": "t1"},
             event_id="evt-1",
+        )
+        store.close()
+
+        with patch(
+            "codex_autorunner.core.flows.flow_telemetry_hooks._open_store",
+            return_value=store,
+        ):
+            result = housekeep_on_worktree_cleanup(repo_root)
+
+        assert result is not None
+        assert result.runs_processed == 1
+
+    def test_prunes_recent_terminal_runs_on_cleanup(
+        self, temp_dir, mock_retention_config
+    ):
+        repo_root = _make_repo(temp_dir, "wt-recent")
+        store = _make_store(repo_root)
+        run_id = _create_recent_terminal_run(store, "run-recent")
+        _add_event(
+            store,
+            run_id,
+            FlowEventType.APP_SERVER_EVENT,
+            {"message": {"method": "test", "params": {}}, "turn_id": "t1"},
+            event_id="evt-recent-1",
         )
         store.close()
 

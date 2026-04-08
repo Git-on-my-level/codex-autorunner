@@ -13,7 +13,6 @@ from codex_autorunner.core.flows.telemetry_export import (
     classify_events_for_run,
     export_all_runs,
     export_run,
-    plan_export,
 )
 
 
@@ -124,7 +123,7 @@ def test_classify_terminal_run_prunes_non_high_signal_app_events(temp_dir):
     assert len(retained) == 0
 
 
-def test_classify_terminal_run_retains_high_signal_item_completed(temp_dir):
+def test_classify_terminal_run_prunes_item_completed_after_export(temp_dir):
     store = _make_store(temp_dir)
     run_id = _create_terminal_run(store)
     _add_event(
@@ -143,12 +142,12 @@ def test_classify_terminal_run_retains_high_signal_item_completed(temp_dir):
         store, run_id, is_terminal=True
     )
     assert len(events) == 1
-    assert ev_app_seqs == []
+    assert len(ev_app_seqs) == 1
     assert tel_app_seqs == []
-    assert len(retained) == 1
+    assert len(retained) == 0
 
 
-def test_classify_terminal_run_retains_user_role(temp_dir):
+def test_classify_terminal_run_prunes_user_role_after_export(temp_dir):
     store = _make_store(temp_dir)
     run_id = _create_terminal_run(store)
     _add_event(
@@ -165,12 +164,12 @@ def test_classify_terminal_run_retains_user_role(temp_dir):
         store, run_id, is_terminal=True
     )
     assert len(events) == 1
-    assert ev_app_seqs == []
+    assert len(ev_app_seqs) == 1
     assert tel_app_seqs == []
-    assert len(retained) == 1
+    assert len(retained) == 0
 
 
-def test_classify_terminal_run_prunes_deltas_after_high_signal(temp_dir):
+def test_classify_terminal_run_prunes_app_events_and_deltas(temp_dir):
     store = _make_store(temp_dir)
     run_id = _create_terminal_run(store)
     _add_event(
@@ -195,10 +194,10 @@ def test_classify_terminal_run_prunes_deltas_after_high_signal(temp_dir):
         store, run_id, is_terminal=True
     )
     assert len(events) == 2
-    assert ev_app_seqs == []
+    assert len(ev_app_seqs) == 1
     assert tel_app_seqs == []
     assert len(prune_delta) == 1
-    assert len(retained) == 1
+    assert len(retained) == 0
 
 
 def test_classify_terminal_run_prunes_all_deltas(temp_dir):
@@ -330,7 +329,7 @@ def test_export_run_prunes_redundant_rows(temp_dir):
     assert len(all_events_after) == 0
 
 
-def test_export_run_retains_high_signal_events(temp_dir):
+def test_export_run_prunes_all_terminal_wire_events(temp_dir):
     store = _make_store(temp_dir)
     run_id = _create_terminal_run(store)
     _add_event(
@@ -357,13 +356,12 @@ def test_export_run_retains_high_signal_events(temp_dir):
     record = store.get_flow_run(run_id)
     assert record is not None
     result = export_run(temp_dir, store, record, dry_run=False)
-    assert result.prunable_app_server_events == 0
+    assert result.prunable_app_server_events == 1
     assert result.prunable_stream_deltas == 1
-    assert result.retained_events == 1
+    assert result.retained_events == 0
 
     remaining = store.get_events(run_id)
-    assert len(remaining) == 1
-    assert remaining[0].event_type == FlowEventType.APP_SERVER_EVENT
+    assert len(remaining) == 0
 
 
 def test_export_all_runs_mixed(temp_dir):
@@ -443,39 +441,6 @@ def test_export_all_runs_dry_run_summary(temp_dir):
     assert summary["events_to_prune"] == 1
 
 
-def test_plan_export(temp_dir):
-    store = _make_store(temp_dir)
-    _create_terminal_run(store, "run-t")
-    _create_active_run(store, "run-a")
-    _add_event(
-        store,
-        "run-t",
-        FlowEventType.APP_SERVER_EVENT,
-        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
-        event_id="evt-runt-1",
-    )
-    _add_event(
-        store,
-        "run-a",
-        FlowEventType.APP_SERVER_EVENT,
-        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
-        event_id="evt-runa-1",
-    )
-    _add_event(
-        store,
-        "run-a",
-        FlowEventType.APP_SERVER_EVENT,
-        {"message": {"method": "message.part.updated", "params": {}}, "turn_id": "t1"},
-    )
-
-    plan = plan_export(store)
-    assert plan.runs_total == 2
-    assert plan.runs_terminal == 1
-    assert plan.runs_active == 1
-    assert plan.events_to_export == 1
-    assert plan.events_to_prune == 1
-
-
 def test_export_run_responses_style_telemetry(temp_dir):
     store = _make_store(temp_dir)
     run_id = _create_terminal_run(store)
@@ -549,9 +514,9 @@ def test_export_run_assistants_style_item_completed(temp_dir):
     assert record is not None
     result = export_run(temp_dir, store, record, dry_run=False)
     assert result.exported_events == 2
-    assert result.prunable_app_server_events == 0
+    assert result.prunable_app_server_events == 1
     assert result.prunable_stream_deltas == 1
-    assert result.retained_events == 1
+    assert result.retained_events == 0
 
 
 def _add_telemetry(
