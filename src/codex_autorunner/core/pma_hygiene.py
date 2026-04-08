@@ -22,6 +22,17 @@ PMA_HYGIENE_CATEGORY_ALIASES = {
 }
 PMA_HYGIENE_GROUP_ORDER = ("safe", "protected", "needs-confirmation")
 PMA_HYGIENE_CATEGORY_ORDER = ("files", "threads", "automation", "alerts")
+PMA_HYGIENE_LOCK_NAME = "pma_hygiene.lock"
+
+
+def _hygiene_lock_path(hub_root: Path) -> Path:
+    return hub_root / ".codex-autorunner" / PMA_HYGIENE_LOCK_NAME
+
+
+def _canonicalize_categories(categories: Sequence[str]) -> tuple[str, ...]:
+    return tuple(
+        category for category in PMA_HYGIENE_CATEGORY_ORDER if category in categories
+    )
 
 
 def _normalize_categories(raw: Optional[Sequence[str]]) -> tuple[str, ...]:
@@ -44,7 +55,7 @@ def _normalize_categories(raw: Optional[Sequence[str]]) -> tuple[str, ...]:
             for item in expanded:
                 if item not in normalized:
                     normalized.append(item)
-    return tuple(normalized or PMA_HYGIENE_CATEGORY_ALIASES["all"])
+    return _canonicalize_categories(normalized or PMA_HYGIENE_CATEGORY_ALIASES["all"])
 
 
 def _load_stale_threshold_seconds(
@@ -74,6 +85,15 @@ def _category_sort_key(category: str) -> int:
         return PMA_HYGIENE_CATEGORY_ORDER.index(category)
     except ValueError:
         return len(PMA_HYGIENE_CATEGORY_ORDER)
+
+
+def _hygiene_item_sort_key(item: dict[str, Any]) -> tuple[int, int, str, str]:
+    return (
+        _group_sort_key(str(item.get("group") or "")),
+        _category_sort_key(str(item.get("category") or "")),
+        str(item.get("label") or ""),
+        str(item.get("candidate_id") or ""),
+    )
 
 
 def _build_candidate(
@@ -433,13 +453,7 @@ def build_pma_hygiene_report(
             stale_threshold_seconds=threshold_seconds,
         )
     )
-    items.sort(
-        key=lambda item: (
-            _group_sort_key(str(item.get("group") or "")),
-            _category_sort_key(str(item.get("category") or "")),
-            str(item.get("label") or ""),
-        )
-    )
+    items.sort(key=_hygiene_item_sort_key)
 
     groups: dict[str, list[dict[str, Any]]] = {
         group: [] for group in PMA_HYGIENE_GROUP_ORDER
@@ -472,7 +486,19 @@ def build_pma_hygiene_report(
     }
 
 
-def apply_pma_hygiene_report(hub_root: Path, report: dict[str, Any]) -> dict[str, Any]:
+def _is_reviewed_thread_cleanup_candidate(item: dict[str, Any]) -> bool:
+    return (
+        str(item.get("group") or "") == "needs-confirmation"
+        and str(item.get("category") or "") == "threads"
+        and str(item.get("action") or "") == "archive_managed_thread"
+    )
+
+
+def _collect_hygiene_apply_items(
+    report: dict[str, Any],
+    *,
+    include_needs_confirmation: bool,
+) -> list[dict[str, Any]]:
     raw_groups = report.get("groups")
     groups = raw_groups if isinstance(raw_groups, dict) else {}
     raw_safe_items = groups.get("safe")
@@ -481,10 +507,45 @@ def apply_pma_hygiene_report(hub_root: Path, report: dict[str, Any]) -> dict[str
         if isinstance(raw_safe_items, list)
         else []
     )
-    automation_store: Optional[PmaAutomationStore] = None
-    results: list[dict[str, Any]] = []
+    reviewed_items: list[dict[str, Any]] = []
+    if include_needs_confirmation:
+        raw_reviewed_items = groups.get("needs-confirmation")
+        reviewed_items = (
+            [
+                item
+                for item in raw_reviewed_items
+                if isinstance(item, dict)
+                and _is_reviewed_thread_cleanup_candidate(item)
+            ]
+            if isinstance(raw_reviewed_items, list)
+            else []
+        )
+    selected_items = [*safe_items, *reviewed_items]
+    selected_items.sort(key=_hygiene_item_sort_key)
+    return selected_items
 
-    for item in safe_items:
+
+def apply_pma_hygiene_report(
+    hub_root: Path,
+    report: dict[str, Any],
+    *,
+    include_needs_confirmation: bool = False,
+) -> dict[str, Any]:
+    selected_items = _collect_hygiene_apply_items(
+        report, include_needs_confirmation=include_needs_confirmation
+    )
+    automation_store: Optional[PmaAutomationStore] = None
+    thread_store: Optional[PmaThreadStore] = None
+    results: list[dict[str, Any]] = []
+    safe_attempted = 0
+    reviewed_attempted = 0
+
+    for item in selected_items:
+        group = str(item.get("group") or "")
+        if group == "safe":
+            safe_attempted += 1
+        elif group == "needs-confirmation":
+            reviewed_attempted += 1
         action = str(item.get("action") or "")
         raw_target = item.get("target")
         target: dict[str, Any] = (
@@ -523,6 +584,10 @@ def apply_pma_hygiene_report(hub_root: Path, report: dict[str, Any]) -> dict[str
                 if dispatch_path.is_file():
                     dispatch_path.unlink()
                     ok = True
+            elif action == "archive_managed_thread":
+                thread_store = thread_store or PmaThreadStore(hub_root)
+                thread_store.archive_thread(str(target.get("managed_thread_id") or ""))
+                ok = True
         except (
             Exception
         ) as exc:  # intentional: multi-action apply; records per-item failure
@@ -530,6 +595,8 @@ def apply_pma_hygiene_report(hub_root: Path, report: dict[str, Any]) -> dict[str
         results.append(
             {
                 "candidate_id": candidate_id,
+                "group": group,
+                "category": item.get("category"),
                 "action": action,
                 "label": item.get("label"),
                 "status": "applied" if ok else "failed",
@@ -538,14 +605,18 @@ def apply_pma_hygiene_report(hub_root: Path, report: dict[str, Any]) -> dict[str
         )
 
     return {
-        "attempted": len(safe_items),
+        "attempted": len(selected_items),
+        "safe_attempted": safe_attempted,
+        "reviewed_attempted": reviewed_attempted,
         "applied": sum(1 for item in results if item.get("status") == "applied"),
         "failed": sum(1 for item in results if item.get("status") != "applied"),
         "results": results,
     }
 
 
-def render_pma_hygiene_report(report: dict[str, Any], *, apply: bool = False) -> str:
+def render_pma_hygiene_report(
+    report: dict[str, Any], *, apply: bool = False, summary_only: bool = False
+) -> str:
     lines: list[str] = []
     raw_categories = report.get("categories")
     categories = (
@@ -557,6 +628,10 @@ def render_pma_hygiene_report(report: dict[str, Any], *, apply: bool = False) ->
     summary = raw_summary if isinstance(raw_summary, dict) else {}
     raw_group_counts = summary.get("group_counts")
     group_counts = raw_group_counts if isinstance(raw_group_counts, dict) else {}
+    raw_category_counts = summary.get("category_counts")
+    category_counts = (
+        raw_category_counts if isinstance(raw_category_counts, dict) else {}
+    )
     raw_groups = report.get("groups")
     groups = raw_groups if isinstance(raw_groups, dict) else {}
     mode = "Apply safe cleanup" if apply else "Dry run only"
@@ -567,6 +642,20 @@ def render_pma_hygiene_report(report: dict[str, Any], *, apply: bool = False) ->
             f"{group}={group_counts.get(group, 0)}" for group in PMA_HYGIENE_GROUP_ORDER
         )
     )
+    if summary_only:
+        if category_counts:
+            lines.append(
+                "Category counts: "
+                + ", ".join(
+                    f"{category}={category_counts.get(category, 0)}"
+                    for category in PMA_HYGIENE_CATEGORY_ORDER
+                    if category in category_counts
+                )
+            )
+        safe_apply_count = summary.get("safe_apply_count")
+        if safe_apply_count is not None:
+            lines.append(f"Safe apply count: {safe_apply_count}")
+        return "\n".join(lines)
     for group in PMA_HYGIENE_GROUP_ORDER:
         raw_items = groups.get(group)
         items = raw_items if isinstance(raw_items, list) else []
