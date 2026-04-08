@@ -713,7 +713,12 @@ class CodexAppServerClient:
             return
 
         status = self._apply_resume_snapshot(state, snapshot)
-        if status and _status_is_terminal(status) and not state.future.done():
+        effective_status = status or state.status
+        if (
+            effective_status
+            and _status_is_terminal(effective_status)
+            and not state.future.done()
+        ):
             await self._emit_recovered_turn_completed_notification(
                 state, thread_id=thread_id, recovery_source="turn_completion_gap"
             )
@@ -723,11 +728,24 @@ class CodexAppServerClient:
                 "app_server.turn_completion_gap_recovery.completed",
                 turn_id=turn_id,
                 thread_id=thread_id,
-                status=status,
+                status=effective_status,
                 item_completed_count=state.item_completed_count,
                 recovery_attempts=state.completion_gap_recovery_attempts,
             )
             self._set_turn_result_if_pending(state)
+            return
+        if effective_status and not _status_is_terminal(effective_status):
+            self._reset_completion_gap_recovery(state)
+            state.last_event_at = now
+            log_event(
+                self._logger,
+                logging.INFO,
+                "app_server.turn_completion_gap_recovery.active",
+                turn_id=turn_id,
+                thread_id=thread_id,
+                status=effective_status,
+                item_completed_count=state.item_completed_count,
+            )
             return
 
         log_event(
@@ -1697,17 +1715,20 @@ class CodexAppServerClient:
             return self._ensure_pending_turn_state(turn_id)
         return None
 
+    def _reset_completion_gap_recovery(self, state: _TurnState) -> None:
+        state.completion_gap_started_at = None
+        state.completion_gap_recovery_attempts = 0
+        state.last_completion_gap_recovery_at = 0.0
+
     def _mark_notification_event(self, *, state: _TurnState, method: str) -> None:
         now = time.monotonic()
         state.last_event_at = now
         state.last_method = method
-        if (
-            not state.turn_completed_seen
-            and state.item_completed_count > 0
-            and method
-            not in {"item/completed", "turn/completed", "error", "turn/error"}
-        ):
-            state.completion_gap_started_at = now
+        if state.turn_completed_seen:
+            return
+        self._reset_completion_gap_recovery(state)
+        if method == "item/completed":
+            return
 
     async def _handle_notification_agent_message_delta(
         self, message: Dict[str, Any], params: dict[str, Any], decoded: Any = None
@@ -1915,6 +1936,8 @@ class CodexAppServerClient:
         return state
 
     def _merge_turn_state(self, target: _TurnState, source: _TurnState) -> None:
+        target_last_event_at = target.last_event_at
+        source_last_event_at = source.last_event_at
         if not target.agent_messages:
             target.agent_messages = list(source.agent_messages)
         else:
@@ -1949,25 +1972,37 @@ class CodexAppServerClient:
         target.item_completed_count = max(
             target.item_completed_count, source.item_completed_count
         )
-        if target.completion_gap_started_at is None:
+        if source_last_event_at > target_last_event_at:
             target.completion_gap_started_at = source.completion_gap_started_at
-        elif source.completion_gap_started_at is not None:
-            target.completion_gap_started_at = max(
-                target.completion_gap_started_at,
-                source.completion_gap_started_at,
+            target.completion_gap_recovery_attempts = (
+                source.completion_gap_recovery_attempts
+            )
+            target.last_completion_gap_recovery_at = (
+                source.last_completion_gap_recovery_at
+            )
+        elif source_last_event_at == target_last_event_at:
+            if (
+                target.completion_gap_started_at is None
+                or source.completion_gap_started_at is None
+            ):
+                target.completion_gap_started_at = None
+            elif source.completion_gap_started_at is not None:
+                target.completion_gap_started_at = max(
+                    target.completion_gap_started_at,
+                    source.completion_gap_started_at,
+                )
+            target.completion_gap_recovery_attempts = max(
+                target.completion_gap_recovery_attempts,
+                source.completion_gap_recovery_attempts,
+            )
+            target.last_completion_gap_recovery_at = max(
+                target.last_completion_gap_recovery_at,
+                source.last_completion_gap_recovery_at,
             )
         if target.turn_completed_seen or source.turn_completed_seen:
             target.active_item_ids.clear()
         elif source.active_item_ids:
             target.active_item_ids.update(source.active_item_ids)
-        target.completion_gap_recovery_attempts = max(
-            target.completion_gap_recovery_attempts,
-            source.completion_gap_recovery_attempts,
-        )
-        target.last_completion_gap_recovery_at = max(
-            target.last_completion_gap_recovery_at,
-            source.last_completion_gap_recovery_at,
-        )
         if target.status is None and source.status is not None:
             target.status = source.status
         if source.future.done() and not target.future.done():

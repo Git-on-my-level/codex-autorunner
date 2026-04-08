@@ -1031,7 +1031,7 @@ async def test_completion_gap_recovery_emits_synthetic_turn_completed_notificati
 
 
 @pytest.mark.anyio
-async def test_wait_for_turn_fails_when_completion_gap_recovery_exhausted(
+async def test_completion_gap_recovery_cancels_gap_for_live_resume_snapshot(
     tmp_path: Path,
 ) -> None:
     client = CodexAppServerClient(
@@ -1040,13 +1040,13 @@ async def test_wait_for_turn_fails_when_completion_gap_recovery_exhausted(
         turn_stall_timeout_seconds=10.0,
         turn_stall_poll_interval_seconds=0.02,
         turn_stall_recovery_min_interval_seconds=0.0,
-        turn_stall_max_recovery_attempts=2,
         turn_completion_gap_timeout_seconds=0.01,
     )
     try:
         state = client._ensure_turn_state("turn-1", "thread-1")
         state.status = "running"
         state.item_completed_count = 1
+        state.last_event_at = time.monotonic() - 1.0
         state.completion_gap_started_at = time.monotonic() - 1.0
         resume_calls = 0
 
@@ -1063,19 +1063,24 @@ async def test_wait_for_turn_fails_when_completion_gap_recovery_exhausted(
 
         client.thread_resume = _resume  # type: ignore[method-assign]
 
-        result = await client.wait_for_turn("turn-1", thread_id="thread-1", timeout=1.0)
-        assert result.status == "failed"
-        assert any(
-            "completion-gap recovery exhausted" in error for error in result.errors
+        await client._maybe_reconcile_turn_completion_gap(
+            state,
+            turn_id="turn-1",
+            thread_id="thread-1",
         )
-        assert resume_calls == 2
-        assert state.future.done()
+
+        assert resume_calls == 1
+        assert state.status == "running"
+        assert state.completion_gap_started_at is None
+        assert state.completion_gap_recovery_attempts == 0
+        assert state.last_completion_gap_recovery_at == 0.0
+        assert state.future.done() is False
     finally:
         await client.close()
 
 
 @pytest.mark.anyio
-async def test_live_progress_refreshes_completion_gap_window(
+async def test_live_progress_clears_completion_gap_window(
     tmp_path: Path,
 ) -> None:
     client = CodexAppServerClient(
@@ -1103,8 +1108,8 @@ async def test_live_progress_refreshes_completion_gap_window(
         client.thread_resume = _resume  # type: ignore[method-assign]
 
         client._mark_notification_event(state=state, method="item/agentMessage/delta")
-        assert state.completion_gap_started_at is not None
-        assert state.completion_gap_started_at > stale_started_at
+        assert stale_started_at is not None
+        assert state.completion_gap_started_at is None
 
         await client._maybe_reconcile_turn_completion_gap(
             state,
@@ -1178,7 +1183,7 @@ async def test_active_item_started_blocks_completion_gap_recovery(
 
 
 @pytest.mark.anyio
-async def test_turn_hint_progress_refreshes_completion_gap_window(
+async def test_turn_hint_progress_clears_completion_gap_window(
     tmp_path: Path,
 ) -> None:
     client = CodexAppServerClient(
@@ -1209,8 +1214,8 @@ async def test_turn_hint_progress_refreshes_completion_gap_window(
             method="item/commandExecution/outputDelta",
             params={"turnId": "turn-1", "threadId": "thread-1"},
         )
-        assert state.completion_gap_started_at is not None
-        assert state.completion_gap_started_at > stale_started_at
+        assert stale_started_at is not None
+        assert state.completion_gap_started_at is None
 
         await client._maybe_reconcile_turn_completion_gap(
             state,
@@ -1261,12 +1266,37 @@ async def test_merge_turn_state_keeps_latest_completion_gap_timestamp(
     try:
         target = client._ensure_turn_state("turn-1", "thread-1")
         source = client._ensure_pending_turn_state("turn-1")
+        target.last_event_at = time.monotonic() - 5.0
+        source.last_event_at = time.monotonic() - 1.0
         target.completion_gap_started_at = time.monotonic() - 5.0
         source.completion_gap_started_at = time.monotonic() - 1.0
 
         client._merge_turn_state(target, source)
 
         assert target.completion_gap_started_at == source.completion_gap_started_at
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_merge_turn_state_keeps_newer_gap_clear_state(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(
+        fixture_command("basic"),
+        cwd=tmp_path,
+    )
+    try:
+        target = client._ensure_turn_state("turn-1", "thread-1")
+        source = client._ensure_pending_turn_state("turn-1")
+        target.last_event_at = time.monotonic() - 5.0
+        target.completion_gap_started_at = time.monotonic() - 5.0
+        source.last_event_at = time.monotonic() - 1.0
+        source.completion_gap_started_at = None
+
+        client._merge_turn_state(target, source)
+
+        assert target.completion_gap_started_at is None
     finally:
         await client.close()
 
