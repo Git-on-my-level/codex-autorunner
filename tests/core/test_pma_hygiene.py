@@ -53,6 +53,27 @@ def _write_dispatch(
     return path
 
 
+def _reviewed_thread_cleanup_report(managed_thread_id: str) -> dict[str, object]:
+    return {
+        "groups": {
+            "safe": [],
+            "protected": [],
+            "needs-confirmation": [
+                {
+                    "candidate_id": f"threads:{managed_thread_id}",
+                    "group": "needs-confirmation",
+                    "category": "threads",
+                    "label": managed_thread_id,
+                    "action": "archive_managed_thread",
+                    "reason": "review-approved cleanup",
+                    "target": {"managed_thread_id": managed_thread_id},
+                    "evidence": {"freshness": {"is_stale": True}},
+                }
+            ],
+        }
+    }
+
+
 def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
     hub_root = hub_env.hub_root
     base_now = datetime.now(timezone.utc)
@@ -234,24 +255,7 @@ def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -
         name="reviewed-cleanup-thread",
     )
     managed_thread_id = thread["managed_thread_id"]
-    report = {
-        "groups": {
-            "safe": [],
-            "protected": [],
-            "needs-confirmation": [
-                {
-                    "candidate_id": f"threads:{managed_thread_id}",
-                    "group": "needs-confirmation",
-                    "category": "threads",
-                    "label": managed_thread_id,
-                    "action": "archive_managed_thread",
-                    "reason": "review-approved cleanup",
-                    "target": {"managed_thread_id": managed_thread_id},
-                    "evidence": {"freshness": {"is_stale": True}},
-                }
-            ],
-        }
-    }
+    report = _reviewed_thread_cleanup_report(managed_thread_id)
 
     blocked = apply_pma_hygiene_report(hub_root, report)
     assert blocked["attempted"] == 0
@@ -265,6 +269,100 @@ def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -
     assert applied["reviewed_attempted"] == 1
     assert applied["applied"] == 1
     assert applied["failed"] == 0
+    assert thread_store.get_thread(managed_thread_id)["status"] == "archived"
+
+
+def test_apply_pma_hygiene_report_revalidates_reviewed_thread_binding(hub_env) -> None:
+    hub_root = hub_env.hub_root
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="reviewed-thread-now-bound",
+    )
+    managed_thread_id = thread["managed_thread_id"]
+    report = _reviewed_thread_cleanup_report(managed_thread_id)
+
+    OrchestrationBindingStore(hub_root).upsert_binding(
+        surface_kind="github_pr",
+        surface_key="Git-on-my-level/codex-autorunner#1302",
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
+
+    applied = apply_pma_hygiene_report(
+        hub_root, report, include_needs_confirmation=True
+    )
+
+    assert applied["attempted"] == 1
+    assert applied["applied"] == 0
+    assert applied["failed"] == 1
+    assert (
+        applied["results"][0]["error"]
+        == "Managed thread cleanup no longer safe: managed thread has an active binding"
+    )
+    assert thread_store.get_thread(managed_thread_id)["status"] == "active"
+
+
+def test_apply_pma_hygiene_report_revalidates_reviewed_thread_busy_state(
+    hub_env,
+) -> None:
+    hub_root = hub_env.hub_root
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="reviewed-thread-now-busy",
+    )
+    managed_thread_id = thread["managed_thread_id"]
+    report = _reviewed_thread_cleanup_report(managed_thread_id)
+
+    thread_store.create_turn(managed_thread_id, prompt="still running")
+
+    applied = apply_pma_hygiene_report(
+        hub_root, report, include_needs_confirmation=True
+    )
+
+    assert applied["attempted"] == 1
+    assert applied["applied"] == 0
+    assert applied["failed"] == 1
+    assert (
+        applied["results"][0]["error"]
+        == "Managed thread cleanup no longer safe: managed thread has running work"
+    )
+    assert thread_store.get_thread(managed_thread_id)["status"] == "active"
+
+
+def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
+    hub_env,
+) -> None:
+    hub_root = hub_env.hub_root
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="reviewed-thread-now-archived",
+    )
+    managed_thread_id = thread["managed_thread_id"]
+    report = _reviewed_thread_cleanup_report(managed_thread_id)
+
+    thread_store.archive_thread(managed_thread_id)
+
+    applied = apply_pma_hygiene_report(
+        hub_root, report, include_needs_confirmation=True
+    )
+
+    assert applied["attempted"] == 1
+    assert applied["applied"] == 0
+    assert applied["failed"] == 1
+    assert (
+        applied["results"][0]["error"]
+        == "Managed thread cleanup no longer safe: managed thread lifecycle is archived"
+    )
     assert thread_store.get_thread(managed_thread_id)["status"] == "archived"
 
 

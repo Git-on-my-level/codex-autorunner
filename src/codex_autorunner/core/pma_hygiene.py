@@ -525,6 +525,45 @@ def _collect_hygiene_apply_items(
     return selected_items
 
 
+def _revalidate_managed_thread_cleanup(
+    thread_store: PmaThreadStore,
+    binding_store: OrchestrationBindingStore,
+    managed_thread_id: str,
+) -> Optional[str]:
+    normalized_thread_id = managed_thread_id.strip()
+    if not normalized_thread_id:
+        return "missing managed_thread_id"
+
+    thread = thread_store.get_thread(normalized_thread_id)
+    if not isinstance(thread, dict):
+        return "managed thread no longer exists"
+
+    lifecycle_status = str(
+        thread.get("lifecycle_status") or thread.get("status") or ""
+    ).strip()
+    normalized_status = str(thread.get("normalized_status") or "").strip()
+    if lifecycle_status != "active":
+        return f"managed thread lifecycle is {lifecycle_status or 'unknown'}"
+    if normalized_status == "archived":
+        return "managed thread is already archived"
+
+    bindings = binding_store.list_bindings(
+        thread_target_id=normalized_thread_id,
+        include_disabled=False,
+        limit=50,
+    )
+    if bindings:
+        return "managed thread has an active binding"
+
+    running_ids = set(thread_store.list_thread_ids_with_running_executions(limit=None))
+    if normalized_thread_id in running_ids:
+        return "managed thread has running work"
+    queued_ids = set(thread_store.list_thread_ids_with_pending_queue(limit=None))
+    if normalized_thread_id in queued_ids:
+        return "managed thread has queued work"
+    return None
+
+
 def apply_pma_hygiene_report(
     hub_root: Path,
     report: dict[str, Any],
@@ -535,6 +574,7 @@ def apply_pma_hygiene_report(
         report, include_needs_confirmation=include_needs_confirmation
     )
     automation_store: Optional[PmaAutomationStore] = None
+    binding_store: Optional[OrchestrationBindingStore] = None
     thread_store: Optional[PmaThreadStore] = None
     results: list[dict[str, Any]] = []
     safe_attempted = 0
@@ -586,7 +626,18 @@ def apply_pma_hygiene_report(
                     ok = True
             elif action == "archive_managed_thread":
                 thread_store = thread_store or PmaThreadStore(hub_root)
-                thread_store.archive_thread(str(target.get("managed_thread_id") or ""))
+                binding_store = binding_store or OrchestrationBindingStore(hub_root)
+                managed_thread_id = str(target.get("managed_thread_id") or "")
+                blocked_reason = _revalidate_managed_thread_cleanup(
+                    thread_store,
+                    binding_store,
+                    managed_thread_id,
+                )
+                if blocked_reason is not None:
+                    raise RuntimeError(
+                        "Managed thread cleanup no longer safe: " f"{blocked_reason}"
+                    )
+                thread_store.archive_thread(managed_thread_id)
                 ok = True
         except (
             Exception
