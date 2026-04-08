@@ -6576,6 +6576,71 @@ async def test_flow_status_defers_publicly_before_flow_store_work(
 
 
 @pytest.mark.anyio
+async def test_component_flow_status_defers_publicly_before_flow_store_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _component_interaction(
+                custom_id="flow_action_select:status", values=["run-1"]
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _StoreStub:
+        def list_flow_runs(self, *, flow_type: str) -> list[Any]:
+            assert flow_type == "ticket_flow"
+            return []
+
+        def close(self) -> None:
+            return None
+
+    observed: dict[str, Any] = {}
+
+    def _open_flow_store_after_defer(workspace_root: Path) -> Any:
+        observed["deferred_type"] = (
+            rest.interaction_responses[0]["payload"]["type"]
+            if rest.interaction_responses
+            else None
+        )
+        assert workspace_root == workspace
+        return _StoreStub()
+
+    monkeypatch.setattr(service, "_open_flow_store", _open_flow_store_after_defer)
+    monkeypatch.setattr(service, "_resolve_flow_run_by_id", lambda store, run_id: None)
+
+    try:
+        await service.run_forever()
+        assert observed["deferred_type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert (
+            "ticket_flow run run-1 not found"
+            in rest.followup_messages[0]["payload"]["content"].lower()
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_car_update_starts_worker_with_explicit_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
