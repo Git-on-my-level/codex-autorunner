@@ -36,13 +36,28 @@ def _prune_flow_run_list_payload(payload: list[dict[str, Any]]) -> None:
         state = row.get("state")
         if not isinstance(state, dict):
             continue
-        ticket_engine = state.get("ticket_engine")
-        current_ticket = (
-            ticket_engine.get("current_ticket")
-            if isinstance(ticket_engine, dict)
-            else state.get("current_ticket")
-        )
-        row["state"] = {"current_ticket": current_ticket, "status": row.get("status")}
+        state_dict = state if isinstance(state, dict) else {}
+        raw_ticket_engine = state_dict.get("ticket_engine")
+        ticket_engine = raw_ticket_engine if isinstance(raw_ticket_engine, dict) else {}
+        current_ticket = ticket_engine.get("current_ticket")
+        if current_ticket is None:
+            current_ticket = state_dict.get("current_ticket")
+        status = row.get("status")
+        ticket_engine_status = ticket_engine.get("status")
+        if ticket_engine_status is None:
+            ticket_engine_status = status
+        row["state"] = {
+            "current_ticket": current_ticket,
+            "status": status,
+            "ticket_engine": {
+                "current_ticket": current_ticket,
+                "status": ticket_engine_status,
+                "ticket_turns": ticket_engine.get("ticket_turns"),
+                "total_turns": ticket_engine.get("total_turns"),
+                "reason": ticket_engine.get("reason"),
+                "reason_details": ticket_engine.get("reason_details"),
+            },
+        }
 
 
 def _list_runs_cache_handles(

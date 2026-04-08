@@ -611,6 +611,38 @@ class FlowArtifactInfo(BaseModel):
     metadata: Dict = Field(default_factory=dict)
 
 
+def _build_lite_flow_state(
+    record: FlowRunRecord, snapshot: dict[str, Any], status: str
+) -> dict[str, Any]:
+    state = snapshot.get("state")
+    if not isinstance(state, dict):
+        state = record.state if isinstance(record.state, dict) else {}
+
+    raw_ticket_engine = state.get("ticket_engine")
+    ticket_engine = raw_ticket_engine if isinstance(raw_ticket_engine, dict) else {}
+
+    current_ticket = snapshot.get("effective_current_ticket")
+    if not (isinstance(current_ticket, str) and current_ticket.strip()):
+        current_ticket = ticket_engine.get("current_ticket")
+
+    ticket_engine_status = ticket_engine.get("status")
+    if not (isinstance(ticket_engine_status, str) and ticket_engine_status.strip()):
+        ticket_engine_status = status
+
+    return {
+        "current_ticket": current_ticket,
+        "status": status,
+        "ticket_engine": {
+            "current_ticket": current_ticket,
+            "status": ticket_engine_status,
+            "ticket_turns": ticket_engine.get("ticket_turns"),
+            "total_turns": ticket_engine.get("total_turns"),
+            "reason": ticket_engine.get("reason"),
+            "reason_details": ticket_engine.get("reason_details"),
+        },
+    }
+
+
 def _build_flow_status_response(
     record: FlowRunRecord,
     repo_root: Path,
@@ -627,10 +659,7 @@ def _build_flow_status_response(
     )
     resp.ticket_progress = snapshot.get("ticket_progress")
     if lite:
-        resp.state = {
-            "current_ticket": snapshot.get("effective_current_ticket"),
-            "status": resp.status,
-        }
+        resp.state = _build_lite_flow_state(record, snapshot, resp.status)
     elif snapshot.get("state") is not None:
         resp.state = snapshot["state"]
     return resp
