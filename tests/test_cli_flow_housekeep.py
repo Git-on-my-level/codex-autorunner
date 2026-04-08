@@ -68,7 +68,6 @@ def test_flow_housekeep_uses_repo_retention_config(monkeypatch, tmp_path: Path) 
         retention_config: FlowRetentionConfig,
         *,
         run_ids=None,
-        vacuum: bool = False,
         dry_run: bool = False,
     ) -> _FakeResult:
         captured["repo_root"] = repo_root
@@ -76,13 +75,12 @@ def test_flow_housekeep_uses_repo_retention_config(monkeypatch, tmp_path: Path) 
         captured["db_path"] = target_db_path
         captured["retention_config"] = retention_config
         captured["run_ids"] = run_ids
-        captured["vacuum"] = vacuum
         captured["dry_run"] = dry_run
         return _FakeResult()
 
     monkeypatch.setattr(flow_module, "execute_housekeep", _fake_execute_housekeep)
 
-    retention = FlowRetentionConfig(retention_days=30, vacuum_after_prune=True)
+    retention = FlowRetentionConfig(retention_days=30, sweep_interval_seconds=3600)
     flow_app = _build_flow_app(monkeypatch, tmp_path, retention)
 
     result = CliRunner().invoke(flow_app, ["housekeep"])
@@ -91,5 +89,4 @@ def test_flow_housekeep_uses_repo_retention_config(monkeypatch, tmp_path: Path) 
     assert captured["repo_root"] == tmp_path
     assert captured["db_path"] == db_path
     assert captured["retention_config"] == retention
-    assert captured["vacuum"] is True
     assert captured["dry_run"] is False

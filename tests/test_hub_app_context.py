@@ -180,6 +180,66 @@ async def test_hub_lifespan_restores_exception_hooks_on_startup_failure(
     assert loop.get_exception_handler() is original_asyncio_exception_handler
 
 
+@pytest.mark.parametrize(
+    ("repo_defaults", "expected_interval"),
+    [
+        ({}, web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS),
+        (
+            {"flow_retention": {"sweep_interval_seconds": 300}},
+            300.0,
+        ),
+        (
+            {"flow_retention": {"sweep_interval_seconds": "abc"}},
+            web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
+        ),
+        (
+            {"flow_retention": {"sweep_interval_seconds": 0}},
+            web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
+        ),
+        (
+            {"flow_retention": {"sweep_interval_seconds": -30}},
+            web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
+        ),
+        (
+            {"flow_retention": {"sweep_interval_seconds": True}},
+            web_app_module._DEFAULT_HUB_FLOW_SWEEP_INTERVAL_SECONDS,
+        ),
+    ],
+)
+def test_resolve_hub_flow_sweep_interval_seconds_sanitizes_repo_defaults(
+    repo_defaults, expected_interval
+) -> None:
+    interval = web_app_module._resolve_hub_flow_sweep_interval_seconds(
+        repo_defaults,
+        logging.getLogger("test.hub.flow_sweep"),
+    )
+
+    assert interval == expected_interval
+
+
+def test_hub_lifespan_ignores_invalid_repo_default_flow_sweep_interval(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hub_root = tmp_path / "hub"
+    hub_root.mkdir()
+    seed_hub_files(hub_root, force=True)
+    write_test_config(
+        hub_root / CONFIG_FILENAME,
+        {
+            "mode": "hub",
+            "repo_defaults": {
+                "flow_retention": {"sweep_interval_seconds": "abc"},
+            },
+        },
+    )
+    _stub_opencode_supervisor(monkeypatch)
+
+    app = create_hub_app(hub_root)
+
+    with TestClient(app):
+        pass
+
+
 def test_hub_opencode_prune_interval_uses_opencode_ttl(
     tmp_path: Path, monkeypatch
 ) -> None:

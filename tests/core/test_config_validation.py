@@ -24,6 +24,33 @@ from codex_autorunner.core.config_validation import (
 )
 
 
+def _minimal_repo_config_for_flow_retention() -> dict[str, object]:
+    return {
+        "version": CONFIG_VERSION,
+        "mode": "repo",
+        "docs": {
+            "active_context": ".codex-autorunner/contextspace/active_context.md",
+            "decisions": ".codex-autorunner/contextspace/decisions.md",
+            "spec": ".codex-autorunner/contextspace/spec.md",
+        },
+        "codex": {"binary": "codex"},
+        "prompt": {"prev_run_max_chars": 10},
+        "runner": {"sleep_seconds": 1, "stop_after_runs": None},
+        "git": {"auto_commit": False},
+        "server": {"host": "127.0.0.1", "port": 4173},
+        "log": {
+            "path": ".codex-autorunner/codex-autorunner.log",
+            "max_bytes": 1,
+            "backup_count": 1,
+        },
+        "server_log": {
+            "path": ".codex-autorunner/codex-server.log",
+            "max_bytes": 1,
+            "backup_count": 1,
+        },
+    }
+
+
 class TestNormalizeTicketFlowApprovalMode:
     def test_yolo(self) -> None:
         assert _normalize_ticket_flow_approval_mode("yolo", scope="test") == "yolo"
@@ -226,6 +253,27 @@ class TestValidateAppServerConfig:
                     }
                 }
             )
+
+
+class TestValidateRepoConfigFlowRetention:
+    def test_rejects_non_mapping(self, tmp_path: Path) -> None:
+        cfg = _minimal_repo_config_for_flow_retention()
+        cfg["flow_retention"] = "bad"
+
+        with pytest.raises(ConfigError, match="flow_retention must be a mapping"):
+            _validate_repo_config(cfg, root=tmp_path)
+
+    def test_rejects_non_positive_sweep_interval(self, tmp_path: Path) -> None:
+        cfg = _minimal_repo_config_for_flow_retention()
+        cfg["flow_retention"] = {
+            "retention_days": 7,
+            "sweep_interval_seconds": 0,
+        }
+
+        with pytest.raises(
+            ConfigError, match="flow_retention.sweep_interval_seconds must be > 0"
+        ):
+            _validate_repo_config(cfg, root=tmp_path)
 
 
 class TestValidateAgentsConfig:

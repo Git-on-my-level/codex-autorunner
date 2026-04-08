@@ -120,7 +120,7 @@
   },
   "flow_retention": {
     "retention_days": 7,
-    "vacuum_after_prune": false
+    "sweep_interval_seconds": 86400
   },
   "git": {
     "auto_commit": false,

@@ -93,12 +93,12 @@ class TestFlowRetentionConfig:
         config = FlowRetentionConfig()
         assert config.retention_days == DEFAULT_RETENTION_DAYS
         assert config.retention_days == 7
-        assert config.vacuum_after_prune is False
+        assert config.sweep_interval_seconds == 86400
 
     def test_custom(self):
-        config = FlowRetentionConfig(retention_days=14, vacuum_after_prune=True)
+        config = FlowRetentionConfig(retention_days=14, sweep_interval_seconds=3600)
         assert config.retention_days == 14
-        assert config.vacuum_after_prune is True
+        assert config.sweep_interval_seconds == 3600
 
     def test_retention_cutoff(self):
         config = FlowRetentionConfig(retention_days=7)
@@ -117,10 +117,17 @@ class TestFlowRetentionConfig:
 
     def test_parse_custom(self):
         config = parse_flow_retention_config(
+            {"retention_days": 30, "sweep_interval_seconds": 7200}
+        )
+        assert config.retention_days == 30
+        assert config.sweep_interval_seconds == 7200
+
+    def test_parse_ignores_legacy_vacuum_setting(self):
+        config = parse_flow_retention_config(
             {"retention_days": 30, "vacuum_after_prune": True}
         )
         assert config.retention_days == 30
-        assert config.vacuum_after_prune is True
+        assert config.sweep_interval_seconds == 86400
 
 
 class TestGatherStats:
@@ -318,7 +325,7 @@ class TestExecuteHousekeep:
         assert result.runs_processed == 0
         assert result.events_exported == 0
 
-    def test_execute_with_vacuum(self, temp_dir):
+    def test_execute_vacuums_after_prune(self, temp_dir):
         store = _make_store(temp_dir)
         db_path = temp_dir / "flows.db"
         run_id = _create_terminal_run(
@@ -336,9 +343,7 @@ class TestExecuteHousekeep:
                 event_id=f"evt-old-{i}",
             )
         config = FlowRetentionConfig(retention_days=7)
-        result = execute_housekeep(
-            temp_dir, store, db_path, config, dry_run=False, vacuum=True
-        )
+        result = execute_housekeep(temp_dir, store, db_path, config, dry_run=False)
         assert result.vacuum_performed is True
         assert result.runs_processed == 1
 

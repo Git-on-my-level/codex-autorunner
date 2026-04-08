@@ -264,7 +264,6 @@ def execute_housekeep(
     retention_config: FlowRetentionConfig,
     *,
     run_ids: Optional[Sequence[str]] = None,
-    vacuum: bool = False,
     dry_run: bool = False,
     include_all_terminal: bool = False,
 ) -> HousekeepResult:
@@ -303,7 +302,7 @@ def execute_housekeep(
         result.archive_files = list(export_result.archive_files)
         result.errors = list(export_result.errors)
 
-    if vacuum:
+    if result.events_pruned > 0:
         _logger.info("Running VACUUM on %s", db_path)
         store.close()
         import sqlite3
