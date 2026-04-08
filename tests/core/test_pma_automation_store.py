@@ -4,7 +4,25 @@ import logging
 
 import pytest
 
-from codex_autorunner.core.pma_automation_store import PmaAutomationStore
+from codex_autorunner.core.orchestration import OrchestrationBindingStore
+from codex_autorunner.core.pma_automation_store import (
+    PmaAutomationStore,
+    PmaAutomationThreadNotFoundError,
+)
+from codex_autorunner.core.pma_thread_store import PmaThreadStore
+
+
+def _create_managed_thread(tmp_path, *, surface_kind: str | None = None) -> str:
+    thread_store = PmaThreadStore(tmp_path)
+    thread = thread_store.create_thread("codex", tmp_path)
+    thread_id = str(thread["managed_thread_id"])
+    if surface_kind is not None:
+        OrchestrationBindingStore(tmp_path).upsert_binding(
+            surface_kind=surface_kind,
+            surface_key=f"{surface_kind}:binding-1",
+            thread_target_id=thread_id,
+        )
+    return thread_id
 
 
 def test_subscription_idempotent_dedupe_and_lifecycle_matching(tmp_path) -> None:
@@ -59,21 +77,22 @@ def test_legacy_backfill_runs_once_per_store_instance(tmp_path, monkeypatch) -> 
     )
 
     store = PmaAutomationStore(tmp_path)
+    thread_id = _create_managed_thread(tmp_path)
 
     state = store.load()
     created, deduped = store.upsert_subscription(
         event_types=["flow_failed"],
-        thread_id="thread-1",
+        thread_id=thread_id,
         idempotency_key="sub-key-1",
     )
     matches = store.match_lifecycle_subscriptions(
         event_type="flow_failed",
-        thread_id="thread-1",
+        thread_id=thread_id,
     )
 
     assert state["subscriptions"] == []
     assert deduped is False
-    assert created.thread_id == "thread-1"
+    assert created.thread_id == thread_id
     assert len(matches) == 1
     assert call_count == 1
 
@@ -275,10 +294,11 @@ def test_create_subscription_accepts_singular_event_type_and_triggers_transition
     tmp_path,
 ) -> None:
     store = PmaAutomationStore(tmp_path)
+    thread_id = _create_managed_thread(tmp_path)
     subscription = store.create_subscription(
         {
             "event_type": "managed_thread_completed",
-            "thread_id": "thread-1",
+            "thread_id": thread_id,
             "lane_id": "pma:lane-next",
         }
     )["subscription"]
@@ -288,10 +308,10 @@ def test_create_subscription_accepts_singular_event_type_and_triggers_transition
     result = store.notify_transition(
         {
             "event_type": "managed_thread_completed",
-            "thread_id": "thread-1",
+            "thread_id": thread_id,
             "from_state": "running",
             "to_state": "completed",
-            "transition_id": "managed-thread-1:completed",
+            "transition_id": f"{thread_id}:completed",
         }
     )
 
@@ -311,7 +331,7 @@ def test_create_subscription_warns_when_event_types_empty(
     with caplog.at_level(
         logging.WARNING, logger="codex_autorunner.core.pma_automation_store"
     ):
-        subscription = store.create_subscription({"thread_id": "thread-empty"})[
+        subscription = store.create_subscription({"repo_id": "repo-empty"})[
             "subscription"
         ]
 
@@ -320,6 +340,35 @@ def test_create_subscription_warns_when_event_types_empty(
         "Creating PMA subscription with empty event_types" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_create_subscription_auto_resolves_lane_from_thread_binding(tmp_path) -> None:
+    store = PmaAutomationStore(tmp_path)
+    thread_id = _create_managed_thread(tmp_path, surface_kind="discord")
+
+    subscription = store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": thread_id,
+        }
+    )["subscription"]
+
+    assert subscription["thread_id"] == thread_id
+    assert subscription["lane_id"] == "discord"
+
+
+def test_create_subscription_with_unknown_thread_requires_resolvable_lane(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path)
+
+    with pytest.raises(PmaAutomationThreadNotFoundError, match="Unknown thread_id"):
+        store.create_subscription(
+            {
+                "event_type": "managed_thread_completed",
+                "thread_id": "missing-thread",
+            }
+        )
 
 
 def test_notify_once_subscription_cancels_after_first_match(tmp_path) -> None:

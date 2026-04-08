@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, cast
 
+from .chat_bindings import active_chat_binding_metadata_by_thread
 from .locks import file_lock
 from .orchestration.legacy_backfill_gate import ensure_legacy_orchestration_backfill
 from .orchestration.sqlite import open_orchestration_sqlite
@@ -32,9 +33,16 @@ from .pma_automation_types import (
     _parse_iso,
     default_pma_automation_state,
 )
+from .pma_thread_store import PmaThreadStore
 from .text_utils import lock_path_for
 
 logger = logging.getLogger(__name__)
+
+
+class PmaAutomationThreadNotFoundError(ValueError):
+    def __init__(self, thread_id: str) -> None:
+        super().__init__(f"Unknown thread_id: {thread_id}")
+        self.thread_id = thread_id
 
 
 @dataclass
@@ -873,6 +881,38 @@ class PmaAutomationStore:
             return None
         return parsed
 
+    def _resolve_thread_lane_id(self, *, thread_id: str) -> str:
+        thread_store = PmaThreadStore(self._hub_root)
+        thread = thread_store.get_thread(thread_id)
+        if thread is None:
+            raise PmaAutomationThreadNotFoundError(thread_id)
+
+        binding_metadata = active_chat_binding_metadata_by_thread(
+            hub_root=self._hub_root
+        ).get(thread_id)
+        binding_kind = (
+            _normalize_text(binding_metadata.get("binding_kind"))
+            if isinstance(binding_metadata, dict)
+            else None
+        )
+        if binding_kind in {"discord", "telegram"}:
+            return binding_kind
+        return DEFAULT_PMA_LANE_ID
+
+    def _resolve_subscription_lane_id(
+        self,
+        *,
+        thread_id: Optional[str],
+        lane_id: Optional[str],
+    ) -> str:
+        normalized_thread_id = _normalize_text(thread_id)
+        normalized_lane_id = _normalize_text(lane_id)
+        if normalized_thread_id is None or normalized_lane_id is not None:
+            return _normalize_lane_id(normalized_lane_id)
+
+        resolved_lane_id = self._resolve_thread_lane_id(thread_id=normalized_thread_id)
+        return resolved_lane_id
+
     def upsert_subscription(
         self,
         *,
@@ -891,6 +931,11 @@ class PmaAutomationStore:
     ) -> tuple[PmaLifecycleSubscription, bool]:
         key = _normalize_text(idempotency_key)
         normalized_event_types = self._normalize_subscription_event_types(event_types)
+        normalized_thread_id = _normalize_text(thread_id)
+        resolved_lane_id = self._resolve_subscription_lane_id(
+            thread_id=normalized_thread_id,
+            lane_id=lane_id,
+        )
         if not normalized_event_types:
             logger.warning(
                 "Creating PMA subscription with empty event_types; subscription will match all events"
@@ -907,8 +952,8 @@ class PmaAutomationStore:
                 event_types=normalized_event_types,
                 repo_id=repo_id,
                 run_id=run_id,
-                thread_id=thread_id,
-                lane_id=lane_id,
+                thread_id=normalized_thread_id,
+                lane_id=resolved_lane_id,
                 from_state=from_state,
                 to_state=to_state,
                 reason=reason,
@@ -1645,6 +1690,7 @@ __all__ = [
     "PMA_AUTOMATION_VERSION",
     "PmaAutomationStore",
     "PmaAutomationTimer",
+    "PmaAutomationThreadNotFoundError",
     "PmaAutomationWakeup",
     "PmaLifecycleSubscription",
     "default_pma_automation_state",

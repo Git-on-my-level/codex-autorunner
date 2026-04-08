@@ -683,6 +683,53 @@ def test_create_managed_thread_notify_on_terminal_creates_subscription(hub_env) 
     assert len(subscriptions) == 1
 
 
+def test_create_subscription_auto_resolves_lane_from_bound_thread(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        create_resp = client.post(
+            "/hub/pma/threads",
+            json={"agent": "codex", **_repo_owner(hub_env)},
+        )
+        assert create_resp.status_code == 200
+        thread_id = create_resp.json()["thread"]["managed_thread_id"]
+
+        OrchestrationBindingStore(hub_env.hub_root).upsert_binding(
+            surface_kind="discord",
+            surface_key="discord:subscription-test",
+            thread_target_id=thread_id,
+        )
+
+        subscription_resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_type": "managed_thread_completed",
+                "thread_id": thread_id,
+            },
+        )
+
+    assert subscription_resp.status_code == 200
+    subscription = subscription_resp.json()["subscription"]
+    assert subscription["thread_id"] == thread_id
+    assert subscription["lane_id"] == "discord"
+
+
+def test_create_subscription_with_unknown_thread_returns_404(hub_env) -> None:
+    app = create_hub_app(hub_env.hub_root)
+
+    with TestClient(app) as client:
+        resp = client.post(
+            "/hub/pma/subscriptions",
+            json={
+                "event_type": "managed_thread_completed",
+                "thread_id": "missing-thread",
+            },
+        )
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "Unknown thread_id: missing-thread"
+
+
 def test_create_managed_thread_terminal_followup_false_opts_out(hub_env) -> None:
     app = create_hub_app(hub_env.hub_root)
 
@@ -1067,6 +1114,7 @@ def test_managed_thread_crud_routes_use_orchestration_service(
         lambda self, action_type, *, managed_thread_id=None, payload_json=None: 1,
     )
 
+    _set_default_terminal_followup(hub_env.hub_root, False)
     app = create_hub_app(hub_env.hub_root)
     with TestClient(app) as client:
         create_resp = client.post(

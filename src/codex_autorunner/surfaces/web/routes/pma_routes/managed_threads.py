@@ -19,6 +19,7 @@ from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
 from .....core.orchestration.models import ThreadTarget
 from .....core.orchestration.turn_timeline import list_turn_timeline
+from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from .....core.pma_thread_store import PmaThreadStore
 from .....core.text_utils import _truncate_text
 from .....integrations.chat.approval_modes import normalize_approval_mode
@@ -434,14 +435,19 @@ def build_automation_routes(
         request: Request, payload: PmaAutomationSubscriptionCreateRequest
     ) -> dict[str, Any]:
         store = await get_automation_store(request, get_runtime_state())
-        created = await call_store_create_with_payload(
-            store,
-            (
-                "create_subscription",
-                "upsert_subscription",
-            ),
-            payload.model_dump(exclude_none=True),
-        )
+        try:
+            created = await call_store_create_with_payload(
+                store,
+                (
+                    "create_subscription",
+                    "upsert_subscription",
+                ),
+                payload.model_dump(exclude_none=True),
+            )
+        except PmaAutomationThreadNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if isinstance(created, dict) and "subscription" in created:
             return created
         return {"subscription": created}
