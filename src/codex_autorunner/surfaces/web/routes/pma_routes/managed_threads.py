@@ -272,6 +272,46 @@ def _apply_chat_binding_fields(
     return payload
 
 
+def _attach_latest_execution_fields(
+    payload: dict[str, Any],
+    *,
+    service: Any,
+    managed_thread_id: str,
+) -> dict[str, Any]:
+    get_running_execution = getattr(service, "get_running_execution", None)
+    get_latest_execution = getattr(service, "get_latest_execution", None)
+    execution = None
+    if callable(get_running_execution):
+        execution = get_running_execution(managed_thread_id)
+    if execution is None and callable(get_latest_execution):
+        execution = get_latest_execution(managed_thread_id)
+    if execution is None:
+        payload.update(
+            {
+                "latest_turn_id": None,
+                "latest_turn_status": None,
+                "latest_assistant_text": "",
+                "latest_output_excerpt": "",
+            }
+        )
+        return payload
+
+    assistant_text = str(getattr(execution, "output_text", "") or "")
+    payload.update(
+        {
+            "latest_turn_id": normalize_optional_text(
+                getattr(execution, "execution_id", None)
+            ),
+            "latest_turn_status": normalize_optional_text(
+                getattr(execution, "status", None)
+            ),
+            "latest_assistant_text": assistant_text,
+            "latest_output_excerpt": _truncate_text(assistant_text, 240),
+        }
+    )
+    return payload
+
+
 def _serialize_thread_target(
     thread: ThreadTarget,
     *,
@@ -807,11 +847,16 @@ def build_managed_thread_crud_routes(
         binding_metadata = _load_chat_binding_metadata_by_thread(
             request.app.state.config.root
         )
-        return {
-            "thread": _serialize_thread_target(
+        serialized_thread = _attach_latest_execution_fields(
+            _serialize_thread_target(
                 thread,
                 binding_metadata_by_thread=binding_metadata,
-            )
+            ),
+            service=service,
+            managed_thread_id=managed_thread_id,
+        )
+        return {
+            "thread": serialized_thread,
         }
 
     @router.post("/threads/{managed_thread_id}/compact")

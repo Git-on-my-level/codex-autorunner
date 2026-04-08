@@ -892,10 +892,14 @@ def test_resume_managed_thread_starts_fresh_backend_on_next_send(hub_env) -> Non
 
         get_resp = client.get(f"/hub/pma/threads/{managed_thread_id}")
         assert get_resp.status_code == 200
-        assert get_resp.json()["thread"]["status"] == "completed"
-        assert get_resp.json()["thread"]["operator_status"] == "reusable"
-        assert get_resp.json()["thread"]["is_reusable"] is True
-        assert get_resp.json()["thread"]["lifecycle_status"] == "active"
+        thread = get_resp.json()["thread"]
+        assert thread["status"] == "completed"
+        assert thread["operator_status"] == "reusable"
+        assert thread["is_reusable"] is True
+        assert thread["lifecycle_status"] == "active"
+        assert thread["latest_assistant_text"] == "assistant output"
+        assert thread["latest_output_excerpt"] == "assistant output"
+        assert thread["latest_turn_status"] == "ok"
 
     assert fake_supervisor.client.resume_calls == []
 

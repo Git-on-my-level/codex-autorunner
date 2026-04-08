@@ -1,9 +1,9 @@
 """PMA CLI commands for Project Management Assistant."""
 
-from contextlib import nullcontext
 import json
 import logging
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -30,9 +30,9 @@ from ...core.filebox_lifecycle import (
 from ...core.locks import file_lock
 from ...core.pma_audit import PmaActionType, PmaAuditEntry, PmaAuditLog
 from ...core.pma_hygiene import (
+    _hygiene_lock_path,
     apply_pma_hygiene_report,
     build_pma_hygiene_report,
-    _hygiene_lock_path,
     render_pma_hygiene_report,
 )
 from .commands.utils import format_hub_request_error

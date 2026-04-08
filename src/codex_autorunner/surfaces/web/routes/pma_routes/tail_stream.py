@@ -33,6 +33,7 @@ from .....core.redaction import redact_text
 from ..shared import SSE_HEADERS
 from .automation_adapter import normalize_optional_text
 from .managed_threads import (
+    _attach_latest_execution_fields,
     _serialize_thread_target,
     build_managed_thread_orchestration_service,
 )
@@ -1051,17 +1052,15 @@ def build_managed_thread_tail_routes(
         thread = service.get_thread_target(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-        serialized_thread = _serialize_thread_target(thread)
-        turn = service.get_running_execution(
-            managed_thread_id
-        ) or service.get_latest_execution(managed_thread_id)
+        serialized_thread = _attach_latest_execution_fields(
+            _serialize_thread_target(thread),
+            service=service,
+            managed_thread_id=managed_thread_id,
+        )
         queue_store = PmaThreadStore(request.app.state.config.root)
         queued_turns = queue_store.list_pending_turn_queue_items(
             managed_thread_id, limit=min(limit, 50)
         )
-        latest_output_excerpt = ""
-        if turn is not None:
-            latest_output_excerpt = truncate_text(turn.output_text or "", 240)
         turn_status = str(snapshot.get("turn_status") or "")
         return {
             "managed_thread_id": managed_thread_id,
@@ -1107,7 +1106,10 @@ def build_managed_thread_tail_routes(
                 for item in queued_turns
             ],
             "recent_progress": snapshot.get("events") or [],
-            "latest_output_excerpt": latest_output_excerpt,
+            "latest_turn_id": serialized_thread.get("latest_turn_id"),
+            "latest_turn_status": serialized_thread.get("latest_turn_status"),
+            "latest_assistant_text": serialized_thread.get("latest_assistant_text"),
+            "latest_output_excerpt": serialized_thread.get("latest_output_excerpt"),
             "stream_available": bool(snapshot.get("stream_available")),
             "active_turn_diagnostics": snapshot.get("active_turn_diagnostics"),
         }
