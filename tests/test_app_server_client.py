@@ -1050,7 +1050,7 @@ async def test_live_progress_refreshes_completion_gap_window(
 
 
 @pytest.mark.anyio
-async def test_recent_stream_delta_blocks_completion_gap_recovery(
+async def test_active_item_started_blocks_completion_gap_recovery(
     tmp_path: Path,
 ) -> None:
     client = CodexAppServerClient(
@@ -1076,25 +1076,27 @@ async def test_recent_stream_delta_blocks_completion_gap_recovery(
 
         client.thread_resume = _resume  # type: ignore[method-assign]
 
-        await client._handle_notification_agent_message_delta(
+        await client._handle_notification_item_started(
             {
-                "method": "item/agentMessage/delta",
+                "method": "item/started",
                 "params": {
                     "turnId": "turn-1",
                     "threadId": "thread-1",
-                    "itemId": "msg-1",
-                    "delta": "still streaming",
+                    "itemId": "tool-1",
+                    "item": {"type": "commandExecution"},
                 },
             },
             {
                 "turnId": "turn-1",
                 "threadId": "thread-1",
-                "itemId": "msg-1",
-                "delta": "still streaming",
+                "itemId": "tool-1",
+                "item": {"type": "commandExecution"},
             },
         )
 
-        assert state.last_stream_delta_at > 0.0
+        assert state.active_item_ids == {"tool-1"}
+        state.last_event_at = time.monotonic() - 1.0
+        state.completion_gap_started_at = time.monotonic() - 1.0
 
         await client._maybe_reconcile_turn_completion_gap(
             state,
@@ -1154,7 +1156,7 @@ async def test_turn_hint_progress_refreshes_completion_gap_window(
 
 
 @pytest.mark.anyio
-async def test_merge_turn_state_keeps_latest_stream_delta_timestamp(
+async def test_merge_turn_state_keeps_latest_event_timestamp_and_active_items(
     tmp_path: Path,
 ) -> None:
     client = CodexAppServerClient(
@@ -1164,12 +1166,18 @@ async def test_merge_turn_state_keeps_latest_stream_delta_timestamp(
     try:
         target = client._ensure_turn_state("turn-1", "thread-1")
         source = client._ensure_pending_turn_state("turn-1")
-        target.last_stream_delta_at = time.monotonic() - 5.0
-        source.last_stream_delta_at = time.monotonic() - 1.0
+        target.last_event_at = time.monotonic() - 5.0
+        target.last_method = "item/completed"
+        target.active_item_ids.add("item-1")
+        source.last_event_at = time.monotonic() - 1.0
+        source.last_method = "item/started"
+        source.active_item_ids.add("item-2")
 
         client._merge_turn_state(target, source)
 
-        assert target.last_stream_delta_at == source.last_stream_delta_at
+        assert target.last_event_at == source.last_event_at
+        assert target.last_method == "item/started"
+        assert target.active_item_ids == {"item-1", "item-2"}
     finally:
         await client.close()
 

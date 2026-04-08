@@ -179,7 +179,7 @@ class _TurnState:
     completion_settle_task: Optional[asyncio.Task[None]] = None
     item_completed_count: int = 0
     completion_gap_started_at: Optional[float] = None
-    last_stream_delta_at: float = 0.0
+    active_item_ids: set[str] = field(default_factory=set)
     completion_gap_recovery_attempts: int = 0
     last_completion_gap_recovery_at: float = 0.0
 
@@ -634,10 +634,9 @@ class CodexAppServerClient:
         if completion_gap_started_at is None:
             return
         now = time.monotonic()
-        if (
-            state.last_stream_delta_at
-            and now - state.last_stream_delta_at < completion_gap_timeout
-        ):
+        if state.active_item_ids:
+            return
+        if state.last_event_at and now - state.last_event_at < completion_gap_timeout:
             return
         completion_gap_seconds = now - completion_gap_started_at
         if completion_gap_seconds < completion_gap_timeout:
@@ -1738,11 +1737,35 @@ class CodexAppServerClient:
             state.agent_message_deltas[item_id] = (
                 state.agent_message_deltas.get(item_id, "") + delta
             )
-        state.last_stream_delta_at = time.monotonic()
         self._mark_notification_event(state=state, method="item/agentMessage/delta")
         _record_raw_event(state, message)
         if state.turn_completed_seen and not state.future.done():
             self._schedule_turn_completion_settle(state)
+        return True
+
+    async def _handle_notification_item_started(
+        self, message: Dict[str, Any], params: dict[str, Any], decoded: Any = None
+    ) -> bool:
+        turn_id = (
+            getattr(decoded, "turn_id", None)
+            or extract_turn_id(params)
+            or extract_turn_id(params.get("item"))
+        )
+        if not turn_id:
+            return True
+        thread_id = getattr(decoded, "thread_id", None) or extract_thread_id_for_turn(
+            params
+        )
+        state = await self._resolve_notification_turn_state(
+            turn_id, thread_id, create_pending=True
+        )
+        if state is None:
+            return True
+        self._mark_notification_event(state=state, method="item/started")
+        item_id = _extract_notification_item_id(params, decoded)
+        if item_id is not None:
+            state.active_item_ids.add(item_id)
+        _record_raw_event(state, message)
         return True
 
     async def _handle_notification_item_completed(
@@ -1810,6 +1833,7 @@ class CodexAppServerClient:
     ) -> Optional[Callable[..., Awaitable[bool]]]:
         handlers: dict[str, Callable[..., Awaitable[bool]]] = {
             "item/agentMessage/delta": self._handle_notification_agent_message_delta,
+            "item/started": self._handle_notification_item_started,
             "item/completed": self._handle_notification_item_completed,
             "turn/completed": self._handle_notification_turn_completed,
             "error": self._handle_notification_error,
@@ -1932,10 +1956,10 @@ class CodexAppServerClient:
                 target.completion_gap_started_at,
                 source.completion_gap_started_at,
             )
-        target.last_stream_delta_at = max(
-            target.last_stream_delta_at,
-            source.last_stream_delta_at,
-        )
+        if target.turn_completed_seen or source.turn_completed_seen:
+            target.active_item_ids.clear()
+        elif source.active_item_ids:
+            target.active_item_ids.update(source.active_item_ids)
         target.completion_gap_recovery_attempts = max(
             target.completion_gap_recovery_attempts,
             source.completion_gap_recovery_attempts,
@@ -2023,10 +2047,12 @@ class CodexAppServerClient:
         decoded: Any = None,
     ) -> None:
         item = params.get("item") if isinstance(params, dict) else None
+        item_id = _extract_notification_item_id(params, decoded)
+        if item_id is not None:
+            state.active_item_ids.discard(item_id)
         text: Optional[str] = None
 
         if isinstance(item, dict) and item.get("type") == "agentMessage":
-            item_id = params.get("itemId") if isinstance(params, dict) else None
             delta_text: Optional[str] = None
             text = _extract_agent_message_text(item)
             phase = _extract_agent_message_phase(item)
@@ -2117,6 +2143,7 @@ class CodexAppServerClient:
             status=state.status,
         )
         state.turn_completed_seen = True
+        state.active_item_ids.clear()
         state.completion_gap_started_at = None
         if _status_prefers_completion_settle(state.status) or not _status_is_terminal(
             state.status
@@ -2593,6 +2620,23 @@ def _normalize_sandbox_policy_type(raw: str) -> str:
         return raw.strip()
     canonical = _SANDBOX_POLICY_CANONICAL.get(cleaned.lower())
     return canonical or raw.strip()
+
+
+def _extract_notification_item_id(params: Any, decoded: Any = None) -> Optional[str]:
+    item_id = getattr(decoded, "item_id", None)
+    if isinstance(item_id, str):
+        return item_id
+    if not isinstance(params, dict):
+        return None
+    item_id = params.get("itemId")
+    if isinstance(item_id, str):
+        return item_id
+    item = params.get("item")
+    if isinstance(item, dict):
+        nested_item_id = item.get("id")
+        if isinstance(nested_item_id, str):
+            return nested_item_id
+    return None
 
 
 def _append_agent_message(messages: list[str], candidate: Optional[str]) -> None:
