@@ -339,6 +339,10 @@ class GitHubPollingConfig:
             ),
         )
 
+    @property
+    def comment_backfill_window_seconds(self) -> int:
+        return self.watch_window_minutes * 60
+
 
 def _reaction_state_from_pr(pr: Mapping[str, Any]) -> str:
     state = _normalize_lower_text(pr.get("state"))
@@ -391,6 +395,69 @@ def _snapshot_map(snapshot: Mapping[str, Any], key: str) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _comment_backfill_lower_bound(
+    *,
+    snapshot: Mapping[str, Any],
+    reference_timestamp: str,
+    window_seconds: int,
+) -> Optional[datetime]:
+    reference_at = _parse_optional_iso(reference_timestamp)
+    if reference_at is None:
+        return None
+    lower_bound = reference_at - timedelta(seconds=max(0, int(window_seconds)))
+    pr_created_at = _parse_optional_iso(snapshot.get("pr_created_at"))
+    if pr_created_at is not None and pr_created_at > lower_bound:
+        lower_bound = pr_created_at
+    return lower_bound
+
+
+def _comment_in_backfill_window(
+    comment: Mapping[str, Any],
+    *,
+    lower_bound: Optional[datetime],
+) -> bool:
+    if lower_bound is None:
+        return False
+    comment_at = _parse_optional_iso(_comment_timestamp(comment))
+    return comment_at is not None and comment_at >= lower_bound
+
+
+def _snapshot_without_backfilled_comments(
+    snapshot: Mapping[str, Any],
+    *,
+    reference_timestamp: str,
+    window_seconds: int,
+) -> dict[str, Any]:
+    lower_bound = _comment_backfill_lower_bound(
+        snapshot=snapshot,
+        reference_timestamp=reference_timestamp,
+        window_seconds=window_seconds,
+    )
+    if lower_bound is None:
+        return dict(snapshot)
+
+    previous_snapshot = dict(snapshot)
+    issue_comments = {
+        key: dict(payload)
+        for key, payload in _snapshot_map(snapshot, "issue_comments").items()
+        if not _comment_in_backfill_window(payload, lower_bound=lower_bound)
+    }
+    review_thread_comments = {
+        key: dict(payload)
+        for key, payload in _snapshot_map(snapshot, "review_thread_comments").items()
+        if not _comment_in_backfill_window(payload, lower_bound=lower_bound)
+    }
+    if issue_comments:
+        previous_snapshot["issue_comments"] = issue_comments
+    else:
+        previous_snapshot.pop("issue_comments", None)
+    if review_thread_comments:
+        previous_snapshot["review_thread_comments"] = review_thread_comments
+    else:
+        previous_snapshot.pop("review_thread_comments", None)
+    return previous_snapshot
+
+
 def _build_snapshot(
     *,
     binding: PrBinding,
@@ -398,6 +465,9 @@ def _build_snapshot(
 ) -> dict[str, Any]:
     pr = service.pr_view(number=binding.pr_number, repo_slug=binding.repo_slug)
     head_sha = _normalize_text(pr.get("headRefOid"))
+    pr_created_at = _normalize_text(pr.get("createdAt")) or _normalize_text(
+        pr.get("created_at")
+    )
     pr_state = _reaction_state_from_pr(pr)
     pr_author = pr.get("author")
     pr_author_login = (
@@ -524,6 +594,8 @@ def _build_snapshot(
     }
     if head_sha is not None:
         snapshot["head_sha"] = head_sha
+    if pr_created_at is not None:
+        snapshot["pr_created_at"] = pr_created_at
     return snapshot
 
 
@@ -556,6 +628,35 @@ class GitHubScmPollingService:
         self._event_store = event_store or ScmEventStore(self._hub_root)
         self._polling_state_path = (
             self._hub_root / ".codex-autorunner" / "github_polling_state.json"
+        )
+
+    def _emit_comment_backfill(
+        self,
+        *,
+        watch: ScmPollingWatch,
+        binding: PrBinding,
+        snapshot: Mapping[str, Any],
+        reference_timestamp: str,
+        window_seconds: int,
+    ) -> int:
+        previous_snapshot = _snapshot_without_backfilled_comments(
+            snapshot,
+            reference_timestamp=reference_timestamp,
+            window_seconds=window_seconds,
+        )
+        if _snapshot_map(previous_snapshot, "issue_comments") == _snapshot_map(
+            snapshot, "issue_comments"
+        ) and _snapshot_map(
+            previous_snapshot, "review_thread_comments"
+        ) == _snapshot_map(
+            snapshot, "review_thread_comments"
+        ):
+            return 0
+        return self._emit_new_conditions(
+            watch=watch,
+            binding=binding,
+            previous_snapshot=previous_snapshot,
+            snapshot=snapshot,
         )
 
     def arm_watch(
@@ -599,7 +700,7 @@ class GitHubScmPollingService:
                     else now_timestamp
                 )
 
-        return self._watch_store.upsert_watch(
+        watch = self._watch_store.upsert_watch(
             provider="github",
             binding_id=binding.binding_id,
             repo_slug=binding.repo_slug,
@@ -615,6 +716,24 @@ class GitHubScmPollingService:
             ),
             snapshot=snapshot,
         )
+        if snapshot.get("baseline_pending"):
+            return watch
+        try:
+            self._emit_comment_backfill(
+                watch=watch,
+                binding=binding,
+                snapshot=snapshot,
+                reference_timestamp=watch.started_at,
+                window_seconds=polling_config.comment_backfill_window_seconds,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Failed emitting SCM polling comment backfill for %s#%s",
+                binding.repo_slug,
+                binding.pr_number,
+                exc_info=True,
+            )
+        return watch
 
     def discover_and_arm_missing_watches(self, *, limit: int = 20) -> dict[str, int]:
         counts = {
@@ -882,7 +1001,15 @@ class GitHubScmPollingService:
             )
             baseline_pending = bool(previous_snapshot.get("baseline_pending"))
             emitted = 0
-            if not baseline_pending:
+            if baseline_pending:
+                emitted += self._emit_comment_backfill(
+                    watch=watch,
+                    binding=binding,
+                    snapshot=snapshot,
+                    reference_timestamp=watch.started_at,
+                    window_seconds=polling_config.comment_backfill_window_seconds,
+                )
+            else:
                 emitted += self._emit_new_conditions(
                     watch=watch,
                     binding=binding,

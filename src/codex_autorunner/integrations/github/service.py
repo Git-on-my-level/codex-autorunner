@@ -782,7 +782,7 @@ class GitHubService:
             "view",
             str(number),
             "--json",
-            "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles,headRefName,baseRefName,headRefOid,isDraft",
+            "number,url,title,body,state,author,labels,files,additions,deletions,changedFiles,headRefName,baseRefName,headRefOid,isDraft,createdAt",
         ]
         if repo_slug:
             args += ["-R", repo_slug]
