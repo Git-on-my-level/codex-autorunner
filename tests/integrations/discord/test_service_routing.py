@@ -913,6 +913,107 @@ def test_list_discord_thread_targets_for_picker_filters_by_mode(tmp_path: Path) 
     }
 
 
+def test_list_discord_thread_targets_for_picker_supports_logical_and_legacy_hermes_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
+            "hermes-m4-other": SimpleNamespace(name="Hermes (hermes-m4-other)"),
+        },
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=None,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    logical_thread = SimpleNamespace(
+        thread_target_id="thread-logical",
+        agent_id="hermes",
+        agent_profile="m4-pma",
+        workspace_root=str(workspace),
+        display_name="discord:logical",
+    )
+    legacy_thread = SimpleNamespace(
+        thread_target_id="thread-legacy",
+        agent_id="hermes-m4-pma",
+        agent_profile="m4-pma",
+        workspace_root=str(workspace),
+        display_name="discord:legacy",
+    )
+    mismatched_profile_thread = SimpleNamespace(
+        thread_target_id="thread-other-profile",
+        agent_id="hermes",
+        agent_profile="m4-other",
+        workspace_root=str(workspace),
+        display_name="discord:other-profile",
+    )
+
+    class _FakeThreadService:
+        def list_thread_targets(self, *, agent_id: str, **kwargs: Any) -> list[Any]:
+            _ = kwargs
+            if agent_id == "hermes":
+                return [logical_thread, mismatched_profile_thread]
+            if agent_id == "hermes-m4-pma":
+                return [legacy_thread]
+            return []
+
+        def list_bindings(self, **kwargs: Any) -> list[Any]:
+            _ = kwargs
+            return []
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            if thread_target_id == logical_thread.thread_target_id:
+                return logical_thread
+            if thread_target_id == legacy_thread.thread_target_id:
+                return legacy_thread
+            return None
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    items = service._list_discord_thread_targets_for_picker(
+        workspace_root=workspace,
+        agent="hermes",
+        agent_profile="m4-pma",
+        current_thread_id=None,
+        mode="repo",
+        repo_id="repo-1",
+    )
+
+    assert {thread_id for thread_id, _label in items} == {
+        logical_thread.thread_target_id,
+        legacy_thread.thread_target_id,
+    }
+
+
+def test_discord_thread_matches_agent_rejects_unknown_thread_agent_id(
+    tmp_path: Path,
+) -> None:
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=None,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    assert (
+        service._discord_thread_matches_agent(
+            SimpleNamespace(agent_id="missing-agent", agent_profile=None),
+            agent="codex",
+        )
+        is False
+    )
+
+
 def _interaction(
     *, name: str, options: list[dict[str, Any]], user_id: str = "user-1"
 ) -> dict[str, Any]:
@@ -6140,6 +6241,188 @@ async def test_car_session_resume_reactivates_thread_without_backend_rebinding(
             options={"thread_id": "thread-1"},
         )
         assert resumed_calls == [("thread-1", {})]
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_session_resume_accepts_legacy_hermes_runtime_alias_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
+            "hermes-m4-other": SimpleNamespace(name="Hermes (hermes-m4-other)"),
+        },
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.update_agent_state(
+        channel_id="channel-1",
+        agent="hermes",
+        agent_profile="m4-pma",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    resumed_calls: list[tuple[str, dict[str, Any]]] = []
+    archived_thread = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="hermes-m4-pma",
+        workspace_root=str(workspace),
+        lifecycle_status="archived",
+        backend_thread_id="legacy-backend",
+        agent_profile="m4-pma",
+    )
+
+    class _FakeThreadService:
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return archived_thread
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            resumed_calls.append((thread_target_id, kwargs))
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                agent_id="hermes-m4-pma",
+                workspace_root=str(workspace),
+                lifecycle_status="active",
+                backend_thread_id="legacy-backend",
+                agent_profile="m4-pma",
+            )
+
+    service._get_discord_thread_binding = (  # type: ignore[assignment]
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="repo"),
+            archived_thread,
+        )
+    )
+    service._attach_discord_thread_binding = lambda *args, **kwargs: None  # type: ignore[assignment]
+    service._list_discord_thread_targets_for_picker = (  # type: ignore[assignment]
+        lambda *args, **kwargs: []
+    )
+
+    try:
+        await service._handle_car_resume(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            options={"thread_id": "thread-1"},
+        )
+        assert resumed_calls == [("thread-1", {})]
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "resumed repo session for `hermes [m4-pma]`" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_session_resume_rejects_different_hermes_profile_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes (hermes-m4-pma)"),
+            "hermes-m4-other": SimpleNamespace(name="Hermes (hermes-m4-other)"),
+        },
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.update_agent_state(
+        channel_id="channel-1",
+        agent="hermes",
+        agent_profile="m4-pma",
+    )
+
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    resumed_calls: list[tuple[str, dict[str, Any]]] = []
+    mismatched_thread = SimpleNamespace(
+        thread_target_id="thread-1",
+        agent_id="hermes",
+        workspace_root=str(workspace),
+        lifecycle_status="archived",
+        backend_thread_id="legacy-backend",
+        agent_profile="m4-other",
+    )
+
+    class _FakeThreadService:
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return mismatched_thread
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            resumed_calls.append((thread_target_id, kwargs))
+            return mismatched_thread
+
+    service._get_discord_thread_binding = (  # type: ignore[assignment]
+        lambda *args, **kwargs: (
+            _FakeThreadService(),
+            SimpleNamespace(thread_target_id="thread-1", mode="repo"),
+            mismatched_thread,
+        )
+    )
+    service._attach_discord_thread_binding = lambda *args, **kwargs: None  # type: ignore[assignment]
+    service._list_discord_thread_targets_for_picker = (  # type: ignore[assignment]
+        lambda *args, **kwargs: []
+    )
+
+    try:
+        await service._handle_car_resume(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            options={"thread_id": "thread-1"},
+        )
+        assert resumed_calls == []
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "selected thread belongs to a different agent" in content
+        assert "hermes [m4-pma]" in content
     finally:
         await store.close()
 

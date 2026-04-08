@@ -437,8 +437,6 @@ async def handle_car_resume(
             return
 
     agent, agent_profile = service._resolve_agent_state(binding)
-    runtime_agent = service._runtime_agent_for_binding(binding)
-
     repo_id = (
         str(binding.get("repo_id")).strip()
         if isinstance(binding.get("repo_id"), str)
@@ -540,7 +538,11 @@ async def handle_car_resume(
                 ),
             )
             return
-        if str(getattr(target_thread, "agent_id", "") or "").strip() != runtime_agent:
+        if not service._discord_thread_matches_agent(
+            target_thread,
+            agent=agent,
+            agent_profile=agent_profile,
+        ):
             await service._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
                 interaction_token=interaction_token,
