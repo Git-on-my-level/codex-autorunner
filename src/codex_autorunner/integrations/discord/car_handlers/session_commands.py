@@ -938,15 +938,18 @@ async def handle_car_interrupt(
     binding = await service._store.get_binding(channel_id=channel_id)
     normalized_thread_target_id = str(thread_target_id or "").strip() or None
     normalized_execution_id = str(execution_id or "").strip() or None
-    if binding is None and normalized_thread_target_id is None:
-        text = format_discord_message(
-            "This channel is not bound. Run `/car bind path:<workspace>` first."
-        )
-        await service._respond_ephemeral(interaction_id, interaction_token, text)
-        return
-
-    pma_enabled = bool(binding.get("pma_enabled", False))
-    workspace_raw = binding.get("workspace_path")
+    if binding is None:
+        if normalized_thread_target_id is None:
+            text = format_discord_message(
+                "This channel is not bound. Run `/car bind path:<workspace>` first."
+            )
+            await service._respond_ephemeral(interaction_id, interaction_token, text)
+            return
+        pma_enabled = False
+        workspace_raw = None
+    else:
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        workspace_raw = binding.get("workspace_path")
     workspace_root: Optional[Path] = None
     if isinstance(workspace_raw, str) and workspace_raw.strip():
         candidate = canonicalize_path(Path(workspace_raw))
