@@ -2081,11 +2081,9 @@ class DiscordBotService:
         resource_id: Optional[str] = None,
         limit: int = DISCORD_SELECT_OPTION_MAX_OPTIONS,
     ) -> list[tuple[str, str]]:
-        runtime_agent = resolve_chat_runtime_agent(
-            agent,
-            agent_profile,
-            default=self.DEFAULT_AGENT,
-            context=self,
+        agent_ids = self._discord_thread_agent_ids(
+            agent=agent,
+            agent_profile=agent_profile,
         )
         orchestration_service = self._discord_thread_service()
         owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
@@ -2094,33 +2092,44 @@ class DiscordBotService:
             resource_kind=resource_kind,
             resource_id=resource_id,
         )
-        threads = orchestration_service.list_thread_targets(
-            agent_id=runtime_agent,
-            repo_id=normalized_repo_id,
-            resource_kind=owner_kind,
-            resource_id=owner_id,
-            limit=max(limit * 4, limit),
-        )
+        threads: list[Any] = []
+        seen_thread_ids: set[str] = set()
+        query_limit = max(limit * 4, limit)
+        for agent_id in agent_ids:
+            for thread in orchestration_service.list_thread_targets(
+                agent_id=agent_id,
+                repo_id=normalized_repo_id,
+                resource_kind=owner_kind,
+                resource_id=owner_id,
+                limit=query_limit,
+            ):
+                thread_id = str(getattr(thread, "thread_target_id", "") or "").strip()
+                if not thread_id or thread_id in seen_thread_ids:
+                    continue
+                seen_thread_ids.add(thread_id)
+                threads.append(thread)
         canonical_workspace = str(workspace_root.resolve())
         filtered: list[Any] = []
         bound_modes_by_thread_id: dict[str, set[str]] = {}
-        for binding in orchestration_service.list_bindings(
-            agent_id=runtime_agent,
-            repo_id=normalized_repo_id,
-            resource_kind=owner_kind,
-            resource_id=owner_id,
-            surface_kind="discord",
-            limit=max(limit * 8, limit),
-        ):
-            binding_thread_id = str(
-                getattr(binding, "thread_target_id", "") or ""
-            ).strip()
-            binding_mode = str(getattr(binding, "mode", "") or "").strip()
-            if not binding_thread_id or not binding_mode:
-                continue
-            bound_modes_by_thread_id.setdefault(binding_thread_id, set()).add(
-                binding_mode
-            )
+        binding_limit = max(limit * 8, limit)
+        for agent_id in agent_ids:
+            for binding in orchestration_service.list_bindings(
+                agent_id=agent_id,
+                repo_id=normalized_repo_id,
+                resource_kind=owner_kind,
+                resource_id=owner_id,
+                surface_kind="discord",
+                limit=binding_limit,
+            ):
+                binding_thread_id = str(
+                    getattr(binding, "thread_target_id", "") or ""
+                ).strip()
+                binding_mode = str(getattr(binding, "mode", "") or "").strip()
+                if not binding_thread_id or not binding_mode:
+                    continue
+                bound_modes_by_thread_id.setdefault(binding_thread_id, set()).add(
+                    binding_mode
+                )
         for thread in threads:
             thread_id = str(getattr(thread, "thread_target_id", "") or "").strip()
             if not thread_id:
@@ -4013,6 +4022,22 @@ class DiscordBotService:
             default=self.DEFAULT_AGENT,
             context=self,
         )
+
+    def _discord_thread_agent_ids(
+        self,
+        *,
+        agent: str,
+        agent_profile: Optional[str] = None,
+    ) -> tuple[str, ...]:
+        runtime_agent = resolve_chat_runtime_agent(
+            agent,
+            agent_profile,
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
+        if runtime_agent == agent:
+            return (agent,)
+        return (agent, runtime_agent)
 
     def _runtime_agent_for_binding(self, binding: Optional[Mapping[str, Any]]) -> str:
         agent, profile = self._resolve_agent_state(binding)
