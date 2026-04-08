@@ -25,7 +25,7 @@ from .models import (
 
 _logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 UNSET = object()
 _REQUIRED_SCHEMA_TABLES = frozenset(
     {"schema_info", "flow_runs", "flow_events", "flow_artifacts"}
@@ -111,25 +111,33 @@ class FlowStore:
             self._ensure_schema_version(conn)
 
     def _validate_readonly_schema(self, conn: sqlite3.Connection) -> None:
+        try:
+            result = conn.execute("SELECT version FROM schema_info").fetchone()
+        except sqlite3.Error as exc:
+            raise RuntimeError(
+                "FlowStore read-only schema check failed; missing schema version"
+            ) from exc
+        if result is None:
+            raise RuntimeError(
+                "FlowStore read-only schema check failed; missing schema version"
+            )
+        schema_version = int(result[0])
+        required_tables = set(_REQUIRED_SCHEMA_TABLES)
+        if schema_version >= 3:
+            required_tables.add("flow_telemetry")
         rows = conn.execute(
             """
             SELECT name
             FROM sqlite_master
-            WHERE type = 'table' AND name IN (?, ?, ?, ?)
-            """,
-            tuple(sorted(_REQUIRED_SCHEMA_TABLES)),
+            WHERE type = 'table'
+            """
         ).fetchall()
         present_tables = {str(row["name"]) for row in rows}
-        missing_tables = sorted(_REQUIRED_SCHEMA_TABLES - present_tables)
+        missing_tables = sorted(required_tables - present_tables)
         if missing_tables:
             missing_text = ", ".join(missing_tables)
             raise RuntimeError(
                 f"FlowStore read-only schema check failed; missing tables: {missing_text}"
-            )
-        result = conn.execute("SELECT version FROM schema_info").fetchone()
-        if result is None:
-            raise RuntimeError(
-                "FlowStore read-only schema check failed; missing schema version"
             )
 
     def _create_schema(self, conn: sqlite3.Connection) -> None:
@@ -190,6 +198,20 @@ class FlowStore:
         )
 
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flow_telemetry (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT NOT NULL UNIQUE,
+                run_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                data TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
+            )
+        """
+        )
+
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status)"
         )
         conn.execute(
@@ -197,6 +219,12 @@ class FlowStore:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flow_artifacts_run_id ON flow_artifacts(run_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_id ON flow_telemetry(run_id, seq)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_type ON flow_telemetry(run_id, event_type, seq)"
         )
 
     def _ensure_schema_version(self, conn: sqlite3.Connection) -> None:
@@ -248,6 +276,26 @@ class FlowStore:
             conn.execute("DROP TABLE flow_events_old")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_flow_events_run_id ON flow_events(run_id, seq)"
+            )
+        elif version == 3:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS flow_telemetry (
+                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id TEXT NOT NULL UNIQUE,
+                    run_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    FOREIGN KEY (run_id) REFERENCES flow_runs(id) ON DELETE CASCADE
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_id ON flow_telemetry(run_id, seq)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_flow_telemetry_run_type ON flow_telemetry(run_id, event_type, seq)"
             )
 
     def create_flow_run(
@@ -714,10 +762,178 @@ class FlowStore:
         return self._row_to_flow_artifact(row)
 
     def delete_flow_run(self, run_id: str) -> bool:
-        """Delete a flow run and its events/artifacts (cascading)."""
+        """Delete a flow run and its events/artifacts/telemetry (cascading)."""
         with self.transaction() as conn:
             cursor = conn.execute("DELETE FROM flow_runs WHERE id = ?", (run_id,))
             return cursor.rowcount > 0
+
+    def create_telemetry(
+        self,
+        telemetry_id: str,
+        run_id: str,
+        event_type: FlowEventType,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> FlowEvent:
+        timestamp = now_iso()
+        normalized_data = dict(data or {})
+
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO flow_telemetry (id, run_id, event_type, timestamp, data)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    telemetry_id,
+                    run_id,
+                    event_type.value,
+                    timestamp,
+                    json.dumps(normalized_data),
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM flow_telemetry WHERE id = ?", (telemetry_id,)
+            ).fetchone()
+
+        if row is None:
+            raise RuntimeError("Failed to persist flow telemetry")
+
+        return self._row_to_flow_telemetry(row)
+
+    def get_telemetry(
+        self,
+        run_id: str,
+        after_seq: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[FlowEvent]:
+        conn = self._get_conn()
+        query = "SELECT * FROM flow_telemetry WHERE run_id = ?"
+        params: List[Any] = [run_id]
+
+        if after_seq is not None:
+            query += " AND seq > ?"
+            params.append(after_seq)
+
+        query += " ORDER BY seq ASC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [self._row_to_flow_telemetry(row) for row in rows]
+
+    def get_telemetry_by_type(
+        self,
+        run_id: str,
+        event_type: FlowEventType,
+        *,
+        after_seq: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[FlowEvent]:
+        return self.get_telemetry_by_types(
+            run_id, [event_type], after_seq=after_seq, limit=limit
+        )
+
+    def get_telemetry_by_types(
+        self,
+        run_id: str,
+        event_types: list[FlowEventType],
+        *,
+        after_seq: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[FlowEvent]:
+        if not event_types:
+            return []
+        conn = self._get_conn()
+        placeholders = ", ".join("?" for _ in event_types)
+        query = f"""
+            SELECT *
+            FROM flow_telemetry
+            WHERE run_id = ? AND event_type IN ({placeholders})
+        """
+        params: List[Any] = [run_id, *[t.value for t in event_types]]
+
+        if after_seq is not None:
+            query += " AND seq > ?"
+            params.append(after_seq)
+
+        query += " ORDER BY seq ASC"
+
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+        return [self._row_to_flow_telemetry(row) for row in rows]
+
+    def get_last_telemetry_by_type(
+        self, run_id: str, event_type: FlowEventType
+    ) -> Optional[FlowEvent]:
+        conn = self._get_conn()
+        row = conn.execute(
+            """
+            SELECT *
+            FROM flow_telemetry
+            WHERE run_id = ? AND event_type = ?
+            ORDER BY seq DESC
+            LIMIT 1
+            """,
+            (run_id, event_type.value),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_flow_telemetry(row)
+
+    def get_last_telemetry_seq_by_types(
+        self, run_id: str, event_types: list[FlowEventType]
+    ) -> Optional[int]:
+        if not event_types:
+            return None
+        conn = self._get_conn()
+        placeholders = ", ".join("?" for _ in event_types)
+        params = [run_id, *[t.value for t in event_types]]
+        row = conn.execute(
+            f"""
+            SELECT seq
+            FROM flow_telemetry
+            WHERE run_id = ? AND event_type IN ({placeholders})
+            ORDER BY seq DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if row is None:
+            return None
+        return cast(int, row["seq"])
+
+    def get_last_telemetry_meta(
+        self, run_id: str
+    ) -> tuple[Optional[int], Optional[str]]:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT seq, timestamp FROM flow_telemetry WHERE run_id = ? ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None, None
+        return row["seq"], row["timestamp"]
+
+    def delete_telemetry_for_run(self, run_id: str) -> int:
+        conn = self._get_conn()
+        cursor = conn.execute("DELETE FROM flow_telemetry WHERE run_id = ?", (run_id,))
+        return cursor.rowcount
+
+    def delete_telemetry_by_seqs(self, seqs: List[int]) -> int:
+        if not seqs:
+            return 0
+        conn = self._get_conn()
+        placeholders = ",".join("?" for _ in seqs)
+        cursor = conn.execute(
+            f"DELETE FROM flow_telemetry WHERE seq IN ({placeholders})",
+            list(seqs),
+        )
+        return cursor.rowcount
 
     def _row_to_flow_run(self, row: sqlite3.Row) -> FlowRunRecord:
         return FlowRunRecord(
@@ -754,6 +970,17 @@ class FlowStore:
             path=row["path"],
             created_at=row["created_at"],
             metadata=json.loads(row["metadata"]),
+        )
+
+    def _row_to_flow_telemetry(self, row: sqlite3.Row) -> FlowEvent:
+        return FlowEvent(
+            seq=row["seq"],
+            id=row["id"],
+            run_id=row["run_id"],
+            event_type=FlowEventType(row["event_type"]),
+            timestamp=row["timestamp"],
+            data=json.loads(row["data"]),
+            step_id=None,
         )
 
     def close(self) -> None:

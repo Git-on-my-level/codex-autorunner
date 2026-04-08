@@ -64,7 +64,7 @@ def _latest_app_server_event_details(
     store: FlowStore, run_id: str
 ) -> tuple[Optional[str], Optional[str]]:
     try:
-        event = store.get_last_event_by_type(run_id, FlowEventType.APP_SERVER_EVENT)
+        event = store.get_last_telemetry_by_type(run_id, FlowEventType.APP_SERVER_EVENT)
     except (sqlite3.Error, ValueError, TypeError, RuntimeError) as exc:
         _logger.debug("Failed to get last app server event: %s", exc)
         return None, None
@@ -432,6 +432,15 @@ def reconcile_flow_run(
                     )
 
             _ensure_worker_not_stale(health)
+
+            if updated is not None and updated.status.is_terminal():
+                try:
+                    from .flow_telemetry_hooks import housekeep_on_run_terminal
+
+                    housekeep_on_run_terminal(repo_root, updated.id)
+                except Exception:
+                    pass
+
             return (updated or record), bool(updated), False
     except FileLockBusy:
         return record, False, True

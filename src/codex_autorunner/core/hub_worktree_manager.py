@@ -686,6 +686,17 @@ class WorktreeManager:
             repo_path=worktree_path,
         )
 
+        try:
+            from .flows.flow_telemetry_hooks import housekeep_on_worktree_cleanup
+
+            housekeep_on_worktree_cleanup(worktree_path)
+        except Exception as exc:
+            logger.warning(
+                "Worktree telemetry housekeeping failed for %s: %s",
+                worktree_repo_id,
+                exc,
+            )
+
         if archive:
             self._ensure_worktree_clean_for_archive(
                 worktree_repo_id=worktree_repo_id,
@@ -745,6 +756,17 @@ class WorktreeManager:
 
         if not worktree_path.exists():
             raise ValueError(f"Worktree path does not exist: {worktree_path}")
+
+        try:
+            from .flows.flow_telemetry_hooks import housekeep_on_worktree_cleanup
+
+            housekeep_on_worktree_cleanup(worktree_path)
+        except Exception as exc:
+            logger.warning(
+                "Worktree telemetry housekeeping failed for %s: %s",
+                worktree_repo_id,
+                exc,
+            )
 
         self._ensure_worktree_clean_for_archive(
             worktree_repo_id=worktree_repo_id,

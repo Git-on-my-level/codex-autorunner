@@ -373,6 +373,43 @@ def create_hub_app(
 
                 tasks.append(asyncio.create_task(_managed_docker_reaper_loop()))
                 tasks.append(asyncio.create_task(_housekeeping_loop()))
+
+                async def _flow_telemetry_sweep_loop():
+                    await asyncio.sleep(initial_delay)
+                    while True:
+                        try:
+                            from ...core.flows.flow_telemetry_hooks import (
+                                housekeep_sweep_repos,
+                            )
+                            from ...manifest import load_manifest
+
+                            hub_root = app.state.config.root
+                            manifest_path = app.state.config.manifest_path
+                            if manifest_path.exists():
+                                manifest = load_manifest(manifest_path, hub_root)
+                                repo_roots = [
+                                    (hub_root / entry.path).resolve()
+                                    for entry in manifest.repos
+                                ]
+                                await asyncio.to_thread(
+                                    housekeep_sweep_repos, repo_roots
+                                )
+                        except (
+                            RuntimeError,
+                            OSError,
+                            ConnectionError,
+                            ValueError,
+                            TypeError,
+                        ) as exc:
+                            safe_log(
+                                app.state.logger,
+                                logging.WARNING,
+                                "Flow telemetry sweep failed",
+                                exc,
+                            )
+                        await asyncio.sleep(interval)
+
+                tasks.append(asyncio.create_task(_flow_telemetry_sweep_loop()))
             app_server_supervisor = cast(
                 Optional[_IdlePrunable],
                 getattr(app.state, "app_server_supervisor", None),

@@ -118,6 +118,10 @@
     "decisions": ".codex-autorunner/contextspace/decisions.md",
     "spec": ".codex-autorunner/contextspace/spec.md"
   },
+  "flow_retention": {
+    "retention_days": 7,
+    "vacuum_after_prune": false
+  },
   "git": {
     "auto_commit": false,
     "commit_message_template": "[codex] run #{run_id}"
