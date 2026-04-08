@@ -2134,6 +2134,12 @@ class DiscordBotService:
             thread_id = str(getattr(thread, "thread_target_id", "") or "").strip()
             if not thread_id:
                 continue
+            if not self._discord_thread_matches_agent(
+                thread,
+                agent=agent,
+                agent_profile=agent_profile,
+            ):
+                continue
             if (
                 str(getattr(thread, "workspace_root", "") or "").strip()
                 != canonical_workspace
@@ -4038,6 +4044,31 @@ class DiscordBotService:
         if runtime_agent == agent:
             return (agent,)
         return (agent, runtime_agent)
+
+    def _discord_thread_matches_agent(
+        self,
+        thread: Any,
+        *,
+        agent: str,
+        agent_profile: Optional[str] = None,
+    ) -> bool:
+        expected_agent, expected_profile = resolve_chat_agent_and_profile(
+            agent,
+            agent_profile,
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
+        thread_agent, thread_profile = resolve_chat_agent_and_profile(
+            getattr(thread, "agent_id", None),
+            getattr(thread, "agent_profile", None),
+            default=self.DEFAULT_AGENT,
+            context=self,
+        )
+        if thread_agent != expected_agent:
+            return False
+        if expected_agent != "hermes":
+            return True
+        return (thread_profile or None) == (expected_profile or None)
 
     def _runtime_agent_for_binding(self, binding: Optional[Mapping[str, Any]]) -> str:
         agent, profile = self._resolve_agent_state(binding)

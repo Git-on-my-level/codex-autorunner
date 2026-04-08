@@ -538,15 +538,10 @@ async def handle_car_resume(
                 ),
             )
             return
-        allowed_agent_ids = set(
-            service._discord_thread_agent_ids(
-                agent=agent,
-                agent_profile=agent_profile,
-            )
-        )
-        if (
-            str(getattr(target_thread, "agent_id", "") or "").strip()
-            not in allowed_agent_ids
+        if not service._discord_thread_matches_agent(
+            target_thread,
+            agent=agent,
+            agent_profile=agent_profile,
         ):
             await service._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
