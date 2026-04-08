@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
 from .....core.flows.workspace_root import resolve_ticket_flow_workspace_root
+from .run_list_cache import list_flow_runs_payload
 
 if TYPE_CHECKING:
     from . import FlowRouteDependencies, FlowRoutesState
@@ -70,30 +71,20 @@ def build_status_history_routes(
 
     @router.get("/runs", response_model=list[Any])
     async def list_runs(
-        request: Request, flow_type: Optional[str] = None, reconcile: bool = False
+        request: Request,
+        flow_type: Optional[str] = None,
+        flow_target_id: Optional[str] = None,
+        reconcile: bool = False,
     ):
         _ensure_state_in_app(request)
-        repo_root = deps.find_repo_root()
-        if repo_root is None:
-            return []
-
-        store = deps.require_flow_store(repo_root)
-        try:
-            records = load_flow_run_records(
-                repo_root,
-                flow_type=flow_type,
-                reconcile=reconcile,
-                store=store,
-                safe_list_flow_runs=deps.safe_list_flow_runs,
-                build_flow_orchestration_service_fn=deps.build_flow_orchestration_service,
-            )
-            return [
-                deps.build_flow_status_response(rec, repo_root, store=store)
-                for rec in records
-            ]
-        finally:
-            if store:
-                store.close()
+        return list_flow_runs_payload(
+            request,
+            deps,
+            load_flow_run_records,
+            flow_type=flow_type,
+            flow_target_id=flow_target_id,
+            reconcile=reconcile,
+        )
 
     @router.get("/{run_id}/status", response_model=dict[str, Any])
     async def get_flow_status(

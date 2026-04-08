@@ -431,17 +431,12 @@ def format_ticket_flow_status_lines(
 
 
 def build_flow_status_snapshot(
-    repo_root: Path, record: FlowRunRecord, store: Optional[FlowStore]
+    repo_root: Path,
+    record: FlowRunRecord,
+    store: Optional[FlowStore],
+    *,
+    lite: bool = False,
 ) -> dict:
-    last_event_seq = None
-    last_event_at = None
-    if store:
-        try:
-            last_event_seq, last_event_at = store.get_last_event_meta(record.id)
-        except (RuntimeError, OSError, ValueError, TypeError, AttributeError):
-            last_event_seq, last_event_at = None, None
-    health = check_worker_health(repo_root, record.id)
-
     state = record.state or {}
     current_ticket = None
     if isinstance(state, dict):
@@ -461,6 +456,28 @@ def build_flow_status_snapshot(
         ticket_engine["current_ticket"] = effective_ticket
         updated_state = dict(state)
         updated_state["ticket_engine"] = ticket_engine
+
+    if lite:
+        return {
+            "last_event_seq": None,
+            "last_event_at": None,
+            "worker_health": None,
+            "effective_current_ticket": effective_ticket,
+            "ticket_progress": None,
+            "state": updated_state,
+            "canonical_state_v1": None,
+            "freshness": None,
+        }
+
+    last_event_seq = None
+    last_event_at = None
+    if store:
+        try:
+            last_event_seq, last_event_at = store.get_last_event_meta(record.id)
+        except (RuntimeError, OSError, ValueError, TypeError, AttributeError):
+            last_event_seq, last_event_at = None, None
+    health = check_worker_health(repo_root, record.id)
+
     canonical_state = _canonical_flow_status_state(repo_root, record, store)
     freshness = (
         canonical_state.get("freshness") if isinstance(canonical_state, dict) else None
