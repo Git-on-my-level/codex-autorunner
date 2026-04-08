@@ -4058,12 +4058,33 @@ class DiscordBotService:
             default=self.DEFAULT_AGENT,
             context=self,
         )
-        thread_agent, thread_profile = resolve_chat_agent_and_profile(
-            getattr(thread, "agent_id", None),
-            getattr(thread, "agent_profile", None),
-            default=self.DEFAULT_AGENT,
+        raw_thread_agent = getattr(thread, "agent_id", None)
+        thread_agent = normalize_chat_agent(
+            raw_thread_agent,
+            default=None,
             context=self,
         )
+        thread_profile = None
+        if thread_agent == "hermes":
+            thread_profile = normalize_hermes_profile(
+                getattr(thread, "agent_profile", None),
+                context=self,
+            )
+        elif thread_agent is None:
+            legacy_profile = normalize_hermes_profile(
+                raw_thread_agent,
+                context=self,
+            )
+            if legacy_profile is None:
+                return False
+            thread_agent = "hermes"
+            thread_profile = (
+                normalize_hermes_profile(
+                    getattr(thread, "agent_profile", None),
+                    context=self,
+                )
+                or legacy_profile
+            )
         if thread_agent != expected_agent:
             return False
         if expected_agent != "hermes":

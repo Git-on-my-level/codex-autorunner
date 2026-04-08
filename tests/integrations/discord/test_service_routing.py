@@ -993,6 +993,27 @@ def test_list_discord_thread_targets_for_picker_supports_logical_and_legacy_herm
     }
 
 
+def test_discord_thread_matches_agent_rejects_unknown_thread_agent_id(
+    tmp_path: Path,
+) -> None:
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=None,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    assert (
+        service._discord_thread_matches_agent(
+            SimpleNamespace(agent_id="missing-agent", agent_profile=None),
+            agent="codex",
+        )
+        is False
+    )
+
+
 def _interaction(
     *, name: str, options: list[dict[str, Any]], user_id: str = "user-1"
 ) -> dict[str, Any]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -191,6 +192,12 @@ async def handle_car_compact(
         response_text = (
             turn_result.final_message.strip() if turn_result.final_message else ""
         )
+        preview_message_id = (
+            turn_result.preview_message_id
+            if isinstance(turn_result.preview_message_id, str)
+            and turn_result.preview_message_id
+            else None
+        )
         if not response_text:
             response_text = (
                 _build_fallback_compact_summary(
@@ -208,6 +215,15 @@ async def handle_car_compact(
                 workspace_root=str(workspace_root),
                 previous_thread_id=previous_thread_id,
             )
+            if preview_message_id:
+                await service._delete_channel_message_safe(
+                    channel_id=channel_id,
+                    message_id=preview_message_id,
+                    record_id=(
+                        "compact:delete_progress:"
+                        f"{previous_thread_id}:{uuid.uuid4().hex[:8]}"
+                    ),
+                )
             await service._send_channel_message_safe(
                 channel_id,
                 {
@@ -392,12 +408,6 @@ async def handle_car_compact(
 
             next_chunk_index = 0
             preview_chunk_applied = False
-            preview_message_id = (
-                turn_result.preview_message_id
-                if isinstance(turn_result.preview_message_id, str)
-                and turn_result.preview_message_id
-                else None
-            )
 
             if preview_message_id:
                 try:

@@ -2001,7 +2001,7 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
         )
         return DiscordMessageTurnResult(
             final_message="",
-            preview_message_id=None,
+            preview_message_id="preview-1",
         )
 
     service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
@@ -2022,6 +2022,12 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
             rest.channel_messages[-1]["payload"]["content"]
             == "Compaction returned an empty summary. Kept the current session active; please retry."
         )
+        assert rest.deleted_channel_messages == [
+            {
+                "channel_id": "channel-1",
+                "message_id": "preview-1",
+            }
+        ]
 
         binding = orchestration_service.get_binding(
             surface_kind="discord",
