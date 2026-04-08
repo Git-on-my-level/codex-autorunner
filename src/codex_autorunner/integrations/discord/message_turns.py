@@ -71,6 +71,7 @@ from ...core.ports.run_event import (
     ToolCall,
 )
 from ...core.utils import canonicalize_path
+from ...integrations.chat.agents import resolve_chat_runtime_agent
 from ...integrations.chat.approval_modes import resolve_approval_mode_policies
 from ...integrations.chat.collaboration_policy import CollaborationEvaluationResult
 from ...integrations.chat.compaction import match_pending_compact_seed
@@ -1095,9 +1096,15 @@ def resolve_discord_thread_target(
         else None
     )
     canonical_workspace = str(workspace_root.resolve())
+    runtime_agent = resolve_chat_runtime_agent(
+        agent,
+        agent_profile,
+        default=getattr(service, "DEFAULT_AGENT", "codex"),
+        context=service,
+    )
     reusable_thread = (
         thread is not None
-        and thread.agent_id == agent
+        and str(thread.agent_id or "").strip() in {agent, runtime_agent}
         and (thread.agent_profile or None) == (agent_profile or None)
         and str(thread.workspace_root or "").strip() == canonical_workspace
     )
@@ -1708,8 +1715,9 @@ async def _run_discord_orchestrated_turn_for_message(
         else orchestrator_channel_key
     )
     binding = await service._store.get_binding(channel_id=channel_id)
-    runtime_agent = service._runtime_agent_for_binding(binding)
-    _agent, agent_profile = service._resolve_agent_state(binding)
+    logical_agent, agent_profile = service._resolve_agent_state(binding)
+    if not isinstance(logical_agent, str) or not logical_agent.strip():
+        logical_agent = agent
     repo_id = binding.get("repo_id") if isinstance(binding, dict) else None
     resource_kind = binding.get("resource_kind") if isinstance(binding, dict) else None
     resource_id = binding.get("resource_id") if isinstance(binding, dict) else None
@@ -1718,7 +1726,7 @@ async def _run_discord_orchestrated_turn_for_message(
         channel_id=channel_id,
         managed_thread_surface_key=managed_thread_surface_key,
         workspace_root=workspace_root,
-        agent=runtime_agent,
+        agent=logical_agent,
         agent_profile=agent_profile,
         repo_id=repo_id if isinstance(repo_id, str) and repo_id.strip() else None,
         resource_kind=(

@@ -1937,12 +1937,6 @@ class DiscordBotService:
         resource_id: Optional[str],
         pma_enabled: bool,
     ) -> tuple[bool, str]:
-        runtime_agent = resolve_chat_runtime_agent(
-            agent,
-            agent_profile,
-            default=self.DEFAULT_AGENT,
-            context=self,
-        )
         mode = "pma" if pma_enabled else "repo"
         orchestration_service, _binding, current_thread = (
             self._get_discord_thread_binding(
@@ -2016,19 +2010,23 @@ class DiscordBotService:
             resource_kind=resource_kind,
             resource_id=resource_id,
         )
+        thread_metadata: Optional[dict[str, Any]] = (
+            {"agent_profile": agent_profile} if agent_profile else None
+        )
         replacement = orchestration_service.create_thread_target(
-            runtime_agent,
+            agent,
             workspace_root,
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
             resource_id=owner_id,
             display_name=f"discord:{channel_id}",
+            metadata=thread_metadata,
         )
         orchestration_service.upsert_binding(
             surface_kind="discord",
             surface_key=channel_id,
             thread_target_id=replacement.thread_target_id,
-            agent_id=runtime_agent,
+            agent_id=agent,
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
             resource_id=owner_id,
@@ -2050,12 +2048,6 @@ class DiscordBotService:
         workspace_root: Optional[Path] = None,
         pma_enabled: bool,
     ) -> Any:
-        runtime_agent = resolve_chat_runtime_agent(
-            agent,
-            agent_profile,
-            default=self.DEFAULT_AGENT,
-            context=self,
-        )
         mode = "pma" if pma_enabled else "repo"
         orchestration_service = self._discord_thread_service()
         owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
@@ -2068,7 +2060,7 @@ class DiscordBotService:
             surface_kind="discord",
             surface_key=channel_id,
             thread_target_id=thread_target_id,
-            agent_id=runtime_agent,
+            agent_id=agent,
             repo_id=normalized_repo_id,
             resource_kind=owner_kind,
             resource_id=owner_id,

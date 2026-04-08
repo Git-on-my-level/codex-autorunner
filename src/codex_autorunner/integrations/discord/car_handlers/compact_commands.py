@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 
+from ....core.orchestration.transcript_mirror import TranscriptMirrorStore
+from ....core.pma_thread_store import PmaThreadStore
 from ....core.utils import canonicalize_path
 from ...chat.compaction import build_compact_seed_prompt
 from ..errors import DiscordAPIError
@@ -17,6 +19,36 @@ COMPACT_SUMMARY_PROMPT = (
     "Summarize the conversation so far into a concise context block I can paste into "
     "a new thread. Include goals, constraints, decisions, and current state."
 )
+COMPACT_FALLBACK_HISTORY_LIMIT = 5
+COMPACT_FALLBACK_PREVIEW_CHARS = 600
+
+
+def _build_fallback_compact_summary(
+    service: Any,
+    *,
+    thread_target_id: str,
+) -> Optional[str]:
+    transcript_entries = TranscriptMirrorStore(
+        service._config.root
+    ).list_target_history(
+        target_kind="thread_target",
+        target_id=thread_target_id,
+        limit=COMPACT_FALLBACK_HISTORY_LIMIT,
+    )
+    sections: list[str] = []
+    for index, entry in enumerate(reversed(transcript_entries), start=1):
+        preview = str(entry.get("preview") or entry.get("content") or "").strip()
+        if not preview:
+            continue
+        if len(preview) > COMPACT_FALLBACK_PREVIEW_CHARS:
+            preview = preview[: COMPACT_FALLBACK_PREVIEW_CHARS - 3].rstrip() + "..."
+        sections.append(f"Recent turn {index}:\n{preview}")
+    if not sections:
+        return None
+    return (
+        "Fallback context recovered from recent Discord thread transcripts.\n\n"
+        + "\n\n".join(sections)
+    )
 
 
 async def _interaction_deferred(
@@ -160,7 +192,45 @@ async def handle_car_compact(
             turn_result.final_message.strip() if turn_result.final_message else ""
         )
         if not response_text:
-            response_text = "(No summary generated.)"
+            response_text = (
+                _build_fallback_compact_summary(
+                    service,
+                    thread_target_id=previous_thread_id,
+                )
+                or ""
+            )
+        if not response_text:
+            log_event(
+                service._logger,
+                logging.WARNING,
+                "discord.compact.empty_summary",
+                channel_id=channel_id,
+                workspace_root=str(workspace_root),
+                previous_thread_id=previous_thread_id,
+            )
+            await service._send_channel_message_safe(
+                channel_id,
+                {
+                    "content": (
+                        "Compaction returned an empty summary. Kept the current "
+                        "session active; please retry."
+                    )
+                },
+            )
+            interaction_text = (
+                "Compaction returned an empty summary. Kept the current session "
+                "active; please retry."
+            )
+            return
+        if not (turn_result.final_message or "").strip():
+            log_event(
+                service._logger,
+                logging.INFO,
+                "discord.compact.transcript_fallback_used",
+                channel_id=channel_id,
+                workspace_root=str(workspace_root),
+                previous_thread_id=previous_thread_id,
+            )
         try:
             (
                 _had_previous,
@@ -219,6 +289,10 @@ async def handle_car_compact(
             agent_profile=agent_profile,
         )
         try:
+            PmaThreadStore(service._config.root).set_thread_compact_seed(
+                next_thread_id,
+                response_text,
+            )
             await service._store.set_pending_compact_seed(
                 channel_id=channel_id,
                 seed_text=build_compact_seed_prompt(response_text),

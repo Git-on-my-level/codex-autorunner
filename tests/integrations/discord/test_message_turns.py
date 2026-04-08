@@ -1942,6 +1942,242 @@ async def test_car_session_compact_restores_previous_thread_when_seed_save_fails
 
 
 @pytest.mark.anyio
+async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    orchestration_service = service._discord_thread_service()
+    current_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace.resolve(),
+        display_name="discord:channel-1",
+    )
+    service._attach_discord_thread_binding(
+        channel_id="channel-1",
+        thread_target_id=current_thread.thread_target_id,
+        agent="codex",
+        repo_id=None,
+        pma_enabled=False,
+    )
+
+    async def _fake_run_turn(
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return DiscordMessageTurnResult(
+            final_message="",
+            preview_message_id=None,
+        )
+
+    service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_compact(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert rest.original_interaction_edits
+        assert (
+            rest.original_interaction_edits[-1]["payload"]["content"]
+            == "Compaction returned an empty summary. Kept the current session active; please retry."
+        )
+        assert rest.channel_messages
+        assert (
+            rest.channel_messages[-1]["payload"]["content"]
+            == "Compaction returned an empty summary. Kept the current session active; please retry."
+        )
+
+        binding = orchestration_service.get_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        )
+        assert binding is not None
+        assert binding.thread_target_id == current_thread.thread_target_id
+
+        restored_thread = orchestration_service.get_thread_target(
+            current_thread.thread_target_id
+        )
+        assert restored_thread is not None
+        assert restored_thread.lifecycle_status == "active"
+
+        active_threads = orchestration_service.list_thread_targets(
+            lifecycle_status="active"
+        )
+        assert [thread.thread_target_id for thread in active_threads] == [
+            current_thread.thread_target_id
+        ]
+
+        state_binding = await store.get_binding(channel_id="channel-1")
+        assert state_binding is not None
+        assert state_binding["pending_compact_seed"] is None
+        assert state_binding["pending_compact_session_key"] is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blank(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    orchestration_service = service._discord_thread_service()
+    current_thread = orchestration_service.create_thread_target(
+        "codex",
+        workspace.resolve(),
+        display_name="discord:channel-1",
+    )
+    service._attach_discord_thread_binding(
+        channel_id="channel-1",
+        thread_target_id=current_thread.thread_target_id,
+        agent="codex",
+        repo_id=None,
+        pma_enabled=False,
+    )
+
+    async def _fake_run_turn(
+        *,
+        workspace_root: Path,
+        prompt_text: str,
+        agent: str,
+        model_override: Optional[str],
+        reasoning_effort: Optional[str],
+        session_key: str,
+        orchestrator_channel_key: str,
+    ) -> DiscordMessageTurnResult:
+        _ = (
+            workspace_root,
+            prompt_text,
+            agent,
+            model_override,
+            reasoning_effort,
+            session_key,
+            orchestrator_channel_key,
+        )
+        return DiscordMessageTurnResult(
+            final_message="",
+            preview_message_id=None,
+        )
+
+    class _FakeTranscriptMirrorStore:
+        def __init__(self, _root: Path) -> None:
+            pass
+
+        def list_target_history(
+            self,
+            *,
+            target_kind: str,
+            target_id: str,
+            limit: int = 10,
+        ) -> list[dict[str, str]]:
+            _ = target_kind, target_id, limit
+            return [
+                {"preview": "User: earlier question\nAssistant: earlier answer"},
+                {"preview": "User: latest question\nAssistant: latest answer"},
+            ]
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.car_handlers.compact_commands.TranscriptMirrorStore",
+        _FakeTranscriptMirrorStore,
+    )
+    service._run_agent_turn_for_message = _fake_run_turn  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_compact(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert rest.original_interaction_edits
+        assert (
+            rest.original_interaction_edits[-1]["payload"]["content"]
+            == "Compaction complete. Summary posted in the channel. Send your next message to continue this session."
+        )
+        binding = await store.get_binding(channel_id="channel-1")
+        assert binding is not None
+        assert "Fallback context recovered from recent Discord thread transcripts." in (
+            binding["pending_compact_seed"] or ""
+        )
+        assert "latest answer" in (binding["pending_compact_seed"] or "")
+
+        active_binding = orchestration_service.get_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        )
+        assert active_binding is not None
+        replacement_thread = orchestration_service.get_thread_target(
+            active_binding.thread_target_id
+        )
+        assert replacement_thread is not None
+        assert replacement_thread.compact_seed is not None
+        assert "earlier answer" in replacement_thread.compact_seed
+
+        archived_thread = orchestration_service.get_thread_target(
+            current_thread.thread_target_id
+        )
+        assert archived_thread is not None
+        assert archived_thread.lifecycle_status == "archived"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_message_event_submits_through_surface_orchestration_ingress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8518,6 +8754,16 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
             agent="codex",
         )
         assert binding["pending_compact_session_key"] == expected_compact_key
+        active_binding = orchestration_service.get_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        )
+        assert active_binding is not None
+        replacement_thread = orchestration_service.get_thread_target(
+            active_binding.thread_target_id
+        )
+        assert replacement_thread is not None
+        assert replacement_thread.compact_seed == summary
         archived_thread = orchestration_service.get_thread_target(
             current_thread.thread_target_id
         )
@@ -8694,6 +8940,16 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
             agent="codex",
         )
         assert binding["pending_compact_session_key"] == expected_compact_key
+        active_binding = orchestration_service.get_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        )
+        assert active_binding is not None
+        replacement_thread = orchestration_service.get_thread_target(
+            active_binding.thread_target_id
+        )
+        assert replacement_thread is not None
+        assert replacement_thread.compact_seed == summary
         archived_thread = orchestration_service.get_thread_target(
             current_thread.thread_target_id
         )
@@ -8788,5 +9044,201 @@ async def test_resolve_discord_thread_target_stores_agent_profile_in_metadata(
         )
         assert thread.agent_id == "hermes"
         assert thread.agent_profile == "m4-pma"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_resolve_discord_thread_target_reuses_legacy_hermes_runtime_alias_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptor = AgentDescriptor(
+        id="hermes-m4-pma",
+        name="Hermes M4 PMA",
+        capabilities=("durable_threads",),
+        make_harness=lambda _ctx: SimpleNamespace(),
+        healthcheck=lambda: True,
+        runtime_kind="hermes",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": descriptor,
+        },
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": descriptor,
+        },
+    )
+    hub_config = SimpleNamespace(
+        agent_profiles=lambda agent_id: (
+            {"m4-pma": SimpleNamespace(display_name="M4 PMA")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_binary=lambda agent_id, **kw: "hermes",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry._resolve_runtime_agent_config",
+        lambda ctx: hub_config,
+    )
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        orchestration_service = service._discord_thread_service()
+        legacy_thread = orchestration_service.create_thread_target(
+            "hermes-m4-pma",
+            workspace.resolve(),
+            display_name="discord:channel-1",
+            metadata={"agent_profile": "m4-pma"},
+        )
+        service._attach_discord_thread_binding(
+            channel_id="channel-1",
+            thread_target_id=legacy_thread.thread_target_id,
+            agent="hermes",
+            agent_profile="m4-pma",
+            repo_id=None,
+            workspace_root=workspace.resolve(),
+            pma_enabled=False,
+        )
+
+        _orch, resolved = discord_message_turns_module.resolve_discord_thread_target(
+            service,
+            channel_id="channel-1",
+            workspace_root=workspace.resolve(),
+            agent="hermes",
+            agent_profile="m4-pma",
+            repo_id=None,
+            resource_kind=None,
+            resource_id=None,
+            mode="repo",
+            pma_enabled=False,
+        )
+
+        assert resolved.thread_target_id == legacy_thread.thread_target_id
+        assert resolved.agent_id == "hermes-m4-pma"
+        assert resolved.agent_profile == "m4-pma"
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_reset_discord_thread_binding_preserves_logical_hermes_profile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry.get_registered_agents",
+        lambda context=None: {
+            "hermes-m4-pma": SimpleNamespace(name="Hermes M4 PMA"),
+        },
+    )
+    hub_config = SimpleNamespace(
+        agent_profiles=lambda agent_id: (
+            {"m4-pma": SimpleNamespace(display_name="M4 PMA")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_binary=lambda agent_id, **kw: "hermes",
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry._resolve_runtime_agent_config",
+        lambda ctx: hub_config,
+    )
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+    await store.update_agent_state(
+        channel_id="channel-1",
+        agent="hermes",
+        agent_profile="m4-pma",
+    )
+    service = DiscordBotService(
+        _config(tmp_path, max_message_length=120),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        orchestration_service = service._discord_thread_service()
+        current_thread = orchestration_service.create_thread_target(
+            "hermes",
+            workspace.resolve(),
+            display_name="discord:channel-1",
+            metadata={"agent_profile": "m4-pma"},
+        )
+        service._attach_discord_thread_binding(
+            channel_id="channel-1",
+            thread_target_id=current_thread.thread_target_id,
+            agent="hermes",
+            agent_profile="m4-pma",
+            repo_id=None,
+            workspace_root=workspace.resolve(),
+            pma_enabled=False,
+        )
+
+        had_previous, replacement_thread_id = (
+            await service._reset_discord_thread_binding(
+                channel_id="channel-1",
+                workspace_root=workspace.resolve(),
+                agent="hermes",
+                agent_profile="m4-pma",
+                repo_id=None,
+                resource_kind=None,
+                resource_id=None,
+                pma_enabled=False,
+            )
+        )
+
+        assert had_previous is True
+        replacement_thread = orchestration_service.get_thread_target(
+            replacement_thread_id
+        )
+        assert replacement_thread is not None
+        assert replacement_thread.agent_id == "hermes"
+        assert replacement_thread.agent_profile == "m4-pma"
+
+        binding = orchestration_service.get_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        )
+        assert binding is not None
+        assert binding.thread_target_id == replacement_thread_id
+        assert binding.agent_id == "hermes"
     finally:
         await store.close()
