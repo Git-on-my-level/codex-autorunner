@@ -451,6 +451,98 @@ def test_arm_watch_backfills_recent_review_comments_immediately(
     }
 
 
+def test_arm_watch_backfill_uses_current_arm_time_for_reactivated_watch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    watch_store = ScmPollingWatchStore(tmp_path)
+    monkeypatch.setattr(scm_polling_watches, "now_iso", lambda: "2026-03-30T00:00:00Z")
+    existing_watch = watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:01:30Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"head_sha": "oldsha"},
+    )
+    watch_store.close_watch(watch_id=existing_watch.watch_id, state="closed")
+
+    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": "abc123",
+                "createdAt": "2026-03-30T00:00:00Z",
+                "author": {"login": "pr-author"},
+            },
+            reviews_payload=[],
+            checks_payload=[],
+            issue_comments_payload=[
+                {
+                    "comment_id": "comment-old",
+                    "body": "Comment from the previous watch window.",
+                    "author_login": "reviewer",
+                    "author_type": "User",
+                    "updated_at": "2026-03-30T00:20:00Z",
+                },
+                {
+                    "comment_id": "comment-new",
+                    "body": "Comment from the current arm window.",
+                    "author_login": "reviewer",
+                    "author_type": "User",
+                    "updated_at": "2026-03-30T00:55:00Z",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(github_polling, "now_iso", lambda: "2026-03-30T01:00:00Z")
+    monkeypatch.setattr(scm_polling_watches, "now_iso", lambda: "2026-03-30T01:00:00Z")
+    _AutomationServiceFake.ingested_events = []
+    _AutomationServiceFake.process_calls = 0
+    monkeypatch.setattr(
+        GitHubScmPollingService,
+        "_build_automation_service",
+        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+            tmp_path,
+            reaction_config=reaction_config,
+        ),
+    )
+
+    service = GitHubScmPollingService(
+        tmp_path,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(tmp_path),
+    )
+
+    watch = service.arm_watch(binding=binding, workspace_root=tmp_path / "repo")
+
+    assert watch is not None
+    assert watch.started_at == "2026-03-30T00:00:00Z"
+    assert [item[0] for item in _AutomationServiceFake.ingested_events] == [
+        "issue_comment"
+    ]
+    events = ScmEventStore(tmp_path).list_events(limit=10)
+    assert len(events) == 1
+    assert events[0].payload["comment_id"] == "comment-new"
+
+
 def test_backfill_binding_thread_targets_claims_active_matching_thread(
     tmp_path: Path,
 ) -> None:
@@ -1092,6 +1184,109 @@ def test_process_due_watches_backfills_recent_comments_when_baseline_was_deferre
         "comment-new",
         "review-comment-new",
     }
+
+
+def test_process_due_watches_uses_current_poll_time_for_deferred_baseline_backfill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = PrBindingStore(tmp_path).upsert_binding(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=17,
+        pr_state="open",
+        head_branch="feature/scm-polling",
+        base_branch="main",
+    )
+    watch_store = ScmPollingWatchStore(tmp_path)
+    monkeypatch.setattr(scm_polling_watches, "now_iso", lambda: "2026-03-30T00:00:00Z")
+    existing_watch = watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"baseline_pending": True},
+    )
+    watch_store.close_watch(watch_id=existing_watch.watch_id, state="closed")
+    monkeypatch.setattr(scm_polling_watches, "now_iso", lambda: "2026-03-30T01:00:00Z")
+    watch_store.upsert_watch(
+        provider="github",
+        binding_id=binding.binding_id,
+        repo_slug=binding.repo_slug,
+        pr_number=binding.pr_number,
+        workspace_root=str((tmp_path / "repo").resolve()),
+        poll_interval_seconds=90,
+        next_poll_at="2026-03-30T00:00:00Z",
+        expires_at="2099-03-30T01:00:00Z",
+        reaction_config={"enabled": True},
+        snapshot={"baseline_pending": True},
+    )
+
+    def _factory(repo_root: Path, raw_config=None) -> _GitHubServiceStub:
+        return _GitHubServiceStub(
+            repo_root,
+            raw_config,
+            pr_view_payload={
+                "state": "OPEN",
+                "isDraft": False,
+                "headRefOid": "newsha",
+                "createdAt": "2026-03-30T00:00:00Z",
+                "author": {"login": "pr-author"},
+            },
+            reviews_payload=[],
+            checks_payload=[],
+            issue_comments_payload=[
+                {
+                    "comment_id": "comment-old",
+                    "body": "Comment from the previous watch window.",
+                    "author_login": "reviewer",
+                    "author_type": "User",
+                    "updated_at": "2026-03-30T00:20:00Z",
+                },
+                {
+                    "comment_id": "comment-new",
+                    "body": "Comment from the current poll window.",
+                    "author_login": "reviewer",
+                    "author_type": "User",
+                    "updated_at": "2026-03-30T00:55:00Z",
+                },
+            ],
+        )
+
+    monkeypatch.setattr(github_polling, "now_iso", lambda: "2026-03-30T01:00:00Z")
+    _AutomationServiceFake.ingested_events = []
+    _AutomationServiceFake.process_calls = 0
+    monkeypatch.setattr(
+        GitHubScmPollingService,
+        "_build_automation_service",
+        lambda self, reaction_config=None: _AutomationServiceFake(  # type: ignore[misc]
+            tmp_path,
+            reaction_config=reaction_config,
+        ),
+    )
+
+    service = GitHubScmPollingService(
+        tmp_path,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(tmp_path),
+    )
+
+    result = service.process_due_watches(limit=10)
+
+    assert result["events_emitted"] == 1
+    assert [item[0] for item in _AutomationServiceFake.ingested_events] == [
+        "issue_comment"
+    ]
+    events = ScmEventStore(tmp_path).list_events(limit=10)
+    assert len(events) == 1
+    assert events[0].payload["comment_id"] == "comment-new"
 
 
 def test_claim_due_watches_prevents_duplicate_claims(

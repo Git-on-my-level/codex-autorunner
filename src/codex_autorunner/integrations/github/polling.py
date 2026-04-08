@@ -723,7 +723,7 @@ class GitHubScmPollingService:
                 watch=watch,
                 binding=binding,
                 snapshot=snapshot,
-                reference_timestamp=watch.started_at,
+                reference_timestamp=now_timestamp,
                 window_seconds=polling_config.comment_backfill_window_seconds,
             )
         except Exception:
@@ -1002,11 +1002,12 @@ class GitHubScmPollingService:
             baseline_pending = bool(previous_snapshot.get("baseline_pending"))
             emitted = 0
             if baseline_pending:
+                baseline_reference_timestamp = now_iso()
                 emitted += self._emit_comment_backfill(
                     watch=watch,
                     binding=binding,
                     snapshot=snapshot,
-                    reference_timestamp=watch.started_at,
+                    reference_timestamp=baseline_reference_timestamp,
                     window_seconds=polling_config.comment_backfill_window_seconds,
                 )
             else:
