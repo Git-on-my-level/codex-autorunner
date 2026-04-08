@@ -5,12 +5,20 @@ import contextlib
 import hashlib
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
+from codex_autorunner.core.filebox import (
+    inbox_dir,
+    outbox_dir,
+    outbox_pending_dir,
+    outbox_sent_dir,
+)
 from codex_autorunner.core.flows import FlowRunStatus
 from codex_autorunner.core.update import UpdateInProgressError
 from codex_autorunner.integrations.app_server.client import CodexAppServerResponseError
@@ -1478,6 +1486,158 @@ async def test_service_ids_reports_collaboration_snippet(tmp_path: Path) -> None
         assert "default_mode: command_only" in content
         assert "channel_id: channel-1" in content
         assert "mode: silent" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_files_inbox_lists_workspace_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    inbox = inbox_dir(workspace)
+    inbox.mkdir(parents=True, exist_ok=True)
+    (inbox / "notes.txt").write_text("hello", encoding="utf-8")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_interaction_path(command_path=("car", "files", "inbox"), options=[])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert "Inbox (1 file(s)):" in content
+        assert "notes.txt" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_files_outbox_lists_pending_and_sent_files(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outbox_root = outbox_dir(workspace)
+    pending = outbox_pending_dir(workspace)
+    sent = outbox_sent_dir(workspace)
+    outbox_root.mkdir(parents=True, exist_ok=True)
+    pending.mkdir(parents=True, exist_ok=True)
+    sent.mkdir(parents=True, exist_ok=True)
+    (outbox_root / "summary.txt").write_text("summary", encoding="utf-8")
+    (pending / "pending.txt").write_text("pending", encoding="utf-8")
+    (sent / "sent.txt").write_text("sent", encoding="utf-8")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [_interaction_path(command_path=("car", "files", "outbox"), options=[])]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert "Outbox root (1 file(s)):" in content
+        assert "summary.txt" in content
+        assert "Outbox pending (1 file(s)):" in content
+        assert "pending.txt" in content
+        assert "Outbox sent (1 file(s)):" in content
+        assert "sent.txt" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_files_clear_deletes_requested_outbox_targets(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    inbox = inbox_dir(workspace)
+    pending = outbox_pending_dir(workspace)
+    sent = outbox_sent_dir(workspace)
+    inbox.mkdir(parents=True, exist_ok=True)
+    pending.mkdir(parents=True, exist_ok=True)
+    sent.mkdir(parents=True, exist_ok=True)
+    inbox_file = inbox / "keep.txt"
+    pending_file = pending / "pending.txt"
+    sent_file = sent / "sent.txt"
+    inbox_file.write_text("keep", encoding="utf-8")
+    pending_file.write_text("pending", encoding="utf-8")
+    sent_file.write_text("sent", encoding="utf-8")
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _interaction_path(
+                command_path=("car", "files", "clear"),
+                options=[{"type": 3, "name": "target", "value": "outbox"}],
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert "Deleted 2 file(s)." in content
+        assert inbox_file.exists()
+        assert not pending_file.exists()
+        assert not sent_file.exists()
     finally:
         await store.close()
 
@@ -3808,6 +3968,76 @@ async def test_normalized_interaction_status_defers_before_reading_active_flow(
 
 
 @pytest.mark.anyio
+async def test_service_routes_slash_command_timeout_followup_through_runner(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    service._command_runner._config = replace(
+        service._command_runner._config,
+        timeout_seconds=0.01,
+        stalled_warning_seconds=None,
+    )
+
+    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
+        await asyncio.sleep(60)
+
+    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert "timed out" in rest.followup_messages[0]["payload"]["content"].lower()
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_service_routes_slash_command_error_followup_through_runner(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    gateway = _FakeGateway([_interaction(name="status", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    async def _failing_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("boom")
+
+    service._handle_car_command = _failing_handle_car_command  # type: ignore[assignment]
+
+    try:
+        await service.run_forever()
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "unexpected error" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_normalized_component_agent_select_updates_agent(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -4508,22 +4738,110 @@ async def test_car_review_custom_without_instructions_returns_guidance(
         state_store=store,
         outbox_manager=_FakeOutboxManager(),
     )
-    deferred = False
-
-    async def _fake_defer_ephemeral(*_args: Any, **_kwargs: Any) -> bool:
-        nonlocal deferred
-        deferred = True
-        return True
-
-    service._defer_ephemeral = _fake_defer_ephemeral  # type: ignore[assignment]
 
     try:
         await service.run_forever()
-        assert deferred is True
-        assert len(rest.interaction_responses) == 0
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
         assert len(rest.followup_messages) == 1
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "provide custom review instructions" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_reset_uses_prepared_interaction_state(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    service._remember_prepared_interaction_policy(
+        interaction_token="token-1",
+        policy="defer_ephemeral",
+    )
+
+    async def _unexpected_defer(*_args: Any, **_kwargs: Any) -> bool:
+        raise AssertionError("handler should use ingress-prepared interaction state")
+
+    async def _fake_reset_thread_binding(**_kwargs: Any) -> tuple[bool, str]:
+        return True, "thread-2"
+
+    service._defer_ephemeral = _unexpected_defer  # type: ignore[assignment]
+    service._reset_discord_thread_binding = _fake_reset_thread_binding  # type: ignore[assignment]
+
+    try:
+        await service._handle_car_reset(
+            "inter-1",
+            "token-1",
+            channel_id="channel-1",
+        )
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "reset repo thread state" in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_car_update_status_uses_prepared_interaction_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    service._remember_prepared_interaction_policy(
+        interaction_token="token-1",
+        policy="defer_ephemeral",
+    )
+
+    async def _unexpected_defer(*_args: Any, **_kwargs: Any) -> bool:
+        raise AssertionError("handler should use ingress-prepared interaction state")
+
+    service._defer_ephemeral = _unexpected_defer  # type: ignore[assignment]
+    monkeypatch.setattr(
+        discord_service_module,
+        "_read_update_status",
+        lambda: {"status": "running", "repo_ref": "main"},
+    )
+
+    try:
+        await service._handle_car_update_status(
+            interaction_id="inter-1",
+            interaction_token="token-1",
+        )
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"].lower()
+        assert "running" in content
+        assert "ref: main" in content
     finally:
         await store.close()
 
@@ -5176,11 +5494,11 @@ async def test_on_dispatch_backgrounds_interaction_handling(
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def _slow_handle(_event: Any, _context: Any) -> None:
+    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
         started.set()
         await release.wait()
 
-    service._handle_chat_event = _slow_handle  # type: ignore[assignment]
+    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
 
     try:
         dispatch_task = asyncio.create_task(
@@ -5197,8 +5515,149 @@ async def test_on_dispatch_backgrounds_interaction_handling(
         assert rest.interaction_responses[0]["payload"]["type"] == 5
         await asyncio.wait_for(started.wait(), timeout=1.0)
         release.set()
-        await asyncio.wait_for(service._dispatcher.wait_idle(), timeout=1.0)
+        await asyncio.wait_for(service._command_runner.shutdown(), timeout=1.0)
     finally:
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("payload", "expected_direct"),
+    [
+        (
+            _interaction_path(
+                command_path=("car", "session", "compact"),
+                options=[],
+            ),
+            False,
+        ),
+        (
+            _component_interaction(
+                custom_id="approval:abc:approve",
+                values=None,
+            ),
+            True,
+        ),
+        (
+            {
+                "id": "inter-modal-1",
+                "token": "token-modal-1",
+                "channel_id": "channel-1",
+                "guild_id": "guild-1",
+                "type": 5,
+                "member": {"user": {"id": "user-1"}},
+                "data": {
+                    "custom_id": "tickets_modal:abc",
+                    "components": [
+                        {
+                            "type": 18,
+                            "label": "Ticket",
+                            "component": {
+                                "type": 4,
+                                "custom_id": "ticket_body",
+                                "value": "body text",
+                            },
+                        }
+                    ],
+                },
+            },
+            True,
+        ),
+        (
+            _autocomplete_interaction_path(
+                command_path=("car", "bind"),
+                focused_name="workspace",
+                focused_value="codex",
+            ),
+            True,
+        ),
+    ],
+)
+async def test_on_dispatch_routes_deadline_bound_interactions_directly(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    expected_direct: bool,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    direct_submit = MagicMock()
+    queued_submit = MagicMock()
+    service._command_runner.submit = direct_submit  # type: ignore[method-assign]
+    service._command_runner.submit_ingressed = queued_submit  # type: ignore[method-assign]
+
+    try:
+        await service._on_dispatch("INTERACTION_CREATE", payload)
+        if expected_direct:
+            direct_submit.assert_called_once()
+            queued_submit.assert_not_called()
+        else:
+            queued_submit.assert_called_once()
+            direct_submit.assert_not_called()
+    finally:
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_autocomplete_bypasses_busy_ingressed_fifo(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    slash_started = asyncio.Event()
+    slash_release = asyncio.Event()
+    autocomplete_started = asyncio.Event()
+
+    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
+        slash_started.set()
+        await slash_release.wait()
+
+    async def _fast_autocomplete(*_args: Any, **_kwargs: Any) -> None:
+        autocomplete_started.set()
+
+    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
+    service._handle_command_autocomplete = _fast_autocomplete  # type: ignore[assignment]
+
+    try:
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction_path(
+                command_path=("car", "session", "compact"),
+                options=[],
+            ),
+        )
+        await asyncio.wait_for(slash_started.wait(), timeout=1.0)
+
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _autocomplete_interaction_path(
+                command_path=("car", "bind"),
+                focused_name="workspace",
+                focused_value="codex",
+            ),
+        )
+        await asyncio.wait_for(autocomplete_started.wait(), timeout=1.0)
+    finally:
+        slash_release.set()
         await service._shutdown()
         await store.close()
 
@@ -6035,7 +6494,7 @@ async def test_car_status_defers_before_loading_workspace_state(
         ("restart", "not bound"),
     ],
 )
-async def test_public_flow_commands_keep_private_preflight_errors_ephemeral(
+async def test_public_flow_commands_keep_dispatch_preflight_errors_ephemeral(
     tmp_path: Path,
     subcommand: str,
     expected_text: str,
@@ -6069,7 +6528,7 @@ async def test_public_flow_commands_keep_private_preflight_errors_ephemeral(
 
 
 @pytest.mark.anyio
-async def test_flow_status_defers_publicly_after_private_preflight(
+async def test_flow_status_defers_publicly_before_flow_store_work(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace = tmp_path / "workspace"
@@ -6112,6 +6571,71 @@ async def test_flow_status_defers_publicly_after_private_preflight(
         await service.run_forever()
         assert observed["deferred_type"] == 5
         assert len(rest.followup_messages) == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_component_flow_status_defers_publicly_before_flow_store_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            _component_interaction(
+                custom_id="flow_action_select:status", values=["run-1"]
+            )
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _StoreStub:
+        def list_flow_runs(self, *, flow_type: str) -> list[Any]:
+            assert flow_type == "ticket_flow"
+            return []
+
+        def close(self) -> None:
+            return None
+
+    observed: dict[str, Any] = {}
+
+    def _open_flow_store_after_defer(workspace_root: Path) -> Any:
+        observed["deferred_type"] = (
+            rest.interaction_responses[0]["payload"]["type"]
+            if rest.interaction_responses
+            else None
+        )
+        assert workspace_root == workspace
+        return _StoreStub()
+
+    monkeypatch.setattr(service, "_open_flow_store", _open_flow_store_after_defer)
+    monkeypatch.setattr(service, "_resolve_flow_run_by_id", lambda store, run_id: None)
+
+    try:
+        await service.run_forever()
+        assert observed["deferred_type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert (
+            "ticket_flow run run-1 not found"
+            in rest.followup_messages[0]["payload"]["content"].lower()
+        )
     finally:
         await store.close()
 

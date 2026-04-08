@@ -1,4 +1,4 @@
-"""Discord integration scaffold."""
+"""Discord integration: gateway, ingress, command runner, and turn execution."""
 
 from .adapter import DiscordChatAdapter, DiscordTextRenderer
 from .allowlist import DiscordAllowlist, allowlist_allows

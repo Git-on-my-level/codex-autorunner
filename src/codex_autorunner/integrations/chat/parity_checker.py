@@ -540,13 +540,6 @@ def _check_discord_known_commands_not_in_generic_fallback(
         discord_service_ast,
         "_handle_normalized_interaction",
     )
-    interaction_handlers = _find_functions_by_name(
-        discord_interaction_dispatch_ast,
-        "handle_interaction",
-    ) or _find_functions_by_name(
-        discord_service_ast,
-        "_handle_interaction",
-    )
 
     checks = {
         "normalized_car_prefix_guard": _has_prefix_guard_in_functions(
@@ -558,16 +551,6 @@ def _check_discord_known_commands_not_in_generic_fallback(
             normalized_handlers,
             prefix="pma",
             require_ingress_not_none=True,
-        ),
-        "interaction_car_prefix_guard": _has_prefix_guard_in_functions(
-            interaction_handlers,
-            prefix="car",
-            require_ingress_not_none=False,
-        ),
-        "interaction_pma_prefix_guard": _has_prefix_guard_in_functions(
-            interaction_handlers,
-            prefix="pma",
-            require_ingress_not_none=False,
         ),
         "generic_fallback_present": _module_has_string_literal(
             discord_service_ast,
@@ -622,13 +605,6 @@ def _check_discord_canonicalize_command_ingress_usage(
         discord_service_ast,
         "_handle_normalized_interaction",
     )
-    interaction_handlers = _find_functions_by_name(
-        discord_interaction_dispatch_ast,
-        "handle_interaction",
-    ) or _find_functions_by_name(
-        discord_service_ast,
-        "_handle_interaction",
-    )
 
     source_ast = (
         discord_interaction_dispatch_ast
@@ -649,28 +625,22 @@ def _check_discord_canonicalize_command_ingress_usage(
             normalized_handlers,
             callee_name="canonicalize_command_ingress",
             required_keywords={
-                "command": lambda expr: _is_dict_get(
-                    expr,
-                    object_name="payload_data",
-                    key="command",
-                )
-                or isinstance(expr, ast.Name),
-                "options": lambda expr: _is_dict_get(
-                    expr,
-                    object_name="payload_data",
-                    key="options",
-                )
-                or isinstance(expr, ast.Name),
-            },
-        ),
-        "interaction_call_present": _has_call_in_functions(
-            interaction_handlers,
-            callee_name="canonicalize_command_ingress",
-            required_keywords={
-                "command_path": lambda expr: _is_name(expr, "command_path")
-                or isinstance(expr, ast.Name),
-                "options": lambda expr: _is_name(expr, "options")
-                or isinstance(expr, ast.Name),
+                "command": lambda expr: (
+                    _is_dict_get(
+                        expr,
+                        object_name="payload_data",
+                        key="command",
+                    )
+                    or isinstance(expr, ast.Name)
+                ),
+                "options": lambda expr: (
+                    _is_dict_get(
+                        expr,
+                        object_name="payload_data",
+                        key="options",
+                    )
+                    or isinstance(expr, ast.Name)
+                ),
             },
         ),
     }
@@ -759,16 +729,11 @@ def _check_discord_interaction_component_guard_paths(
         discord_service_ast,
         "_handle_normalized_interaction",
     )
-    legacy_interaction_handlers = _find_functions_by_name(
+    execute_handlers = _find_functions_by_name(
         discord_interaction_dispatch_ast,
-        "handle_interaction",
-    ) or _find_functions_by_name(
-        discord_service_ast,
-        "_handle_interaction",
+        "execute_ingressed_interaction",
     )
-    interaction_handlers = (
-        normalized_interaction_handlers or legacy_interaction_handlers
-    )
+    interaction_handlers = normalized_interaction_handlers or execute_handlers
 
     normalized_component_handlers = _find_functions_by_name(
         discord_interaction_dispatch_ast,
@@ -777,23 +742,10 @@ def _check_discord_interaction_component_guard_paths(
         discord_service_ast,
         "_handle_component_interaction_normalized",
     )
-    legacy_component_handlers = _find_functions_by_name(
-        discord_interaction_dispatch_ast,
-        "_handle_component_from_payload",
-    ) or _find_functions_by_name(
-        discord_service_ast,
-        "_handle_component_interaction",
-    )
-    component_handlers = normalized_component_handlers or legacy_component_handlers
+    component_handlers = normalized_component_handlers
 
-    component_unhandled_error_event = (
-        "discord.component.normalized.unhandled_error"
-        if normalized_component_handlers
-        else "discord.component.unhandled_error"
-    )
-    component_missing_custom_id_functions = (
-        interaction_handlers if normalized_component_handlers else component_handlers
-    )
+    component_unhandled_error_event = "discord.component.normalized.unhandled_error"
+    component_missing_custom_id_functions = interaction_handlers + execute_handlers
 
     checks = {
         "interaction_parse_failure_response": _has_guard_response(
@@ -875,11 +827,9 @@ def _check_discord_interaction_component_guard_paths(
             "failed_predicates": failed_predicates,
             "predicates": checks,
             "interaction_handler": (
-                "normalized" if normalized_interaction_handlers else "legacy"
+                "normalized" if normalized_interaction_handlers else "execute_ingressed"
             ),
-            "component_handler": (
-                "normalized" if normalized_component_handlers else "legacy"
-            ),
+            "component_handler": "normalized",
         },
     )
 

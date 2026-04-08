@@ -204,6 +204,8 @@ from .collaboration_helpers import (
     collaboration_probe_text,
 )
 from .command_registry import sync_commands
+from .command_runner import CommandRunner as _CommandRunner
+from .command_runner import RunnerConfig as _RunnerConfig
 from .commands import build_application_commands
 from .components import (
     DISCORD_BUTTON_STYLE_SUCCESS,
@@ -242,11 +244,9 @@ from .flow_watchers import (
 )
 from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
+from .ingress import InteractionIngress, InteractionKind
 from .interaction_dispatch import (
     handle_component_interaction as _dispatch_component_interaction,
-)
-from .interaction_dispatch import (
-    handle_interaction as _dispatch_interaction,
 )
 from .interaction_dispatch import (
     handle_normalized_interaction as _dispatch_normalized_interaction,
@@ -656,6 +656,19 @@ class DiscordBotService:
                 "Update still running. Use `/car update target:status` for current state."
             ),
         )
+        self._ingress = InteractionIngress(self, logger=self._logger)
+        self._command_runner = _CommandRunner(
+            self,
+            config=_RunnerConfig(
+                timeout_seconds=(
+                    config.dispatch.handler_timeout_seconds
+                    if config.dispatch.handler_timeout_seconds is not None
+                    else 120.0
+                ),
+                stalled_warning_seconds=config.dispatch.handler_stalled_warning_seconds,
+            ),
+            logger=self._logger,
+        )
 
     async def run_forever(self) -> None:
         self._reap_managed_processes(stage="startup")
@@ -700,6 +713,7 @@ class DiscordBotService:
                 )
             await self._gateway.run(self._on_dispatch)
         finally:
+            await self._command_runner.shutdown()
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._dispatcher.wait_idle()
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
@@ -3154,6 +3168,7 @@ class DiscordBotService:
                 task.cancel()
             await asyncio.gather(*list(self._background_tasks), return_exceptions=True)
             self._background_tasks.clear()
+        await self._command_runner.shutdown()
         if self._owns_gateway:
             with contextlib.suppress(Exception):  # intentional: shutdown cleanup
                 await self._gateway.stop()
@@ -3368,14 +3383,32 @@ class DiscordBotService:
 
     async def _on_dispatch(self, event_type: str, payload: dict[str, Any]) -> None:
         if event_type == "INTERACTION_CREATE":
-            interaction_event = self._chat_adapter.parse_interaction_event(payload)
-            if interaction_event is not None:
-                await self._dispatch_chat_event(interaction_event)
-        elif event_type == "MESSAGE_CREATE":
+            ingress_result = await self._ingress.process_raw_payload(payload)
+            if not ingress_result.accepted:
+                return
+            if ingress_result.context is not None:
+                # Components, modal submits, and autocomplete have a hard
+                # initial-response deadline, so they skip the shared FIFO.
+                if ingress_result.context.kind in (
+                    InteractionKind.COMPONENT,
+                    InteractionKind.MODAL_SUBMIT,
+                    InteractionKind.AUTOCOMPLETE,
+                ):
+                    self._command_runner.submit(
+                        ingress_result.context,
+                        payload,
+                    )
+                else:
+                    self._command_runner.submit_ingressed(
+                        ingress_result.context,
+                        payload,
+                    )
+            return
+        if event_type == "MESSAGE_CREATE":
             await self._record_channel_directory_seen_from_message_payload(payload)
             message_event = self._chat_adapter.parse_message_event(payload)
             if message_event is not None:
-                await self._dispatch_chat_event(message_event)
+                self._command_runner.submit_event(message_event)
 
     async def _record_channel_directory_seen_from_message_payload(
         self, payload: dict[str, Any]
@@ -3529,14 +3562,6 @@ class DiscordBotService:
             if normalized:
                 return normalized
         return None
-
-    async def _handle_interaction(self, interaction_payload: dict[str, Any]) -> None:
-        await _dispatch_interaction(self, interaction_payload)
-
-    async def _handle_autocomplete_interaction(
-        self, interaction_payload: dict[str, Any]
-    ) -> None:
-        await _dispatch_interaction(self, interaction_payload)
 
     async def _handle_bind(
         self,
@@ -4566,11 +4591,6 @@ class DiscordBotService:
                     workspace_path=str(workspace_root),
                 )
                 break
-
-    async def _handle_modal_submit_interaction(
-        self, interaction_payload: dict[str, Any]
-    ) -> None:
-        await _dispatch_interaction(self, interaction_payload)
 
     async def _handle_ticket_modal_submit(
         self,
@@ -6508,11 +6528,6 @@ class DiscordBotService:
             ephemeral=False,
         )
 
-    async def _handle_component_interaction(
-        self, interaction_payload: dict[str, Any]
-    ) -> None:
-        await _dispatch_interaction(self, interaction_payload)
-
     async def _handle_component_interaction_normalized(
         self,
         interaction_id: str,
@@ -6525,17 +6540,21 @@ class DiscordBotService:
         user_id: Optional[str] = None,
         message_id: Optional[str] = None,
     ) -> None:
-        await _dispatch_component_interaction(
-            self,
+        from .ingress import IngressContext, IngressTiming, InteractionKind
+
+        ctx = IngressContext(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             channel_id=channel_id,
-            custom_id=custom_id,
-            values=values,
             guild_id=guild_id,
             user_id=user_id,
+            kind=InteractionKind.COMPONENT,
+            custom_id=custom_id,
+            values=values,
             message_id=message_id,
+            timing=IngressTiming(),
         )
+        await _dispatch_component_interaction(self, ctx)
 
     async def _bind_to_workspace_candidate(
         self,

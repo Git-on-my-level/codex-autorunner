@@ -298,7 +298,7 @@ def _default_discord_bot_section() -> Dict[str, Any]:
             "max_voice_bytes": 10_000_000,
         },
         "dispatch": {
-            "handler_timeout_seconds": None,
+            "handler_timeout_seconds": 120.0,
             "handler_stalled_warning_seconds": 60.0,
         },
     }

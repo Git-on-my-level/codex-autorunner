@@ -2,6 +2,29 @@
 
 Discord bot surface and adapters.
 
+## Interaction Lifecycle
+
+All Discord interactions follow a two-phase lifecycle:
+
+1. **Ingress** (`InteractionIngress`): normalizes the interaction, checks
+   authorization via collaboration policy, and emits the initial response or
+   defer.  Ingress runs on the gateway hot path and **never** executes business
+   logic.  Timing is recorded from `interaction_created_at` through ack.
+
+2. **Background execution** (`CommandRunner`): after ingress acknowledges the
+   interaction, the runner dispatches it off the gateway hot path with per-command
+   timeout enforcement (default 120 s), stall warnings (default 60 s), and full
+   lifecycle telemetry.
+
+Timeout and stall thresholds are configurable under `discord_bot.dispatch`:
+
+```yaml
+discord_bot:
+  dispatch:
+    handler_timeout_seconds: 120
+    handler_stalled_warning_seconds: 60
+```
+
 ## Setup
 
 1. Create a Discord application and bot in the Discord Developer Portal.

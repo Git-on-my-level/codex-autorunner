@@ -8,22 +8,7 @@ from typing import Any, Optional
 from ...core.logging_utils import log_event
 from ...integrations.chat.command_ingress import canonicalize_command_ingress
 from .errors import DiscordTransientError
-from .interactions import (
-    extract_autocomplete_command_context,
-    extract_channel_id,
-    extract_command_path_and_options,
-    extract_component_custom_id,
-    extract_component_values,
-    extract_guild_id,
-    extract_interaction_id,
-    extract_interaction_token,
-    extract_modal_custom_id,
-    extract_modal_values,
-    extract_user_id,
-    is_autocomplete_interaction,
-    is_component_interaction,
-    is_modal_submit_interaction,
-)
+from .ingress import CommandSpec, IngressContext, IngressTiming, InteractionKind
 
 TICKETS_FILTER_SELECT_ID = "tickets_filter_select"
 TICKETS_SELECT_ID = "tickets_select"
@@ -36,134 +21,6 @@ UPDATE_CONFIRM_PREFIX = "update_confirm"
 UPDATE_CANCEL_PREFIX = "update_cancel"
 REVIEW_COMMIT_SELECT_ID = "review_commit_select"
 FLOW_ACTION_SELECT_PREFIX = "flow_action_select"
-
-
-async def handle_interaction(
-    service: Any,
-    interaction_payload: dict[str, Any],
-) -> None:
-    if is_modal_submit_interaction(interaction_payload):
-        await _handle_modal_submit(service, interaction_payload)
-        return
-    if is_component_interaction(interaction_payload):
-        await _handle_component_from_payload(service, interaction_payload)
-        return
-    if is_autocomplete_interaction(interaction_payload):
-        await _handle_autocomplete_from_payload(service, interaction_payload)
-        return
-
-    interaction_id = extract_interaction_id(interaction_payload)
-    interaction_token = extract_interaction_token(interaction_payload)
-    channel_id = extract_channel_id(interaction_payload)
-    guild_id = extract_guild_id(interaction_payload)
-    user_id = extract_user_id(interaction_payload)
-
-    if not interaction_id or not interaction_token or not channel_id:
-        service._logger.warning(
-            "handle_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-            bool(interaction_id),
-            bool(interaction_token),
-            bool(channel_id),
-        )
-        return
-
-    policy_result = service._evaluate_interaction_collaboration_policy(
-        channel_id=channel_id,
-        guild_id=guild_id,
-        user_id=user_id,
-    )
-    if not policy_result.command_allowed:
-        service._log_collaboration_policy_result(
-            channel_id=channel_id,
-            guild_id=guild_id,
-            user_id=user_id,
-            interaction_id=interaction_id,
-            result=policy_result,
-        )
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "This Discord command is not authorized for this channel/user/guild.",
-        )
-        return
-
-    command_path, options = extract_command_path_and_options(interaction_payload)
-    ingress = canonicalize_command_ingress(
-        command_path=command_path,
-        options=options,
-    )
-    if ingress is None:
-        service._logger.warning(
-            "handle_interaction: failed to canonicalize command ingress (command_path=%s, options=%s)",
-            command_path,
-            options,
-        )
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "I could not parse this interaction. Please retry the command.",
-        )
-        return
-
-    ingress = replace(
-        ingress,
-        command_path=service._normalize_discord_command_path(ingress.command_path),
-    )
-    prepared = await service._prepare_command_interaction_or_abort(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-        command_path=ingress.command_path,
-        timing="dispatch",
-    )
-    if not prepared:
-        return
-
-    try:
-        if ingress.command_path[:1] == ("car",):
-            await service._handle_car_command(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                guild_id=guild_id,
-                user_id=user_id,
-                command_path=ingress.command_path,
-                options=ingress.options,
-            )
-            return
-
-        if ingress.command_path[:1] == ("pma",):
-            await service._handle_pma_command(
-                interaction_id,
-                interaction_token,
-                channel_id=channel_id,
-                guild_id=guild_id,
-                command_path=ingress.command_path,
-                options=ingress.options,
-            )
-            return
-
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "Command not implemented yet for Discord.",
-        )
-    except DiscordTransientError as exc:
-        user_msg = exc.user_message or "An error occurred. Please try again later."
-        await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
-    except Exception as exc:  # intentional: top-level interaction error handler
-        log_event(
-            service._logger,
-            logging.ERROR,
-            "discord.interaction.unhandled_error",
-            command_path=ingress.command,
-            channel_id=channel_id,
-            exc=exc,
-        )
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "An unexpected error occurred. Please try again later.",
-        )
 
 
 async def handle_normalized_interaction(
@@ -225,17 +82,19 @@ async def handle_normalized_interaction(
                 "I could not identify this interaction action. Please retry.",
             )
             return
-        await handle_component_interaction(
-            service,
+        ctx = IngressContext(
             interaction_id=interaction_id,
             interaction_token=interaction_token,
             channel_id=channel_id,
-            custom_id=custom_id,
-            values=payload_data.get("values"),
             guild_id=payload_data.get("guild_id"),
             user_id=event.from_user_id,
+            kind=InteractionKind.COMPONENT,
+            custom_id=custom_id,
+            values=payload_data.get("values"),
             message_id=context.message_id,
+            timing=IngressTiming(),
         )
+        await execute_ingressed_interaction(service, ctx, payload_data)
         return
 
     if payload_data.get("type") == "modal_submit":
@@ -243,13 +102,18 @@ async def handle_normalized_interaction(
         modal_values_raw = payload_data.get("values")
         custom_id = custom_id_raw if isinstance(custom_id_raw, str) else ""
         modal_values = modal_values_raw if isinstance(modal_values_raw, dict) else {}
-        await service._handle_ticket_modal_submit(
-            interaction_id,
-            interaction_token,
+        ctx = IngressContext(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
             channel_id=channel_id,
+            guild_id=payload_data.get("guild_id"),
+            user_id=event.from_user_id,
+            kind=InteractionKind.MODAL_SUBMIT,
             custom_id=custom_id,
-            values=modal_values,
+            modal_values=modal_values,
+            timing=IngressTiming(),
         )
+        await execute_ingressed_interaction(service, ctx, payload_data)
         return
 
     if payload_data.get("type") == "autocomplete":
@@ -274,15 +138,25 @@ async def handle_normalized_interaction(
             if isinstance(payload_data.get("options"), dict)
             else {}
         )
-        await service._handle_command_autocomplete(
-            interaction_id,
-            interaction_token,
+        ctx = IngressContext(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
             channel_id=channel_id,
-            command_path=command_path,
-            options=options,
+            guild_id=payload_data.get("guild_id"),
+            user_id=event.from_user_id,
+            kind=InteractionKind.AUTOCOMPLETE,
+            command_spec=CommandSpec(
+                path=command_path,
+                options=options,
+                ack_policy=None,
+                ack_timing="dispatch",
+                requires_workspace=False,
+            ),
             focused_name=focused_name,
             focused_value=focused_value,
+            timing=IngressTiming(),
         )
+        await execute_ingressed_interaction(service, ctx, payload_data)
         return
 
     ingress = canonicalize_command_ingress(
@@ -366,16 +240,16 @@ async def handle_normalized_interaction(
 
 async def handle_component_interaction(
     service: Any,
-    *,
-    interaction_id: str,
-    interaction_token: str,
-    channel_id: str,
-    custom_id: str,
-    values: Optional[list[str]] = None,
-    guild_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    message_id: Optional[str] = None,
+    ctx: IngressContext,
 ) -> None:
+    interaction_id = ctx.interaction_id
+    interaction_token = ctx.interaction_token
+    channel_id = ctx.channel_id
+    custom_id = ctx.custom_id or ""
+    values = ctx.values
+    guild_id = ctx.guild_id
+    user_id = ctx.user_id
+    message_id = ctx.message_id
     try:
         if custom_id == TICKETS_FILTER_SELECT_ID:
             await service._handle_ticket_filter_component(
@@ -593,16 +467,7 @@ async def handle_component_interaction(
             return
 
         if custom_id.startswith(f"{FLOW_ACTION_SELECT_PREFIX}:"):
-            await _handle_flow_action_select(
-                service,
-                interaction_id=interaction_id,
-                interaction_token=interaction_token,
-                channel_id=channel_id,
-                custom_id=custom_id,
-                values=values,
-                guild_id=guild_id,
-                user_id=user_id,
-            )
+            await _handle_flow_action_select(service, ctx)
             return
 
         if custom_id.startswith("flow:"):
@@ -697,16 +562,17 @@ async def handle_component_interaction(
 
 async def _handle_flow_action_select(
     service: Any,
-    *,
-    interaction_id: str,
-    interaction_token: str,
-    channel_id: str,
-    custom_id: str,
-    values: Optional[list[str]],
-    guild_id: Optional[str],
-    user_id: Optional[str],
+    ctx: IngressContext,
 ) -> None:
     from ...core.flows import FLOW_ACTIONS_WITH_RUN_PICKER
+
+    interaction_id = ctx.interaction_id
+    interaction_token = ctx.interaction_token
+    channel_id = ctx.channel_id
+    custom_id = ctx.custom_id or ""
+    values = ctx.values
+    guild_id = ctx.guild_id
+    user_id = ctx.user_id
 
     action = custom_id.split(":", 1)[1].strip().lower()
     if not values:
@@ -817,175 +683,107 @@ async def _handle_flow_action_select(
         return
 
 
-async def _handle_component_from_payload(
+async def execute_ingressed_interaction(
     service: Any,
-    interaction_payload: dict[str, Any],
+    ctx: IngressContext,
+    payload: dict[str, Any],
 ) -> None:
-    interaction_id = extract_interaction_id(interaction_payload)
-    interaction_token = extract_interaction_token(interaction_payload)
-    channel_id = extract_channel_id(interaction_payload)
-    user_id = extract_user_id(interaction_payload)
+    """Route an ingress-acknowledged interaction to its handler.
 
-    if not interaction_id or not interaction_token or not channel_id:
-        service._logger.warning(
-            "handle_component_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-            bool(interaction_id),
-            bool(interaction_token),
-            bool(channel_id),
-        )
-        return
+    Unlike handle_normalized_interaction, this entry point skips authz checks
+    and ack/defer because ingress already completed those steps.  It is the
+    required execution path for interactions submitted to the CommandRunner.
+    """
+    interaction_id = ctx.interaction_id
+    interaction_token = ctx.interaction_token
+    channel_id = ctx.channel_id
 
-    policy_result = service._evaluate_interaction_collaboration_policy(
-        channel_id=channel_id,
-        guild_id=extract_guild_id(interaction_payload),
-        user_id=user_id,
-    )
-    if not policy_result.command_allowed:
-        service._log_collaboration_policy_result(
+    if ctx.kind == InteractionKind.AUTOCOMPLETE:
+        command_path = ctx.command_spec.path if ctx.command_spec else ()
+        options = ctx.command_spec.options if ctx.command_spec else {}
+        await service._handle_command_autocomplete(
+            interaction_id,
+            interaction_token,
             channel_id=channel_id,
-            guild_id=extract_guild_id(interaction_payload),
-            user_id=user_id,
-            interaction_id=interaction_id,
-            result=policy_result,
+            command_path=command_path,
+            options=options,
+            focused_name=ctx.focused_name,
+            focused_value=ctx.focused_value or "",
         )
-        await service._respond_ephemeral(
+        return
+
+    if ctx.kind == InteractionKind.COMPONENT:
+        if not ctx.custom_id:
+            await service._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "I could not identify this interaction action. Please retry.",
+            )
+            return
+        await handle_component_interaction(service, ctx)
+        return
+
+    if ctx.kind == InteractionKind.MODAL_SUBMIT:
+        await service._handle_ticket_modal_submit(
             interaction_id,
             interaction_token,
-            "This Discord interaction is not authorized.",
-        )
-        return
-
-    custom_id = extract_component_custom_id(interaction_payload)
-    if not custom_id:
-        service._logger.debug(
-            "handle_component_interaction: missing custom_id (interaction_id=%s)",
-            interaction_id,
-        )
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "I could not identify this interaction action. Please retry.",
-        )
-        return
-
-    interaction_message_id: Optional[str] = None
-    interaction_message = interaction_payload.get("message")
-    if isinstance(interaction_message, dict):
-        message_id_raw = interaction_message.get("id")
-        if isinstance(message_id_raw, str) and message_id_raw.strip():
-            interaction_message_id = message_id_raw.strip()
-
-    values = extract_component_values(interaction_payload)
-
-    await handle_component_interaction(
-        service,
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-        channel_id=channel_id,
-        custom_id=custom_id,
-        values=values,
-        guild_id=extract_guild_id(interaction_payload),
-        user_id=user_id,
-        message_id=interaction_message_id,
-    )
-
-
-async def _handle_modal_submit(
-    service: Any,
-    interaction_payload: dict[str, Any],
-) -> None:
-    interaction_id = extract_interaction_id(interaction_payload)
-    interaction_token = extract_interaction_token(interaction_payload)
-    channel_id = extract_channel_id(interaction_payload)
-
-    if not interaction_id or not interaction_token or not channel_id:
-        service._logger.warning(
-            "handle_modal_submit_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-            bool(interaction_id),
-            bool(interaction_token),
-            bool(channel_id),
-        )
-        return
-
-    policy_result = service._evaluate_interaction_collaboration_policy(
-        channel_id=channel_id,
-        guild_id=extract_guild_id(interaction_payload),
-        user_id=extract_user_id(interaction_payload),
-    )
-    if not policy_result.command_allowed:
-        service._log_collaboration_policy_result(
             channel_id=channel_id,
-            guild_id=extract_guild_id(interaction_payload),
-            user_id=extract_user_id(interaction_payload),
+            custom_id=ctx.custom_id or "",
+            values=ctx.modal_values or {},
+        )
+        return
+
+    command_path = ctx.command_spec.path if ctx.command_spec else ()
+    options = ctx.command_spec.options if ctx.command_spec else {}
+    if not command_path:
+        await service._respond_ephemeral(
+            interaction_id,
+            interaction_token,
+            "I could not parse this interaction. Please retry the command.",
+        )
+        return
+
+    try:
+        if command_path[:1] == ("car",):
+            await service._handle_car_command(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                guild_id=ctx.guild_id,
+                user_id=ctx.user_id,
+                command_path=command_path,
+                options=options,
+            )
+        elif command_path[:1] == ("pma",):
+            await service._handle_pma_command(
+                interaction_id,
+                interaction_token,
+                channel_id=channel_id,
+                guild_id=ctx.guild_id,
+                command_path=command_path,
+                options=options,
+            )
+        else:
+            await service._respond_ephemeral(
+                interaction_id,
+                interaction_token,
+                "Command not implemented yet for Discord.",
+            )
+    except DiscordTransientError as exc:
+        user_msg = exc.user_message or "An error occurred. Please try again later."
+        await service._respond_ephemeral(interaction_id, interaction_token, user_msg)
+    except Exception as exc:
+        log_event(
+            service._logger,
+            logging.ERROR,
+            "discord.runner.handler_error",
+            command_path=command_path,
+            channel_id=channel_id,
             interaction_id=interaction_id,
-            result=policy_result,
+            exc=exc,
         )
         await service._respond_ephemeral(
             interaction_id,
             interaction_token,
-            "This Discord interaction is not authorized.",
+            "An unexpected error occurred. Please try again later.",
         )
-        return
-
-    custom_id = extract_modal_custom_id(interaction_payload)
-    if not custom_id:
-        await service._respond_ephemeral(
-            interaction_id,
-            interaction_token,
-            "I could not identify this modal submission. Please retry.",
-        )
-        return
-
-    values = extract_modal_values(interaction_payload)
-    await service._handle_ticket_modal_submit(
-        interaction_id,
-        interaction_token,
-        channel_id=channel_id,
-        custom_id=custom_id,
-        values=values,
-    )
-
-
-async def _handle_autocomplete_from_payload(
-    service: Any,
-    interaction_payload: dict[str, Any],
-) -> None:
-    interaction_id = extract_interaction_id(interaction_payload)
-    interaction_token = extract_interaction_token(interaction_payload)
-    channel_id = extract_channel_id(interaction_payload)
-
-    if not interaction_id or not interaction_token or not channel_id:
-        service._logger.warning(
-            "handle_autocomplete_interaction: missing required fields (interaction_id=%s, token=%s, channel=%s)",
-            bool(interaction_id),
-            bool(interaction_token),
-            bool(channel_id),
-        )
-        return
-
-    policy_result = service._evaluate_interaction_collaboration_policy(
-        channel_id=channel_id,
-        guild_id=extract_guild_id(interaction_payload),
-        user_id=extract_user_id(interaction_payload),
-    )
-    if not policy_result.command_allowed:
-        await service._respond_autocomplete(
-            interaction_id, interaction_token, choices=[]
-        )
-        return
-
-    (
-        command_path,
-        options,
-        focused_name,
-        focused_value,
-    ) = extract_autocomplete_command_context(interaction_payload)
-    await service._handle_command_autocomplete(
-        interaction_id,
-        interaction_token,
-        channel_id=channel_id,
-        command_path=command_path,
-        options=options,
-        focused_name=focused_name,
-        focused_value=focused_value,
-    )

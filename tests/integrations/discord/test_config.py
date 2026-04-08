@@ -206,7 +206,7 @@ def test_discord_bot_config_media_invalid_voice_raises(tmp_path) -> None:
 
 def test_discord_bot_config_dispatch_defaults(tmp_path) -> None:
     cfg = DiscordBotConfig.from_raw(root=tmp_path, raw={"enabled": False})
-    assert cfg.dispatch.handler_timeout_seconds is None
+    assert cfg.dispatch.handler_timeout_seconds == 120.0
     assert cfg.dispatch.handler_stalled_warning_seconds == 60.0
 
 

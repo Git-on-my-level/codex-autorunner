@@ -53,6 +53,7 @@ Mapping the conceptual layers to the codebase:
 - **Engine**: `src/codex_autorunner/core/`. Handles the core loop, state, and locking.
 - **Control Plane**: `.codex-autorunner/` (files), `tickets/` (python).
 - **Adapters**: `src/codex_autorunner/integrations/` (GitHub, Telegram, App Server).
+  - **Discord interaction runtime**: ingress (`ingress.py`) -> command runner (`command_runner.py`) -> interaction dispatch (`interaction_dispatch.py`).  Two-phase lifecycle: ingress acknowledges on the gateway hot path, then the runner executes the handler in the background with timeout enforcement.
 - **Surfaces**:
   - **Hub**: Supervises multiple repos/worktrees (primary interface for users).
   - **Server/UI**: `src/codex_autorunner/server.py` (FastAPI), `static/`.

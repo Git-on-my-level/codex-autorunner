@@ -35,6 +35,21 @@ UPDATE_CONFIRM_PREFIX = "update_confirm"
 UPDATE_CANCEL_PREFIX = "update_cancel"
 
 
+async def _interaction_deferred(
+    service: Any,
+    interaction_id: str,
+    interaction_token: str,
+) -> bool:
+    if service._prepared_interaction_policy(interaction_token) is not None:
+        return True
+    return bool(
+        await service._defer_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+        )
+    )
+
+
 def _update_thread_blocks_restart_warning(thread: Any) -> bool:
     thread_kind = str(getattr(thread, "thread_kind", "") or "").strip().lower()
     return thread_kind != "ticket_flow"
@@ -237,9 +252,10 @@ async def handle_car_update(
             interaction_token=interaction_token,
         )
         if component_response
-        else await service._defer_ephemeral(
-            interaction_id=interaction_id,
-            interaction_token=interaction_token,
+        else await _interaction_deferred(
+            service,
+            interaction_id,
+            interaction_token,
         )
     )
     if not confirmed and _update_target_restarts_surface(
@@ -430,10 +446,7 @@ async def handle_car_update_status(
             components=[],
         )
         return
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
     status = await asyncio.to_thread(read_status)
     if not isinstance(status, dict):
         status = None
@@ -455,10 +468,7 @@ async def handle_car_logout(
 ) -> None:
     from ..service import log_event
 
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
     client = await service._client_for_workspace(str(workspace_root))
     if client is None:
         await service._send_or_respond_ephemeral(
@@ -517,10 +527,7 @@ async def handle_car_feedback(
         )
         return
 
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
     client = await service._client_for_workspace(str(workspace_root))
     if client is None:
         await service._send_or_respond_ephemeral(
@@ -628,10 +635,7 @@ async def handle_car_mention(
         )
         return
 
-    deferred = await service._defer_ephemeral(
-        interaction_id=interaction_id,
-        interaction_token=interaction_token,
-    )
+    deferred = await _interaction_deferred(service, interaction_id, interaction_token)
     max_bytes = 100000
     try:
         data = path.read_bytes()

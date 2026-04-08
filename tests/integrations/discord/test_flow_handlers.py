@@ -912,6 +912,74 @@ async def test_flow_start_reuses_active_or_paused_run(
 
 
 @pytest.mark.anyio
+async def test_flow_start_acknowledges_before_slow_start_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = _workspace(tmp_path)
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id=None,
+    )
+
+    flow_service = _FlowServiceStub()
+    rest = _FakeRest()
+    observed: dict[str, Any] = {}
+
+    async def _slow_start_flow_run(
+        _flow_target_id: str,
+        *,
+        input_data: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+        run_id: str | None = None,
+    ) -> SimpleNamespace:
+        flow_service.start_calls.append(
+            {
+                "input_data": input_data or {},
+                "metadata": metadata or {},
+                "run_id": run_id,
+            }
+        )
+        observed["deferred_type"] = (
+            rest.interaction_responses[0]["payload"]["type"]
+            if rest.interaction_responses
+            else None
+        )
+        await asyncio.sleep(0.01)
+        return SimpleNamespace(run_id="run-slow", status="running")
+
+    flow_service.start_flow_run = _slow_start_flow_run  # type: ignore[method-assign]
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.service.build_ticket_flow_orchestration_service",
+        lambda *, workspace_root: flow_service,
+    )
+
+    gateway = _FakeGateway([_flow_interaction(name="start", options=[])])
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    try:
+        await service.run_forever()
+        assert observed["deferred_type"] == 5
+        assert len(flow_service.start_calls) == 1
+        assert len(rest.followup_messages) == 1
+        content = rest.followup_messages[0]["payload"]["content"]
+        assert "Started ticket_flow run run-slow." in content
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_flow_restart_starts_new_run_for_failed_flow(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
