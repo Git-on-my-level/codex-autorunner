@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -82,7 +83,7 @@ def _config(root: Path) -> DiscordBotConfig:
 
 @pytest.mark.anyio
 async def test_message_create_records_channel_directory_with_names(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     service = DiscordBotService(
         _config(tmp_path),
@@ -91,13 +92,7 @@ async def test_message_create_records_channel_directory_with_names(
         gateway_client=_FakeGateway(),
     )
 
-    async def _noop_dispatch(_event) -> None:
-        return None
-
-    monkeypatch.setattr(service, "_dispatch_chat_event", _noop_dispatch)
-
-    await service._on_dispatch(
-        "MESSAGE_CREATE",
+    await service._record_channel_directory_seen_from_message_payload(
         {
             "id": "m-1",
             "channel_id": "channel-1",
@@ -122,7 +117,7 @@ async def test_message_create_records_channel_directory_with_names(
 
 @pytest.mark.anyio
 async def test_message_create_records_channel_directory_with_id_fallbacks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     service = DiscordBotService(
         _config(tmp_path),
@@ -131,13 +126,7 @@ async def test_message_create_records_channel_directory_with_id_fallbacks(
         gateway_client=_FakeGateway(),
     )
 
-    async def _noop_dispatch(_event) -> None:
-        return None
-
-    monkeypatch.setattr(service, "_dispatch_chat_event", _noop_dispatch)
-
-    await service._on_dispatch(
-        "MESSAGE_CREATE",
+    await service._record_channel_directory_seen_from_message_payload(
         {
             "id": "m-2",
             "channel_id": "channel-9",
@@ -160,7 +149,7 @@ async def test_message_create_records_channel_directory_with_id_fallbacks(
 
 @pytest.mark.anyio
 async def test_message_create_resolves_channel_directory_names_via_rest(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     rest = _FakeRest()
     rest.channels_by_id["channel-9"] = {
@@ -177,11 +166,6 @@ async def test_message_create_resolves_channel_directory_names_via_rest(
         gateway_client=_FakeGateway(),
     )
 
-    async def _noop_dispatch(_event) -> None:
-        return None
-
-    monkeypatch.setattr(service, "_dispatch_chat_event", _noop_dispatch)
-
     payload = {
         "id": "m-3",
         "channel_id": "channel-9",
@@ -189,8 +173,8 @@ async def test_message_create_resolves_channel_directory_names_via_rest(
         "content": "hello",
         "author": {"id": "user-1", "bot": False},
     }
-    await service._on_dispatch("MESSAGE_CREATE", dict(payload))
-    await service._on_dispatch("MESSAGE_CREATE", dict(payload))
+    await service._record_channel_directory_seen_from_message_payload(dict(payload))
+    await service._record_channel_directory_seen_from_message_payload(dict(payload))
 
     entries = ChannelDirectoryStore(tmp_path).list_entries(limit=None)
     assert len(entries) == 1
@@ -203,7 +187,7 @@ async def test_message_create_resolves_channel_directory_names_via_rest(
 
 @pytest.mark.anyio
 async def test_message_create_uses_negative_lookup_cache_for_missing_names(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     rest = _FakeRest()
     service = DiscordBotService(
@@ -213,11 +197,6 @@ async def test_message_create_uses_negative_lookup_cache_for_missing_names(
         gateway_client=_FakeGateway(),
     )
 
-    async def _noop_dispatch(_event) -> None:
-        return None
-
-    monkeypatch.setattr(service, "_dispatch_chat_event", _noop_dispatch)
-
     payload = {
         "id": "m-4",
         "channel_id": "channel-missing",
@@ -225,8 +204,8 @@ async def test_message_create_uses_negative_lookup_cache_for_missing_names(
         "content": "hello",
         "author": {"id": "user-1", "bot": False},
     }
-    await service._on_dispatch("MESSAGE_CREATE", dict(payload))
-    await service._on_dispatch("MESSAGE_CREATE", dict(payload))
+    await service._record_channel_directory_seen_from_message_payload(dict(payload))
+    await service._record_channel_directory_seen_from_message_payload(dict(payload))
 
     entries = ChannelDirectoryStore(tmp_path).list_entries(limit=None)
     assert len(entries) == 1
@@ -234,3 +213,49 @@ async def test_message_create_uses_negative_lookup_cache_for_missing_names(
     assert entry["display"] == "guild:guild-missing / #channel-missing"
     assert rest.get_channel_calls == ["channel-missing"]
     assert rest.get_guild_calls == ["guild-missing"]
+
+
+@pytest.mark.anyio
+async def test_message_create_dispatch_does_not_wait_for_channel_directory_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=_FakeRest(),
+        gateway_client=_FakeGateway(),
+    )
+
+    lookup_started = asyncio.Event()
+    release_lookup = asyncio.Event()
+    submitted_message_ids: list[str] = []
+
+    async def _slow_record(payload: dict[str, Any]) -> None:
+        lookup_started.set()
+        await release_lookup.wait()
+
+    def _submit_event(event: Any) -> None:
+        submitted_message_ids.append(event.message.message_id)
+
+    monkeypatch.setattr(
+        service,
+        "_record_channel_directory_seen_from_message_payload",
+        _slow_record,
+    )
+    monkeypatch.setattr(service._command_runner, "submit_event", _submit_event)
+
+    payload = {
+        "id": "m-hot-path",
+        "channel_id": "channel-1",
+        "guild_id": "guild-1",
+        "content": "hello",
+        "author": {"id": "user-1", "bot": False},
+    }
+
+    await asyncio.wait_for(service._on_dispatch("MESSAGE_CREATE", dict(payload)), 0.1)
+    await asyncio.wait_for(lookup_started.wait(), 0.1)
+
+    assert submitted_message_ids == ["m-hot-path"]
+
+    release_lookup.set()
+    await asyncio.sleep(0)

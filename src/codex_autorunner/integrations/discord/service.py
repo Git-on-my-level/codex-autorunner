@@ -3406,7 +3406,12 @@ class DiscordBotService:
                     )
             return
         if event_type == "MESSAGE_CREATE":
-            await self._record_channel_directory_seen_from_message_payload(payload)
+            # Keep MESSAGE_CREATE handling off the gateway hot path. Channel/guild
+            # name enrichment can perform Discord REST lookups and must not delay
+            # later interaction callbacks that need to ack within ~3 seconds.
+            self._spawn_task(
+                self._record_channel_directory_seen_from_message_payload(payload)
+            )
             message_event = self._chat_adapter.parse_message_event(payload)
             if message_event is not None:
                 self._command_runner.submit_event(message_event)
