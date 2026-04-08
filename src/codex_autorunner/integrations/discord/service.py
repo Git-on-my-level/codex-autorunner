@@ -244,7 +244,7 @@ from .flow_watchers import (
 )
 from .flow_watchers import watch_ticket_flow_pauses, watch_ticket_flow_terminals
 from .gateway import DiscordGatewayClient
-from .ingress import InteractionIngress
+from .ingress import InteractionIngress, InteractionKind
 from .interaction_dispatch import (
     handle_component_interaction as _dispatch_component_interaction,
 )
@@ -3387,10 +3387,22 @@ class DiscordBotService:
             if not ingress_result.accepted:
                 return
             if ingress_result.context is not None:
-                self._command_runner.submit_ingressed(
-                    ingress_result.context,
-                    payload,
-                )
+                # Components, modal submits, and autocomplete have a hard
+                # initial-response deadline, so they skip the shared FIFO.
+                if ingress_result.context.kind in (
+                    InteractionKind.COMPONENT,
+                    InteractionKind.MODAL_SUBMIT,
+                    InteractionKind.AUTOCOMPLETE,
+                ):
+                    self._command_runner.submit(
+                        ingress_result.context,
+                        payload,
+                    )
+                else:
+                    self._command_runner.submit_ingressed(
+                        ingress_result.context,
+                        payload,
+                    )
             return
         if event_type == "MESSAGE_CREATE":
             await self._record_channel_directory_seen_from_message_payload(payload)

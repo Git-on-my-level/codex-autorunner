@@ -9,6 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -5516,6 +5517,147 @@ async def test_on_dispatch_backgrounds_interaction_handling(
         release.set()
         await asyncio.wait_for(service._command_runner.shutdown(), timeout=1.0)
     finally:
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("payload", "expected_direct"),
+    [
+        (
+            _interaction_path(
+                command_path=("car", "session", "compact"),
+                options=[],
+            ),
+            False,
+        ),
+        (
+            _component_interaction(
+                custom_id="approval:abc:approve",
+                values=None,
+            ),
+            True,
+        ),
+        (
+            {
+                "id": "inter-modal-1",
+                "token": "token-modal-1",
+                "channel_id": "channel-1",
+                "guild_id": "guild-1",
+                "type": 5,
+                "member": {"user": {"id": "user-1"}},
+                "data": {
+                    "custom_id": "tickets_modal:abc",
+                    "components": [
+                        {
+                            "type": 18,
+                            "label": "Ticket",
+                            "component": {
+                                "type": 4,
+                                "custom_id": "ticket_body",
+                                "value": "body text",
+                            },
+                        }
+                    ],
+                },
+            },
+            True,
+        ),
+        (
+            _autocomplete_interaction_path(
+                command_path=("car", "bind"),
+                focused_name="workspace",
+                focused_value="codex",
+            ),
+            True,
+        ),
+    ],
+)
+async def test_on_dispatch_routes_deadline_bound_interactions_directly(
+    tmp_path: Path,
+    payload: dict[str, Any],
+    expected_direct: bool,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    direct_submit = MagicMock()
+    queued_submit = MagicMock()
+    service._command_runner.submit = direct_submit  # type: ignore[method-assign]
+    service._command_runner.submit_ingressed = queued_submit  # type: ignore[method-assign]
+
+    try:
+        await service._on_dispatch("INTERACTION_CREATE", payload)
+        if expected_direct:
+            direct_submit.assert_called_once()
+            queued_submit.assert_not_called()
+        else:
+            queued_submit.assert_called_once()
+            direct_submit.assert_not_called()
+    finally:
+        await service._shutdown()
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_autocomplete_bypasses_busy_ingressed_fifo(
+    tmp_path: Path,
+) -> None:
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    rest = _FakeRest()
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+    slash_started = asyncio.Event()
+    slash_release = asyncio.Event()
+    autocomplete_started = asyncio.Event()
+
+    async def _slow_handle_car_command(*_args: Any, **_kwargs: Any) -> None:
+        slash_started.set()
+        await slash_release.wait()
+
+    async def _fast_autocomplete(*_args: Any, **_kwargs: Any) -> None:
+        autocomplete_started.set()
+
+    service._handle_car_command = _slow_handle_car_command  # type: ignore[assignment]
+    service._handle_command_autocomplete = _fast_autocomplete  # type: ignore[assignment]
+
+    try:
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _interaction_path(
+                command_path=("car", "session", "compact"),
+                options=[],
+            ),
+        )
+        await asyncio.wait_for(slash_started.wait(), timeout=1.0)
+
+        await service._on_dispatch(
+            "INTERACTION_CREATE",
+            _autocomplete_interaction_path(
+                command_path=("car", "bind"),
+                focused_name="workspace",
+                focused_value="codex",
+            ),
+        )
+        await asyncio.wait_for(autocomplete_started.wait(), timeout=1.0)
+    finally:
+        slash_release.set()
         await service._shutdown()
         await store.close()
 
