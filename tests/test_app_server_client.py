@@ -384,6 +384,74 @@ async def test_item_completed_without_item_id_prunes_matching_stale_delta(
 
 
 @pytest.mark.anyio
+async def test_item_completed_without_item_id_clears_matching_active_item(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        state.active_item_ids.update({"item-1", "item-2"})
+        partial_delta = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "item-1",
+            "delta": "final",
+        }
+        completed_item_without_id = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "item": {"type": "agentMessage", "text": "final reply"},
+        }
+
+        await client._handle_notification_agent_message_delta(
+            {"method": "item/agentMessage/delta", "params": partial_delta},
+            partial_delta,
+        )
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": completed_item_without_id},
+            completed_item_without_id,
+        )
+
+        assert state.active_item_ids == {"item-2"}
+        assert state.agent_message_deltas == {}
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
+async def test_item_completed_without_item_id_clears_lone_active_item(
+    tmp_path: Path,
+) -> None:
+    client = CodexAppServerClient(fixture_command("basic"), cwd=tmp_path)
+    try:
+        state = client._ensure_turn_state("turn-1", "thread-1")
+        started_item = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "itemId": "tool-1",
+            "item": {"type": "commandExecution"},
+        }
+        completed_item_without_id = {
+            "turnId": "turn-1",
+            "threadId": "thread-1",
+            "item": {"type": "commandExecution"},
+        }
+
+        await client._handle_notification_item_started(
+            {"method": "item/started", "params": started_item},
+            started_item,
+        )
+        await client._handle_notification_item_completed(
+            {"method": "item/completed", "params": completed_item_without_id},
+            completed_item_without_id,
+        )
+
+        assert state.active_item_ids == set()
+    finally:
+        await client.close()
+
+
+@pytest.mark.anyio
 async def test_turn_completed_settles_before_returning_final_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -2048,6 +2048,7 @@ class CodexAppServerClient:
     ) -> None:
         item = params.get("item") if isinstance(params, dict) else None
         item_id = _extract_notification_item_id(params, decoded)
+        matched_active_item_id = item_id if isinstance(item_id, str) else None
         if item_id is not None:
             state.active_item_ids.discard(item_id)
         text: Optional[str] = None
@@ -2059,12 +2060,17 @@ class CodexAppServerClient:
             if isinstance(item_id, str):
                 delta_text = state.agent_message_deltas.pop(item_id, None)
             elif text:
-                _prune_unambiguous_stale_delta(
+                matched_active_item_id = _prune_unambiguous_stale_delta(
                     state.agent_message_deltas, completed_text=text
                 )
             if not text:
                 text = delta_text
             _append_agent_message_for_phase(state, text, phase=phase)
+        if item_id is None:
+            _discard_completed_active_item(
+                state.active_item_ids,
+                matched_item_id=matched_active_item_id,
+            )
         review_text = _extract_review_text(item)
         if review_text and review_text != text:
             _append_agent_message(state.agent_messages, review_text)
@@ -2680,10 +2686,10 @@ def _agent_message_deltas_as_list(agent_message_deltas: Dict[str, str]) -> list[
 
 def _prune_unambiguous_stale_delta(
     agent_message_deltas: Dict[str, str], *, completed_text: str
-) -> None:
+) -> Optional[str]:
     cleaned_completed = completed_text.strip()
     if not cleaned_completed:
-        return
+        return None
     matching_keys = [
         item_id
         for item_id, delta_text in agent_message_deltas.items()
@@ -2692,7 +2698,20 @@ def _prune_unambiguous_stale_delta(
         and cleaned_completed.startswith(delta_text.strip())
     ]
     if len(matching_keys) == 1:
-        agent_message_deltas.pop(matching_keys[0], None)
+        matched_item_id = matching_keys[0]
+        agent_message_deltas.pop(matched_item_id, None)
+        return matched_item_id
+    return None
+
+
+def _discard_completed_active_item(
+    active_item_ids: set[str], *, matched_item_id: Optional[str]
+) -> None:
+    if matched_item_id is not None:
+        active_item_ids.discard(matched_item_id)
+        return
+    if len(active_item_ids) == 1:
+        active_item_ids.clear()
 
 
 def _agent_messages_for_result(state: _TurnState) -> list[str]:
