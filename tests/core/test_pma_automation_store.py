@@ -271,6 +271,57 @@ def test_subscription_lane_id_flows_into_transition_wakeup(tmp_path) -> None:
     assert pending[0]["lane_id"] == "pma:lane-next"
 
 
+def test_create_subscription_accepts_singular_event_type_and_triggers_transition(
+    tmp_path,
+) -> None:
+    store = PmaAutomationStore(tmp_path)
+    subscription = store.create_subscription(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": "thread-1",
+            "lane_id": "pma:lane-next",
+        }
+    )["subscription"]
+
+    assert subscription["event_types"] == ["managed_thread_completed"]
+
+    result = store.notify_transition(
+        {
+            "event_type": "managed_thread_completed",
+            "thread_id": "thread-1",
+            "from_state": "running",
+            "to_state": "completed",
+            "transition_id": "managed-thread-1:completed",
+        }
+    )
+
+    assert result["matched"] == 1
+    assert result["created"] == 1
+    pending = store.list_pending_wakeups(limit=10)
+    assert len(pending) == 1
+    assert pending[0]["subscription_id"] == subscription["subscription_id"]
+    assert pending[0]["event_type"] == "managed_thread_completed"
+
+
+def test_create_subscription_warns_when_event_types_empty(
+    tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    store = PmaAutomationStore(tmp_path)
+
+    with caplog.at_level(
+        logging.WARNING, logger="codex_autorunner.core.pma_automation_store"
+    ):
+        subscription = store.create_subscription({"thread_id": "thread-empty"})[
+            "subscription"
+        ]
+
+    assert subscription["event_types"] == []
+    assert any(
+        "Creating PMA subscription with empty event_types" in record.getMessage()
+        for record in caplog.records
+    )
+
+
 def test_notify_once_subscription_cancels_after_first_match(tmp_path) -> None:
     store = PmaAutomationStore(tmp_path)
     subscription = store.create_subscription(

@@ -835,6 +835,33 @@ class PmaAutomationStore:
         return merged
 
     @staticmethod
+    def _normalize_subscription_event_types(
+        value: Any,
+        *,
+        singular: Any = None,
+    ) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+
+        def _append(candidate: Any) -> None:
+            text = _normalize_text(candidate)
+            if text is None:
+                return
+            lowered = text.lower()
+            if lowered in seen:
+                return
+            seen.add(lowered)
+            normalized.append(lowered)
+
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                _append(item)
+        else:
+            _append(value)
+        _append(singular)
+        return normalized
+
+    @staticmethod
     def _coerce_limit(value: Any) -> Optional[int]:
         if value is None:
             return None
@@ -863,6 +890,11 @@ class PmaAutomationStore:
         metadata: Optional[dict[str, Any]] = None,
     ) -> tuple[PmaLifecycleSubscription, bool]:
         key = _normalize_text(idempotency_key)
+        normalized_event_types = self._normalize_subscription_event_types(event_types)
+        if not normalized_event_types:
+            logger.warning(
+                "Creating PMA subscription with empty event_types; subscription will match all events"
+            )
         with file_lock(self._lock_path()):
             state, subscriptions, timers, wakeups = self._load_structured_unlocked()
             if key is not None:
@@ -872,7 +904,7 @@ class PmaAutomationStore:
                     if existing.idempotency_key == key:
                         return existing, True
             created = PmaLifecycleSubscription.create(
-                event_types=event_types,
+                event_types=normalized_event_types,
                 repo_id=repo_id,
                 run_id=run_id,
                 thread_id=thread_id,
@@ -894,7 +926,11 @@ class PmaAutomationStore:
     ) -> dict[str, Any]:
         data = self._coerce_payload(payload, kwargs)
         created, deduped = self.upsert_subscription(
-            event_types=_normalize_text_list(data.get("event_types")) or None,
+            event_types=self._normalize_subscription_event_types(
+                data.get("event_types"),
+                singular=data.get("event_type"),
+            )
+            or None,
             repo_id=_normalize_text(data.get("repo_id")),
             run_id=_normalize_text(data.get("run_id")),
             thread_id=_normalize_text(data.get("thread_id")),

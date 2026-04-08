@@ -2875,7 +2875,7 @@ def test_pma_automation_subscription_endpoints(hub_env) -> None:
             self.list_filters.append(dict(filters))
             return [{"subscription_id": "sub-1", "thread_id": "thread-1"}]
 
-        def delete_subscription(self, subscription_id: str) -> dict[str, Any]:
+        def cancel_subscription(self, subscription_id: str) -> dict[str, Any]:
             self.deleted_ids.append(subscription_id)
             return {"deleted": True}
 
@@ -2919,6 +2919,59 @@ def test_pma_automation_subscription_endpoints(hub_env) -> None:
         and fake_store.list_filters[0]["thread_id"] == "thread-1"
     )
     assert fake_store.deleted_ids == ["sub-1"]
+
+
+@pytest.mark.parametrize(
+    ("request_body", "expected_event_types"),
+    [
+        (
+            {
+                "event_type": "managed_thread_completed",
+                "thread_id": "thread-1",
+            },
+            ["managed_thread_completed"],
+        ),
+        (
+            {
+                "event_types": [
+                    "managed_thread_completed",
+                    "managed_thread_failed",
+                ],
+                "thread_id": "thread-2",
+            },
+            ["managed_thread_completed", "managed_thread_failed"],
+        ),
+    ],
+)
+def test_pma_automation_subscription_create_normalizes_event_type_aliases(
+    hub_env,
+    request_body: dict[str, Any],
+    expected_event_types: list[str],
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+
+    class FakeAutomationStore:
+        def __init__(self) -> None:
+            self.created_payloads: list[dict[str, Any]] = []
+
+        def create_subscription(self, payload: dict[str, Any]) -> dict[str, Any]:
+            self.created_payloads.append(dict(payload))
+            return {"subscription_id": "sub-event-types-1", **payload}
+
+    fake_store = FakeAutomationStore()
+    app.state.hub_supervisor.get_pma_automation_store = lambda: fake_store
+
+    with TestClient(app) as client:
+        create_resp = client.post("/hub/pma/subscriptions", json=request_body)
+
+    assert create_resp.status_code == 200
+    assert fake_store.created_payloads == [
+        {
+            "thread_id": request_body["thread_id"],
+            "event_types": expected_event_types,
+        }
+    ]
 
 
 def test_pma_automation_timer_endpoints(hub_env) -> None:
@@ -3027,7 +3080,7 @@ def test_pma_automation_subscription_alias_endpoint_supports_kwargs_only_store(
                 "lane_id": lane_id,
             }
 
-        def delete_subscription(self, subscription_id: str) -> bool:
+        def cancel_subscription(self, subscription_id: str) -> bool:
             self.deleted_ids.append(subscription_id)
             return True
 

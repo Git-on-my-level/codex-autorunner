@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from ...core.car_context import CarContextProfile
+from ...core.text_utils import _normalize_text
 from ...integrations.chat.approval_modes import normalize_approval_mode
 
 
@@ -798,6 +799,44 @@ class PmaAutomationSubscriptionCreateRequest(Payload):
     )
     reason: Optional[str] = None
     timestamp: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_event_type_inputs(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        data = dict(value)
+        normalized_event_types: list[str] = []
+        seen: set[str] = set()
+
+        def _append(candidate: Any) -> None:
+            text = _normalize_text(candidate)
+            if text is None:
+                return
+            lowered = text.lower()
+            if lowered in seen:
+                return
+            seen.add(lowered)
+            normalized_event_types.append(lowered)
+
+        plural_value = data.get("event_types", data.get("eventTypes"))
+        if isinstance(plural_value, (list, tuple, set)):
+            for item in plural_value:
+                _append(item)
+        else:
+            _append(plural_value)
+
+        _append(data.get("event_type"))
+        _append(data.get("eventType"))
+
+        data.pop("event_type", None)
+        data.pop("eventType", None)
+        data.pop("eventTypes", None)
+        if normalized_event_types:
+            data["event_types"] = normalized_event_types
+        elif "event_types" in data:
+            data["event_types"] = []
+        return data
 
 
 class PmaAutomationTimerCreateRequest(Payload):
