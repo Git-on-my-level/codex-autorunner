@@ -57,6 +57,15 @@ def _thread_followup_state_rank(state: str) -> int:
     return 99
 
 
+def _is_pma_self_thread(entry: Mapping[str, Any]) -> bool:
+    agent = str(entry.get("agent") or entry.get("agent_id") or "").strip().lower()
+    thread_kind = str(entry.get("thread_kind") or "").strip().lower()
+    resource_kind = str(entry.get("resource_kind") or "").strip().lower()
+    if thread_kind == "pma":
+        return True
+    return resource_kind == "agent_workspace" and agent.endswith("-pma")
+
+
 def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
     status = str(entry.get("status") or "").strip().lower()
     status_reason = str(entry.get("status_reason") or "").strip().lower()
@@ -71,6 +80,15 @@ def _thread_followup_semantics(entry: Mapping[str, Any]) -> dict[str, Any]:
 
     if status == "running":
         if is_stale:
+            if _is_pma_self_thread(entry):
+                return {
+                    "followup_state": "running_healthy",
+                    "operator_need": "none",
+                    "recommended_action": None,
+                    "why_selected": (
+                        "PMA self thread is still running; suppress hung-thread noise"
+                    ),
+                }
             return {
                 "followup_state": "attention_required",
                 "operator_need": "urgent",
@@ -487,6 +505,8 @@ def _build_thread_queue_items(
             is_stale = bool(
                 isinstance(freshness, Mapping) and freshness.get("is_stale") is True
             )
+            if is_stale and _is_pma_self_thread(entry):
+                continue
             if not is_stale:
                 continue
         repo_id = str(entry.get("repo_id") or "").strip()
