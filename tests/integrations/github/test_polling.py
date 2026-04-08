@@ -10,6 +10,7 @@ import codex_autorunner.core.scm_polling_watches as scm_polling_watches
 import codex_autorunner.integrations.github.polling as github_polling
 from codex_autorunner.core.orchestration.sqlite import open_orchestration_sqlite
 from codex_autorunner.core.pma_thread_store import PmaThreadStore
+from codex_autorunner.core.pr_binding_runtime import upsert_pr_binding
 from codex_autorunner.core.pr_bindings import PrBindingStore
 from codex_autorunner.core.scm_events import ScmEventStore
 from codex_autorunner.core.scm_polling_watches import ScmPollingWatchStore
@@ -1481,6 +1482,73 @@ def test_process_discovers_external_pr_binding_from_discord_bound_unregistered_w
     assert watch.workspace_root == str(repo_root.resolve())
 
 
+def test_process_uses_managed_thread_head_branch_hint_for_external_pr_discovery(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    repo_root = hub_root / "worktrees" / "repo-1--codex-1"
+    repo_root.mkdir(parents=True)
+    thread = PmaThreadStore(hub_root).create_thread(
+        "codex",
+        repo_root,
+        repo_id="repo-1",
+        metadata={"head_branch": "feature/non-ticket-flow"},
+    )
+
+    class _BranchHintGitHubServiceStub(_DiscoveringGitHubServiceStub):
+        def discover_pr_binding(self, *, branch=None, cwd=None):
+            _ = cwd
+            if branch != self._head_branch:
+                return None
+            return upsert_pr_binding(
+                self._hub_root,
+                provider="github",
+                repo_slug=self._repo_slug,
+                repo_id=self._repo_id,
+                pr_number=self._pr_number,
+                pr_state=self._pr_state,
+                head_branch=self._head_branch,
+                base_branch=self._base_branch,
+            )
+
+    def _factory(repo_root_arg: Path, raw_config=None) -> _BranchHintGitHubServiceStub:
+        return _BranchHintGitHubServiceStub(
+            repo_root_arg,
+            raw_config,
+            hub_root=hub_root,
+            repo_id="repo-1",
+            repo_slug="acme/widgets",
+            pr_number=44,
+            head_branch="feature/non-ticket-flow",
+            discover=True,
+        )
+
+    watch_store = ScmPollingWatchStore(hub_root)
+    service = GitHubScmPollingService(
+        hub_root,
+        raw_config=_polling_config(),
+        github_service_factory=_factory,
+        watch_store=watch_store,
+        event_store=ScmEventStore(hub_root),
+    )
+
+    result = service.process(limit=10)
+
+    assert result["candidate_workspaces"] == 1
+    assert result["bindings_discovered"] == 1
+    binding = PrBindingStore(hub_root).get_binding_by_pr(
+        provider="github",
+        repo_slug="acme/widgets",
+        pr_number=44,
+    )
+    assert binding is not None
+    assert binding.thread_target_id == thread["managed_thread_id"]
+    watch = watch_store.get_watch(provider="github", binding_id=binding.binding_id)
+    assert watch is not None
+    assert watch.state == "active"
+    assert watch.workspace_root == str(repo_root.resolve())
+
+
 def test_process_repairs_active_watch_workspace_root_without_resetting_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -1909,7 +1977,7 @@ def test_process_rotates_discovery_across_candidate_workspaces(
     monkeypatch.setattr(
         service,
         "_candidate_workspace_roots",
-        lambda: (list(roots), {}, {}),
+        lambda: (list(roots), {}, {}, {}),
     )
     monkeypatch.setattr(
         service,
@@ -2079,7 +2147,7 @@ def test_process_throttles_discovery_to_one_workspace_per_cycle(
     monkeypatch.setattr(
         service,
         "_candidate_workspace_roots",
-        lambda: (list(roots), {}, {}),
+        lambda: (list(roots), {}, {}, {}),
     )
     monkeypatch.setattr(service, "_thread_activity", lambda: ({}, {}))
     monkeypatch.setattr(
@@ -2133,7 +2201,7 @@ def test_process_rotates_single_workspace_discovery_across_cycles(
     )
 
     monkeypatch.setattr(
-        service, "_candidate_workspace_roots", lambda: (list(roots), {}, {})
+        service, "_candidate_workspace_roots", lambda: (list(roots), {}, {}, {})
     )
     monkeypatch.setattr(service, "_thread_activity", lambda: ({}, {}))
 

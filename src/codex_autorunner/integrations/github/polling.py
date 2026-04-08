@@ -41,6 +41,8 @@ _RATE_LIMIT_QUOTA_CACHE_TTL_SECONDS = 10 * 60
 _RATE_LIMIT_QUOTA_NEAR_LIMIT_FALLBACK_TTL_SECONDS = 60
 _RATE_LIMIT_QUOTA_ERROR_CACHE_TTL_SECONDS = 30
 _RATE_LIMIT_RESOURCES = ("graphql", "core")
+_THREAD_BRANCH_KEYS = ("head_branch", "branch", "git_branch")
+_THREAD_CONTEXT_KEYS = ("manual_context", "scm", "scm_context", "context")
 _LOGGER = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -95,6 +97,21 @@ def _normalize_non_negative_int(value: Any) -> Optional[int]:
     except (TypeError, ValueError):
         return None
     return normalized if normalized >= 0 else None
+
+
+def _thread_branch_hint(thread: Mapping[str, Any]) -> Optional[str]:
+    metadata = _mapping(thread.get("metadata"))
+    contexts: list[Mapping[str, Any]] = [metadata]
+    for key in _THREAD_CONTEXT_KEYS:
+        nested = _mapping(metadata.get(key))
+        if nested:
+            contexts.append(nested)
+    for context in contexts:
+        for key in _THREAD_BRANCH_KEYS:
+            branch = _normalize_text(context.get(key))
+            if branch is not None:
+                return branch
+    return None
 
 
 def _parse_optional_iso(value: Any) -> Optional[datetime]:
@@ -749,9 +766,12 @@ class GitHubScmPollingService:
         if not polling_config.enabled:
             return counts
 
-        candidate_roots, workspaces_by_repo_id, workspaces_by_thread_id = (
-            self._candidate_workspace_roots()
-        )
+        (
+            candidate_roots,
+            workspaces_by_repo_id,
+            workspaces_by_thread_id,
+            workspace_branch_hints,
+        ) = self._candidate_workspace_roots()
         counts["candidate_workspaces"] = len(candidate_roots)
         thread_activity_by_thread, workspace_activity = self._thread_activity()
 
@@ -782,7 +802,10 @@ class GitHubScmPollingService:
                             else None
                         ),
                     )
-                    binding = github.discover_pr_binding(cwd=workspace_root)
+                    binding = github.discover_pr_binding(
+                        branch=workspace_branch_hints.get(workspace_root),
+                        cwd=workspace_root,
+                    )
                 except Exception:
                     _LOGGER.warning(
                         "Failed discovering polling binding for workspace %s",
@@ -1355,17 +1378,19 @@ class GitHubScmPollingService:
 
     def _candidate_workspace_roots(
         self,
-    ) -> tuple[list[Path], dict[str, list[Path]], dict[str, Path]]:
+    ) -> tuple[list[Path], dict[str, list[Path]], dict[str, Path], dict[Path, str]]:
         roots: list[Path] = []
         seen_roots: set[Path] = set()
         workspaces_by_repo_id: dict[str, list[Path]] = {}
         workspaces_by_thread_id: dict[str, Path] = {}
+        workspace_branch_hints: dict[Path, str] = {}
 
         def add_root(
             workspace_root: Path,
             *,
             repo_id: Optional[str] = None,
             thread_target_id: Optional[str] = None,
+            branch_hint: Optional[str] = None,
         ) -> None:
             resolved_root = workspace_root.resolve()
             if not resolved_root.exists() or not resolved_root.is_dir():
@@ -1381,6 +1406,12 @@ class GitHubScmPollingService:
             normalized_thread_target_id = _normalize_text(thread_target_id)
             if normalized_thread_target_id is not None:
                 workspaces_by_thread_id[normalized_thread_target_id] = resolved_root
+            normalized_branch_hint = _normalize_text(branch_hint)
+            if (
+                normalized_branch_hint is not None
+                and resolved_root not in workspace_branch_hints
+            ):
+                workspace_branch_hints[resolved_root] = normalized_branch_hint
 
         manifest_path = self._hub_root / ".codex-autorunner" / "manifest.yml"
         if manifest_path.exists():
@@ -1409,6 +1440,7 @@ class GitHubScmPollingService:
                 Path(workspace_root),
                 repo_id=_normalize_text(thread.get("repo_id")),
                 thread_target_id=_normalize_text(thread.get("managed_thread_id")),
+                branch_hint=_thread_branch_hint(thread),
             )
         try:
             preferred_chat_sources = (
@@ -1421,7 +1453,12 @@ class GitHubScmPollingService:
             preferred_chat_sources = {}
         for workspace_root in preferred_chat_sources:
             add_root(Path(workspace_root))
-        return roots, workspaces_by_repo_id, workspaces_by_thread_id
+        return (
+            roots,
+            workspaces_by_repo_id,
+            workspaces_by_thread_id,
+            workspace_branch_hints,
+        )
 
     def _resolve_workspace_root_for_binding(
         self,
