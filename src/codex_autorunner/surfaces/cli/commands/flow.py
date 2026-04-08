@@ -1298,9 +1298,11 @@ You are the first ticket in a new ticket_flow run.
         if not db_path.exists():
             raise_exit("Flow database not found at .codex-autorunner/flows.db")
 
-        retention_config = parse_flow_retention_config(
-            getattr(engine.config, "flow_retention", None)
-        )
+        configured_retention = getattr(engine.config, "flow_retention", None)
+        if isinstance(configured_retention, FlowRetentionConfig):
+            retention_config = configured_retention
+        else:
+            retention_config = parse_flow_retention_config(configured_retention)
         if retention is not None:
             from datetime import timedelta
 
@@ -1447,7 +1449,7 @@ You are the first ticket in a new ticket_flow run.
                 db_path,
                 retention_config,
                 run_ids=target_run_ids,
-                vacuum=vacuum,
+                vacuum=vacuum or retention_config.vacuum_after_prune,
                 dry_run=False,
             )
             result_payload = hk_result.to_dict()
