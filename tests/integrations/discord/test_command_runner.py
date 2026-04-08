@@ -205,6 +205,36 @@ async def test_timeout_sends_user_message() -> None:
 
 
 @pytest.mark.anyio
+async def test_none_timeout_allows_long_running_handler() -> None:
+    service = _FakeService()
+    finished = asyncio.Event()
+
+    async def slow_handler(*args: Any, **kwargs: Any) -> None:
+        await asyncio.sleep(0.2)
+        finished.set()
+
+    service._handle_car_command.side_effect = slow_handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+    ctx = _make_ctx()
+    payload = _slash_payload()
+
+    runner.submit(ctx, payload)
+    await asyncio.wait_for(finished.wait(), timeout=1.0)
+    for _ in range(20):
+        if runner.active_task_count == 0:
+            break
+        await asyncio.sleep(0.01)
+
+    service._send_or_respond_ephemeral.assert_not_awaited()
+    assert runner.active_task_count == 0
+
+
+@pytest.mark.anyio
 async def test_handler_error_sends_error_followup() -> None:
     service = _FakeService()
 

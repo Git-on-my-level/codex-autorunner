@@ -13,8 +13,9 @@ The runner adds:
 - A grace-period shutdown that drains in-flight work
 - Error logging for runner-level failures
 
-Handler timeout enforcement is provided by the ChatDispatcher (configured
-via ``dispatch.handler_timeout_seconds``, defaulting to 120 s).
+Handler timeout enforcement is optional and should be used sparingly for
+interaction handlers because many commands manage their own longer-lived turn
+timeouts internally.
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from .interaction_dispatch import (
     execute_ingressed_interaction,
 )
 
-DEFAULT_HANDLER_TIMEOUT_SECONDS: float = 120.0
+DEFAULT_HANDLER_TIMEOUT_SECONDS: Optional[float] = None
 DEFAULT_STALLED_WARNING_SECONDS: Optional[float] = 60.0
 
 _DRAIN_SENTINEL: object = object()
@@ -45,7 +46,7 @@ class QueuedIngressInteraction:
 
 @dataclass(frozen=True)
 class RunnerConfig:
-    timeout_seconds: float = DEFAULT_HANDLER_TIMEOUT_SECONDS
+    timeout_seconds: Optional[float] = DEFAULT_HANDLER_TIMEOUT_SECONDS
     stalled_warning_seconds: Optional[float] = DEFAULT_STALLED_WARNING_SECONDS
 
 
@@ -246,10 +247,13 @@ class CommandRunner:
                     self._warn_on_stall(handler_task, ctx, started_at),
                 )
             try:
-                await asyncio.wait_for(
-                    asyncio.shield(handler_task),
-                    timeout=self._config.timeout_seconds,
-                )
+                if self._config.timeout_seconds is None:
+                    await asyncio.shield(handler_task)
+                else:
+                    await asyncio.wait_for(
+                        asyncio.shield(handler_task),
+                        timeout=self._config.timeout_seconds,
+                    )
             except asyncio.TimeoutError:
                 self._handle_timeout(handler_task, ctx, started_at)
                 return

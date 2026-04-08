@@ -29,7 +29,7 @@ Each interaction runs as an independent `asyncio.Task` with:
 
 - guaranteed background execution (gateway never blocks on a handler)
 - arrival-order preservation for events that go through the FIFO queue
-- per-command handler timeout (default 120 s, configurable via
+- optional per-command handler timeout (disabled by default; configurable via
   `discord_bot.dispatch.handler_timeout_seconds`)
 - stall warning at 60 s (configurable via
   `discord_bot.dispatch.handler_stalled_warning_seconds`)
@@ -154,7 +154,7 @@ discord_bot:
     timeout_ms: 120000
     max_output_chars: 3800
   dispatch:
-    handler_timeout_seconds: 120
+    handler_timeout_seconds: null
     handler_stalled_warning_seconds: 60
   media:
     enabled: true

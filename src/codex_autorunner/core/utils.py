@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .config import RepoConfig, TemplateRepoConfig
 
 SUBCOMMAND_HINTS = ("exec", "resume")
+HELP_TEXT_TIMEOUT_SECONDS = 10.0
 
 
 def extract_flag_value(args: Iterable[str], flag: str) -> Optional[str]:
@@ -90,8 +91,9 @@ def _read_help_text(binary: str) -> str:
             capture_output=True,
             text=True,
             check=False,
+            timeout=HELP_TEXT_TIMEOUT_SECONDS,
         )
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         return ""
     return "\n".join(filter(None, [result.stdout, result.stderr]))
 

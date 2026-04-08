@@ -660,11 +660,7 @@ class DiscordBotService:
         self._command_runner = _CommandRunner(
             self,
             config=_RunnerConfig(
-                timeout_seconds=(
-                    config.dispatch.handler_timeout_seconds
-                    if config.dispatch.handler_timeout_seconds is not None
-                    else 120.0
-                ),
+                timeout_seconds=config.dispatch.handler_timeout_seconds,
                 stalled_warning_seconds=config.dispatch.handler_stalled_warning_seconds,
             ),
             logger=self._logger,
