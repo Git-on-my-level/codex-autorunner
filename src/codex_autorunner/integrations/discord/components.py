@@ -505,6 +505,40 @@ def build_cancel_turn_button(
     )
 
 
+def build_cancel_turn_custom_id(
+    *,
+    thread_target_id: str | None = None,
+    execution_id: str | None = None,
+) -> str:
+    normalized_thread_target_id = str(thread_target_id or "").strip()
+    normalized_execution_id = str(execution_id or "").strip()
+    if not normalized_thread_target_id:
+        return "cancel_turn"
+    custom_id = f"cancel_turn:{normalized_thread_target_id}"
+    if normalized_execution_id:
+        candidate = f"{custom_id}:{normalized_execution_id}"
+        if len(candidate) <= 100:
+            return candidate
+    if len(custom_id) <= 100:
+        return custom_id
+    return "cancel_turn"
+
+
+def parse_cancel_turn_custom_id(custom_id: str) -> tuple[str | None, str | None]:
+    normalized_custom_id = str(custom_id or "").strip()
+    if normalized_custom_id == "cancel_turn":
+        return None, None
+    if not normalized_custom_id.startswith("cancel_turn:"):
+        return None, None
+    payload = normalized_custom_id.split(":", 1)[1].strip()
+    if not payload:
+        return None, None
+    thread_target_id, separator, execution_id = payload.partition(":")
+    normalized_thread_target_id = thread_target_id.strip() or None
+    normalized_execution_id = execution_id.strip() if separator else ""
+    return normalized_thread_target_id, normalized_execution_id or None
+
+
 def build_queue_notice_buttons(source_message_id: str) -> dict[str, Any]:
     source = str(source_message_id or "").strip()
     if not source:

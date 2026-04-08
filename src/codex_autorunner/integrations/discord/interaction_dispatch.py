@@ -516,7 +516,7 @@ async def handle_component_interaction(
             )
             return
 
-        if custom_id == "cancel_turn":
+        if custom_id == "cancel_turn" or custom_id.startswith("cancel_turn:"):
             await service._handle_cancel_turn_button(
                 interaction_id,
                 interaction_token,

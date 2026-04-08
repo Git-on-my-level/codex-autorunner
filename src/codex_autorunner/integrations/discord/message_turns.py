@@ -95,7 +95,7 @@ from ..chat.turn_metrics import (
     _extract_context_usage_percent,
     compose_turn_response_with_footer,
 )
-from .components import build_cancel_turn_button
+from .components import build_cancel_turn_button, build_cancel_turn_custom_id
 from .rendering import (
     chunk_discord_message,
     format_discord_message,
@@ -1752,6 +1752,7 @@ async def _run_discord_orchestrated_turn_for_message(
     progress_rendered: Optional[str] = None
     progress_last_updated = 0.0
     progress_heartbeat_task: Optional[asyncio.Task[None]] = None
+    progress_execution_id: Optional[str] = None
     runtime_state = ProgressRuntimeState()
     active_progress_labels = {"working", "queued", "running", "review"}
     reusable_progress_message_id = _claim_discord_reusable_progress_message(
@@ -1786,7 +1787,14 @@ async def _run_discord_orchestrated_turn_for_message(
         if remove_components:
             payload["components"] = []
         elif tracker.label in active_progress_labels:
-            payload["components"] = [build_cancel_turn_button()]
+            payload["components"] = [
+                build_cancel_turn_button(
+                    custom_id=build_cancel_turn_custom_id(
+                        thread_target_id=managed_thread_id,
+                        execution_id=progress_execution_id,
+                    )
+                )
+            ]
         else:
             payload["components"] = []
         try:
@@ -1838,7 +1846,13 @@ async def _run_discord_orchestrated_turn_for_message(
                 channel_id,
                 {
                     "content": initial_content,
-                    "components": [build_cancel_turn_button()],
+                    "components": [
+                        build_cancel_turn_button(
+                            custom_id=build_cancel_turn_custom_id(
+                                thread_target_id=managed_thread_id,
+                            )
+                        )
+                    ],
                 },
             )
             message_id = response.get("id")
@@ -1887,6 +1901,20 @@ async def _run_discord_orchestrated_turn_for_message(
                 ),
             )
         raise
+
+    progress_execution_id = (
+        str(getattr(started_execution.execution, "execution_id", "") or "").strip()
+        or None
+    )
+    if progress_message_id:
+        try:
+            await _edit_progress(force=True)
+        except (RuntimeError, ConnectionError, OSError):
+            _logger.debug(
+                "Discord progress cancel-button refresh failed for channel=%s",
+                channel_id,
+                exc_info=True,
+            )
 
     if (
         str(getattr(started_execution.execution, "status", "") or "").strip()

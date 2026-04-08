@@ -1953,6 +1953,8 @@ class DiscordBotService:
         )
         had_previous = current_thread is not None
         if current_thread is not None:
+            from .message_turns import clear_discord_turn_progress_reuse
+
             log_event(
                 self._logger,
                 logging.INFO,
@@ -2004,6 +2006,10 @@ class DiscordBotService:
                     channel_id=channel_id,
                     thread_target_id=current_thread.thread_target_id,
                 )
+            clear_discord_turn_progress_reuse(
+                self,
+                thread_target_id=current_thread.thread_target_id,
+            )
             orchestration_service.archive_thread_target(current_thread.thread_target_id)
         owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
             workspace_root,
@@ -6814,6 +6820,8 @@ class DiscordBotService:
         *,
         channel_id: str,
         active_turn_text: str = "Stopping current turn...",
+        thread_target_id: Optional[str] = None,
+        execution_id: Optional[str] = None,
         progress_reuse_source_message_id: Optional[str] = None,
         progress_reuse_acknowledgement: Optional[str] = None,
         source: str = "unknown",
@@ -6830,6 +6838,8 @@ class DiscordBotService:
             interaction_token,
             channel_id=channel_id,
             active_turn_text=active_turn_text,
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
             progress_reuse_source_message_id=progress_reuse_source_message_id,
             progress_reuse_acknowledgement=progress_reuse_acknowledgement,
             source=source,
@@ -6849,11 +6859,16 @@ class DiscordBotService:
         message_id: Optional[str] = None,
         custom_id: str = "cancel_turn",
     ) -> None:
+        from .components import parse_cancel_turn_custom_id
+
+        thread_target_id, execution_id = parse_cancel_turn_custom_id(custom_id)
         await self._handle_car_interrupt(
             interaction_id,
             interaction_token,
             channel_id=channel_id,
             source="component",
+            thread_target_id=thread_target_id,
+            execution_id=execution_id,
             source_custom_id=custom_id,
             source_message_id=message_id,
             source_user_id=user_id,

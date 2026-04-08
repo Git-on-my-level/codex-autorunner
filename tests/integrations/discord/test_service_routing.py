@@ -45,7 +45,10 @@ from codex_autorunner.integrations.discord.config import (
     DiscordBotConfig,
     DiscordCommandRegistration,
 )
-from codex_autorunner.integrations.discord.errors import DiscordAPIError
+from codex_autorunner.integrations.discord.errors import (
+    DiscordAPIError,
+    DiscordPermanentError,
+)
 from codex_autorunner.integrations.discord.service import (
     DiscordBotService,
     DiscordMessageTurnResult,
@@ -6260,12 +6263,17 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
         channel_id="channel-1",
         message_id="preview-1",
     )
+    rest.fetched_channel_messages[("channel-1", "preview-1")] = {
+        "id": "preview-1",
+        "content": "Working...",
+    }
 
     try:
         await service._handle_car_interrupt(
             "interaction-1",
             "token-1",
             channel_id="channel-1",
+            source_message_id="preview-1",
             progress_reuse_source_message_id="m-2",
             progress_reuse_acknowledgement="Message received. Switching to it now...",
         )
@@ -6275,8 +6283,144 @@ async def test_car_interrupt_recovers_missing_backend_thread(tmp_path: Path) -> 
         content = rest.followup_messages[0]["payload"]["content"].lower()
         assert "recovered stale session" in content
         assert "backend thread was lost" in content
+        assert len(rest.edited_channel_messages) == 1
+        assert rest.edited_channel_messages[0]["message_id"] == "preview-1"
+        assert rest.edited_channel_messages[0]["payload"]["components"] == []
+        assert "no longer live in the backend" in (
+            rest.edited_channel_messages[0]["payload"]["content"].lower()
+        )
         assert service._discord_turn_progress_reuse_requests == {}
         assert service._discord_reusable_progress_messages == {}
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_cancel_turn_button_stale_execution_does_not_interrupt_newer_turn(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+    rest.fetched_channel_messages[("channel-1", "preview-1")] = {
+        "id": "preview-1",
+        "content": "Working...",
+    }
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    stop_calls: list[str] = []
+
+    class _FakeThreadService:
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(execution_id="turn-2", status="running")
+
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            stop_calls.append(thread_target_id)
+            return SimpleNamespace(interrupted_active=True)
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_cancel_turn_button(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            user_id="user-1",
+            message_id="preview-1",
+            custom_id="cancel_turn:thread-1:turn-1",
+        )
+
+        assert stop_calls == []
+        assert len(rest.interaction_responses) == 1
+        assert rest.interaction_responses[0]["payload"]["type"] == 5
+        assert len(rest.followup_messages) == 1
+        assert "older turn" in rest.followup_messages[0]["payload"]["content"].lower()
+        assert len(rest.edited_channel_messages) == 1
+        assert rest.edited_channel_messages[0]["payload"]["components"] == []
+        assert "newer turn is active" in (
+            rest.edited_channel_messages[0]["payload"]["content"].lower()
+        )
+    finally:
+        await store.close()
+
+
+@pytest.mark.anyio
+async def test_cancel_turn_button_stale_execution_ignores_message_fetch_failures(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+
+    rest = _FakeRest()
+
+    async def _raise_missing(*, channel_id: str, message_id: str) -> dict[str, Any]:
+        _ = channel_id, message_id
+        raise DiscordPermanentError("message missing")
+
+    rest.get_channel_message = _raise_missing  # type: ignore[method-assign]
+    service = DiscordBotService(
+        _config(tmp_path, allow_user_ids=frozenset({"user-1"})),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=_FakeGateway([]),
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    class _FakeThreadService:
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(thread_target_id="thread-1")
+
+        def get_running_execution(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-1"
+            return SimpleNamespace(execution_id="turn-2", status="running")
+
+    service._discord_thread_service = lambda: _FakeThreadService()  # type: ignore[assignment]
+
+    try:
+        await service._handle_cancel_turn_button(
+            "interaction-1",
+            "token-1",
+            channel_id="channel-1",
+            user_id="user-1",
+            message_id="preview-1",
+            custom_id="cancel_turn:thread-1:turn-1",
+        )
+
+        assert len(rest.followup_messages) == 1
+        assert "older turn" in rest.followup_messages[0]["payload"]["content"].lower()
     finally:
         await store.close()
 
@@ -6301,6 +6445,19 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
     )
 
     calls: list[tuple[str, str]] = []
+    discord_message_turns.request_discord_turn_progress_reuse(
+        service,
+        thread_target_id="thread-1",
+        source_message_id="m-2",
+        acknowledgement="Message received. Switching to it now...",
+    )
+    discord_message_turns._stash_discord_reusable_progress_message(
+        service,
+        thread_target_id="thread-1",
+        source_message_id="m-2",
+        channel_id="channel-1",
+        message_id="preview-1",
+    )
 
     class _FakeThreadService:
         def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
@@ -6353,6 +6510,8 @@ async def test_reset_discord_thread_binding_archives_after_lost_backend_recovery
         ("create", "codex"),
         ("bind", "thread-2"),
     ]
+    assert service._discord_turn_progress_reuse_requests == {}
+    assert service._discord_reusable_progress_messages == {}
 
 
 @pytest.mark.anyio

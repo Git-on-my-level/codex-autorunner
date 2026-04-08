@@ -51,6 +51,8 @@ _MISSING_THREAD_MARKERS = (
     "missing thread",
     "thread not found",
     "no rollout found for thread id",
+    "unknown hermes turn",
+    "no active hermes turn tracked",
 )
 _REHYDRATION_TRANSCRIPT_LIMIT = 3
 _REHYDRATION_TEXT_LIMIT = 4_000

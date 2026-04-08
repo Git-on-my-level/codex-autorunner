@@ -13,6 +13,7 @@ from codex_autorunner.integrations.discord.components import (
     build_agent_profile_picker,
     build_bind_picker,
     build_button,
+    build_cancel_turn_custom_id,
     build_flow_runs_picker,
     build_flow_status_buttons,
     build_model_effort_picker,
@@ -22,6 +23,7 @@ from codex_autorunner.integrations.discord.components import (
     build_select_option,
     build_session_threads_picker,
     build_update_target_picker,
+    parse_cancel_turn_custom_id,
 )
 
 
@@ -48,6 +50,24 @@ class TestBuildButton:
             "Stop", "flow:123:stop", style=DISCORD_BUTTON_STYLE_DANGER
         )
         assert button["style"] == DISCORD_BUTTON_STYLE_DANGER
+
+
+class TestCancelTurnCustomId:
+    def test_builds_contextual_cancel_turn_custom_id(self) -> None:
+        custom_id = build_cancel_turn_custom_id(
+            thread_target_id="thread-1",
+            execution_id="turn-1",
+        )
+
+        assert custom_id == "cancel_turn:thread-1:turn-1"
+
+    def test_parses_contextual_cancel_turn_custom_id(self) -> None:
+        thread_target_id, execution_id = parse_cancel_turn_custom_id(
+            "cancel_turn:thread-1:turn-1"
+        )
+
+        assert thread_target_id == "thread-1"
+        assert execution_id == "turn-1"
 
 
 class TestBuildSelectMenu:

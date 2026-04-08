@@ -1187,6 +1187,34 @@ async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_
     assert outcome.execution.error is None
 
 
+async def test_stop_thread_recovers_unknown_hermes_turn_interrupt_error(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    harness.interrupt_error = RuntimeError("Unknown Hermes turn 'turn-10'")
+
+    outcome = await service.stop_thread(thread.thread_target_id)
+
+    assert len(harness.interrupt_calls) == 1
+    assert outcome.interrupted_active is True
+    assert outcome.recovered_lost_backend is True
+    assert outcome.execution is not None
+    assert outcome.execution.execution_id == execution.execution_id
+    assert outcome.execution.status == "interrupted"
+
+
 async def test_cancel_queued_executions_marks_queued_rows_interrupted(
     tmp_path: Path,
 ) -> None:

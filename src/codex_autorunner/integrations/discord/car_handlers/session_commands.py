@@ -18,7 +18,7 @@ from ..message_turns import (
     clear_discord_turn_progress_reuse,
     request_discord_turn_progress_reuse,
 )
-from ..rendering import format_discord_message
+from ..rendering import format_discord_message, truncate_for_discord
 
 _logger = logging.getLogger(__name__)
 
@@ -824,6 +824,84 @@ async def handle_car_archive(
     )
 
 
+def _interrupt_resolution_note(
+    *,
+    referenced_execution_id: Optional[str],
+    running_execution: Any,
+    resolved_execution: Any,
+    thread_missing: bool,
+) -> str:
+    if thread_missing:
+        return (
+            "Status: this progress message no longer maps to an active managed thread."
+        )
+    running_execution_id = (
+        str(getattr(running_execution, "execution_id", "") or "").strip() or None
+    )
+    if (
+        referenced_execution_id
+        and running_execution_id
+        and running_execution_id != referenced_execution_id
+    ):
+        return "Status: this progress message belongs to an older turn. A newer turn is active."
+    resolved_status = (
+        str(getattr(resolved_execution, "status", "") or "").strip().lower()
+    )
+    if resolved_status == "ok":
+        return "Status: this turn already completed."
+    if resolved_status == "interrupted":
+        return "Status: this turn was already stopped."
+    if resolved_status == "error":
+        return "Status: this turn already failed."
+    if resolved_status == "queued":
+        return "Status: this turn is queued and no longer has an active cancel surface."
+    return "Status: this turn is no longer active."
+
+
+async def _retire_stale_progress_message(
+    service: Any,
+    *,
+    channel_id: str,
+    message_id: Optional[str],
+    note: str,
+) -> None:
+    from ..errors import DiscordAPIError
+
+    normalized_message_id = str(message_id or "").strip()
+    if not normalized_message_id:
+        return
+    content = note
+    try:
+        fetched = await service._rest.get_channel_message(
+            channel_id=channel_id,
+            message_id=normalized_message_id,
+        )
+    except (DiscordAPIError, RuntimeError, ConnectionError, OSError, ValueError):
+        fetched = {}
+    existing_content = str(fetched.get("content") or "").strip()
+    if existing_content:
+        lowered_existing = existing_content.lower()
+        lowered_note = note.lower()
+        if lowered_note not in lowered_existing:
+            content = f"{existing_content.rstrip()}\n\n{note}"
+        else:
+            content = existing_content
+    try:
+        await service._rest.edit_channel_message(
+            channel_id=channel_id,
+            message_id=normalized_message_id,
+            payload={
+                "content": truncate_for_discord(
+                    content,
+                    max_len=max(int(service._config.max_message_length), 32),
+                ),
+                "components": [],
+            },
+        )
+    except (DiscordAPIError, RuntimeError, ConnectionError, OSError, ValueError):
+        return
+
+
 async def handle_car_interrupt(
     service: Any,
     interaction_id: str,
@@ -831,6 +909,8 @@ async def handle_car_interrupt(
     *,
     channel_id: str,
     active_turn_text: str = "Stopping current turn...",
+    thread_target_id: Optional[str] = None,
+    execution_id: Optional[str] = None,
     progress_reuse_source_message_id: Optional[str] = None,
     progress_reuse_acknowledgement: Optional[str] = None,
     source: str = "unknown",
@@ -852,9 +932,13 @@ async def handle_car_interrupt(
         source_command=source_command,
         source_custom_id=source_custom_id,
         source_message_id=source_message_id,
+        requested_thread_target_id=thread_target_id,
+        requested_execution_id=execution_id,
     )
     binding = await service._store.get_binding(channel_id=channel_id)
-    if binding is None:
+    normalized_thread_target_id = str(thread_target_id or "").strip() or None
+    normalized_execution_id = str(execution_id or "").strip() or None
+    if binding is None and normalized_thread_target_id is None:
         text = format_discord_message(
             "This channel is not bound. Run `/car bind path:<workspace>` first."
         )
@@ -874,7 +958,7 @@ async def handle_car_interrupt(
         if fallback.exists() and fallback.is_dir():
             workspace_root = fallback
 
-    if workspace_root is None:
+    if workspace_root is None and binding is not None:
         text = format_discord_message(
             "Binding is invalid. Run `/car bind path:<workspace>` first."
         )
@@ -882,16 +966,41 @@ async def handle_car_interrupt(
         return
 
     mode = "pma" if pma_enabled else "repo"
-    orchestration_service, _binding_row, current_thread = (
-        service._get_discord_thread_binding(channel_id=channel_id, mode=mode)
-    )
+    if normalized_thread_target_id is not None:
+        orchestration_service = service._discord_thread_service()
+        _binding_row = None
+        current_thread = orchestration_service.get_thread_target(
+            normalized_thread_target_id
+        )
+    else:
+        orchestration_service, _binding_row, current_thread = (
+            service._get_discord_thread_binding(channel_id=channel_id, mode=mode)
+        )
+        normalized_thread_target_id = (
+            str(getattr(current_thread, "thread_target_id", "") or "").strip() or None
+        )
     if current_thread is None:
         if progress_reuse_source_message_id or progress_reuse_acknowledgement:
             clear_discord_turn_progress_reuse(
                 service,
                 thread_target_id=(
-                    getattr(_binding_row, "thread_target_id", None) or ""
+                    normalized_thread_target_id
+                    or getattr(_binding_row, "thread_target_id", None)
+                    or ""
                 ),
+            )
+        if normalized_thread_target_id is not None:
+            note = _interrupt_resolution_note(
+                referenced_execution_id=normalized_execution_id,
+                running_execution=None,
+                resolved_execution=None,
+                thread_missing=True,
+            )
+            await _retire_stale_progress_message(
+                service,
+                channel_id=channel_id,
+                message_id=source_message_id,
+                note=note,
             )
         log_event(
             service._logger,
@@ -909,6 +1018,44 @@ async def handle_car_interrupt(
         await service._respond_ephemeral(interaction_id, interaction_token, text)
         return
     deferred = await _interaction_deferred(service, interaction_id, interaction_token)
+    get_running_execution = getattr(
+        orchestration_service, "get_running_execution", None
+    )
+    running_execution = (
+        get_running_execution(normalized_thread_target_id)
+        if callable(get_running_execution) and normalized_thread_target_id is not None
+        else None
+    )
+    if (
+        normalized_execution_id is not None
+        and running_execution is not None
+        and str(getattr(running_execution, "execution_id", "") or "").strip()
+        != normalized_execution_id
+    ):
+        note = _interrupt_resolution_note(
+            referenced_execution_id=normalized_execution_id,
+            running_execution=running_execution,
+            resolved_execution=running_execution,
+            thread_missing=False,
+        )
+        clear_discord_turn_progress_reuse(
+            service,
+            thread_target_id=normalized_thread_target_id or "",
+        )
+        await _retire_stale_progress_message(
+            service,
+            channel_id=channel_id,
+            message_id=source_message_id,
+            note=note,
+        )
+        text = format_discord_message("This progress message belongs to an older turn.")
+        await service._send_or_respond_ephemeral(
+            interaction_id=interaction_id,
+            interaction_token=interaction_token,
+            deferred=deferred,
+            text=text,
+        )
+        return
     try:
         stop_outcome = await orchestration_service.stop_thread(
             current_thread.thread_target_id
@@ -949,11 +1096,37 @@ async def handle_car_interrupt(
             and not recovered_lost_backend
             and not cancelled_queued
         ):
+            get_execution = getattr(orchestration_service, "get_execution", None)
+            get_latest_execution = getattr(
+                orchestration_service, "get_latest_execution", None
+            )
+            resolved_execution = None
+            if callable(get_execution) and normalized_execution_id is not None:
+                resolved_execution = get_execution(
+                    current_thread.thread_target_id,
+                    normalized_execution_id,
+                )
+            elif callable(get_latest_execution):
+                resolved_execution = get_latest_execution(
+                    current_thread.thread_target_id
+                )
             if progress_reuse_source_message_id or progress_reuse_acknowledgement:
                 clear_discord_turn_progress_reuse(
                     service,
                     thread_target_id=current_thread.thread_target_id,
                 )
+            note = _interrupt_resolution_note(
+                referenced_execution_id=normalized_execution_id,
+                running_execution=running_execution,
+                resolved_execution=resolved_execution,
+                thread_missing=False,
+            )
+            await _retire_stale_progress_message(
+                service,
+                channel_id=channel_id,
+                message_id=source_message_id,
+                note=note,
+            )
             text = format_discord_message("No active turn to interrupt.")
             await service._send_or_respond_ephemeral(
                 interaction_id=interaction_id,
@@ -973,6 +1146,13 @@ async def handle_car_interrupt(
             clear_discord_turn_progress_reuse(
                 service,
                 thread_target_id=current_thread.thread_target_id,
+            )
+        if recovered_lost_backend:
+            await _retire_stale_progress_message(
+                service,
+                channel_id=channel_id,
+                message_id=source_message_id,
+                note="Status: this turn is no longer live in the backend and was recovered locally.",
             )
         parts = []
         if interrupted_active:
