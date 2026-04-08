@@ -262,6 +262,8 @@ def test_pma_hygiene_help_shows_apply_and_category_options():
     output = result.stdout
     assert "--apply" in output
     assert "--category" in output
+    assert "--summary" in output
+    assert "--include-needs-confirmation" in output
     assert "--json" in output
 
 
@@ -433,6 +435,9 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
                 "managed_thread_id": "thread-1",
                 "agent": "codex",
                 "status": "completed",
+                "latest_turn_id": "turn-1",
+                "latest_turn_status": "ok",
+                "latest_assistant_text": "assistant conclusion",
             }
         },
         "/hub/pma/threads/thread-1/status": {
@@ -444,6 +449,9 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
                 "status": "completed",
                 "lifecycle_status": "active",
                 "status_reason": "managed_turn_completed",
+                "latest_turn_id": "turn-1",
+                "latest_turn_status": "ok",
+                "latest_assistant_text": "assistant conclusion",
             },
             "status": "completed",
             "status_reason": "managed_turn_completed",
@@ -470,7 +478,8 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
                 "stall_reason": None,
             },
             "recent_progress": [],
-            "latest_output_excerpt": "assistant output",
+            "latest_output_excerpt": "assistant conclusion",
+            "latest_assistant_text": "assistant conclusion",
         },
         "/hub/pma/threads/thread-1/tail": {
             "managed_thread_id": "thread-1",
@@ -545,6 +554,7 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
     assert "thread-1 agent=codex status=idle" in list_result.stdout
     assert info_result.exit_code == 0
     assert '"managed_thread_id": "thread-1"' in info_result.stdout
+    assert '"latest_assistant_text": "assistant conclusion"' in info_result.stdout
     assert status_result.exit_code == 0
     assert (
         "id=thread-1 agent=codex repo=repo-1 status=reusable last_turn=completed"
@@ -560,6 +570,7 @@ def test_pma_cli_thread_query_commands_use_orchestration_routes(
         in status_result.stdout
     )
     assert "latest output:" in status_result.stdout
+    assert "assistant conclusion" in status_result.stdout
     assert tail_result.exit_code == 0
     assert "turn=turn-1 status=ok activity=completed" in tail_result.stdout
     assert (
@@ -879,8 +890,8 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
             200,
             {
                 "status": "ok",
-                "send_state": "queued",
-                "execution_state": "queued",
+                "send_state": "accepted",
+                "execution_state": "running",
                 "managed_turn_id": "turn-2",
                 "active_managed_turn_id": "turn-1",
                 "queue_depth": 1,
@@ -909,7 +920,7 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
     )
 
     assert result.exit_code == 0
-    assert "send_state=queued managed_turn_id=turn-2" in result.stdout
+    assert "send_state=accepted managed_turn_id=turn-2" in result.stdout
     assert "active_managed_turn_id=turn-1" in result.stdout
     assert "queue_depth=1" in result.stdout
     assert "delivered message:\nfollow up\n" in result.stdout
@@ -917,7 +928,7 @@ def test_pma_cli_thread_send_reports_queued_busy_thread(
     assert captured["payload"] == {
         "message": "follow up",
         "busy_policy": "queue",
-        "defer_execution": False,
+        "defer_execution": True,
     }
 
 
@@ -952,10 +963,10 @@ def test_pma_cli_thread_send_reads_message_from_file(
             {
                 "status": "ok",
                 "send_state": "accepted",
-                "execution_state": "completed",
+                "execution_state": "running",
                 "managed_turn_id": "turn-3",
                 "delivered_message": payload["message"],
-                "assistant_text": "done",
+                "assistant_text": "",
             },
         )
 
@@ -982,10 +993,10 @@ def test_pma_cli_thread_send_reads_message_from_file(
     assert captured["payload"] == {
         "message": "literal `glm-5-turbo`\nsecond line\n",
         "busy_policy": "queue",
-        "defer_execution": False,
+        "defer_execution": True,
     }
     assert "delivered message:\nliteral `glm-5-turbo`\nsecond line\n" in result.stdout
-    assert "\nassistant:\ndone\n" in result.stdout
+    assert "\nassistant:\n" not in result.stdout
 
 
 def test_pma_cli_thread_send_reads_message_from_stdin(
@@ -1047,7 +1058,7 @@ def test_pma_cli_thread_send_reads_message_from_stdin(
     assert captured["payload"] == {
         "message": "stdin payload with backticks `glm-5-turbo`\n",
         "busy_policy": "queue",
-        "defer_execution": False,
+        "defer_execution": True,
     }
     assert (
         "delivered message:\nstdin payload with backticks `glm-5-turbo`\n"

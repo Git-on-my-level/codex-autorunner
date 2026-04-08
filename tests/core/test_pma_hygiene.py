@@ -53,6 +53,27 @@ def _write_dispatch(
     return path
 
 
+def _reviewed_thread_cleanup_report(managed_thread_id: str) -> dict[str, object]:
+    return {
+        "groups": {
+            "safe": [],
+            "protected": [],
+            "needs-confirmation": [
+                {
+                    "candidate_id": f"threads:{managed_thread_id}",
+                    "group": "needs-confirmation",
+                    "category": "threads",
+                    "label": managed_thread_id,
+                    "action": "archive_managed_thread",
+                    "reason": "review-approved cleanup",
+                    "target": {"managed_thread_id": managed_thread_id},
+                    "evidence": {"freshness": {"is_stale": True}},
+                }
+            ],
+        }
+    }
+
+
 def test_build_pma_hygiene_report_groups_candidates(hub_env) -> None:
     hub_root = hub_env.hub_root
     base_now = datetime.now(timezone.utc)
@@ -224,6 +245,136 @@ def test_apply_pma_hygiene_report_only_removes_safe_items(hub_env) -> None:
     assert automation_store.list_wakeups() == []
 
 
+def test_apply_pma_hygiene_report_can_include_reviewed_thread_cleanup(hub_env) -> None:
+    hub_root = hub_env.hub_root
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="reviewed-cleanup-thread",
+    )
+    managed_thread_id = thread["managed_thread_id"]
+    report = _reviewed_thread_cleanup_report(managed_thread_id)
+
+    blocked = apply_pma_hygiene_report(hub_root, report)
+    assert blocked["attempted"] == 0
+    assert thread_store.get_thread(managed_thread_id)["status"] == "active"
+
+    applied = apply_pma_hygiene_report(
+        hub_root, report, include_needs_confirmation=True
+    )
+    assert applied["attempted"] == 1
+    assert applied["safe_attempted"] == 0
+    assert applied["reviewed_attempted"] == 1
+    assert applied["applied"] == 1
+    assert applied["failed"] == 0
+    assert thread_store.get_thread(managed_thread_id)["status"] == "archived"
+
+
+def test_apply_pma_hygiene_report_revalidates_reviewed_thread_binding(hub_env) -> None:
+    hub_root = hub_env.hub_root
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="reviewed-thread-now-bound",
+    )
+    managed_thread_id = thread["managed_thread_id"]
+    report = _reviewed_thread_cleanup_report(managed_thread_id)
+
+    OrchestrationBindingStore(hub_root).upsert_binding(
+        surface_kind="github_pr",
+        surface_key="Git-on-my-level/codex-autorunner#1302",
+        thread_target_id=managed_thread_id,
+        agent_id="codex",
+        repo_id=hub_env.repo_id,
+    )
+
+    applied = apply_pma_hygiene_report(
+        hub_root, report, include_needs_confirmation=True
+    )
+
+    assert applied["attempted"] == 1
+    assert applied["applied"] == 0
+    assert applied["failed"] == 1
+    assert (
+        applied["results"][0]["error"]
+        == "Managed thread cleanup no longer safe: managed thread has an active binding"
+    )
+    assert thread_store.get_thread(managed_thread_id)["status"] == "active"
+
+
+def test_apply_pma_hygiene_report_revalidates_reviewed_thread_busy_state(
+    hub_env,
+) -> None:
+    hub_root = hub_env.hub_root
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="reviewed-thread-now-busy",
+    )
+    managed_thread_id = thread["managed_thread_id"]
+    report = _reviewed_thread_cleanup_report(managed_thread_id)
+
+    thread_store.create_turn(managed_thread_id, prompt="still running")
+
+    applied = apply_pma_hygiene_report(
+        hub_root, report, include_needs_confirmation=True
+    )
+
+    assert applied["attempted"] == 1
+    assert applied["applied"] == 0
+    assert applied["failed"] == 1
+    assert (
+        applied["results"][0]["error"]
+        == "Managed thread cleanup no longer safe: managed thread has running work"
+    )
+    assert thread_store.get_thread(managed_thread_id)["status"] == "active"
+
+
+def test_apply_pma_hygiene_report_revalidates_reviewed_thread_lifecycle(
+    hub_env,
+) -> None:
+    hub_root = hub_env.hub_root
+    thread_store = PmaThreadStore(hub_root)
+    thread = thread_store.create_thread(
+        "codex",
+        hub_env.repo_root,
+        repo_id=hub_env.repo_id,
+        name="reviewed-thread-now-archived",
+    )
+    managed_thread_id = thread["managed_thread_id"]
+    report = _reviewed_thread_cleanup_report(managed_thread_id)
+
+    thread_store.archive_thread(managed_thread_id)
+
+    applied = apply_pma_hygiene_report(
+        hub_root, report, include_needs_confirmation=True
+    )
+
+    assert applied["attempted"] == 1
+    assert applied["applied"] == 0
+    assert applied["failed"] == 1
+    assert (
+        applied["results"][0]["error"]
+        == "Managed thread cleanup no longer safe: managed thread lifecycle is archived"
+    )
+    assert thread_store.get_thread(managed_thread_id)["status"] == "archived"
+
+
+def test_build_pma_hygiene_report_canonicalizes_category_order(hub_env) -> None:
+    report = build_pma_hygiene_report(
+        hub_env.hub_root,
+        categories=["automation", "threads"],
+    )
+
+    assert report["categories"] == ["threads", "automation"]
+
+
 def test_pma_hygiene_cli_outputs_json_report(hub_env) -> None:
     ensure_structure(hub_env.hub_root)
     stale_file = inbox_dir(hub_env.hub_root) / "cli-stale.txt"
@@ -248,3 +399,31 @@ def test_pma_hygiene_cli_outputs_json_report(hub_env) -> None:
 
     assert result.exit_code == 0
     assert "files:inbox:cli-stale.txt" in result.stdout
+
+
+def test_pma_hygiene_cli_summary_only_output(hub_env) -> None:
+    ensure_structure(hub_env.hub_root)
+    stale_file = inbox_dir(hub_env.hub_root) / "summary-stale.txt"
+    stale_file.write_text("stale", encoding="utf-8")
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+    _set_file_mtime(stale_file, old)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        pma_app,
+        [
+            "hygiene",
+            "--path",
+            str(hub_env.hub_root),
+            "--category",
+            "files",
+            "--stale-threshold-seconds",
+            "60",
+            "--summary",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Summary:" in result.stdout
+    assert "Category counts:" in result.stdout
+    assert "files:inbox:summary-stale.txt" not in result.stdout

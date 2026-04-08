@@ -783,7 +783,13 @@ def test_managed_thread_status_aggregates_thread_turn_and_progress(hub_env) -> N
         assert payload["active_turn_diagnostics"]["stalled"] is False
         assert payload["is_alive"] is False
         assert isinstance(payload.get("recent_progress"), list)
+        assert payload["latest_turn_status"] == "ok"
+        assert payload["latest_assistant_text"] == "completed assistant output"
         assert "completed assistant output" in payload.get("latest_output_excerpt", "")
+        assert (
+            payload["thread"]["latest_assistant_text"] == "completed assistant output"
+        )
+        assert payload["thread"]["latest_turn_status"] == "ok"
 
 
 def test_managed_thread_status_surfaces_attention_required_separately_from_failure(
@@ -808,6 +814,8 @@ def test_managed_thread_status_surfaces_attention_required_separately_from_failu
     assert payload["thread"]["operator_status"] == "reusable"
     assert payload["thread"]["is_reusable"] is True
     assert payload["turn"]["phase"] == "interrupted"
+    assert payload["latest_assistant_text"] == ""
+    assert payload["thread"]["latest_assistant_text"] == ""
 
 
 def test_refresh_active_turn_diagnostics_recomputes_idle_without_events() -> None:

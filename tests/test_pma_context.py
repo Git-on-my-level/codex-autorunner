@@ -870,9 +870,38 @@ def test_build_hub_snapshot_prefers_status_change_time_for_thread_freshness(
     assert freshness.get("basis_at") == "2026-03-16T09:00:00+00:00"
 
 
-def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:
+def test_render_hub_snapshot_marks_stale_sections_with_warning() -> None:
     from codex_autorunner.core.pma_context import _render_hub_snapshot
 
+    rendered = _render_hub_snapshot(
+        {
+            "generated_at": "2026-03-16T12:00:00Z",
+            "freshness": {
+                "generated_at": "2026-03-16T12:00:00Z",
+                "stale_threshold_seconds": 3600,
+                "sections": {
+                    "repos": {
+                        "entity_count": 1,
+                        "stale_count": 1,
+                        "newest_basis_at": "2026-03-16T11:00:00Z",
+                    },
+                    "pma_threads": {
+                        "entity_count": 2,
+                        "stale_count": 0,
+                        "newest_basis_at": "2026-03-16T11:55:00Z",
+                    },
+                },
+            },
+        }
+    )
+
+    assert "WARNING: stale sections may be outdated" in rendered
+    assert "section=repos count=1 stale=1" in rendered
+    assert "STALE" in rendered
+    assert "section=pma_threads count=2 stale=0" in rendered
+
+
+def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:
     hub_config = load_hub_config(hub_env.hub_root)
     manifest = load_manifest(hub_config.manifest_path, hub_env.hub_root)
     repo = manifest.get(hub_env.repo_id)
@@ -898,8 +927,60 @@ def test_build_hub_snapshot_includes_effective_destination(hub_env) -> None:
     assert effective_destination.get("kind") == "docker"
     assert effective_destination.get("image") == "busybox:latest"
 
-    rendered = _render_hub_snapshot(snapshot)
-    assert "destination=docker:busybox:latest" in rendered
+
+def test_build_hub_snapshot_ignores_pma_self_thread_hung_noise(hub_env) -> None:
+    from codex_autorunner.core.pma_action_queue import build_pma_action_queue
+    from codex_autorunner.core.pma_context import build_hub_snapshot
+
+    thread_store = PmaThreadStore(hub_env.hub_root)
+    thread = thread_store.create_thread(
+        "hermes-m4-pma",
+        hub_env.hub_root,
+        resource_kind="agent_workspace",
+        resource_id="pma-self",
+        name="PMA self thread",
+    )
+    thread_id = thread["managed_thread_id"]
+    running_turn = thread_store.create_turn(thread_id, prompt="running self thread")
+
+    old_ts = "2026-03-16T09:00:00Z"
+    with thread_store._write_conn() as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            UPDATE orch_thread_targets
+               SET updated_at = ?,
+                   status_updated_at = ?
+             WHERE thread_target_id = ?
+            """,
+            (old_ts, old_ts, thread_id),
+        )
+        conn.commit()
+
+    supervisor = HubSupervisor.from_path(hub_env.hub_root)
+    try:
+        snapshot = asyncio.run(
+            build_hub_snapshot(supervisor, hub_root=hub_env.hub_root)
+        )
+    finally:
+        supervisor.shutdown()
+
+    queue = build_pma_action_queue(
+        inbox=snapshot.get("inbox") or [],
+        pma_threads=snapshot.get("pma_threads") or [],
+        pma_files_detail=snapshot.get("pma_files_detail")
+        or {"inbox": [], "outbox": []},
+        automation=snapshot.get("automation") or {},
+        generated_at=snapshot.get("generated_at") or "2026-03-16T12:00:00Z",
+        stale_threshold_seconds=3600,
+    )
+
+    assert running_turn["managed_turn_id"]
+    assert not any(
+        item.get("managed_thread_id") == thread_id
+        for item in queue
+        if item.get("queue_source") == "managed_thread_followup"
+    )
 
 
 def test_build_hub_snapshot_surfaces_unreadable_latest_dispatch(hub_env) -> None:

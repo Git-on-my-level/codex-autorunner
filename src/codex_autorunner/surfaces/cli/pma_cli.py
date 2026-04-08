@@ -3,6 +3,7 @@
 import json
 import logging
 import sys
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -26,8 +27,10 @@ from ...core.filebox_lifecycle import (
     list_consumed_files,
     unconsume_inbox_file,
 )
+from ...core.locks import file_lock
 from ...core.pma_audit import PmaActionType, PmaAuditEntry, PmaAuditLog
 from ...core.pma_hygiene import (
+    _hygiene_lock_path,
     apply_pma_hygiene_report,
     build_pma_hygiene_report,
     render_pma_hygiene_report,
@@ -1177,6 +1180,20 @@ def pma_hygiene(
         "--apply",
         help="Apply only safe PMA hygiene candidates after showing the report.",
     ),
+    include_needs_confirmation: bool = typer.Option(
+        False,
+        "--include-needs-confirmation",
+        "--force-non-safe",
+        help=(
+            "Also apply reviewed needs-confirmation managed-thread cleanup "
+            "candidates."
+        ),
+    ),
+    summary: bool = typer.Option(
+        False,
+        "--summary",
+        help="Show counts only instead of expanding individual candidates.",
+    ),
     stale_threshold_seconds: Optional[int] = typer.Option(
         None,
         "--stale-threshold-seconds",
@@ -1188,12 +1205,21 @@ def pma_hygiene(
 ):
     """Review PMA hygiene candidates and optionally clean only the safe ones."""
     hub_root = _resolve_hub_path(path)
+    apply_result: Optional[dict[str, Any]] = None
     try:
-        report = build_pma_hygiene_report(
-            hub_root,
-            categories=category or None,
-            stale_threshold_seconds=stale_threshold_seconds,
-        )
+        lock_ctx = file_lock(_hygiene_lock_path(hub_root)) if apply else nullcontext()
+        with lock_ctx:
+            report = build_pma_hygiene_report(
+                hub_root,
+                categories=category or None,
+                stale_threshold_seconds=stale_threshold_seconds,
+            )
+            if apply:
+                apply_result = apply_pma_hygiene_report(
+                    hub_root,
+                    report,
+                    include_needs_confirmation=include_needs_confirmation,
+                )
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
@@ -1201,26 +1227,38 @@ def pma_hygiene(
         typer.echo(f"Failed to build PMA hygiene report: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    apply_result: Optional[dict[str, Any]] = None
-    if apply:
-        try:
-            apply_result = apply_pma_hygiene_report(hub_root, report)
-        except (OSError, ValueError) as exc:
-            typer.echo(f"Failed to apply PMA hygiene cleanup: {exc}", err=True)
-            raise typer.Exit(code=1) from None
-
     if output_json:
-        typer.echo(json.dumps({"report": report, "apply": apply_result}, indent=2))
+        report_payload: dict[str, Any]
+        if summary:
+            report_payload = {
+                "generated_at": report.get("generated_at"),
+                "categories": report.get("categories"),
+                "summary": report.get("summary"),
+            }
+        else:
+            report_payload = report
+        typer.echo(
+            json.dumps({"report": report_payload, "apply": apply_result}, indent=2)
+        )
         return
 
-    typer.echo(render_pma_hygiene_report(report, apply=apply))
+    typer.echo(render_pma_hygiene_report(report, apply=apply, summary_only=summary))
     if apply_result is not None:
-        typer.echo(
-            "Applied safe cleanup: "
-            f"attempted={apply_result['attempted']} "
-            f"applied={apply_result['applied']} "
-            f"failed={apply_result['failed']}"
-        )
+        if include_needs_confirmation:
+            typer.echo(
+                "Applied cleanup: "
+                f"safe_attempted={apply_result['safe_attempted']} "
+                f"reviewed_attempted={apply_result['reviewed_attempted']} "
+                f"applied={apply_result['applied']} "
+                f"failed={apply_result['failed']}"
+            )
+        else:
+            typer.echo(
+                "Applied safe cleanup: "
+                f"attempted={apply_result['attempted']} "
+                f"applied={apply_result['applied']} "
+                f"failed={apply_result['failed']}"
+            )
 
 
 @pma_app.command("agents")
@@ -1693,7 +1731,9 @@ def pma_thread_send(
         option_hint="--message, --message-file, or --message-stdin",
     )
     normalized_notify_on = _normalize_notify_on(notify_on)
-    should_defer = watch or normalized_notify_on == "terminal"
+    # Always defer execution here so `send` returns immediately; `--watch`
+    # only controls whether we tail the managed turn afterward.
+    should_defer = True
     normalized_if_busy = (if_busy or "").strip().lower() or "queue"
     if normalized_if_busy not in {"queue", "interrupt", "reject"}:
         raise typer.BadParameter("if-busy must be queue, interrupt, or reject")
@@ -1719,7 +1759,7 @@ def pma_thread_send(
             _build_pma_url(config, f"/threads/{managed_thread_id}/messages"),
             payload,
             token_env=config.server_auth_token_env,
-            timeout=240.0 if not should_defer else 30.0,
+            timeout=15.0,
         )
     except (httpx.HTTPError, ValueError, OSError, TypeError) as exc:
         typer.echo(f"Error: {exc}", err=True)

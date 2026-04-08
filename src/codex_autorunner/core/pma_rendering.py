@@ -122,6 +122,7 @@ def _render_freshness_section(
     if header_parts:
         lines.append(f"- {' '.join(header_parts)}")
     sections = snapshot_freshness.get("sections") or {}
+    stale_section_names: list[str] = []
     if isinstance(sections, Mapping):
         for section_name, payload in sections.items():
             if not isinstance(payload, Mapping):
@@ -129,11 +130,22 @@ def _render_freshness_section(
             count = _truncate(str(payload.get("entity_count") or 0), max_field_chars)
             stale = _truncate(str(payload.get("stale_count") or 0), max_field_chars)
             newest = _field(payload, "newest_basis_at", max_field_chars)
+            is_stale = int(payload.get("stale_count") or 0) > 0
+            if is_stale:
+                stale_section_names.append(str(section_name))
             lines.append(
                 f"- section={_truncate(str(section_name), max_field_chars)} "
                 f"count={count} stale={stale}"
                 + (f" newest_basis_at={newest}" if newest else "")
+                + (" STALE" if is_stale else "")
             )
+    if stale_section_names:
+        warning_sections = ", ".join(
+            _truncate(name, max_field_chars) for name in stale_section_names
+        )
+        lines.append(
+            f"WARNING: stale sections may be outdated; refresh before acting on: {warning_sections}"
+        )
     lines.append("")
 
 
