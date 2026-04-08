@@ -12,8 +12,8 @@ All Discord interactions follow a two-phase lifecycle:
    logic.  Timing is recorded from `interaction_created_at` through ack.
 
 2. **Background execution** (`CommandRunner`): after ingress acknowledges the
-   interaction, the runner dispatches it off the gateway hot path with per-command
-   timeout enforcement (default 120 s), stall warnings (default 60 s), and full
+   interaction, the runner dispatches it off the gateway hot path with optional
+   per-command timeout enforcement (disabled by default), stall warnings (default 60 s), and full
    lifecycle telemetry.
 
 Timeout and stall thresholds are configurable under `discord_bot.dispatch`:
@@ -21,7 +21,7 @@ Timeout and stall thresholds are configurable under `discord_bot.dispatch`:
 ```yaml
 discord_bot:
   dispatch:
-    handler_timeout_seconds: 120
+    handler_timeout_seconds: null
     handler_stalled_warning_seconds: 60
 ```
 

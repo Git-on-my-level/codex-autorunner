@@ -76,7 +76,7 @@ Discord auth envs (names configurable via `discord_bot.*_env`):
 
 Dispatch and timeout defaults:
 
-- `discord_bot.dispatch.handler_timeout_seconds` (default `120`)
+- `discord_bot.dispatch.handler_timeout_seconds` (default `null`, disabled)
 - `discord_bot.dispatch.handler_stalled_warning_seconds` (default `60`)
 
 These control the background command runner timeout and stall-warning threshold
