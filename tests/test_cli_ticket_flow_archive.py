@@ -393,6 +393,64 @@ def test_ticket_flow_archive_searches_full_ancestor_chain_for_hub_manifest(
     assert payload["archived_pma_thread_ids"] == [thread["managed_thread_id"]]
 
 
+def test_ticket_flow_archive_cleans_related_terminal_runs(
+    tmp_path: Path,
+) -> None:
+    repo_root = _setup_repo(tmp_path)
+    archived_run_id = "a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1"
+    stale_run_id = "b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2"
+    _seed_repo_run(repo_root, archived_run_id, FlowRunStatus.STOPPED)
+    _seed_repo_run(repo_root, stale_run_id, FlowRunStatus.SUPERSEDED)
+    _seed_ticket(repo_root)
+    _seed_contextspace(repo_root)
+
+    archived_run_dir = repo_root / ".codex-autorunner" / "runs" / archived_run_id
+    archived_run_dir.mkdir(parents=True, exist_ok=True)
+    stale_run_dir = repo_root / ".codex-autorunner" / "runs" / stale_run_id
+    stale_run_dir.mkdir(parents=True, exist_ok=True)
+    (stale_run_dir / "reply.txt").write_text("stale payload\n", encoding="utf-8")
+
+    stale_flow_dir = repo_root / ".codex-autorunner" / "flows" / stale_run_id / "chat"
+    stale_flow_dir.mkdir(parents=True, exist_ok=True)
+    (stale_flow_dir / "events.jsonl").write_text("{}", encoding="utf-8")
+
+    payload = archive_flow_run_artifacts(
+        repo_root,
+        run_id=archived_run_id,
+        force=False,
+        delete_run=True,
+    )
+
+    related = payload["related_terminal_cleanup"]
+    assert related["archived_run_ids"] == [stale_run_id]
+    assert related["deleted_run_ids"] == [stale_run_id]
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / stale_run_id
+        / "archived_runs"
+        / "reply.txt"
+    ).read_text(encoding="utf-8") == "stale payload\n"
+    assert (
+        repo_root
+        / ".codex-autorunner"
+        / "archive"
+        / "runs"
+        / stale_run_id
+        / "flow_state"
+        / "chat"
+        / "events.jsonl"
+    ).read_text(encoding="utf-8") == "{}"
+
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        store.initialize()
+        assert store.get_flow_run(archived_run_id) is None
+        assert store.get_flow_run(stale_run_id) is None
+
+
 def test_ticket_flow_archive_scans_all_active_threads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

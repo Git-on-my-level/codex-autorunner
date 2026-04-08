@@ -37,7 +37,8 @@ from .destinations import (
     default_car_docker_container_name,
     resolve_effective_repo_destination,
 )
-from .flows import FlowRunStatus, FlowStore, archive_flow_run_artifacts
+from .flows import FlowStore
+from .flows.archive_helpers import archive_terminal_flow_runs
 from .force_attestation import enforce_force_attestation
 from .git_utils import (
     GitError,
@@ -900,31 +901,28 @@ class WorktreeManager:
                 continue
             finally:
                 store.close()
-            completed = [r for r in records if r.status == FlowRunStatus.COMPLETED]
-            if not completed:
+            terminal = [r for r in records if r.status.is_terminal()]
+            if not terminal:
                 continue
             if dry_run:
-                n = len(completed)
+                n = len(terminal)
                 flow_by_repo.append({"repo_id": entry.id, "count": n})
                 total_flow_count += n
                 continue
-            archived_here = 0
-            for record in completed:
-                try:
-                    archive_flow_run_artifacts(
-                        repo_root,
-                        run_id=record.id,
-                        force=False,
-                        delete_run=True,
-                    )
-                    archived_here += 1
-                except (OSError, ValueError) as exc:
-                    logger.warning(
-                        "cleanup_all: archive flow run failed repo=%s run=%s",
-                        entry.id,
-                        record.id,
-                        exc_info=exc,
-                    )
+            try:
+                cleanup_summary = archive_terminal_flow_runs(
+                    repo_root,
+                    store=store,
+                    delete_run=True,
+                )
+                archived_here = int(cleanup_summary.get("deleted_run_count") or 0)
+            except (OSError, ValueError, sqlite3.Error) as exc:
+                logger.warning(
+                    "cleanup_all: archive terminal runs failed repo=%s",
+                    entry.id,
+                    exc_info=exc,
+                )
+                archived_here = 0
             if archived_here:
                 flow_by_repo.append({"repo_id": entry.id, "count": archived_here})
             total_flow_count += archived_here
