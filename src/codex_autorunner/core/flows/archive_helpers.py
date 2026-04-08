@@ -303,8 +303,24 @@ def archive_terminal_flow_runs(
     archived_run_summaries: list[dict[str, Any]] = []
     archived_pma_thread_ids: list[str] = []
     deleted_run_ids: list[str] = []
+    failed_runs: list[dict[str, str]] = []
     for record in records:
-        run_summary = _archive_run_scoped_artifacts(repo_root, record=record)
+        try:
+            run_summary = _archive_run_scoped_artifacts(repo_root, record=record)
+        except Exception as exc:  # intentional: sibling cleanup must stay best-effort
+            logger.warning(
+                "Failed to archive terminal sibling run %s",
+                record.id,
+                exc_info=exc,
+            )
+            failed_runs.append(
+                {
+                    "run_id": record.id,
+                    "error": str(exc).strip() or exc.__class__.__name__,
+                }
+            )
+            continue
+
         archived_run_ids.append(record.id)
         archived_run_summaries.append(run_summary)
         try:
@@ -329,6 +345,8 @@ def archive_terminal_flow_runs(
         "archived_pma_thread_ids": archived_pma_thread_ids,
         "archived_pma_thread_count": len(archived_pma_thread_ids),
         "archived_runs": archived_run_summaries,
+        "failed_runs": failed_runs,
+        "failed_run_count": len(failed_runs),
     }
 
 

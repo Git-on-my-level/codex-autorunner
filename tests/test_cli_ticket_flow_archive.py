@@ -451,6 +451,62 @@ def test_ticket_flow_archive_cleans_related_terminal_runs(
         assert store.get_flow_run(stale_run_id) is None
 
 
+def test_ticket_flow_archive_tolerates_sibling_cleanup_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _setup_repo(tmp_path)
+    archived_run_id = "c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3"
+    failing_run_id = "d4d4d4d4-d4d4-d4d4-d4d4-d4d4d4d4d4d4"
+    _seed_repo_run(repo_root, archived_run_id, FlowRunStatus.STOPPED)
+    _seed_repo_run(repo_root, failing_run_id, FlowRunStatus.SUPERSEDED)
+
+    archived_run_dir = repo_root / ".codex-autorunner" / "runs" / archived_run_id
+    archived_run_dir.mkdir(parents=True, exist_ok=True)
+    failing_run_dir = repo_root / ".codex-autorunner" / "runs" / failing_run_id
+    failing_run_dir.mkdir(parents=True, exist_ok=True)
+
+    original_archive_run_scoped_artifacts = archive_flow_run_artifacts.__globals__[
+        "_archive_run_scoped_artifacts"
+    ]
+
+    def fake_archive_run_scoped_artifacts(
+        repo_root_arg: Path,
+        *,
+        record: object,
+    ) -> dict[str, object]:
+        if getattr(record, "id", None) == failing_run_id:
+            raise PermissionError("permission denied")
+        return original_archive_run_scoped_artifacts(repo_root_arg, record=record)
+
+    monkeypatch.setitem(
+        archive_flow_run_artifacts.__globals__,
+        "_archive_run_scoped_artifacts",
+        fake_archive_run_scoped_artifacts,
+    )
+
+    payload = archive_flow_run_artifacts(
+        repo_root,
+        run_id=archived_run_id,
+        force=False,
+        delete_run=True,
+    )
+
+    related = payload["related_terminal_cleanup"]
+    assert related["archived_run_ids"] == []
+    assert related["deleted_run_ids"] == []
+    assert related["failed_run_count"] == 1
+    assert related["failed_runs"] == [
+        {"run_id": failing_run_id, "error": "permission denied"}
+    ]
+
+    db_path = repo_root / ".codex-autorunner" / "flows.db"
+    with FlowStore(db_path) as store:
+        store.initialize()
+        assert store.get_flow_run(archived_run_id) is None
+        assert store.get_flow_run(failing_run_id) is not None
+
+
 def test_ticket_flow_archive_scans_all_active_threads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
