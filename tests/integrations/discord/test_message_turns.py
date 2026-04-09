@@ -8618,7 +8618,6 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
             public_execution_error="Runtime thread failed",
             timeout_error="Runtime thread timed out",
             interrupted_error="Runtime thread interrupted",
-            turn_preview="",
         )
     )
     coordinator.ensure_queue_worker(
@@ -8735,7 +8734,6 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
             public_execution_error="Runtime thread failed",
             timeout_error="Runtime thread timed out",
             interrupted_error="Runtime thread interrupted",
-            turn_preview="",
         )
     )
     coordinator.ensure_queue_worker(
@@ -8836,7 +8834,6 @@ async def test_discord_managed_thread_coordinator_prefers_started_execution_erro
             public_execution_error="Discord PMA turn failed",
             timeout_error="Discord PMA turn timed out",
             interrupted_error="Discord PMA turn interrupted",
-            turn_preview="preview",
         )
     )
 

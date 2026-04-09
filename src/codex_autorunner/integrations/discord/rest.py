@@ -21,6 +21,7 @@ _DISCORD_ATTACHMENT_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.n
 # deadline. A 2s read timeout caused avoidable "application did not respond"
 # when the API or network was slightly slow; stay under 3s but allow headroom.
 DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS = 2.85
+DISCORD_INTERACTION_CALLBACK_MAX_RETRIES = 1
 
 
 class DiscordRestClient:
@@ -105,10 +106,20 @@ class DiscordRestClient:
         self, *, path: str, max_retries: int
     ) -> bool:
         return (
-            max_retries == 0
+            max_retries <= DISCORD_INTERACTION_CALLBACK_MAX_RETRIES
             and path.startswith("/interactions/")
             and path.endswith("/callback")
         )
+
+    def _retry_delay_for_request(
+        self,
+        *,
+        attempt: int,
+        fail_fast_interaction_callback: bool,
+    ) -> float:
+        if fail_fast_interaction_callback:
+            return 0.0
+        return self._calculate_retry_delay(attempt)
 
     def _should_record_breaker_failure_for_fail_fast_callback(
         self, exc: Exception
@@ -134,10 +145,14 @@ class DiscordRestClient:
             if max_retries_override is None
             else max(0, int(max_retries_override))
         )
+        fail_fast_interaction_callback = (
+            self._is_fail_fast_interaction_callback_request(
+                path=path,
+                max_retries=max_retries,
+            )
+        )
         should_record_breaker_failure = self._should_record_breaker_failure
-        if self._is_fail_fast_interaction_callback_request(
-            path=path, max_retries=max_retries
-        ):
+        if fail_fast_interaction_callback:
             should_record_breaker_failure = (
                 self._should_record_breaker_failure_for_fail_fast_callback
             )
@@ -164,7 +179,8 @@ class DiscordRestClient:
                     if exc.response.status_code == 429:
                         retry_after_raw = exc.response.headers.get("Retry-After")
                         if (
-                            retry_after_raw is not None
+                            not fail_fast_interaction_callback
+                            and retry_after_raw is not None
                             and rate_limit_retries < max_retries
                         ):
                             rate_limit_retries += 1
@@ -193,9 +209,17 @@ class DiscordRestClient:
                     if 200 <= status_code < 300:
                         response = exc.response
                     elif 500 <= status_code < 600:
-                        if retry_attempt < max_retries:
+                        if (
+                            not fail_fast_interaction_callback
+                            and retry_attempt < max_retries
+                        ):
                             retry_attempt += 1
-                            delay = self._calculate_retry_delay(retry_attempt)
+                            delay = self._retry_delay_for_request(
+                                attempt=retry_attempt,
+                                fail_fast_interaction_callback=(
+                                    fail_fast_interaction_callback
+                                ),
+                            )
                             logger.warning(
                                 "Discord server error %d on %s %s, retrying in %.1fs (attempt %d/%d)",
                                 exc.response.status_code,
@@ -205,7 +229,8 @@ class DiscordRestClient:
                                 retry_attempt,
                                 max_retries,
                             )
-                            await asyncio.sleep(delay)
+                            if delay > 0:
+                                await asyncio.sleep(delay)
                             continue
                         raise DiscordTransientError(
                             f"Discord API server error for {method} {path}: "
@@ -222,9 +247,24 @@ class DiscordRestClient:
                             f"status={status_code} body={body_preview!r}"
                         ) from exc
                 except httpx.HTTPError as exc:
-                    if self._is_retryable_error(exc) and retry_attempt < max_retries:
+                    can_retry = self._is_retryable_error(exc)
+                    if fail_fast_interaction_callback and isinstance(
+                        exc,
+                        (
+                            httpx.ConnectTimeout,
+                            httpx.ReadTimeout,
+                            httpx.WriteTimeout,
+                        ),
+                    ):
+                        can_retry = False
+                    if can_retry and retry_attempt < max_retries:
                         retry_attempt += 1
-                        delay = self._calculate_retry_delay(retry_attempt)
+                        delay = self._retry_delay_for_request(
+                            attempt=retry_attempt,
+                            fail_fast_interaction_callback=(
+                                fail_fast_interaction_callback
+                            ),
+                        )
                         logger.warning(
                             "Discord network error on %s %s: %s, retrying in %.1fs (attempt %d/%d)",
                             method,
@@ -234,7 +274,8 @@ class DiscordRestClient:
                             retry_attempt,
                             max_retries,
                         )
-                        await asyncio.sleep(delay)
+                        if delay > 0:
+                            await asyncio.sleep(delay)
                         continue
                     raise DiscordTransientError(
                         f"Discord API network error for {method} {path}: {exc}"
@@ -306,7 +347,7 @@ class DiscordRestClient:
             f"/interactions/{interaction_id}/{interaction_token}/callback",
             payload=payload,
             expect_json=False,
-            max_retries_override=0,
+            max_retries_override=DISCORD_INTERACTION_CALLBACK_MAX_RETRIES,
             timeout_seconds_override=DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS,
         )
 

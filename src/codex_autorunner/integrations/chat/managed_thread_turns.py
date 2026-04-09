@@ -52,6 +52,10 @@ BeginNextQueuedExecution = Callable[
     [Any, str], Awaitable[Optional[RuntimeThreadExecution]]
 ]
 ManagedThreadLifecycleHook = Callable[[RuntimeThreadExecution], Any]
+MessagePreviewBuilder = Callable[[str], str]
+
+_QUEUE_WORKER_FAILURE_ERROR = "Queue worker terminated unexpectedly"
+logger = logging.getLogger(__name__)
 
 _DIRECT_RUN_EVENT_TYPES = (
     OutputDelta,
@@ -194,16 +198,6 @@ def _matching_backend_thread_target(
             continue
         return candidate
     return None
-
-
-def _bind_queued_execution_runner(
-    process_started_execution: Callable[[RuntimeThreadExecution], Awaitable[None]],
-    started_execution: RuntimeThreadExecution,
-) -> Callable[[], Awaitable[None]]:
-    async def _run() -> None:
-        await process_started_execution(started_execution)
-
-    return _run
 
 
 async def _invoke_lifecycle_hook(
@@ -355,6 +349,7 @@ class ManagedThreadTurnCoordinator:
     errors: ManagedThreadErrorMessages
     logger: logging.Logger
     turn_preview: str
+    preview_builder: Optional[MessagePreviewBuilder] = None
 
     async def submit_execution(
         self,
@@ -380,6 +375,21 @@ class ManagedThreadTurnCoordinator:
         runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
     ) -> dict[str, Any]:
         resolved_hooks = hooks or ManagedThreadCoordinatorHooks()
+        turn_preview = self.turn_preview
+        if self.preview_builder is not None:
+            try:
+                turn_preview = self.preview_builder(started.request.message_text)
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ):
+                self.logger.debug(
+                    "%s preview builder failed; falling back to coordinator preview",
+                    self.surface.log_label,
+                    exc_info=True,
+                )
         await _invoke_lifecycle_hook(resolved_hooks.on_execution_started, started)
         try:
             return await finalize_managed_thread_execution(
@@ -389,7 +399,7 @@ class ManagedThreadTurnCoordinator:
                 surface=self.surface,
                 errors=self.errors,
                 logger=self.logger,
-                turn_preview=self.turn_preview,
+                turn_preview=turn_preview,
                 runtime_event_state=runtime_event_state,
                 on_progress_event=resolved_hooks.on_progress_event,
             )
@@ -532,11 +542,109 @@ def ensure_managed_thread_queue_worker(
     worker_task: Optional[asyncio.Task[Any]] = None
     begin_next = begin_next_execution or begin_next_queued_runtime_thread_execution
 
+    async def _record_queue_worker_failure(
+        started_execution: RuntimeThreadExecution,
+        *,
+        error: str,
+    ) -> dict[str, Any]:
+        detail = error.strip() or _QUEUE_WORKER_FAILURE_ERROR
+        try:
+            orchestration_service.record_execution_result(
+                started_execution.thread.thread_target_id,
+                started_execution.execution.execution_id,
+                status="error",
+                assistant_text="",
+                error=detail,
+                backend_turn_id=None,
+                transcript_turn_id=None,
+            )
+        except KeyError:
+            pass
+        return {
+            "status": "error",
+            "assistant_text": "",
+            "error": detail,
+            "managed_thread_id": started_execution.thread.thread_target_id,
+            "managed_turn_id": started_execution.execution.execution_id,
+            "backend_thread_id": getattr(
+                started_execution.thread,
+                "backend_thread_id",
+                None,
+            ),
+            "token_usage": None,
+        }
+
     async def _process_started_execution(
         started_execution: RuntimeThreadExecution,
     ) -> None:
-        finalized = await finalize_started_execution(started_execution)
-        await deliver_result(finalized)
+        finalized: Optional[dict[str, Any]] = None
+        try:
+            if run_with_indicator is None:
+                finalized = await finalize_started_execution(started_execution)
+            else:
+
+                async def _finalize_work() -> None:
+                    nonlocal finalized
+                    finalized = await finalize_started_execution(started_execution)
+
+                await run_with_indicator(_finalize_work)
+        except BaseException as exc:
+            if finalized is not None:
+                logger.exception(
+                    "Managed-thread queue worker indicator failed after execution finalized "
+                    "(thread=%s execution=%s)",
+                    started_execution.thread.thread_target_id,
+                    started_execution.execution.execution_id,
+                )
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+            else:
+                logger.exception(
+                    "Managed-thread queued execution failed "
+                    "(thread=%s execution=%s)",
+                    started_execution.thread.thread_target_id,
+                    started_execution.execution.execution_id,
+                )
+                finalized = await _record_queue_worker_failure(
+                    started_execution,
+                    error=str(exc) or _QUEUE_WORKER_FAILURE_ERROR,
+                )
+                try:
+                    await deliver_result(finalized)
+                except (
+                    RuntimeError,
+                    OSError,
+                    ValueError,
+                    TypeError,
+                    ConnectionError,
+                ):
+                    logger.exception(
+                        "Managed-thread queued execution failure delivery failed "
+                        "(thread=%s execution=%s)",
+                        started_execution.thread.thread_target_id,
+                        started_execution.execution.execution_id,
+                    )
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                return
+
+        if finalized is None:
+            return
+        try:
+            await deliver_result(finalized)
+        except (
+            RuntimeError,
+            OSError,
+            ValueError,
+            TypeError,
+            ConnectionError,
+        ):
+            logger.exception(
+                "Managed-thread queued execution delivery failed "
+                "(thread=%s execution=%s)",
+                started_execution.thread.thread_target_id,
+                started_execution.execution.execution_id,
+            )
 
     async def _queue_worker() -> None:
         try:
@@ -553,15 +661,36 @@ def ensure_managed_thread_queue_worker(
                 )
                 if started is None:
                     break
-                if run_with_indicator is None:
-                    await _process_started_execution(started)
-                else:
-                    await run_with_indicator(
-                        _bind_queued_execution_runner(
-                            _process_started_execution,
-                            started,
-                        )
+                await _process_started_execution(started)
+        except BaseException:
+            logger.exception(
+                "Managed-thread queue worker failed (thread=%s)",
+                managed_thread_id,
+            )
+            try:
+                running = orchestration_service.get_running_execution(managed_thread_id)
+                if running is not None:
+                    orchestration_service.record_execution_result(
+                        managed_thread_id,
+                        running.execution_id,
+                        status="error",
+                        assistant_text="",
+                        error=_QUEUE_WORKER_FAILURE_ERROR,
+                        backend_turn_id=None,
+                        transcript_turn_id=None,
                     )
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                AttributeError,
+            ):
+                logger.exception(
+                    "Managed-thread queue worker cleanup failed (thread=%s)",
+                    managed_thread_id,
+                )
+            raise
         finally:
             if (
                 worker_task is not None

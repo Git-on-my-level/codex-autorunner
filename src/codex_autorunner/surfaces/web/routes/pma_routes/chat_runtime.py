@@ -85,6 +85,69 @@ def _get_pma_config(request: Request) -> dict[str, Any]:
     return pma_config_from_raw(raw)
 
 
+async def _resolve_terminal_queue_item_result(
+    queue: Any,
+    *,
+    lane_id: str,
+    item_id: str,
+) -> Optional[dict[str, Any]]:
+    try:
+        items = await queue.list_items(lane_id)
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,
+        TypeError,
+        AttributeError,
+    ):
+        logger.debug(
+            "Failed to read PMA queue item state for late result delivery",
+            exc_info=True,
+        )
+        return None
+
+    for queued_item in items:
+        if getattr(queued_item, "item_id", None) != item_id:
+            continue
+        state = getattr(queued_item, "state", None)
+        if state == QueueItemState.COMPLETED:
+            result = getattr(queued_item, "result", None)
+            return dict(result) if isinstance(result, dict) else {"status": "ok"}
+        if state == QueueItemState.FAILED:
+            return {
+                "status": "error",
+                "detail": str(getattr(queued_item, "error", "") or "").strip()
+                or "PMA chat failed",
+            }
+        if state == QueueItemState.CANCELLED:
+            return {
+                "status": "error",
+                "detail": str(getattr(queued_item, "error", "") or "").strip()
+                or "PMA chat cancelled",
+            }
+        break
+    return None
+
+
+async def _register_pma_result_future(
+    runtime: PmaRuntimeState,
+    queue: Any,
+    *,
+    lane_id: str,
+    item_id: str,
+) -> asyncio.Future[dict[str, Any]]:
+    result_future = asyncio.get_running_loop().create_future()
+    runtime.item_futures[item_id] = result_future
+    late_result = await _resolve_terminal_queue_item_result(
+        queue,
+        lane_id=lane_id,
+        item_id=item_id,
+    )
+    if late_result is not None and not result_future.done():
+        result_future.set_result(late_result)
+    return result_future
+
+
 def _resolve_agent_profile(
     request: Request,
     agent_id: str,
@@ -1729,13 +1792,11 @@ def build_chat_runtime_router(
                 "deduped": True,
             }
 
-        result_future = asyncio.get_running_loop().create_future()
-        runtime.item_futures[item.item_id] = result_future
-
+        result_future = await _register_pma_result_future(
+            runtime, queue, lane_id=lane_id, item_id=item.item_id
+        )
         await runtime.ensure_lane_worker(
-            lane_id,
-            request,
-            lambda item: _execute_queue_item(runtime, item, request),
+            lane_id, request, lambda item: _execute_queue_item(runtime, item, request)
         )
 
         try:
@@ -1748,6 +1809,8 @@ def build_chat_runtime_router(
                 "status": "error",
                 "detail": "An error occurred processing your request",
             }
+        finally:
+            runtime.item_futures.pop(item.item_id, None)
 
         return result
 

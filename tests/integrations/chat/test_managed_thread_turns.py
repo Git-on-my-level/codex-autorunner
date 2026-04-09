@@ -45,6 +45,31 @@ def _build_started_execution(tmp_path: Path) -> RuntimeThreadExecution:
     )
 
 
+def _replace_started_execution(
+    started: RuntimeThreadExecution,
+    *,
+    execution_id: str,
+    message_text: str,
+) -> RuntimeThreadExecution:
+    return RuntimeThreadExecution(
+        service=started.service,
+        harness=started.harness,
+        thread=started.thread,
+        execution=ExecutionRecord(
+            execution_id=execution_id,
+            target_id=started.execution.target_id,
+            target_kind=started.execution.target_kind,
+            status=started.execution.status,
+        ),
+        workspace_root=started.workspace_root,
+        request=MessageRequest(
+            target_id=started.request.target_id,
+            target_kind=started.request.target_kind,
+            message_text=message_text,
+        ),
+    )
+
+
 @pytest.mark.anyio
 async def test_managed_thread_turn_coordinator_runs_lifecycle_hooks(
     tmp_path: Path,
@@ -107,6 +132,48 @@ async def test_managed_thread_turn_coordinator_runs_lifecycle_hooks(
 
     assert result == {"status": "ok", "managed_turn_id": "exec-1"}
     assert events == ["started", "finalize", "finished"]
+
+
+@pytest.mark.anyio
+async def test_managed_thread_turn_coordinator_uses_preview_builder_per_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    captured_preview: dict[str, str] = {}
+
+    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+        captured_preview["value"] = kwargs["turn_preview"]
+        return {"status": "ok", "managed_turn_id": "exec-1"}
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "finalize_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    coordinator = managed_thread_turns_module.ManagedThreadTurnCoordinator(
+        orchestration_service=SimpleNamespace(),
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind="test",
+            surface_key="surface-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="public",
+            timeout_error="timeout",
+            interrupted_error="interrupted",
+            timeout_seconds=30,
+        ),
+        logger=logging.getLogger("test"),
+        turn_preview="stale-preview",
+        preview_builder=lambda message_text: f"preview:{message_text}",
+    )
+
+    await coordinator.run_started_execution(started)
+
+    assert captured_preview == {"value": "preview:hello"}
 
 
 @pytest.mark.anyio
@@ -195,9 +262,106 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
         "started",
         "finalize",
         "finished",
-        ("deliver", "exec-1"),
         "indicator:end",
+        ("deliver", "exec-1"),
     ]
+    assert task_map == {}
+
+
+@pytest.mark.anyio
+async def test_managed_thread_turn_coordinator_queue_worker_recovers_and_continues(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _build_started_execution(tmp_path)
+    second = _replace_started_execution(
+        first,
+        execution_id="exec-2",
+        message_text="second queued message",
+    )
+    begin_calls = 0
+    delivered: list[tuple[str, str]] = []
+    recorded_errors: list[tuple[str, str, str]] = []
+
+    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+        started = kwargs["started"]
+        if started.execution.execution_id == "exec-1":
+            raise RuntimeError("worker finalize exploded")
+        return {
+            "status": "ok",
+            "managed_turn_id": started.execution.execution_id,
+        }
+
+    async def _fake_begin_next(
+        orchestration_service: object,
+        managed_thread_id: str,
+    ) -> Optional[RuntimeThreadExecution]:
+        nonlocal begin_calls
+        _ = orchestration_service, managed_thread_id
+        begin_calls += 1
+        if begin_calls == 1:
+            return first
+        if begin_calls == 2:
+            return second
+        return None
+
+    async def _deliver_result(finalized: dict[str, Any]) -> None:
+        delivered.append(
+            (
+                str(finalized["managed_turn_id"]),
+                str(finalized["status"]),
+            )
+        )
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "finalize_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    task_map: dict[str, asyncio.Task[Any]] = {}
+    spawned_tasks: list[asyncio.Task[Any]] = []
+    orchestration_service = SimpleNamespace(
+        get_running_execution=lambda managed_thread_id: None,
+        record_execution_result=lambda thread_id, execution_id, **kwargs: recorded_errors.append(
+            (thread_id, execution_id, str(kwargs.get("error") or ""))
+        ),
+    )
+    coordinator = managed_thread_turns_module.ManagedThreadTurnCoordinator(
+        orchestration_service=orchestration_service,
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind="test",
+            surface_key="surface-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="public",
+            timeout_error="timeout",
+            interrupted_error="interrupted",
+            timeout_seconds=30,
+        ),
+        logger=logging.getLogger("test"),
+        turn_preview="preview",
+    )
+
+    coordinator.ensure_queue_worker(
+        task_map=task_map,
+        managed_thread_id="thread-1",
+        spawn_task=lambda coro: spawned_tasks.append(asyncio.create_task(coro))
+        or spawned_tasks[-1],
+        hooks=managed_thread_turns_module.ManagedThreadCoordinatorHooks(
+            deliver_result=_deliver_result,
+        ),
+        begin_next_execution=_fake_begin_next,
+    )
+
+    await asyncio.gather(*spawned_tasks)
+
+    assert recorded_errors == [
+        ("thread-1", "exec-1", "worker finalize exploded"),
+    ]
+    assert delivered == [("exec-1", "error"), ("exec-2", "ok")]
     assert task_map == {}
 
 

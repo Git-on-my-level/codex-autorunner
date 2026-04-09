@@ -245,6 +245,46 @@ async def test_interaction_4xx_does_not_open_shared_breaker() -> None:
 
 
 @pytest.mark.anyio
+async def test_interaction_callback_retries_fast_transient_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = {"count": 0}
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.discord.rest.asyncio.sleep",
+        fake_sleep,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(204)
+
+    client = DiscordRestClient(
+        bot_token="abc123",
+        base_url="https://discord.test/api/v10",
+        max_retries=0,
+    )
+    await _configure_mock_client(client, httpx.MockTransport(handler))
+    try:
+        await client.create_interaction_response(
+            interaction_id="123",
+            interaction_token="token",
+            payload={"type": 5},
+        )
+    finally:
+        await client.close()
+
+    assert attempts["count"] == 2
+    assert sleeps == []
+
+
+@pytest.mark.anyio
 async def test_rate_limit_exhaustion_does_not_open_shared_breaker() -> None:
     attempts = {"count": 0}
 

@@ -1143,7 +1143,6 @@ def _build_discord_managed_thread_coordinator(
     public_execution_error: str,
     timeout_error: str,
     interrupted_error: str,
-    turn_preview: str,
 ) -> ManagedThreadTurnCoordinator:
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
@@ -1160,7 +1159,11 @@ def _build_discord_managed_thread_coordinator(
             timeout_seconds=DISCORD_PMA_TIMEOUT_SECONDS,
         ),
         logger=getattr(service, "_logger", _logger),
-        turn_preview=turn_preview,
+        turn_preview="",
+        preview_builder=lambda message_text: truncate_for_discord(
+            message_text,
+            max_len=120,
+        ),
     )
 
 
@@ -1305,7 +1308,6 @@ async def _run_discord_orchestrated_turn_for_message(
         public_execution_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
-        turn_preview=truncate_for_discord(prompt_text, max_len=120),
     )
     tracker = TurnProgressTracker(
         started_at=time.monotonic(),

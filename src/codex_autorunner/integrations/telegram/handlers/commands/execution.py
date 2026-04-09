@@ -464,7 +464,6 @@ def _build_telegram_managed_thread_coordinator(
     public_execution_error: str,
     timeout_error: str,
     interrupted_error: str,
-    turn_preview: str,
 ) -> ManagedThreadTurnCoordinator:
     return ManagedThreadTurnCoordinator(
         orchestration_service=orchestration_service,
@@ -485,7 +484,11 @@ def _build_telegram_managed_thread_coordinator(
             timeout_seconds=TELEGRAM_PMA_TIMEOUT_SECONDS,
         ),
         logger=getattr(handlers, "_logger", logging.getLogger(__name__)),
-        turn_preview=turn_preview,
+        turn_preview="",
+        preview_builder=lambda message_text: _preview_from_text(
+            message_text,
+            RESUME_PREVIEW_USER_LIMIT,
+        ),
     )
 
 
@@ -725,7 +728,6 @@ def _ensure_telegram_managed_thread_queue_worker(
         public_execution_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
-        turn_preview="",
     )
     coordinator.ensure_queue_worker(
         task_map=task_map,
@@ -874,7 +876,6 @@ async def _run_telegram_managed_thread_turn(
         public_execution_error=public_execution_error,
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
-        turn_preview=_preview_from_text(prompt_text, RESUME_PREVIEW_USER_LIMIT),
     )
 
     def ensure_queue_worker() -> None:

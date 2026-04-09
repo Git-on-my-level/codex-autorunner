@@ -286,6 +286,61 @@ def test_pma_chat_submits_through_surface_orchestration_ingress(
     }
 
 
+@pytest.mark.anyio
+async def test_pma_chat_returns_completed_queue_result_when_future_is_registered_late(
+    hub_env,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_pma(hub_env.hub_root)
+    app = create_hub_app(hub_env.hub_root)
+    queue = PmaQueue(hub_env.hub_root)
+    original_enqueue = queue.enqueue
+
+    async def _enqueue_and_complete(
+        lane_id: str,
+        idempotency_key: str,
+        payload: dict[str, Any],
+    ):
+        item, dupe_reason = await original_enqueue(lane_id, idempotency_key, payload)
+        await queue.complete_item(
+            item,
+            {
+                "status": "ok",
+                "message": "late queue result",
+                "client_turn_id": "",
+            },
+        )
+        return item, dupe_reason
+
+    async def _ensure_lane_worker(*args: Any, **kwargs: Any) -> None:
+        _ = args, kwargs
+
+    monkeypatch.setattr(queue, "enqueue", _enqueue_and_complete)
+    monkeypatch.setattr(
+        chat_runtime.PmaRuntimeState,
+        "get_pma_queue",
+        lambda self, hub_root: queue,
+    )
+    monkeypatch.setattr(
+        chat_runtime.PmaRuntimeState,
+        "ensure_lane_worker",
+        _ensure_lane_worker,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        resp = await client.post("/hub/pma/chat", json={"message": "hello"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "status": "ok",
+        "message": "late queue result",
+        "client_turn_id": "",
+    }
+
+
 def test_pma_thread_status_includes_queued_turns(hub_env) -> None:
     _enable_pma(hub_env.hub_root)
     app = create_hub_app(hub_env.hub_root)

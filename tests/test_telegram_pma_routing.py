@@ -1756,9 +1756,9 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
     assert events == [
         ("begin", -1001, 101),
         "finalize",
+        ("end", -1001, 101),
         ("send", -1001, 101, "queued telegram reply"),
         ("flush", -1001, 101),
-        ("end", -1001, 101),
     ]
 
 

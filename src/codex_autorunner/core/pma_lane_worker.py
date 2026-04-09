@@ -85,9 +85,11 @@ class PmaLaneWorker:
                 self.lane_id,
                 item.item_id,
             )
+            item_terminalized = False
             try:
                 result = await self._executor(item)
                 await self._queue.complete_item(item, result)
+                item_terminalized = True
                 self._log.info(
                     "PMA lane item completed (lane_id=%s item_id=%s status=%s)",
                     self.lane_id,
@@ -96,18 +98,30 @@ class PmaLaneWorker:
                 )
                 await self._notify(item, result)
             except (
-                Exception
+                BaseException
             ) as exc:  # intentional: executor is a user-provided callback
                 self._log.exception("Failed to process PMA queue item %s", item.item_id)
-                error_result = {"status": "error", "detail": str(exc)}
-                await self._queue.fail_item(item, str(exc))
+                detail = str(exc).strip() or "PMA lane item terminated unexpectedly"
+                error_result = {"status": "error", "detail": detail}
+                if not item_terminalized:
+                    try:
+                        await self._queue.fail_item(item, detail)
+                        item_terminalized = True
+                    except Exception:
+                        self._log.exception(
+                            "Failed to persist PMA queue failure (lane_id=%s item_id=%s)",
+                            self.lane_id,
+                            item.item_id,
+                        )
                 self._log.info(
                     "PMA lane item failed (lane_id=%s item_id=%s error=%s)",
                     self.lane_id,
                     item.item_id,
-                    str(exc),
+                    detail,
                 )
                 await self._notify(item, error_result)
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
 
     async def _notify(self, item: PmaQueueItem, result: dict[str, Any]) -> None:
         if self._on_result is None:
