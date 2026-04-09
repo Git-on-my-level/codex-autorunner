@@ -170,6 +170,13 @@ class _TurnRunFailure:
     transcript_text: Optional[str]
 
 
+@dataclass(frozen=True)
+class _TelegramTurnThreadContext:
+    thread_id: Optional[str]
+    pma_thread_registry: Optional[AppServerThreadRegistry]
+    pma_thread_key: Optional[str]
+
+
 def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
     chain: list[BaseException] = []
     current: Optional[BaseException] = exc
@@ -248,6 +255,72 @@ def _spawn_telegram_background_task(handlers: Any, coro: Any) -> asyncio.Task[An
     if callable(log_task_result):
         task.add_done_callback(log_task_result)
     return task
+
+
+def _resolve_telegram_turn_thread_context(
+    handlers: Any,
+    *,
+    record: "TelegramTopicRecord",
+    message: TelegramMessage,
+    pma_enabled: bool,
+) -> _TelegramTurnThreadContext:
+    pma_thread_registry = (
+        getattr(handlers, "_hub_thread_registry", None) if pma_enabled else None
+    )
+    pma_thread_key = (
+        handlers._pma_registry_key(record, message) if pma_enabled else None
+    )
+    thread_id = None if pma_enabled else record.active_thread_id
+    if pma_enabled and pma_thread_registry and pma_thread_key:
+        agent, profile = handlers._effective_agent_state(record)
+        legacy_keys = pma_legacy_migration_fallback_keys(pma_thread_key, agent, profile)
+        if legacy_keys:
+            thread_id = pma_thread_registry.get_thread_id_with_fallback(
+                pma_thread_key, *legacy_keys
+            )
+        else:
+            thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
+    return _TelegramTurnThreadContext(
+        thread_id=thread_id,
+        pma_thread_registry=pma_thread_registry,
+        pma_thread_key=pma_thread_key,
+    )
+
+
+async def _start_telegram_compatibility_thread(
+    handlers: Any,
+    *,
+    client: Any,
+    message: TelegramMessage,
+    record: "TelegramTopicRecord",
+    pma_mode: bool,
+    pma_thread_registry: Optional[AppServerThreadRegistry],
+    pma_thread_key: Optional[str],
+) -> tuple["TelegramTopicRecord", Optional[str]]:
+    workspace_path = record.workspace_path
+    if not workspace_path:
+        return record, None
+    thread = await client.thread_start(
+        workspace_path,
+        **handlers._thread_start_kwargs(record),
+    )
+    if not await handlers._require_thread_workspace(
+        message, workspace_path, thread, action="thread_start"
+    ):
+        return record, None
+    new_thread_id = _extract_thread_id(thread)
+    if not new_thread_id:
+        return record, None
+    if pma_mode and pma_thread_registry and pma_thread_key:
+        pma_thread_registry.set_thread_id(pma_thread_key, new_thread_id)
+        return record, new_thread_id
+    updated_record = await handlers._apply_thread_result(
+        message.chat_id,
+        message.thread_id,
+        thread,
+        active_thread_id=new_thread_id,
+    )
+    return updated_record, new_thread_id
 
 
 def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
@@ -2285,33 +2358,6 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             )
             return any(marker in message for marker in missing_markers)
 
-        async def _start_new_thread() -> Optional[str]:
-            nonlocal record
-            workspace_path = record.workspace_path
-            if not workspace_path:
-                return None
-            thread = await client.thread_start(
-                workspace_path,
-                **self._thread_start_kwargs(record),
-            )
-            if not await self._require_thread_workspace(
-                message, workspace_path, thread, action="thread_start"
-            ):
-                return None
-            new_thread_id = _extract_thread_id(thread)
-            if not new_thread_id:
-                return None
-            if pma_mode and pma_thread_registry and pma_thread_key:
-                pma_thread_registry.set_thread_id(pma_thread_key, new_thread_id)
-            elif not pma_mode:
-                record = await self._apply_thread_result(
-                    message.chat_id,
-                    message.thread_id,
-                    thread,
-                    active_thread_id=new_thread_id,
-                )
-            return new_thread_id
-
         try:
             client = await self._client_for_workspace(record.workspace_path)
         except AppServerUnavailableError as exc:
@@ -2360,7 +2406,15 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                         transcript_message_id=transcript_message_id,
                         transcript_text=transcript_text,
                     )
-                thread_id = await _start_new_thread()
+                record, thread_id = await _start_telegram_compatibility_thread(
+                    self,
+                    client=client,
+                    message=message,
+                    record=record,
+                    pma_mode=pma_mode,
+                    pma_thread_registry=pma_thread_registry,
+                    pma_thread_key=pma_thread_key,
+                )
                 if not thread_id:
                     return await self._maybe_send_failure(
                         message,
@@ -2520,7 +2574,15 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                                 transcript_message_id=transcript_message_id,
                                 transcript_text=transcript_text,
                             )
-                        thread_id = await _start_new_thread()
+                        record, thread_id = await _start_telegram_compatibility_thread(
+                            self,
+                            client=client,
+                            message=message,
+                            record=record,
+                            pma_mode=pma_mode,
+                            pma_thread_registry=pma_thread_registry,
+                            pma_thread_key=pma_thread_key,
+                        )
                         if thread_id is None:
                             raise
                         turn_handle = await client.turn_start(
@@ -3002,24 +3064,15 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 )
             record = verified
 
-        pma_thread_registry = (
-            getattr(self, "_hub_thread_registry", None) if pma_enabled else None
+        thread_context = _resolve_telegram_turn_thread_context(
+            self,
+            record=record,
+            message=message,
+            pma_enabled=pma_enabled,
         )
-        pma_thread_key = (
-            self._pma_registry_key(record, message) if pma_enabled else None
-        )
-        thread_id = None if pma_enabled else record.active_thread_id
-        if pma_enabled and pma_thread_registry and pma_thread_key:
-            agent, profile = self._effective_agent_state(record)
-            legacy_keys = pma_legacy_migration_fallback_keys(
-                pma_thread_key, agent, profile
-            )
-            if legacy_keys:
-                thread_id = pma_thread_registry.get_thread_id_with_fallback(
-                    pma_thread_key, *legacy_keys
-                )
-            else:
-                thread_id = pma_thread_registry.get_thread_id(pma_thread_key)
+        pma_thread_registry = thread_context.pma_thread_registry
+        pma_thread_key = thread_context.pma_thread_key
+        thread_id = thread_context.thread_id
         prompt_text = (
             text_override if text_override is not None else (message.text or "")
         )
@@ -3071,7 +3124,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 ),
             )
 
-        if pma_enabled and (has_managed_thread_runtime or agent == "opencode"):
+        if pma_enabled and uses_managed_thread_runtime:
             approval_policy, sandbox_policy = self._effective_policies(record)
             return await _run_telegram_managed_thread_turn(
                 self,
@@ -3092,7 +3145,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 sandbox_policy=sandbox_policy,
             )
 
-        if has_managed_thread_runtime or agent == "opencode":
+        if uses_managed_thread_runtime:
             approval_policy, sandbox_policy = self._effective_policies(record)
             return await _run_telegram_managed_thread_turn(
                 self,

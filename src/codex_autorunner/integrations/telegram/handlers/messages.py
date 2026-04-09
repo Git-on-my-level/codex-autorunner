@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import time
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional, Sequence
@@ -371,6 +372,15 @@ async def _submit_thread_message_core(
     await handlers._handle_normal_message(message, runtime, **normal_kwargs)
 
 
+async def _clear_message_placeholder(
+    handlers: Any,
+    message: TelegramMessage,
+    placeholder_id: Optional[int],
+) -> None:
+    if placeholder_id is not None:
+        await handlers._delete_message(message.chat_id, placeholder_id)
+
+
 def _has_pending_custom_question(handlers: Any, message: TelegramMessage) -> bool:
     for pending in handlers._pending_questions.values():
         if (
@@ -424,6 +434,31 @@ class _MediaBatchBuffer:
     task: Optional[asyncio.Task[None]] = None
     media_group_id: Optional[str] = None
     created_at: float = 0.0
+
+
+@dataclass(frozen=True)
+class _TelegramSurfaceTurnDispatch:
+    handlers: Any
+    message: TelegramMessage
+    runtime: Any
+    record: Any
+    topic_key: str
+    workspace_root: Path
+    prompt_text: str
+    flow_reply_text: str
+    pma_enabled: bool
+    paused: Optional[tuple[str, Any]]
+    notification_reply: Any
+    placeholder_id: Optional[int]
+
+    def build_request(self) -> SurfaceThreadMessageRequest:
+        return SurfaceThreadMessageRequest(
+            surface_kind="telegram",
+            workspace_root=self.workspace_root,
+            prompt_text=self.prompt_text,
+            agent_id=getattr(self.record, "agent", None),
+            pma_enabled=self.pma_enabled,
+        )
 
 
 def _message_text_candidate(message: TelegramMessage) -> tuple[str, str, Any]:
@@ -548,6 +583,25 @@ async def _enqueue_or_run_topic_work(
     await _run_wrapped_with_typing()
 
 
+async def _enqueue_or_run_topic_call(
+    handlers: Any,
+    key: str,
+    *,
+    chat_id: int,
+    thread_id: Optional[int],
+    placeholder_id: Optional[int],
+    callback: Any,
+) -> None:
+    await _enqueue_or_run_topic_work(
+        handlers,
+        key,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        placeholder_id=placeholder_id,
+        work=callback,
+    )
+
+
 async def _run_placeholder_wrapped_work(
     handlers: Any,
     *,
@@ -567,6 +621,114 @@ async def _run_placeholder_wrapped_work(
         await wrapped()
         return
     await wrapped
+
+
+def _build_telegram_surface_ingress(
+    handlers: Any,
+    *,
+    topic_key: str,
+    message: TelegramMessage,
+) -> Any:
+    event_logger = _event_logger(handlers)
+    return build_surface_orchestration_ingress(
+        event_sink=lambda orchestration_event: log_event(
+            event_logger,
+            logging.INFO,
+            f"telegram.{orchestration_event.event_type}",
+            topic_key=topic_key,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            message_id=message.message_id,
+            surface_kind=orchestration_event.surface_kind,
+            target_kind=orchestration_event.target_kind,
+            target_id=orchestration_event.target_id,
+            status=orchestration_event.status,
+            **orchestration_event.metadata,
+        )
+    )
+
+
+async def _resolve_telegram_paused_flow(
+    _request: SurfaceThreadMessageRequest,
+    *,
+    dispatch: _TelegramSurfaceTurnDispatch,
+) -> Optional[PausedFlowTarget]:
+    return await _resolve_paused_flow_core(dispatch.paused, dispatch.workspace_root)
+
+
+async def _submit_telegram_flow_reply(
+    _request: SurfaceThreadMessageRequest,
+    flow_target: PausedFlowTarget,
+    *,
+    dispatch: _TelegramSurfaceTurnDispatch,
+) -> None:
+    await _submit_flow_reply_core(
+        dispatch.handlers,
+        dispatch.message,
+        dispatch.paused,
+        dispatch.workspace_root,
+        dispatch.flow_reply_text,
+    )
+
+
+async def _submit_telegram_thread_message(
+    _request: SurfaceThreadMessageRequest,
+    *,
+    dispatch: _TelegramSurfaceTurnDispatch,
+) -> None:
+    await _submit_thread_message_core(
+        dispatch.handlers,
+        dispatch.message,
+        dispatch.runtime,
+        dispatch.record,
+        text_override=dispatch.prompt_text,
+        placeholder_id=dispatch.placeholder_id,
+        notification_reply=dispatch.notification_reply,
+    )
+
+
+async def _bind_telegram_notification_continuation(
+    dispatch: _TelegramSurfaceTurnDispatch,
+) -> None:
+    notification_reply = dispatch.notification_reply
+    if notification_reply is None:
+        return
+    orch_binding = _build_telegram_thread_orchestration_service(
+        dispatch.handlers
+    ).get_binding(
+        surface_kind="telegram",
+        surface_key=notification_surface_key(notification_reply.notification_id),
+    )
+    if orch_binding is not None:
+        PmaNotificationStore(dispatch.handlers._config.root).bind_continuation_thread(
+            notification_id=notification_reply.notification_id,
+            thread_target_id=orch_binding.thread_target_id,
+        )
+
+
+async def _submit_telegram_surface_turn(
+    dispatch: _TelegramSurfaceTurnDispatch,
+) -> None:
+    ingress = _build_telegram_surface_ingress(
+        dispatch.handlers,
+        topic_key=dispatch.topic_key,
+        message=dispatch.message,
+    )
+    request = dispatch.build_request()
+    if dispatch.notification_reply is not None:
+        await _submit_telegram_thread_message(request, dispatch=dispatch)
+        await _bind_telegram_notification_continuation(dispatch)
+        return
+    await ingress.submit_message(
+        request,
+        resolve_paused_flow_target=partial(
+            _resolve_telegram_paused_flow, dispatch=dispatch
+        ),
+        submit_flow_reply=partial(_submit_telegram_flow_reply, dispatch=dispatch),
+        submit_thread_message=partial(
+            _submit_telegram_thread_message, dispatch=dispatch
+        ),
+    )
 
 
 async def handle_message(handlers: Any, message: TelegramMessage) -> None:
@@ -694,27 +856,24 @@ async def handle_edited_message(
         return
     ctx = handlers._turn_contexts.get(turn_key)
     if ctx is None or ctx.reply_to_message_id != message.message_id:
-        if placeholder_id is not None:
-            await handlers._delete_message(message.chat_id, placeholder_id)
+        await _clear_message_placeholder(handlers, message, placeholder_id)
         return
     await handlers._handle_interrupt(message, runtime)
     edited_text = f"Edited: {text}"
 
-    async def work() -> None:
-        await handlers._handle_normal_message(
-            message,
-            runtime,
-            text_override=edited_text,
-            placeholder_id=placeholder_id,
-        )
-
-    await _enqueue_or_run_topic_work(
+    await _enqueue_or_run_topic_call(
         handlers,
         key,
         chat_id=message.chat_id,
         thread_id=message.thread_id,
         placeholder_id=placeholder_id,
-        work=work,
+        callback=partial(
+            handlers._handle_normal_message,
+            message,
+            runtime,
+            text_override=edited_text,
+            placeholder_id=placeholder_id,
+        ),
     )
 
 
@@ -734,13 +893,8 @@ async def handle_message_inner(
         entities = message.caption_entities
     has_media = message_has_media(message)
     if not text and not has_media:
-        if placeholder_id is not None:
-            await handlers._delete_message(message.chat_id, placeholder_id)
+        await _clear_message_placeholder(handlers, message, placeholder_id)
         return
-
-    async def _clear_placeholder() -> None:
-        if placeholder_id is not None:
-            await handlers._delete_message(message.chat_id, placeholder_id)
 
     if isinstance(topic_key, str) and topic_key:
         key = topic_key
@@ -771,7 +925,7 @@ async def handle_message_inner(
         )
         if has_pending_state:
             _log_message_policy_result(handlers, message, command_policy_result)
-            await _clear_placeholder()
+            await _clear_message_placeholder(handlers, message, placeholder_id)
             return
 
     if text and handlers._handle_pending_resume(
@@ -779,29 +933,29 @@ async def handle_message_inner(
         text,
         user_id=message.from_user_id,
     ):
-        await _clear_placeholder()
+        await _clear_message_placeholder(handlers, message, placeholder_id)
         return
     if text and handlers._handle_pending_bind(
         key,
         text,
         user_id=message.from_user_id,
     ):
-        await _clear_placeholder()
+        await _clear_message_placeholder(handlers, message, placeholder_id)
         return
 
     if text and is_interrupt_alias(text) and not is_forwarded:
         if not command_policy_result.command_allowed:
             _log_message_policy_result(handlers, message, command_policy_result)
-            await _clear_placeholder()
+            await _clear_message_placeholder(handlers, message, placeholder_id)
             return
         await handlers._handle_interrupt(message, runtime)
-        await _clear_placeholder()
+        await _clear_message_placeholder(handlers, message, placeholder_id)
         return
 
     if text and text.startswith("!") and not has_media and not is_forwarded:
         if not command_policy_result.command_allowed:
             _log_message_policy_result(handlers, message, command_policy_result)
-            await _clear_placeholder()
+            await _clear_message_placeholder(handlers, message, placeholder_id)
             return
         agent_profile_options = getattr(handlers, "_agent_profile_options", None)
         _pop_pending_state_if_owned(handlers._resume_options, key, actor_id)
@@ -813,16 +967,13 @@ async def handle_message_inner(
         handlers._model_options.pop(key, None)
         handlers._model_pending.pop(key, None)
 
-        async def work() -> None:
-            await handlers._handle_bang_shell(message, text, runtime)
-
-        await _enqueue_or_run_topic_work(
+        await _enqueue_or_run_topic_call(
             handlers,
             key,
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             placeholder_id=placeholder_id,
-            work=work,
+            callback=partial(handlers._handle_bang_shell, message, text, runtime),
         )
         return
 
@@ -832,7 +983,7 @@ async def handle_message_inner(
         key,
         text,
     ):
-        await _clear_placeholder()
+        await _clear_message_placeholder(handlers, message, placeholder_id)
         return
 
     command_text = raw_text if raw_text.strip() else raw_caption
@@ -846,7 +997,7 @@ async def handle_message_inner(
     if await handlers._handle_pending_review_custom(
         key, message, runtime, command, raw_text, raw_caption
     ):
-        await _clear_placeholder()
+        await _clear_message_placeholder(handlers, message, placeholder_id)
         return
     if command:
         agent_profile_options = getattr(handlers, "_agent_profile_options", None)
@@ -900,30 +1051,26 @@ async def handle_message_inner(
     if command:
         if not command_policy_result.command_allowed:
             _log_message_policy_result(handlers, message, command_policy_result)
-            await _clear_placeholder()
+            await _clear_message_placeholder(handlers, message, placeholder_id)
             return
         spec = handlers._command_specs.get(command.name)
-
-        async def work() -> None:
-            await handlers._handle_command(command, message, runtime)
-
         if spec and spec.allow_during_turn:
             handlers._spawn_task(
                 _run_placeholder_wrapped_work(
                     handlers,
                     chat_id=message.chat_id,
                     placeholder_id=placeholder_id,
-                    work=work,
+                    work=partial(handlers._handle_command, command, message, runtime),
                 )
             )
         else:
-            await _enqueue_or_run_topic_work(
+            await _enqueue_or_run_topic_call(
                 handlers,
                 key,
                 chat_id=message.chat_id,
                 thread_id=message.thread_id,
                 placeholder_id=placeholder_id,
-                work=work,
+                callback=partial(handlers._handle_command, command, message, runtime),
             )
         return
 
@@ -968,122 +1115,48 @@ async def handle_message_inner(
             pass
         else:
             _log_message_policy_result(handlers, message, policy_result)
-            await _clear_placeholder()
+            await _clear_message_placeholder(handlers, message, placeholder_id)
             return
 
     if has_media:
-
-        async def work() -> None:
-            await handle_media_message(
-                handlers,
-                message,
-                runtime,
-                text,
-                placeholder_id=placeholder_id,
-            )
-
-        await _enqueue_or_run_topic_work(
+        await _enqueue_or_run_topic_call(
             handlers,
             key,
             chat_id=message.chat_id,
             thread_id=message.thread_id,
             placeholder_id=placeholder_id,
-            work=work,
+            callback=partial(
+                handle_media_message,
+                handlers,
+                message,
+                runtime,
+                text,
+                placeholder_id=placeholder_id,
+            ),
         )
         return
 
-    event_logger = _event_logger(handlers)
-    ingress = build_surface_orchestration_ingress(
-        event_sink=lambda orchestration_event: log_event(
-            event_logger,
-            logging.INFO,
-            f"telegram.{orchestration_event.event_type}",
-            topic_key=key,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            message_id=message.message_id,
-            surface_kind=orchestration_event.surface_kind,
-            target_kind=orchestration_event.target_kind,
-            target_id=orchestration_event.target_id,
-            status=orchestration_event.status,
-            **orchestration_event.metadata,
-        )
+    dispatch = _TelegramSurfaceTurnDispatch(
+        handlers=handlers,
+        message=message,
+        runtime=runtime,
+        record=record,
+        topic_key=key,
+        workspace_root=workspace_root or Path("."),
+        prompt_text=turn_text,
+        flow_reply_text=flow_reply_text,
+        pma_enabled=pma_enabled,
+        paused=paused,
+        notification_reply=notification_reply,
+        placeholder_id=placeholder_id,
     )
-
-    async def _resolve_paused_flow(
-        _request: SurfaceThreadMessageRequest,
-    ) -> Optional[PausedFlowTarget]:
-        return await _resolve_paused_flow_core(paused, workspace_root)
-
-    async def _submit_flow_reply(
-        _request: SurfaceThreadMessageRequest, flow_target: PausedFlowTarget
-    ) -> None:
-        await _submit_flow_reply_core(
-            handlers,
-            message,
-            paused,
-            workspace_root or Path("."),
-            flow_reply_text,
-        )
-
-    async def _submit_thread_message(
-        _request: SurfaceThreadMessageRequest,
-    ) -> None:
-        await _submit_thread_message_core(
-            handlers,
-            message,
-            runtime,
-            record,
-            text_override=turn_text,
-            placeholder_id=placeholder_id,
-            notification_reply=notification_reply,
-        )
-
-    async def work() -> None:
-        if notification_reply is not None:
-            await _submit_thread_message(
-                SurfaceThreadMessageRequest(
-                    surface_kind="telegram",
-                    workspace_root=workspace_root or Path("."),
-                    prompt_text=turn_text,
-                    agent_id=getattr(record, "agent", None),
-                    pma_enabled=True,
-                )
-            )
-            orch_binding = _build_telegram_thread_orchestration_service(
-                handlers
-            ).get_binding(
-                surface_kind="telegram",
-                surface_key=notification_surface_key(
-                    notification_reply.notification_id
-                ),
-            )
-            if orch_binding is not None:
-                PmaNotificationStore(handlers._config.root).bind_continuation_thread(
-                    notification_id=notification_reply.notification_id,
-                    thread_target_id=orch_binding.thread_target_id,
-                )
-            return
-        await ingress.submit_message(
-            SurfaceThreadMessageRequest(
-                surface_kind="telegram",
-                workspace_root=workspace_root or Path("."),
-                prompt_text=turn_text,
-                agent_id=getattr(record, "agent", None),
-                pma_enabled=pma_enabled,
-            ),
-            resolve_paused_flow_target=_resolve_paused_flow,
-            submit_flow_reply=_submit_flow_reply,
-            submit_thread_message=_submit_thread_message,
-        )
-
-    await _enqueue_or_run_topic_work(
+    await _enqueue_or_run_topic_call(
         handlers,
         key,
         chat_id=message.chat_id,
         thread_id=message.thread_id,
         placeholder_id=placeholder_id,
-        work=work,
+        callback=partial(_submit_telegram_surface_turn, dispatch),
     )
 
 

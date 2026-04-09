@@ -138,34 +138,27 @@ def _collect_reachable_call_names(
 def test_discord_ordinary_turn_entrypoint_routes_only_via_shared_ingress() -> None:
     path = REPO_ROOT / "src/codex_autorunner/integrations/discord/message_turns.py"
     function_node = _parse_function(path, "handle_message_event")
-    nested_submit = _find_nested_async_function(function_node, "_submit_thread_message")
+    submit_helper = _parse_function(path, "_submit_discord_thread_message")
 
-    entrypoint_calls = _collect_reachable_call_names(
-        function_node,
-        skip_helpers={"_submit_thread_message"},
-    )
-    nested_calls = _collect_reachable_call_names(nested_submit)
+    entrypoint_calls = _collect_reachable_call_names(function_node)
+    helper_calls = _collect_reachable_call_names(submit_helper)
 
-    assert "build_surface_orchestration_ingress" in entrypoint_calls
+    assert "_build_discord_surface_ingress" in entrypoint_calls
     assert "ingress.submit_message" in entrypoint_calls
     assert "service._run_agent_turn_for_message" not in entrypoint_calls
-    assert "service._run_agent_turn_for_message" in nested_calls
+    assert "dispatch.service._run_agent_turn_for_message" in helper_calls
 
 
 def test_telegram_ordinary_turn_entrypoint_routes_only_via_shared_ingress() -> None:
     path = REPO_ROOT / "src/codex_autorunner/integrations/telegram/handlers/messages.py"
     function_node = _parse_function(path, "handle_message_inner")
-    nested_submit = _find_nested_async_function(function_node, "_submit_thread_message")
-    nested_work = _find_nested_async_function(function_node, "work")
+    dispatch_helper = _parse_function(path, "_submit_telegram_surface_turn")
 
-    entrypoint_calls = _collect_reachable_call_names(
-        function_node,
-        skip_helpers={"_submit_thread_message"},
-    )
-    nested_calls = _collect_reachable_call_names(nested_submit)
-    work_calls = _collect_reachable_call_names(nested_work)
+    entrypoint_calls = _collect_reachable_call_names(function_node)
+    helper_calls = _collect_reachable_call_names(dispatch_helper)
 
-    assert "build_surface_orchestration_ingress" in entrypoint_calls
+    assert "_enqueue_or_run_topic_call" in entrypoint_calls
     assert "_submit_thread_message_core" not in entrypoint_calls
-    assert "ingress.submit_message" in work_calls
-    assert "_submit_thread_message_core" in nested_calls
+    assert "_build_telegram_surface_ingress" in helper_calls
+    assert "ingress.submit_message" in helper_calls
+    assert "_submit_telegram_thread_message" in helper_calls
