@@ -36,8 +36,7 @@ from ....integrations.app_server.threads import (
     pma_topic_scoped_key,
 )
 from ....integrations.chat.agents import (
-    normalize_chat_agent,
-    normalize_hermes_profile,
+    resolve_chat_agent_and_profile,
 )
 from ....integrations.telegram.state import topic_key
 from ....manifest import Manifest, load_manifest
@@ -198,32 +197,20 @@ def build_hub_repo_routes(
         agent: Any,
         profile: Any = None,
     ) -> tuple[str, Optional[str]]:
-        normalized_agent = normalize_chat_agent(
+        normalized_agent, normalized_profile = resolve_chat_agent_and_profile(
             agent,
-            default=None,
+            profile,
+            default="codex",
             context=context,
         )
-        legacy_hermes_profile = normalize_hermes_profile(
-            agent,
-            context=context,
-        )
-        if normalized_agent is None and legacy_hermes_profile is not None:
-            normalized_agent = "hermes"
-        if normalized_agent is None:
-            raw_agent = str(agent or "").strip().lower()
-            normalized_agent = raw_agent or "codex"
-        normalized_profile: Optional[str] = None
-        if normalized_agent == "hermes":
-            normalized_profile = normalize_hermes_profile(
-                profile,
-                context=context,
-            )
-            if normalized_profile is None:
-                normalized_profile = legacy_hermes_profile
-            if normalized_profile is None and isinstance(profile, str):
-                raw_profile = profile.strip().lower()
-                if raw_profile:
-                    normalized_profile = raw_profile
+        if (
+            normalized_agent == "hermes"
+            and normalized_profile is None
+            and isinstance(profile, str)
+        ):
+            raw_profile = profile.strip().lower()
+            if raw_profile:
+                normalized_profile = raw_profile
         return normalized_agent, normalized_profile
 
     def _normalize_agent(value: Any) -> str:

@@ -1498,6 +1498,60 @@ def test_hub_channel_directory_route_uses_profiled_pma_registry_key(
     assert standalone_key not in rows
 
 
+def test_hub_channel_directory_route_falls_back_unknown_agents_to_codex_pma_key(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("work")
+
+    store = ChannelDirectoryStore(hub_root)
+    store.record_seen("discord", "chan-stale-agent", None, "PMA / #stale-agent", {})
+
+    _write_discord_binding_rows(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-stale-agent",
+                "guild_id": None,
+                "workspace_path": str(repo.path),
+                "repo_id": "work",
+                "pma_enabled": 1,
+                "agent": "retired-agent",
+                "updated_at": "2026-01-01T00:00:02Z",
+            }
+        ],
+    )
+    _write_app_server_threads(
+        repo.path / ".codex-autorunner" / "app_server_threads.json",
+        threads={pma_base_key("codex", None): "discord-codex-pma-thread"},
+    )
+
+    pma_thread = PmaThreadStore(hub_root).create_thread(
+        "codex",
+        repo.path,
+        repo_id="work",
+        name="discord:chan-stale-agent",
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/chat/channels")
+    assert response.status_code == 200
+    rows = {entry["key"]: entry for entry in response.json()["entries"]}
+
+    channel_row = rows["discord:chan-stale-agent"]
+    assert channel_row["source"] == "pma_thread"
+    assert channel_row["active_thread_id"] == "discord-codex-pma-thread"
+    assert channel_row["provenance"]["agent"] == "codex"
+    assert (
+        channel_row["provenance"]["managed_thread_id"]
+        == pma_thread["managed_thread_id"]
+    )
+
+    standalone_key = f"pma_thread:{pma_thread['managed_thread_id']}"
+    assert standalone_key not in rows
+
+
 def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     index_html = (
