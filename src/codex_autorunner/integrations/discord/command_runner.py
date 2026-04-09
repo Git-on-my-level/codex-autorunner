@@ -23,10 +23,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass
-from typing import Any, Optional, Set
+from typing import Any, Deque, Dict, Optional, Set
 
 from ...core.logging_utils import log_event
+from ...integrations.chat.dispatcher import conversation_id_for
 from .ingress import IngressContext, IngressTiming
 from .interaction_dispatch import (
     execute_ingressed_interaction,
@@ -64,6 +66,8 @@ class CommandRunner:
         self._queue: asyncio.Queue[Any] = asyncio.Queue()
         self._drain_task: Optional[asyncio.Task[None]] = None
         self._direct_tasks: Set[asyncio.Task[None]] = set()
+        self._ingressed_queues: Dict[str, Deque[QueuedIngressInteraction]] = {}
+        self._ingressed_workers: Dict[str, asyncio.Task[None]] = {}
         self._started = False
 
     def start(self) -> None:
@@ -76,7 +80,7 @@ class CommandRunner:
 
     @property
     def active_task_count(self) -> int:
-        count = len(self._direct_tasks)
+        count = len(self._direct_tasks) + len(self._ingressed_workers)
         if self._drain_task is not None and not self._drain_task.done():
             count += 1
         return count
@@ -103,7 +107,18 @@ class CommandRunner:
         payload: dict[str, Any],
     ) -> None:
         self._ensure_started()
-        self._queue.put_nowait(QueuedIngressInteraction(ctx=ctx, payload=payload))
+        conversation_id = self._ingressed_conversation_id(ctx)
+        queue = self._ingressed_queues.get(conversation_id)
+        if queue is None:
+            queue = deque()
+            self._ingressed_queues[conversation_id] = queue
+        queue.append(QueuedIngressInteraction(ctx=ctx, payload=payload))
+        worker = self._ingressed_workers.get(conversation_id)
+        if worker is None or worker.done():
+            self._ingressed_workers[conversation_id] = asyncio.create_task(
+                self._drain_ingressed_conversation(conversation_id),
+                name=f"discord-runner-ingressed-{conversation_id}",
+            )
 
     async def shutdown(self, *, grace_seconds: float = 5.0) -> None:
         if self._drain_task is not None and not self._drain_task.done():
@@ -129,11 +144,28 @@ class CommandRunner:
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
             self._direct_tasks.clear()
+        if self._ingressed_workers:
+            workers = list(self._ingressed_workers.values())
+            done, pending = await asyncio.wait(
+                workers,
+                timeout=grace_seconds,
+                return_when=asyncio.ALL_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            self._ingressed_workers.clear()
+            self._ingressed_queues.clear()
         self._started = False
 
     def _ensure_started(self) -> None:
         if not self._started:
             self.start()
+
+    @staticmethod
+    def _ingressed_conversation_id(ctx: IngressContext) -> str:
+        return conversation_id_for("discord", ctx.channel_id, ctx.guild_id)
 
     async def _drain_loop(self) -> None:
         try:
@@ -183,6 +215,53 @@ class CommandRunner:
                     )
         except asyncio.CancelledError:
             return
+
+    async def _drain_ingressed_conversation(self, conversation_id: str) -> None:
+        try:
+            while True:
+                queue = self._ingressed_queues.get(conversation_id)
+                if not queue:
+                    self._ingressed_queues.pop(conversation_id, None)
+                    return
+                item = queue.popleft()
+                try:
+                    started_at = time.monotonic()
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "discord.runner.execute.start",
+                        interaction_id=item.ctx.interaction_id,
+                        kind=item.ctx.kind.value,
+                        command=(
+                            ":".join(item.ctx.command_spec.path)
+                            if item.ctx.command_spec
+                            else item.ctx.kind.value
+                        ),
+                    )
+                    await self._run_with_lifecycle(item.ctx, item.payload)
+                except Exception as exc:
+                    log_event(
+                        self._logger,
+                        logging.ERROR,
+                        "discord.runner.dispatch.error",
+                        exc=exc,
+                    )
+                finally:
+                    elapsed_ms = (time.monotonic() - started_at) * 1000
+                    log_event(
+                        self._logger,
+                        logging.DEBUG,
+                        "discord.runner.dispatch.done",
+                        elapsed_ms=round(elapsed_ms, 1),
+                    )
+        except asyncio.CancelledError:
+            return
+        finally:
+            current = self._ingressed_workers.get(conversation_id)
+            if current is asyncio.current_task():
+                self._ingressed_workers.pop(conversation_id, None)
+            if not self._ingressed_queues.get(conversation_id):
+                self._ingressed_queues.pop(conversation_id, None)
 
     def _direct_task_done(self, task: asyncio.Task[None]) -> None:
         self._direct_tasks.discard(task)

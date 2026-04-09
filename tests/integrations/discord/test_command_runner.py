@@ -500,6 +500,100 @@ async def test_submit_event_preserves_arrival_order() -> None:
 
 
 @pytest.mark.anyio
+async def test_submit_ingressed_preserves_fifo_within_conversation() -> None:
+    service = _FakeService()
+    started_ids: list[str] = []
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def ordered_handler(*args: Any, **_kwargs: Any) -> None:
+        interaction_id = str(args[0]) if args else ""
+        started_ids.append(interaction_id)
+        if interaction_id == "inter-1":
+            first_started.set()
+            await release_first.wait()
+
+    service._handle_car_command.side_effect = ordered_handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+
+    ctx_first = _make_ctx(
+        interaction_id="inter-1",
+        interaction_token="token-1",
+        channel_id="chan-1",
+        guild_id="guild-1",
+    )
+    ctx_second = _make_ctx(
+        interaction_id="inter-2",
+        interaction_token="token-2",
+        channel_id="chan-1",
+        guild_id="guild-1",
+    )
+
+    runner.submit_ingressed(ctx_first, _slash_payload())
+    runner.submit_ingressed(ctx_second, _slash_payload())
+
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+    await asyncio.sleep(0.05)
+    assert started_ids == ["inter-1"]
+
+    release_first.set()
+    await runner.shutdown(grace_seconds=5.0)
+    assert started_ids == ["inter-1", "inter-2"]
+
+
+@pytest.mark.anyio
+async def test_submit_ingressed_does_not_block_other_conversations() -> None:
+    service = _FakeService()
+    first_started = asyncio.Event()
+    second_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    async def blocking_handler(*args: Any, **_kwargs: Any) -> None:
+        interaction_id = str(args[0]) if args else ""
+        if interaction_id == "inter-1":
+            first_started.set()
+            await release_first.wait()
+            return
+        if interaction_id == "inter-2":
+            second_started.set()
+
+    service._handle_car_command.side_effect = blocking_handler
+
+    runner = CommandRunner(
+        service,
+        config=RunnerConfig(timeout_seconds=None, stalled_warning_seconds=None),
+        logger=service._logger,
+    )
+
+    ctx_first = _make_ctx(
+        interaction_id="inter-1",
+        interaction_token="token-1",
+        channel_id="chan-1",
+        guild_id="guild-1",
+    )
+    ctx_second = _make_ctx(
+        interaction_id="inter-2",
+        interaction_token="token-2",
+        channel_id="chan-2",
+        guild_id="guild-1",
+    )
+
+    runner.submit_ingressed(ctx_first, _slash_payload())
+    await asyncio.wait_for(first_started.wait(), timeout=1.0)
+
+    runner.submit_ingressed(ctx_second, _slash_payload())
+    await asyncio.wait_for(second_started.wait(), timeout=1.0)
+
+    release_first.set()
+    await runner.shutdown(grace_seconds=5.0)
+
+
+@pytest.mark.anyio
 async def test_component_interaction_routes_through_handle_component() -> None:
     service = _FakeService()
     service._handle_ticket_filter_component = AsyncMock()
