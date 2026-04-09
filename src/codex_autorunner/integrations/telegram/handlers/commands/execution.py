@@ -174,6 +174,24 @@ class _TurnRunFailure:
     transcript_text: Optional[str]
 
 
+@dataclass
+class _TurnDeliveryState:
+    intermediate_response: str = ""
+
+    def capture_progress_summary(
+        self, handlers: Any, turn_key: Optional[TurnKey]
+    ) -> None:
+        if turn_key is None:
+            return
+        render_fn = getattr(handlers, "_render_turn_progress_summary", None)
+        if callable(render_fn):
+            self.intermediate_response = render_fn(turn_key)
+            return
+        render_fn = getattr(handlers, "_render_final_turn_progress", None)
+        if callable(render_fn):
+            self.intermediate_response = render_fn(turn_key)
+
+
 @dataclass(frozen=True)
 class _TelegramTurnThreadContext:
     thread_id: Optional[str]
@@ -1455,17 +1473,11 @@ class ExecutionCommands(TelegramCommandSupportMixin):
     def _finalize_turn_progress(
         self,
         turn_key: Optional[TurnKey],
-        turn_delivery_state: dict[str, str],
+        turn_delivery_state: _TurnDeliveryState,
     ) -> None:
+        turn_delivery_state.capture_progress_summary(self, turn_key)
         if turn_key is None:
             return
-        render_fn = getattr(self, "_render_turn_progress_summary", None)
-        if callable(render_fn):
-            turn_delivery_state["intermediate_response"] = render_fn(turn_key)
-        else:
-            render_fn = getattr(self, "_render_final_turn_progress", None)
-            if callable(render_fn):
-                turn_delivery_state["intermediate_response"] = render_fn(turn_key)
         self._turn_contexts.pop(turn_key, None)
         self._clear_thinking_preview(turn_key)
         self._clear_turn_progress(turn_key)
@@ -1526,7 +1538,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         pma_thread_key: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         supervisor = getattr(self, "_opencode_supervisor", None)
-        turn_delivery_state: dict[str, str] = {}
+        turn_delivery_state = _TurnDeliveryState()
         if supervisor is None:
             return await self._maybe_send_failure(
                 message,
@@ -2313,9 +2325,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 token_usage=token_usage,
                 transcript_message_id=transcript_message_id,
                 transcript_text=transcript_text,
-                intermediate_response=turn_delivery_state.get(
-                    "intermediate_response", ""
-                ),
+                intermediate_response=turn_delivery_state.intermediate_response,
             )
         except Exception as exc:  # intentional: top-level command handler
             log_extra: dict[str, Any] = {}
@@ -2376,7 +2386,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         turn_handle = None
         turn_key: Optional[TurnKey] = None
         turn_started_at: Optional[float] = None
-        turn_delivery_state: dict[str, str] = {}
+        turn_delivery_state = _TurnDeliveryState()
 
         def _is_missing_thread_error(exc: Exception) -> bool:
             if not isinstance(exc, CodexAppServerResponseError):
@@ -2829,7 +2839,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             token_usage=token_usage,
             transcript_message_id=transcript_message_id,
             transcript_text=transcript_text,
-            intermediate_response=turn_delivery_state.get("intermediate_response", ""),
+            intermediate_response=turn_delivery_state.intermediate_response,
             interrupt_status_turn_id=turn_handle_id,
             interrupt_status_fallback_text=interrupt_status_fallback_text,
         )

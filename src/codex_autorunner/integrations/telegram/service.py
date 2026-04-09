@@ -124,6 +124,7 @@ from .types import (
     ReviewCommitSelectionState,
     SelectionState,
     TurnContext,
+    UpdateConfirmState,
 )
 from .voice import TelegramVoiceManager
 
@@ -394,7 +395,7 @@ class TelegramBotService(
         self._bind_options: dict[str, SelectionState] = {}
         self._flow_run_options: dict[str, SelectionState] = {}
         self._update_options: dict[str, SelectionState] = {}
-        self._update_confirm_options: dict[str, dict[str, Any]] = {}
+        self._update_confirm_options: dict[str, UpdateConfirmState] = {}
         self._review_commit_options: dict[str, ReviewCommitSelectionState] = {}
         self._review_commit_subjects: dict[str, dict[str, str]] = {}
         self._pending_review_custom: dict[str, dict[str, Any]] = {}
