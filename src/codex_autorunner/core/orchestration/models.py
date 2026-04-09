@@ -32,6 +32,29 @@ def _normalize_message_request_kind(value: Any) -> MessageRequestKind:
     return "message"
 
 
+def _normalize_target_kind(value: Any) -> TargetKind:
+    normalized = _normalize_optional_text(value)
+    if normalized == "flow":
+        return "flow"
+    return "thread"
+
+
+def _normalize_busy_thread_policy(value: Any) -> BusyThreadPolicy:
+    normalized = _normalize_optional_text(value)
+    if normalized == "interrupt":
+        return "interrupt"
+    if normalized == "reject":
+        return "reject"
+    return "queue"
+
+
+def _normalize_input_items(value: Any) -> Optional[list[dict[str, Any]]]:
+    if not isinstance(value, list):
+        return None
+    normalized_items = [dict(item) for item in value if isinstance(item, dict)]
+    return normalized_items or None
+
+
 def normalize_resource_owner_fields(
     *,
     resource_kind: Any = None,
@@ -219,8 +242,82 @@ class MessageRequest:
     context_profile: Optional[CarContextProfile] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    @classmethod
+    def from_mapping(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        default_target_id: Optional[str] = None,
+        busy_policy: Optional[BusyThreadPolicy] = None,
+    ) -> "MessageRequest":
+        target_id = _normalize_optional_text(
+            data.get("target_id")
+        ) or _normalize_optional_text(default_target_id)
+        if target_id is None:
+            raise ValueError("MessageRequest requires a target_id")
+        message_text = _normalize_optional_text(data.get("message_text"))
+        if message_text is None:
+            raise ValueError("MessageRequest requires message_text")
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        return cls(
+            target_id=target_id,
+            target_kind=_normalize_target_kind(data.get("target_kind")),
+            message_text=message_text,
+            kind=_normalize_message_request_kind(data.get("kind")),
+            busy_policy=busy_policy
+            or _normalize_busy_thread_policy(data.get("busy_policy")),
+            agent_profile=_normalize_optional_text(data.get("agent_profile")),
+            model=_normalize_optional_text(data.get("model")),
+            reasoning=_normalize_optional_text(data.get("reasoning")),
+            approval_mode=_normalize_optional_text(data.get("approval_mode")),
+            input_items=_normalize_input_items(data.get("input_items")),
+            context_profile=normalize_car_context_profile(data.get("context_profile")),
+            metadata=dict(metadata),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass(frozen=True)
+class QueuedExecutionRequest:
+    """Typed queued execution envelope reconstructed from durable payloads."""
+
+    request: MessageRequest
+    client_request_id: Optional[str] = None
+    sandbox_policy: Optional[Any] = None
+
+    @classmethod
+    def from_payload(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        thread_target_id: str,
+    ) -> "QueuedExecutionRequest":
+        request_data = payload.get("request")
+        if not isinstance(request_data, Mapping):
+            raise ValueError("Queued execution payload is missing request data")
+        request = MessageRequest.from_mapping(
+            request_data,
+            default_target_id=thread_target_id,
+            busy_policy="queue",
+        )
+        return cls(
+            request=request,
+            client_request_id=_normalize_optional_text(
+                payload.get("client_request_id")
+            ),
+            sandbox_policy=payload.get("sandbox_policy"),
+        )
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "request": self.request.to_dict(),
+            "client_request_id": self.client_request_id,
+            "sandbox_policy": self.sandbox_policy,
+        }
 
 
 @dataclass(frozen=True)

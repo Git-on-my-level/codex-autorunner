@@ -843,6 +843,65 @@ async def test_start_next_queued_execution_starts_fresh_after_runtime_binding_re
     assert harness.start_turn_calls[0]["conversation_id"] == "backend-fresh-2"
 
 
+async def test_claim_next_queued_execution_context_preserves_typed_request_payload(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+
+    running = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="first",
+        )
+    )
+    queued = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="second",
+            approval_mode="never",
+            input_items=[
+                {"type": "text", "text": "second"},
+                {"type": "image", "image_url": "https://example.com/diagram.png"},
+            ],
+            context_profile="car_core",
+            metadata={"runtime_prompt": "Use the saved context first."},
+        ),
+        client_request_id="client-2",
+        sandbox_policy={"mode": "workspace-write"},
+    )
+    service.record_execution_result(
+        thread.thread_target_id,
+        running.execution_id,
+        status="ok",
+        assistant_text="done",
+    )
+
+    claimed = service.claim_next_queued_execution_context(thread.thread_target_id)
+
+    assert queued.status == "queued"
+    assert claimed is not None
+    assert claimed.thread.thread_target_id == thread.thread_target_id
+    assert claimed.execution.execution_id == queued.execution_id
+    assert claimed.request.message_text == "second"
+    assert claimed.request.approval_mode == "never"
+    assert claimed.request.input_items == [
+        {"type": "text", "text": "second"},
+        {"type": "image", "image_url": "https://example.com/diagram.png"},
+    ]
+    assert claimed.request.context_profile == "car_core"
+    assert claimed.request.metadata == {
+        "runtime_prompt": "Use the saved context first."
+    }
+    assert claimed.client_request_id == "client-2"
+    assert claimed.sandbox_policy == {"mode": "workspace-write"}
+
+
 async def test_send_message_queues_when_thread_is_busy_by_default(
     tmp_path: Path,
 ) -> None:
@@ -1200,6 +1259,37 @@ async def test_stop_thread_marks_interrupted_when_runtime_binding_is_lost_after_
     assert outcome.execution.execution_id == execution.execution_id
     assert outcome.execution.status == "interrupted"
     assert outcome.execution.error is None
+
+
+async def test_recover_running_execution_after_restart_marks_missing_backend_binding(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness()
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+    thread = service.create_thread_target("codex", workspace_root)
+    execution = await service.send_message(
+        MessageRequest(
+            target_id=thread.thread_target_id,
+            target_kind="thread",
+            message_text="Need an answer",
+        )
+    )
+
+    clear_runtime_thread_binding(tmp_path / "hub", thread.thread_target_id)
+    restarted_service = _build_service(tmp_path, harness)
+
+    recovered = restarted_service.recover_running_execution_after_restart(
+        thread.thread_target_id
+    )
+
+    assert recovered is not None
+    assert recovered.execution_id == execution.execution_id
+    assert recovered.status == "error"
+    assert recovered.error == "Backend thread missing from orchestration state"
+    assert _thread_runtime_binding(restarted_service, thread.thread_target_id) is None
+    assert restarted_service.get_running_execution(thread.thread_target_id) is None
 
 
 async def test_stop_thread_recovers_unknown_hermes_turn_interrupt_error(
