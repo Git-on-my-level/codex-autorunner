@@ -69,6 +69,7 @@ from ..chat.managed_thread_turns import (
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
+    complete_managed_thread_execution,
 )
 from ..chat.managed_thread_turns import (
     build_managed_thread_input_items as _shared_build_managed_thread_input_items,
@@ -1077,58 +1078,23 @@ def _build_discord_managed_thread_coordinator(
     )
 
 
-async def _finalize_discord_thread_execution(
-    service: Any,
-    *,
-    orchestration_service: Any,
-    started: RuntimeThreadExecution,
-    channel_id: str,
-    public_execution_error: str,
-    timeout_error: str,
-    interrupted_error: str,
-    runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
-    on_progress_event: Optional[Any] = None,
-) -> dict[str, Any]:
-    coordinator = _build_discord_managed_thread_coordinator(
-        service=service,
-        orchestration_service=orchestration_service,
-        channel_id=channel_id,
-        public_execution_error=public_execution_error,
-        timeout_error=timeout_error,
-        interrupted_error=interrupted_error,
-        turn_preview=truncate_for_discord(
-            str(started.request.message_text or ""),
-            max_len=120,
-        ),
-    )
-    return await coordinator.run_started_execution(
-        started,
-        hooks=ManagedThreadCoordinatorHooks(on_progress_event=on_progress_event),
-        runtime_event_state=runtime_event_state,
-    )
-
-
-def _ensure_discord_thread_queue_worker(
-    service: Any,
-    *,
-    orchestration_service: Any,
-    managed_thread_id: str,
-    channel_id: str,
-    public_execution_error: str,
-    timeout_error: str,
-    interrupted_error: str,
-) -> None:
+def _get_discord_thread_queue_task_map(service: Any) -> dict[str, asyncio.Task[Any]]:
     task_map = getattr(service, "_discord_thread_queue_tasks", None)
     if not isinstance(task_map, dict):
         task_map = {}
         service._discord_thread_queue_tasks = task_map
         service._discord_managed_thread_queue_tasks = task_map
+    return task_map
 
-    async def _run_with_discord_typing_indicator(
-        *,
-        channel_id: str,
-        work: Any,
-    ) -> None:
+
+def _build_discord_queue_worker_hooks(
+    service: Any,
+    *,
+    channel_id: str,
+    managed_thread_id: str,
+    public_execution_error: str,
+) -> ManagedThreadCoordinatorHooks:
+    async def _run_with_discord_typing_indicator(work: Any) -> None:
         run_with_typing = getattr(service, "_run_with_typing_indicator", None)
         if callable(run_with_typing):
             await run_with_typing(channel_id=channel_id, work=work)
@@ -1178,29 +1144,11 @@ def _ensure_discord_thread_queue_worker(
             ),
         )
 
-    coordinator = _build_discord_managed_thread_coordinator(
-        service=service,
-        orchestration_service=orchestration_service,
-        channel_id=channel_id,
-        public_execution_error=public_execution_error,
-        timeout_error=timeout_error,
-        interrupted_error=interrupted_error,
-        turn_preview="",
-    )
-    coordinator.ensure_queue_worker(
-        task_map=task_map,
-        managed_thread_id=managed_thread_id,
-        spawn_task=service._spawn_task,
-        hooks=ManagedThreadCoordinatorHooks(
-            on_execution_started=_on_execution_started,
-            on_execution_finished=_on_execution_finished,
-            deliver_result=_deliver_result,
-            run_with_indicator=lambda work: _run_with_discord_typing_indicator(
-                channel_id=channel_id,
-                work=work,
-            ),
-        ),
-        begin_next_execution=begin_next_queued_runtime_thread_execution,
+    return ManagedThreadCoordinatorHooks(
+        on_execution_started=_on_execution_started,
+        on_execution_finished=_on_execution_finished,
+        deliver_result=_deliver_result,
+        run_with_indicator=_run_with_discord_typing_indicator,
     )
 
 
@@ -1365,6 +1313,20 @@ async def _run_discord_orchestrated_turn_for_message(
                 await progress_heartbeat_task
             progress_heartbeat_task = None
 
+    def ensure_queue_worker() -> None:
+        coordinator.ensure_queue_worker(
+            task_map=_get_discord_thread_queue_task_map(service),
+            managed_thread_id=managed_thread_id,
+            spawn_task=service._spawn_task,
+            hooks=_build_discord_queue_worker_hooks(
+                service,
+                channel_id=channel_id,
+                managed_thread_id=managed_thread_id,
+                public_execution_error=public_execution_error,
+            ),
+            begin_next_execution=begin_next_queued_runtime_thread_execution,
+        )
+
     try:
         if reusable_progress_message_id:
             progress_message_id = reusable_progress_message_id
@@ -1467,55 +1429,41 @@ async def _run_discord_orchestrated_turn_for_message(
                 channel_id,
                 exc_info=True,
             )
-        _ensure_discord_thread_queue_worker(
-            service,
-            orchestration_service=orchestration_service,
-            managed_thread_id=managed_thread_id,
-            channel_id=channel_id,
-            public_execution_error=public_execution_error,
-            timeout_error=timeout_error,
-            interrupted_error=interrupted_error,
-        )
+        ensure_queue_worker()
         return DiscordMessageTurnResult(
             final_message="Queued (waiting for available worker...)"
         )
 
-    service._register_discord_turn_approval_context(
-        started_execution=started_execution,
-        channel_id=channel_id,
-    )
     try:
-        finalized = await _finalize_discord_thread_execution(
-            service,
-            orchestration_service=orchestration_service,
-            started=started_execution,
-            channel_id=channel_id,
-            public_execution_error=public_execution_error,
-            timeout_error=timeout_error,
-            interrupted_error=interrupted_error,
-            runtime_event_state=RuntimeThreadRunEventState(),
-            on_progress_event=lambda run_event: _apply_discord_progress_run_event(
-                tracker,
-                run_event,
-                runtime_state=runtime_state,
-                edit_progress=_edit_progress,
+        finalized_flow = await complete_managed_thread_execution(
+            coordinator,
+            submission,
+            ensure_queue_worker=ensure_queue_worker,
+            direct_hooks=ManagedThreadCoordinatorHooks(
+                on_execution_started=(
+                    lambda active_execution: service._register_discord_turn_approval_context(
+                        started_execution=active_execution,
+                        channel_id=channel_id,
+                    )
+                ),
+                on_execution_finished=(
+                    lambda active_execution: service._clear_discord_turn_approval_context(
+                        started_execution=active_execution
+                    )
+                ),
+                on_progress_event=lambda run_event: _apply_discord_progress_run_event(
+                    tracker,
+                    run_event,
+                    runtime_state=runtime_state,
+                    edit_progress=_edit_progress,
+                ),
             ),
+            runtime_event_state=RuntimeThreadRunEventState(),
         )
     finally:
-        service._clear_discord_turn_approval_context(
-            started_execution=started_execution
-        )
         await _stop_progress_heartbeat()
 
-    _ensure_discord_thread_queue_worker(
-        service,
-        orchestration_service=orchestration_service,
-        managed_thread_id=managed_thread_id,
-        channel_id=channel_id,
-        public_execution_error=public_execution_error,
-        timeout_error=timeout_error,
-        interrupted_error=interrupted_error,
-    )
+    finalized = cast(dict[str, Any], finalized_flow.finalized)
     if finalized["status"] != "ok":
         if finalized["status"] == "interrupted":
             reuse_request = _peek_discord_progress_reuse_request(

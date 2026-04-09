@@ -88,6 +88,13 @@ class ManagedThreadSubmissionResult:
 
 
 @dataclass(frozen=True)
+class ManagedThreadExecutionFlowResult:
+    started_execution: RuntimeThreadExecution
+    queued: bool
+    finalized: Optional[dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
 class ManagedThreadCoordinatorHooks:
     on_execution_started: Optional[ManagedThreadLifecycleHook] = None
     on_execution_finished: Optional[ManagedThreadLifecycleHook] = None
@@ -390,6 +397,35 @@ async def submit_managed_thread_execution(
     return ManagedThreadSubmissionResult(
         started_execution=started_execution,
         queued=queued,
+    )
+
+
+async def complete_managed_thread_execution(
+    coordinator: ManagedThreadTurnCoordinator,
+    submission: ManagedThreadSubmissionResult,
+    *,
+    ensure_queue_worker: Optional[Callable[[], None]] = None,
+    direct_hooks: Optional[ManagedThreadCoordinatorHooks] = None,
+    runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
+) -> ManagedThreadExecutionFlowResult:
+    if submission.queued:
+        if ensure_queue_worker is not None:
+            ensure_queue_worker()
+        return ManagedThreadExecutionFlowResult(
+            started_execution=submission.started_execution,
+            queued=True,
+        )
+    finalized = await coordinator.run_started_execution(
+        submission.started_execution,
+        hooks=direct_hooks,
+        runtime_event_state=runtime_event_state,
+    )
+    if ensure_queue_worker is not None:
+        ensure_queue_worker()
+    return ManagedThreadExecutionFlowResult(
+        started_execution=submission.started_execution,
+        queued=False,
+        finalized=finalized,
     )
 
 

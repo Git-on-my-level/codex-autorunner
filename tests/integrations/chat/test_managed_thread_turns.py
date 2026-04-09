@@ -201,6 +201,100 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
     assert task_map == {}
 
 
+@pytest.mark.anyio
+async def test_complete_managed_thread_execution_runs_direct_hooks_and_ensures_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    events: list[Any] = []
+
+    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+        assert kwargs["started"] is started
+        events.append("finalize")
+        return {"status": "ok", "managed_turn_id": started.execution.execution_id}
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "finalize_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    coordinator = managed_thread_turns_module.ManagedThreadTurnCoordinator(
+        orchestration_service=SimpleNamespace(),
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind="test",
+            surface_key="surface-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="public",
+            timeout_error="timeout",
+            interrupted_error="interrupted",
+            timeout_seconds=30,
+        ),
+        logger=logging.getLogger("test"),
+        turn_preview="preview",
+    )
+
+    result = await managed_thread_turns_module.complete_managed_thread_execution(
+        coordinator,
+        managed_thread_turns_module.ManagedThreadSubmissionResult(
+            started_execution=started,
+            queued=False,
+        ),
+        ensure_queue_worker=lambda: events.append("ensure"),
+        direct_hooks=managed_thread_turns_module.ManagedThreadCoordinatorHooks(
+            on_execution_started=lambda started_execution: events.append("started"),
+            on_execution_finished=lambda started_execution: events.append("finished"),
+        ),
+        runtime_event_state=RuntimeThreadRunEventState(),
+    )
+
+    assert result.queued is False
+    assert result.finalized == {"status": "ok", "managed_turn_id": "exec-1"}
+    assert events == ["started", "finalize", "finished", "ensure"]
+
+
+@pytest.mark.anyio
+async def test_complete_managed_thread_execution_starts_queue_worker_for_queued_submission(
+    tmp_path: Path,
+) -> None:
+    started = _build_started_execution(tmp_path)
+    coordinator = managed_thread_turns_module.ManagedThreadTurnCoordinator(
+        orchestration_service=SimpleNamespace(),
+        state_root=tmp_path,
+        surface=managed_thread_turns_module.ManagedThreadSurfaceInfo(
+            log_label="Test",
+            surface_kind="test",
+            surface_key="surface-1",
+        ),
+        errors=managed_thread_turns_module.ManagedThreadErrorMessages(
+            public_execution_error="public",
+            timeout_error="timeout",
+            interrupted_error="interrupted",
+            timeout_seconds=30,
+        ),
+        logger=logging.getLogger("test"),
+        turn_preview="preview",
+    )
+    events: list[str] = []
+
+    result = await managed_thread_turns_module.complete_managed_thread_execution(
+        coordinator,
+        managed_thread_turns_module.ManagedThreadSubmissionResult(
+            started_execution=started,
+            queued=True,
+        ),
+        ensure_queue_worker=lambda: events.append("ensure"),
+    )
+
+    assert result.queued is True
+    assert result.finalized is None
+    assert events == ["ensure"]
+
+
 def test_resolve_managed_thread_target_resumes_matching_binding(tmp_path: Path) -> None:
     canonical_workspace = str(tmp_path.resolve())
     thread = SimpleNamespace(

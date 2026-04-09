@@ -71,6 +71,7 @@ from .....integrations.chat.managed_thread_turns import (
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
+    complete_managed_thread_execution,
 )
 from .....integrations.chat.managed_thread_turns import (
     resolve_managed_thread_target as _shared_resolve_managed_thread_target,
@@ -862,6 +863,21 @@ async def _run_telegram_managed_thread_turn(
         interrupted_error=interrupted_error,
         turn_preview=_preview_from_text(prompt_text, RESUME_PREVIEW_USER_LIMIT),
     )
+
+    def ensure_queue_worker() -> None:
+        _ensure_telegram_managed_thread_queue_worker(
+            handlers,
+            orchestration_service=orchestration_service,
+            managed_thread_id=thread.thread_target_id,
+            surface_key=topic_key,
+            record=record,
+            chat_id=message.chat_id,
+            thread_id=message.thread_id,
+            public_execution_error=public_execution_error,
+            timeout_error=timeout_error,
+            interrupted_error=interrupted_error,
+        )
+
     try:
         submission = await coordinator.submit_execution(
             MessageRequest(
@@ -926,18 +942,7 @@ async def _run_telegram_managed_thread_turn(
         )
 
     if submission.queued:
-        _ensure_telegram_managed_thread_queue_worker(
-            handlers,
-            orchestration_service=orchestration_service,
-            managed_thread_id=thread.thread_target_id,
-            surface_key=topic_key,
-            record=record,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            public_execution_error=public_execution_error,
-            timeout_error=timeout_error,
-            interrupted_error=interrupted_error,
-        )
+        ensure_queue_worker()
         return _TurnRunResult(
             record=record,
             thread_id=str(thread.backend_thread_id or "") or None,
@@ -987,9 +992,11 @@ async def _run_telegram_managed_thread_turn(
             )
 
     try:
-        finalized = await coordinator.run_started_execution(
-            started_execution,
-            hooks=ManagedThreadCoordinatorHooks(
+        finalized_flow = await complete_managed_thread_execution(
+            coordinator,
+            submission,
+            ensure_queue_worker=ensure_queue_worker,
+            direct_hooks=ManagedThreadCoordinatorHooks(
                 on_progress_event=(
                     (
                         lambda run_event: handlers._apply_run_event_to_progress(
@@ -1027,18 +1034,7 @@ async def _run_telegram_managed_thread_turn(
         runtime.current_turn_key = None
         runtime.interrupt_requested = False
 
-    _ensure_telegram_managed_thread_queue_worker(
-        handlers,
-        orchestration_service=orchestration_service,
-        managed_thread_id=thread.thread_target_id,
-        surface_key=topic_key,
-        record=record,
-        chat_id=message.chat_id,
-        thread_id=message.thread_id,
-        public_execution_error=public_execution_error,
-        timeout_error=timeout_error,
-        interrupted_error=interrupted_error,
-    )
+    finalized = cast(dict[str, Any], finalized_flow.finalized)
     if finalized["status"] != "ok":
         failure_message = str(finalized.get("error") or public_execution_error)
         interrupt_status_fallback_text: Optional[str] = None

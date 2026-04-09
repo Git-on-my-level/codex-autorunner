@@ -415,6 +415,10 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
         _ = args, kwargs
         return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
 
+    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return SimpleNamespace(finalized=await _fake_finalize())
+
     monkeypatch.setattr(
         discord_message_turns_module,
         "resolve_discord_thread_target",
@@ -427,13 +431,8 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "_finalize_discord_thread_execution",
-        _fake_finalize,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "_ensure_discord_thread_queue_worker",
-        lambda *args, **kwargs: None,
+        "complete_managed_thread_execution",
+        _fake_complete,
     )
 
     service = _Service()
@@ -545,6 +544,10 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
             "token_usage": None,
         }
 
+    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return SimpleNamespace(finalized=await _fake_finalize())
+
     monkeypatch.setattr(
         discord_message_turns_module,
         "resolve_discord_thread_target",
@@ -557,13 +560,8 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "_finalize_discord_thread_execution",
-        _fake_finalize,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "_ensure_discord_thread_queue_worker",
-        lambda *args, **kwargs: None,
+        "complete_managed_thread_execution",
+        _fake_complete,
     )
 
     service = _Service()
@@ -665,6 +663,10 @@ async def test_orchestrated_turn_interrupt_send_acknowledges_when_progress_messa
         _ = args, kwargs
         return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
 
+    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return SimpleNamespace(finalized=await _fake_finalize())
+
     monkeypatch.setattr(
         discord_message_turns_module,
         "resolve_discord_thread_target",
@@ -677,13 +679,8 @@ async def test_orchestrated_turn_interrupt_send_acknowledges_when_progress_messa
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "_finalize_discord_thread_execution",
-        _fake_finalize,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "_ensure_discord_thread_queue_worker",
-        lambda *args, **kwargs: None,
+        "complete_managed_thread_execution",
+        _fake_complete,
     )
 
     service = _Service()
@@ -787,6 +784,10 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
         _ = args, kwargs
         return {"status": "interrupted", "error": "Discord PMA turn interrupted"}
 
+    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return SimpleNamespace(finalized=await _fake_finalize())
+
     monkeypatch.setattr(
         discord_message_turns_module,
         "resolve_discord_thread_target",
@@ -799,13 +800,8 @@ async def test_orchestrated_turn_interrupt_send_falls_back_when_progress_ack_edi
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "_finalize_discord_thread_execution",
-        _fake_finalize,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "_ensure_discord_thread_queue_worker",
-        lambda *args, **kwargs: None,
+        "complete_managed_thread_execution",
+        _fake_complete,
     )
 
     service = _Service()
@@ -872,6 +868,10 @@ async def test_orchestrated_turn_placeholder_sent_before_runtime_begin(
         call_order.append("finalize")
         return {"status": "ok", "assistant_text": "ok", "token_usage": None}
 
+    async def _fake_complete(*args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return SimpleNamespace(finalized=await _fake_finalize())
+
     class _Store:
         async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
             assert channel_id == "channel-1"
@@ -931,13 +931,8 @@ async def test_orchestrated_turn_placeholder_sent_before_runtime_begin(
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "_finalize_discord_thread_execution",
-        _fake_finalize,
-    )
-    monkeypatch.setattr(
-        discord_message_turns_module,
-        "_ensure_discord_thread_queue_worker",
-        lambda *args, **kwargs: None,
+        "complete_managed_thread_execution",
+        _fake_complete,
     )
 
     service = _Service()
@@ -1156,13 +1151,13 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
     )
     monkeypatch.setattr(
         discord_message_turns_module,
-        "_finalize_discord_thread_execution",
+        "complete_managed_thread_execution",
         _fake_finalize,
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
-        "_ensure_discord_thread_queue_worker",
-        _fake_ensure_queue,
+        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        "ensure_queue_worker",
+        lambda *args, **kwargs: _fake_ensure_queue(),
     )
 
     service = _Service()
@@ -8324,14 +8319,31 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
     )
 
     service = _Service()
-    discord_message_turns_module._ensure_discord_thread_queue_worker(
-        service,
-        orchestration_service=_OrchestrationServiceStub(),
+    orchestration_service = _OrchestrationServiceStub()
+    coordinator = (
+        discord_message_turns_module._build_discord_managed_thread_coordinator(
+            service=service,
+            orchestration_service=orchestration_service,
+            channel_id="channel-1",
+            public_execution_error="Runtime thread failed",
+            timeout_error="Runtime thread timed out",
+            interrupted_error="Runtime thread interrupted",
+            turn_preview="",
+        )
+    )
+    coordinator.ensure_queue_worker(
+        task_map=discord_message_turns_module._get_discord_thread_queue_task_map(
+            service
+        ),
         managed_thread_id="managed-thread-1",
-        channel_id="channel-1",
-        public_execution_error="Runtime thread failed",
-        timeout_error="Runtime thread timed out",
-        interrupted_error="Runtime thread interrupted",
+        spawn_task=service._spawn_task,
+        hooks=discord_message_turns_module._build_discord_queue_worker_hooks(
+            service,
+            channel_id="channel-1",
+            managed_thread_id="managed-thread-1",
+            public_execution_error="Runtime thread failed",
+        ),
+        begin_next_execution=discord_message_turns_module.begin_next_queued_runtime_thread_execution,
     )
 
     await asyncio.gather(*service._spawned_tasks)
@@ -8424,14 +8436,31 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
     )
 
     service = _Service()
-    discord_message_turns_module._ensure_discord_thread_queue_worker(
-        service,
-        orchestration_service=_OrchestrationServiceStub(),
+    orchestration_service = _OrchestrationServiceStub()
+    coordinator = (
+        discord_message_turns_module._build_discord_managed_thread_coordinator(
+            service=service,
+            orchestration_service=orchestration_service,
+            channel_id="channel-1",
+            public_execution_error="Runtime thread failed",
+            timeout_error="Runtime thread timed out",
+            interrupted_error="Runtime thread interrupted",
+            turn_preview="",
+        )
+    )
+    coordinator.ensure_queue_worker(
+        task_map=discord_message_turns_module._get_discord_thread_queue_task_map(
+            service
+        ),
         managed_thread_id="managed-thread-1",
-        channel_id="channel-1",
-        public_execution_error="Runtime thread failed",
-        timeout_error="Runtime thread timed out",
-        interrupted_error="Runtime thread interrupted",
+        spawn_task=service._spawn_task,
+        hooks=discord_message_turns_module._build_discord_queue_worker_hooks(
+            service,
+            channel_id="channel-1",
+            managed_thread_id="managed-thread-1",
+            public_execution_error="Runtime thread failed",
+        ),
+        begin_next_execution=discord_message_turns_module.begin_next_queued_runtime_thread_execution,
     )
 
     await asyncio.gather(*service._spawned_tasks)
@@ -8451,7 +8480,7 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
 
 
 @pytest.mark.anyio
-async def test_finalize_discord_thread_execution_prefers_started_execution_error(
+async def test_discord_managed_thread_coordinator_prefers_started_execution_error(
     tmp_path: Path,
 ) -> None:
     seed_hub_files(tmp_path, force=True)
@@ -8508,14 +8537,22 @@ async def test_finalize_discord_thread_execution_prefers_started_execution_error
         harness=object(),
     )
 
-    result = await discord_message_turns_module._finalize_discord_thread_execution(
-        service,
-        orchestration_service=_OrchestrationServiceStub(),
-        started=started,
-        channel_id="channel-1",
-        public_execution_error="Discord PMA turn failed",
-        timeout_error="Discord PMA turn timed out",
-        interrupted_error="Discord PMA turn interrupted",
+    orchestration_service = _OrchestrationServiceStub()
+    coordinator = (
+        discord_message_turns_module._build_discord_managed_thread_coordinator(
+            service=service,
+            orchestration_service=orchestration_service,
+            channel_id="channel-1",
+            public_execution_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+            turn_preview="preview",
+        )
+    )
+
+    result = await coordinator.run_started_execution(
+        started,
+        runtime_event_state=discord_message_turns_module.RuntimeThreadRunEventState(),
     )
 
     assert result["status"] == "error"
