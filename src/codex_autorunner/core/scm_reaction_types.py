@@ -12,7 +12,11 @@ ReactionKind = Literal[
     "approved_and_green",
     "merged",
 ]
-ReactionOperationKind = Literal["enqueue_managed_turn", "notify_chat"]
+ReactionOperationKind = Literal[
+    "enqueue_managed_turn",
+    "notify_chat",
+    "react_pr_review_comment",
+]
 ReactionProfile = Literal["all", "minimal_noise"]
 
 

@@ -134,6 +134,7 @@
         "enqueue_managed_turn": "allow",
         "merge_pr": "deny",
         "notify_chat": "allow",
+        "react_pr_review_comment": "allow",
         "post_pr_comment": "deny"
       },
       "polling": {

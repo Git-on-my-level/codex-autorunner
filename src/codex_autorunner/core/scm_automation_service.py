@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import importlib
 import json
 import logging
 from collections.abc import Mapping
@@ -296,6 +297,12 @@ def _default_publish_processor(
     *,
     journal: PublishJournalStore,
 ) -> PublishOperationProcessor:
+    github_publisher = importlib.import_module(
+        "codex_autorunner.integrations.github.publisher"
+    )
+    build_react_pr_review_comment_executor = (
+        github_publisher.build_react_pr_review_comment_executor
+    )
     raw_config = load_hub_config(hub_root).raw
     return PublishOperationProcessor(
         journal,
@@ -304,6 +311,10 @@ def _default_publish_processor(
                 hub_root=hub_root
             ),
             "notify_chat": build_notify_chat_executor(hub_root=hub_root),
+            "react_pr_review_comment": build_react_pr_review_comment_executor(
+                repo_root=hub_root,
+                raw_config=raw_config,
+            ),
         },
         mutation_policy_config=raw_config,
     )

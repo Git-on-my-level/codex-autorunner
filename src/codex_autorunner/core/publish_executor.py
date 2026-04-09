@@ -12,6 +12,7 @@ from .text_utils import _normalize_optional_text
 DEFAULT_PUBLISH_RETRY_DELAYS_SECONDS = (0.0, 30.0, 300.0)
 _LOGGER = logging.getLogger(__name__)
 _EXTERNAL_ACTION_PROVIDERS: dict[str, str] = {
+    "react_pr_review_comment": "github",
     "post_pr_comment": "github",
     "add_labels": "github",
     "merge_pr": "github",

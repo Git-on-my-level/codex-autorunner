@@ -129,6 +129,35 @@ def _build_publish_payload(
     return payload
 
 
+def _build_review_comment_reaction_payload(
+    *,
+    event: ScmEvent,
+    binding: Optional[PrBinding],
+) -> Optional[dict[str, Any]]:
+    payload = _event_payload(event)
+    comment_id = _normalize_text(payload.get("comment_id"))
+    repo_slug = _resolved_repo_slug(event, binding)
+    if comment_id is None or repo_slug is None:
+        return None
+    reaction_payload: dict[str, Any] = {
+        "comment_id": comment_id,
+        "content": "eyes",
+        "correlation_id": correlation_id_for_event(event),
+        "repo_slug": repo_slug,
+        "scm": _scm_metadata(
+            event=event,
+            binding=binding,
+            reaction_kind="review_comment",
+        ),
+    }
+    repo_id = _resolved_repo_id(event, binding)
+    if repo_id is not None:
+        reaction_payload["repo_id"] = repo_id
+    if binding is not None:
+        reaction_payload["binding_id"] = binding.binding_id
+    return reaction_payload
+
+
 def _match_reaction_kind(
     event: ScmEvent,
     *,
@@ -204,45 +233,75 @@ def route_scm_reactions(
     if reaction_kind is None or not resolved_config.is_enabled(reaction_kind):
         return []
 
+    intents: list[ReactionIntent] = []
     operation_kind = _resolve_operation_kind(
         reaction_kind=reaction_kind,
         event=event,
         binding=binding,
     )
-    if operation_kind is None:
-        return []
-
-    operation_key = stable_reaction_operation_key(
-        provider=event.provider,
-        event_id=event.event_id,
-        reaction_kind=reaction_kind,
-        operation_kind=operation_kind,
-        repo_slug=_resolved_repo_slug(event, binding),
-        repo_id=_resolved_repo_id(event, binding),
-        pr_number=_resolved_pr_number(event, binding),
-        binding_id=binding.binding_id if binding is not None else None,
-        thread_target_id=(
-            binding.thread_target_id
-            if binding is not None and binding.thread_target_id is not None
-            else None
-        ),
-    )
-
-    return [
-        ReactionIntent(
+    if operation_kind is not None:
+        operation_key = stable_reaction_operation_key(
+            provider=event.provider,
+            event_id=event.event_id,
             reaction_kind=reaction_kind,
             operation_kind=operation_kind,
-            operation_key=operation_key,
-            payload=_build_publish_payload(
+            repo_slug=_resolved_repo_slug(event, binding),
+            repo_id=_resolved_repo_id(event, binding),
+            pr_number=_resolved_pr_number(event, binding),
+            binding_id=binding.binding_id if binding is not None else None,
+            thread_target_id=(
+                binding.thread_target_id
+                if binding is not None and binding.thread_target_id is not None
+                else None
+            ),
+        )
+        intents.append(
+            ReactionIntent(
                 reaction_kind=reaction_kind,
                 operation_kind=operation_kind,
-                event=event,
-                binding=binding,
-            ),
-            event_id=event.event_id,
-            binding_id=binding.binding_id if binding is not None else None,
+                operation_key=operation_key,
+                payload=_build_publish_payload(
+                    reaction_kind=reaction_kind,
+                    operation_kind=operation_kind,
+                    event=event,
+                    binding=binding,
+                ),
+                event_id=event.event_id,
+                binding_id=binding.binding_id if binding is not None else None,
+            )
         )
-    ]
+    if event.provider == "github" and event.event_type == "pull_request_review_comment":
+        reaction_payload = _build_review_comment_reaction_payload(
+            event=event,
+            binding=binding,
+        )
+        if reaction_payload is not None:
+            intents.append(
+                ReactionIntent(
+                    reaction_kind=reaction_kind,
+                    operation_kind="react_pr_review_comment",
+                    operation_key=stable_reaction_operation_key(
+                        provider=event.provider,
+                        event_id=event.event_id,
+                        reaction_kind=reaction_kind,
+                        operation_kind="react_pr_review_comment",
+                        repo_slug=_resolved_repo_slug(event, binding),
+                        repo_id=_resolved_repo_id(event, binding),
+                        pr_number=_resolved_pr_number(event, binding),
+                        binding_id=binding.binding_id if binding is not None else None,
+                        thread_target_id=(
+                            binding.thread_target_id
+                            if binding is not None
+                            and binding.thread_target_id is not None
+                            else None
+                        ),
+                    ),
+                    payload=reaction_payload,
+                    event_id=event.event_id,
+                    binding_id=(binding.binding_id if binding is not None else None),
+                )
+            )
+    return intents
 
 
 __all__ = ["route_scm_reactions"]

@@ -380,6 +380,7 @@ def _default_github_automation_section() -> Dict[str, Any]:
         "policy": {
             "enqueue_managed_turn": "allow",
             "notify_chat": "allow",
+            "react_pr_review_comment": "allow",
             "post_pr_comment": "deny",
             "add_labels": "deny",
             "merge_pr": "deny",
