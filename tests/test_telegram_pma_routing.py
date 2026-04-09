@@ -1715,28 +1715,14 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
             return queued_started
         return None
 
-    async def _fake_finalize(
-        handlers: object,
-        *,
-        orchestration_service: object,
+    async def _fake_run_started_execution(
+        self: object,
         started: object,
-        surface_key: str,
-        chat_id: int,
-        thread_id: Optional[int],
-        public_execution_error: str,
-        timeout_error: str,
-        interrupted_error: str,
+        *,
+        hooks: object = None,
+        runtime_event_state: object = None,
     ) -> dict[str, object]:
-        _ = (
-            handlers,
-            orchestration_service,
-            surface_key,
-            chat_id,
-            thread_id,
-            public_execution_error,
-            timeout_error,
-            interrupted_error,
-        )
+        _ = self, hooks, runtime_event_state
         assert started is queued_started
         events.append("finalize")
         return {"status": "ok", "assistant_text": "queued telegram reply"}
@@ -1747,9 +1733,9 @@ async def test_managed_thread_queue_worker_wraps_execution_with_typing_indicator
         _fake_begin_next,
     )
     monkeypatch.setattr(
-        execution_commands_module,
-        "_finalize_telegram_managed_thread_execution",
-        _fake_finalize,
+        execution_commands_module.ManagedThreadTurnCoordinator,
+        "run_started_execution",
+        _fake_run_started_execution,
     )
 
     handler = _Handler()

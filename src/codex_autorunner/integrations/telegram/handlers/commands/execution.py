@@ -12,10 +12,6 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 import httpx
 
-from .....agents.base import (
-    harness_progress_event_stream,
-    harness_supports_progress_event_stream,
-)
 from .....agents.opencode.runtime import (
     PERMISSION_ALLOW,
     PERMISSION_ASK,
@@ -44,18 +40,11 @@ from .....core.orchestration import (
 )
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
-    normalize_runtime_thread_raw_event,
-    recover_post_completion_outcome,
-    terminal_run_event_from_outcome,
 )
 from .....core.orchestration.runtime_threads import (
-    RuntimeThreadExecution,
-    RuntimeThreadOutcome,
-    await_runtime_thread_outcome,
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
-from .....core.orchestration.turn_timeline import persist_turn_timeline
 from .....core.pma_context import (
     build_hub_snapshot,
     format_pma_discoverability_preamble,
@@ -63,7 +52,6 @@ from .....core.pma_context import (
     load_pma_prompt,
 )
 from .....core.pma_thread_store import PmaThreadStore
-from .....core.pma_transcripts import PmaTranscriptStore
 from .....core.state import now_iso
 from .....core.utils import canonicalize_path
 from .....integrations.app_server.threads import (
@@ -77,8 +65,15 @@ from .....integrations.chat.constants import (
     APP_SERVER_UNAVAILABLE_MESSAGE,
     TOPIC_NOT_BOUND_MESSAGE,
 )
-from .....integrations.chat.runtime_thread_errors import (
-    resolve_runtime_thread_error_detail as _resolve_runtime_thread_result_error_detail,
+from .....integrations.chat.managed_thread_turns import (
+    ManagedThreadCoordinatorHooks,
+    ManagedThreadErrorMessages,
+    ManagedThreadSurfaceInfo,
+    ManagedThreadTargetRequest,
+    ManagedThreadTurnCoordinator,
+)
+from .....integrations.chat.managed_thread_turns import (
+    resolve_managed_thread_target as _shared_resolve_managed_thread_target,
 )
 from .....integrations.chat.runtime_thread_errors import (
     sanitize_runtime_thread_error as _sanitize_runtime_thread_result_error,
@@ -307,22 +302,6 @@ def _get_telegram_thread_binding(
     return orchestration_service, binding, thread
 
 
-def _get_thread_runtime_binding(
-    orchestration_service: Any, thread_target_id: str
-) -> Any:
-    getter = getattr(orchestration_service, "get_thread_runtime_binding", None)
-    if not callable(getter) or not thread_target_id:
-        return None
-    try:
-        return getter(thread_target_id)
-    except (
-        AttributeError,
-        TypeError,
-        RuntimeError,
-    ):  # intentional: defensive guard for dynamic dispatch
-        return None
-
-
 async def _resolve_telegram_managed_thread(
     handlers: Any,
     *,
@@ -403,49 +382,66 @@ async def _resolve_telegram_managed_thread(
         and existing_backend_thread_id is not None
     ):
         effective_backend_thread_id = existing_backend_thread_id
-    if reusable_thread and (
-        str(thread.lifecycle_status or "").strip().lower() != "active"
-        or thread.backend_thread_id != effective_backend_thread_id
-    ):
-        thread = orchestration_service.resume_thread_target(
-            thread.thread_target_id,
-            backend_thread_id=effective_backend_thread_id,
-            backend_runtime_instance_id=backend_runtime_instance_id,
-        )
-    elif not reusable_thread:
-        if not allow_new_thread and not effective_backend_thread_id:
-            return orchestration_service, None
-        thread_metadata: Optional[dict[str, Any]] = {}
-        if agent_profile:
-            thread_metadata["agent_profile"] = agent_profile
-        if backend_runtime_instance_id is not None:
-            thread_metadata["backend_runtime_instance_id"] = backend_runtime_instance_id
-        thread = orchestration_service.create_thread_target(
-            agent,
-            workspace_root,
+    return _shared_resolve_managed_thread_target(
+        orchestration_service,
+        request=ManagedThreadTargetRequest(
+            surface_kind="telegram",
+            surface_key=surface_key,
+            mode=mode,
+            agent=agent,
+            agent_profile=agent_profile,
+            workspace_root=workspace_root,
+            display_name=f"telegram:{surface_key}",
             repo_id=repo_id,
             resource_kind=resource_kind,
             resource_id=resource_id,
-            display_name=f"telegram:{surface_key}",
+            binding_metadata={
+                "topic_key": surface_key,
+                "pma_enabled": pma_enabled,
+                "surface_key": surface_key,
+            },
+            allow_new_thread=allow_new_thread,
             backend_thread_id=effective_backend_thread_id,
-            metadata=thread_metadata or None,
-        )
-    orchestration_service.upsert_binding(
-        surface_kind="telegram",
-        surface_key=surface_key,
-        thread_target_id=thread.thread_target_id,
-        agent_id=agent,
-        repo_id=repo_id,
-        resource_kind=resource_kind,
-        resource_id=resource_id,
-        mode=mode,
-        metadata={
-            "topic_key": surface_key,
-            "pma_enabled": pma_enabled,
-            "surface_key": surface_key,
-        },
+            backend_runtime_instance_id=backend_runtime_instance_id,
+            existing_binding=binding,
+            existing_thread=thread,
+        ),
     )
-    return orchestration_service, thread
+
+
+def _build_telegram_managed_thread_coordinator(
+    handlers: Any,
+    *,
+    orchestration_service: Any,
+    surface_key: str,
+    chat_id: int,
+    thread_id: Optional[int],
+    public_execution_error: str,
+    timeout_error: str,
+    interrupted_error: str,
+    turn_preview: str,
+) -> ManagedThreadTurnCoordinator:
+    return ManagedThreadTurnCoordinator(
+        orchestration_service=orchestration_service,
+        state_root=_telegram_state_root(handlers),
+        surface=ManagedThreadSurfaceInfo(
+            log_label="Telegram",
+            surface_kind="telegram",
+            surface_key=surface_key,
+            metadata={
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+            },
+        ),
+        errors=ManagedThreadErrorMessages(
+            public_execution_error=public_execution_error,
+            timeout_error=timeout_error,
+            interrupted_error=interrupted_error,
+            timeout_seconds=TELEGRAM_PMA_TIMEOUT_SECONDS,
+        ),
+        logger=getattr(handlers, "_logger", logging.getLogger(__name__)),
+        turn_preview=turn_preview,
+    )
 
 
 async def _reset_telegram_thread_binding(
@@ -633,418 +629,6 @@ async def _sync_telegram_thread_binding(
     return orchestration_service, current_thread
 
 
-async def _finalize_telegram_managed_thread_execution(
-    handlers: Any,
-    *,
-    orchestration_service: Any,
-    started: RuntimeThreadExecution,
-    surface_key: str,
-    chat_id: int,
-    thread_id: Optional[int],
-    public_execution_error: str = TELEGRAM_PMA_PUBLIC_EXECUTION_ERROR,
-    timeout_error: str = TELEGRAM_PMA_TIMEOUT_ERROR,
-    interrupted_error: str = TELEGRAM_PMA_INTERRUPTED_ERROR,
-    runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
-    on_progress_event: Optional[Any] = None,
-) -> dict[str, Any]:
-    state_root = _telegram_state_root(handlers)
-    thread_store = PmaThreadStore(state_root)
-    transcripts = PmaTranscriptStore(state_root)
-    managed_thread_id = started.thread.thread_target_id
-    managed_turn_id = started.execution.execution_id
-    current_thread_row = thread_store.get_thread(managed_thread_id) or {}
-    current_preview = _preview_from_text(
-        str(started.request.message_text or ""),
-        RESUME_PREVIEW_USER_LIMIT,
-    )
-    runtime_binding = _get_thread_runtime_binding(
-        orchestration_service, managed_thread_id
-    )
-    current_backend_thread_id = str(
-        getattr(runtime_binding, "backend_thread_id", None)
-        or started.thread.backend_thread_id
-        or ""
-    ).strip()
-    event_state = runtime_event_state or RuntimeThreadRunEventState()
-    stream_task: Optional[asyncio.Task[None]] = None
-    timeline_events: list[Any] = []
-    live_timeline_count = 0
-    live_timeline_error_logged = False
-
-    def _persist_live_timeline_events(events: list[Any]) -> None:
-        nonlocal live_timeline_count
-        nonlocal live_timeline_error_logged
-        if not events:
-            return
-        try:
-            persist_turn_timeline(
-                state_root,
-                execution_id=managed_turn_id,
-                target_kind="thread_target",
-                target_id=managed_thread_id,
-                repo_id=str(current_thread_row.get("repo_id") or "").strip() or None,
-                resource_kind=(
-                    str(current_thread_row.get("resource_kind") or "").strip() or None
-                ),
-                resource_id=(
-                    str(current_thread_row.get("resource_id") or "").strip() or None
-                ),
-                metadata={
-                    "agent": getattr(started.thread, "agent_id", None),
-                    "execution_id": managed_turn_id,
-                    "thread_target_id": managed_thread_id,
-                    "backend_thread_id": current_backend_thread_id or None,
-                    "backend_turn_id": started.execution.backend_id,
-                    "model": started.request.model,
-                    "reasoning": started.request.reasoning,
-                    "request_kind": getattr(started.request, "kind", None),
-                    "status": "running",
-                    "surface_kind": "telegram",
-                    "surface_key": surface_key,
-                    "chat_id": chat_id,
-                    "thread_id": thread_id,
-                },
-                events=events,
-                start_index=live_timeline_count + 1,
-            )
-        except Exception:
-            if not live_timeline_error_logged:
-                live_timeline_error_logged = True
-                handlers._logger.exception(
-                    "Failed to persist live Telegram thread timeline (thread=%s turn=%s)",
-                    managed_thread_id,
-                    managed_turn_id,
-                )
-        else:
-            live_timeline_count += len(events)
-
-    stream_backend_thread_id = current_backend_thread_id
-    stream_backend_turn_id = str(started.execution.backend_id or "").strip()
-    if not stream_backend_turn_id:
-        stream_backend_turn_id = str(started.execution.execution_id or "").strip()
-        handlers._logger.warning(
-            "Telegram finalize: backend_id missing, falling back to execution_id=%s "
-            "for thread=%s",
-            stream_backend_turn_id,
-            managed_thread_id,
-        )
-
-    if (
-        harness_supports_progress_event_stream(started.harness)
-        and stream_backend_thread_id
-        and stream_backend_turn_id
-    ):
-
-        async def _pump_runtime_events() -> None:
-            raw_events_received = 0
-            run_events_dispatched = 0
-            try:
-                async for raw_event in harness_progress_event_stream(
-                    started.harness,
-                    started.workspace_root,
-                    stream_backend_thread_id,
-                    stream_backend_turn_id,
-                ):
-                    raw_events_received += 1
-                    run_events = await normalize_runtime_thread_raw_event(
-                        raw_event,
-                        event_state,
-                    )
-                    timeline_events.extend(run_events)
-                    _persist_live_timeline_events(run_events)
-                    if on_progress_event is None:
-                        continue
-                    for run_event in run_events:
-                        run_events_dispatched += 1
-                        try:
-                            await on_progress_event(run_event)
-                        except (
-                            RuntimeError,
-                            ValueError,
-                            TypeError,
-                            ConnectionError,
-                            OSError,
-                            AttributeError,
-                        ):  # intentional: best-effort
-                            handlers._logger.debug(
-                                "Telegram progress event handler failed for %s",
-                                type(run_event).__name__,
-                                exc_info=True,
-                            )
-                            continue
-            except Exception:  # intentional: event pump handler
-                handlers._logger.warning(
-                    "Telegram progress event pump failed", exc_info=True
-                )
-            finally:
-                handlers._logger.info(
-                    "Telegram progress pump finished thread=%s turn=%s "
-                    "raw_events=%d run_events_dispatched=%d",
-                    managed_thread_id,
-                    managed_turn_id,
-                    raw_events_received,
-                    run_events_dispatched,
-                )
-
-        stream_task = asyncio.create_task(_pump_runtime_events())
-
-    try:
-        outcome = await await_runtime_thread_outcome(
-            started,
-            interrupt_event=None,
-            timeout_seconds=TELEGRAM_PMA_TIMEOUT_SECONDS,
-            execution_error_message=public_execution_error,
-        )
-    except (
-        RuntimeError,
-        OSError,
-        ValueError,
-        TypeError,
-        ConnectionError,
-    ):  # intentional: user-facing error display
-        outcome = RuntimeThreadOutcome(
-            status="error",
-            assistant_text="",
-            error=public_execution_error,
-            backend_thread_id=current_backend_thread_id,
-            backend_turn_id=started.execution.backend_id,
-        )
-    finally:
-        if stream_task is not None:
-            drain_cancel: Optional[BaseException] = None
-            try:
-                await asyncio.wait_for(stream_task, timeout=0.5)
-            except asyncio.TimeoutError:
-                stream_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await stream_task
-            except asyncio.CancelledError as exc:
-                drain_cancel = exc
-                stream_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await stream_task
-            if drain_cancel is not None:
-                raise drain_cancel
-
-    recovered_outcome = recover_post_completion_outcome(outcome, event_state)
-    if recovered_outcome is not outcome:
-        handlers._logger.warning(
-            "Telegram runtime turn recovered from post-completion error: thread=%s turn=%s error=%s",
-            managed_thread_id,
-            managed_turn_id,
-            outcome.error,
-        )
-        outcome = recovered_outcome
-
-    if on_progress_event is not None:
-        terminal_event = terminal_run_event_from_outcome(outcome, event_state)
-        timeline_events.append(terminal_event)
-        try:
-            await on_progress_event(terminal_event)
-        except (
-            RuntimeError,
-            ValueError,
-            TypeError,
-            ConnectionError,
-            OSError,
-            AttributeError,
-        ):  # intentional: best-effort
-            handlers._logger.debug(
-                "Telegram terminal progress event failed", exc_info=True
-            )
-    else:
-        timeline_events.append(terminal_run_event_from_outcome(outcome, event_state))
-
-    try:
-        persist_turn_timeline(
-            state_root,
-            execution_id=managed_turn_id,
-            target_kind="thread_target",
-            target_id=managed_thread_id,
-            repo_id=str(current_thread_row.get("repo_id") or "").strip() or None,
-            resource_kind=(
-                str(current_thread_row.get("resource_kind") or "").strip() or None
-            ),
-            resource_id=(
-                str(current_thread_row.get("resource_id") or "").strip() or None
-            ),
-            metadata={
-                "agent": getattr(started.thread, "agent_id", None),
-                "execution_id": managed_turn_id,
-                "thread_target_id": managed_thread_id,
-                "backend_thread_id": current_backend_thread_id or None,
-                "backend_turn_id": outcome.backend_turn_id
-                or started.execution.backend_id,
-                "model": started.request.model,
-                "reasoning": started.request.reasoning,
-                "request_kind": getattr(started.request, "kind", None),
-                "status": outcome.status,
-                "surface_kind": "telegram",
-                "surface_key": surface_key,
-                "chat_id": chat_id,
-                "thread_id": thread_id,
-            },
-            events=timeline_events,
-        )
-    except Exception:
-        handlers._logger.exception(
-            "Failed to persist Telegram thread timeline (thread=%s turn=%s)",
-            managed_thread_id,
-            managed_turn_id,
-        )
-
-    resolved_assistant_text = (
-        outcome.assistant_text or event_state.best_assistant_text()
-    )
-
-    finalized_thread = orchestration_service.get_thread_target(managed_thread_id)
-    runtime_binding = _get_thread_runtime_binding(
-        orchestration_service, managed_thread_id
-    )
-    resolved_backend_thread_id = (
-        str(
-            getattr(runtime_binding, "backend_thread_id", None)
-            or getattr(finalized_thread, "backend_thread_id", None)
-            or ""
-        ).strip()
-        or outcome.backend_thread_id
-        or current_backend_thread_id
-    )
-
-    if outcome.status == "ok":
-        transcript_turn_id: Optional[str] = None
-        transcript_metadata = {
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "repo_id": current_thread_row.get("repo_id"),
-            "workspace_root": str(started.workspace_root),
-            "agent": current_thread_row.get("agent"),
-            "backend_thread_id": resolved_backend_thread_id,
-            "backend_turn_id": outcome.backend_turn_id,
-            "model": started.request.model,
-            "reasoning": started.request.reasoning,
-            "status": "ok",
-            "surface_kind": "telegram",
-            "surface_key": surface_key,
-            "chat_id": chat_id,
-            "thread_id": thread_id,
-        }
-        try:
-            transcripts.write_transcript(
-                turn_id=managed_turn_id,
-                metadata=transcript_metadata,
-                assistant_text=resolved_assistant_text,
-            )
-            transcript_turn_id = managed_turn_id
-        except OSError as exc:
-            handlers._logger.warning(
-                "Failed to persist Telegram transcript (thread=%s turn=%s): %s",
-                managed_thread_id,
-                managed_turn_id,
-                exc,
-            )
-        try:
-            finalized_execution = orchestration_service.record_execution_result(
-                managed_thread_id,
-                managed_turn_id,
-                status="ok",
-                assistant_text=resolved_assistant_text,
-                error=outcome.error,
-                backend_turn_id=outcome.backend_turn_id,
-                transcript_turn_id=transcript_turn_id,
-            )
-        except KeyError:
-            finalized_execution = orchestration_service.get_execution(
-                managed_thread_id,
-                managed_turn_id,
-            )
-        finalized_status = str(
-            getattr(finalized_execution, "status", "") if finalized_execution else ""
-        ).strip()
-        if finalized_status != "ok":
-            detail = public_execution_error
-            if finalized_status == "interrupted":
-                detail = interrupted_error
-            elif finalized_status == "error" and finalized_execution is not None:
-                detail = _resolve_runtime_thread_result_error_detail(
-                    execution_error=getattr(finalized_execution, "error", None),
-                    event_error=event_state.last_error_message,
-                    public_error=public_execution_error,
-                    timeout_error=timeout_error,
-                    interrupted_error=interrupted_error,
-                )
-            return {
-                "status": "error",
-                "assistant_text": "",
-                "error": detail,
-                "managed_thread_id": managed_thread_id,
-                "managed_turn_id": managed_turn_id,
-                "backend_thread_id": resolved_backend_thread_id,
-                "token_usage": event_state.token_usage,
-            }
-        thread_store.update_thread_after_turn(
-            managed_thread_id,
-            last_turn_id=managed_turn_id,
-            last_message_preview=current_preview,
-        )
-        return {
-            "status": "ok",
-            "assistant_text": resolved_assistant_text,
-            "error": None,
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "backend_thread_id": resolved_backend_thread_id,
-            "token_usage": event_state.token_usage,
-        }
-
-    if outcome.status == "interrupted":
-        try:
-            orchestration_service.record_execution_interrupted(
-                managed_thread_id,
-                managed_turn_id,
-            )
-        except KeyError:
-            pass
-        return {
-            "status": "interrupted",
-            "assistant_text": "",
-            "error": interrupted_error,
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "backend_thread_id": resolved_backend_thread_id,
-            "token_usage": event_state.token_usage,
-        }
-
-    detail = _resolve_runtime_thread_result_error_detail(
-        outcome_error=outcome.error,
-        event_error=event_state.last_error_message,
-        public_error=public_execution_error,
-        timeout_error=timeout_error,
-        interrupted_error=interrupted_error,
-    )
-    try:
-        orchestration_service.record_execution_result(
-            managed_thread_id,
-            managed_turn_id,
-            status="error",
-            assistant_text="",
-            error=detail,
-            backend_turn_id=outcome.backend_turn_id,
-            transcript_turn_id=None,
-        )
-    except KeyError:
-        pass
-    return {
-        "status": "error",
-        "assistant_text": "",
-        "error": detail,
-        "managed_thread_id": managed_thread_id,
-        "managed_turn_id": managed_turn_id,
-        "backend_thread_id": resolved_backend_thread_id,
-        "token_usage": event_state.token_usage,
-    }
-
-
 def _ensure_telegram_managed_thread_queue_worker(
     handlers: Any,
     *,
@@ -1062,11 +646,6 @@ def _ensure_telegram_managed_thread_queue_worker(
     if not isinstance(task_map, dict):
         task_map = {}
         handlers._telegram_managed_thread_queue_tasks = task_map
-    existing = task_map.get(managed_thread_id)
-    if isinstance(existing, asyncio.Task) and not existing.done():
-        return
-
-    worker_task: Optional[asyncio.Task[Any]] = None
 
     async def _run_with_telegram_typing_indicator(work: Any) -> None:
         begin = getattr(handlers, "_begin_typing_indicator", None)
@@ -1101,72 +680,52 @@ def _ensure_telegram_managed_thread_queue_worker(
                         exc=exc,
                     )
 
-    async def _queue_worker() -> None:
-        try:
-            while True:
-                if orchestration_service.get_running_execution(managed_thread_id):
-                    await asyncio.sleep(0.1)
-                    continue
-                started = await begin_next_queued_runtime_thread_execution(
-                    orchestration_service,
-                    managed_thread_id,
-                )
-                if started is None:
-                    break
+    async def _deliver_result(finalized: dict[str, Any]) -> None:
+        if finalized["status"] == "ok":
+            message_text = str(finalized.get("assistant_text") or "").strip()
+            if not message_text:
+                message_text = "(No response text returned.)"
+            await handlers._send_message(
+                chat_id,
+                message_text,
+                thread_id=thread_id,
+                reply_to=None,
+            )
+            await handlers._flush_outbox_files(
+                record,
+                chat_id=chat_id,
+                thread_id=thread_id,
+                reply_to=None,
+            )
+            return
+        await handlers._send_message(
+            chat_id,
+            ("Turn failed: " f"{finalized.get('error') or public_execution_error}"),
+            thread_id=thread_id,
+            reply_to=None,
+        )
 
-                async def _process_started_execution(
-                    started_execution: RuntimeThreadExecution = started,
-                ) -> None:
-                    finalized = await _finalize_telegram_managed_thread_execution(
-                        handlers,
-                        orchestration_service=orchestration_service,
-                        started=started_execution,
-                        surface_key=surface_key,
-                        chat_id=chat_id,
-                        thread_id=thread_id,
-                        public_execution_error=public_execution_error,
-                        timeout_error=timeout_error,
-                        interrupted_error=interrupted_error,
-                    )
-                    if finalized["status"] == "ok":
-                        message_text = str(
-                            finalized.get("assistant_text") or ""
-                        ).strip()
-                        if not message_text:
-                            message_text = "(No response text returned.)"
-                        await handlers._send_message(
-                            chat_id,
-                            message_text,
-                            thread_id=thread_id,
-                            reply_to=None,
-                        )
-                        await handlers._flush_outbox_files(
-                            record,
-                            chat_id=chat_id,
-                            thread_id=thread_id,
-                            reply_to=None,
-                        )
-                        return
-                    await handlers._send_message(
-                        chat_id,
-                        (
-                            "Turn failed: "
-                            f"{finalized.get('error') or public_execution_error}"
-                        ),
-                        thread_id=thread_id,
-                        reply_to=None,
-                    )
-
-                await _run_with_telegram_typing_indicator(_process_started_execution)
-        finally:
-            if (
-                worker_task is not None
-                and task_map.get(managed_thread_id) is worker_task
-            ):
-                task_map.pop(managed_thread_id, None)
-
-    worker_task = _spawn_telegram_background_task(handlers, _queue_worker())
-    task_map[managed_thread_id] = worker_task
+    coordinator = _build_telegram_managed_thread_coordinator(
+        handlers,
+        orchestration_service=orchestration_service,
+        surface_key=surface_key,
+        chat_id=chat_id,
+        thread_id=thread_id,
+        public_execution_error=public_execution_error,
+        timeout_error=timeout_error,
+        interrupted_error=interrupted_error,
+        turn_preview="",
+    )
+    coordinator.ensure_queue_worker(
+        task_map=task_map,
+        managed_thread_id=managed_thread_id,
+        spawn_task=lambda coro: _spawn_telegram_background_task(handlers, coro),
+        hooks=ManagedThreadCoordinatorHooks(
+            deliver_result=_deliver_result,
+            run_with_indicator=_run_with_telegram_typing_indicator,
+        ),
+        begin_next_execution=begin_next_queued_runtime_thread_execution,
+    )
 
 
 def _sync_pma_registry_thread_id(
@@ -1454,9 +1013,19 @@ async def _run_telegram_managed_thread_turn(
                 {"type": "text", "text": pending_seed},
                 *execution_input_items,
             ]
+    coordinator = _build_telegram_managed_thread_coordinator(
+        handlers,
+        orchestration_service=orchestration_service,
+        surface_key=topic_key,
+        chat_id=message.chat_id,
+        thread_id=message.thread_id,
+        public_execution_error=public_execution_error,
+        timeout_error=timeout_error,
+        interrupted_error=interrupted_error,
+        turn_preview=_preview_from_text(prompt_text, RESUME_PREVIEW_USER_LIMIT),
+    )
     try:
-        started_execution = await begin_runtime_thread_execution(
-            orchestration_service,
+        submission = await coordinator.submit_execution(
             MessageRequest(
                 target_id=thread.thread_target_id,
                 target_kind="thread",
@@ -1473,6 +1042,7 @@ async def _run_telegram_managed_thread_turn(
             ),
             client_request_id=(f"telegram:{topic_key}:{secrets.token_hex(6)}"),
             sandbox_policy=sandbox_policy,
+            begin_execution=begin_runtime_thread_execution,
         )
     except (
         RuntimeError,
@@ -1501,6 +1071,7 @@ async def _run_telegram_managed_thread_turn(
             transcript_message_id,
             transcript_text,
         )
+    started_execution = submission.started_execution
     if pma_enabled:
         _sync_pma_registry_thread_id(
             handlers,
@@ -1516,10 +1087,7 @@ async def _run_telegram_managed_thread_turn(
             _clear_pending_compact_seed,
         )
 
-    if (
-        str(getattr(started_execution.execution, "status", "") or "").strip()
-        == "queued"
-    ):
+    if submission.queued:
         _ensure_telegram_managed_thread_queue_worker(
             handlers,
             orchestration_service=orchestration_service,
@@ -1581,27 +1149,21 @@ async def _run_telegram_managed_thread_turn(
             )
 
     try:
-        finalized = await _finalize_telegram_managed_thread_execution(
-            handlers,
-            orchestration_service=orchestration_service,
-            started=started_execution,
-            surface_key=topic_key,
-            chat_id=message.chat_id,
-            thread_id=message.thread_id,
-            public_execution_error=public_execution_error,
-            timeout_error=timeout_error,
-            interrupted_error=interrupted_error,
-            runtime_event_state=RuntimeThreadRunEventState(),
-            on_progress_event=(
-                (
-                    lambda run_event: handlers._apply_run_event_to_progress(
-                        registered_turn_key,
-                        run_event,
+        finalized = await coordinator.run_started_execution(
+            started_execution,
+            hooks=ManagedThreadCoordinatorHooks(
+                on_progress_event=(
+                    (
+                        lambda run_event: handlers._apply_run_event_to_progress(
+                            registered_turn_key,
+                            run_event,
+                        )
                     )
+                    if registered_turn_key is not None
+                    else None
                 )
-                if registered_turn_key is not None
-                else None
             ),
+            runtime_event_state=RuntimeThreadRunEventState(),
         )
     finally:
         if registered_turn_key is not None:

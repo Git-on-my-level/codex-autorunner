@@ -8259,6 +8259,7 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
     class _Service:
         def __init__(self) -> None:
             self._spawned_tasks: list[asyncio.Task[Any]] = []
+            self._config = SimpleNamespace(root=".")
 
         def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
             task = asyncio.create_task(coro)
@@ -8296,24 +8297,14 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
             return queued_started
         return None
 
-    async def _fake_finalize(
-        service: object,
-        *,
-        orchestration_service: object,
+    async def _fake_run_started_execution(
+        self: object,
         started: object,
-        channel_id: str,
-        public_execution_error: str,
-        timeout_error: str,
-        interrupted_error: str,
+        *,
+        hooks: object = None,
+        runtime_event_state: object = None,
     ) -> dict[str, object]:
-        _ = (
-            service,
-            orchestration_service,
-            channel_id,
-            public_execution_error,
-            timeout_error,
-            interrupted_error,
-        )
+        _ = self, hooks, runtime_event_state
         assert started is queued_started
         return {
             "status": "ok",
@@ -8327,9 +8318,9 @@ async def test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_r
         _fake_begin_next,
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
-        "_finalize_discord_thread_execution",
-        _fake_finalize,
+        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        "run_started_execution",
+        _fake_run_started_execution,
     )
 
     service = _Service()
@@ -8365,6 +8356,7 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
     class _Service:
         def __init__(self) -> None:
             self._spawned_tasks: list[asyncio.Task[Any]] = []
+            self._config = SimpleNamespace(root=".")
 
         def _spawn_task(self, coro: Any) -> asyncio.Task[Any]:
             task = asyncio.create_task(coro)
@@ -8402,24 +8394,14 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
             return queued_started
         return None
 
-    async def _fake_finalize(
-        service: object,
-        *,
-        orchestration_service: object,
+    async def _fake_run_started_execution(
+        self: object,
         started: object,
-        channel_id: str,
-        public_execution_error: str,
-        timeout_error: str,
-        interrupted_error: str,
+        *,
+        hooks: object = None,
+        runtime_event_state: object = None,
     ) -> dict[str, object]:
-        _ = (
-            service,
-            orchestration_service,
-            channel_id,
-            public_execution_error,
-            timeout_error,
-            interrupted_error,
-        )
+        _ = self, hooks, runtime_event_state
         assert started is queued_started
         return {
             "status": "ok",
@@ -8436,9 +8418,9 @@ async def test_discord_managed_thread_queue_worker_formats_local_file_links(
         _fake_begin_next,
     )
     monkeypatch.setattr(
-        discord_message_turns_module,
-        "_finalize_discord_thread_execution",
-        _fake_finalize,
+        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        "run_started_execution",
+        _fake_run_started_execution,
     )
 
     service = _Service()
