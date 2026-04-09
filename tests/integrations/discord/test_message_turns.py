@@ -13,6 +13,7 @@ from typing import Any, Optional
 import anyio
 import pytest
 
+import codex_autorunner.integrations.chat.managed_thread_turns as managed_thread_turns_module
 import codex_autorunner.integrations.discord.message_turns as discord_message_turns_module
 import codex_autorunner.integrations.discord.service as discord_service_module
 from codex_autorunner.agents.registry import AgentDescriptor
@@ -8846,6 +8847,55 @@ async def test_discord_managed_thread_coordinator_prefers_started_execution_erro
     assert "ACP subprocess emitted invalid JSON" in str(result["error"])
     assert captured_result["status"] == "error"
     assert "ACP subprocess emitted invalid JSON" in str(captured_result["error"])
+
+
+@pytest.mark.anyio
+async def test_discord_managed_thread_coordinator_uses_started_execution_preview(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, Any] = {}
+
+    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+        seen["turn_preview"] = kwargs["turn_preview"]
+        return {"status": "ok", "managed_turn_id": "turn-1"}
+
+    monkeypatch.setattr(
+        managed_thread_turns_module,
+        "finalize_managed_thread_execution",
+        _fake_finalize,
+    )
+
+    coordinator = (
+        discord_message_turns_module._build_discord_managed_thread_coordinator(
+            service=SimpleNamespace(
+                _config=SimpleNamespace(root=tmp_path),
+                _logger=logging.getLogger("test"),
+            ),
+            orchestration_service=SimpleNamespace(),
+            channel_id="channel-1",
+            public_execution_error="Discord PMA turn failed",
+            timeout_error="Discord PMA turn timed out",
+            interrupted_error="Discord PMA turn interrupted",
+        )
+    )
+
+    started = SimpleNamespace(
+        thread=SimpleNamespace(thread_target_id="managed-thread-1"),
+        execution=SimpleNamespace(execution_id="turn-1"),
+        request=SimpleNamespace(
+            message_text="A later queued Discord prompt that should win."
+        ),
+        workspace_root=tmp_path,
+        harness=object(),
+    )
+
+    await coordinator.run_started_execution(started)
+
+    assert seen["turn_preview"] == discord_message_turns_module.truncate_for_discord(
+        "A later queued Discord prompt that should win.",
+        max_len=120,
+    )
 
 
 @pytest.mark.anyio
