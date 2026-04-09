@@ -18,6 +18,7 @@ from ...core.context_awareness import (
 )
 from ...core.filebox import inbox_dir, outbox_dir, outbox_pending_dir
 from ...core.injected_context import wrap_injected_context
+from ...core.logging_utils import log_event
 from ...core.orchestration import (
     FlowTarget,
     MessageRequest,
@@ -99,6 +100,7 @@ _logger = logging.getLogger(__name__)
 DISCORD_PMA_PUBLIC_EXECUTION_ERROR = "Discord PMA turn failed"
 DISCORD_REPO_PUBLIC_EXECUTION_ERROR = "Discord turn failed"
 DISCORD_PMA_TIMEOUT_SECONDS = 7200
+DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS = 45.0
 DISCORD_PMA_PROGRESS_MAX_ACTIONS = 12
 DISCORD_PMA_PROGRESS_MIN_EDIT_INTERVAL_SECONDS = 1.0
 DISCORD_PMA_PROGRESS_HEARTBEAT_INTERVAL_SECONDS = 2.0
@@ -1480,25 +1482,53 @@ async def _run_discord_orchestrated_turn_for_message(
         progress_message_id = None
 
     try:
-        submission = await coordinator.submit_execution(
-            MessageRequest(
-                target_id=thread.thread_target_id,
-                target_kind="thread",
-                message_text=prompt_text,
-                busy_policy="queue",
-                model=model_override,
-                reasoning=reasoning_effort,
-                approval_mode=approval_mode,
-                input_items=execution_input_items,
-                metadata={
-                    "runtime_prompt": execution_prompt,
-                    "execution_error_message": public_execution_error,
-                },
+        submission = await asyncio.wait_for(
+            coordinator.submit_execution(
+                MessageRequest(
+                    target_id=thread.thread_target_id,
+                    target_kind="thread",
+                    message_text=prompt_text,
+                    busy_policy="queue",
+                    model=model_override,
+                    reasoning=reasoning_effort,
+                    approval_mode=approval_mode,
+                    input_items=execution_input_items,
+                    metadata={
+                        "runtime_prompt": execution_prompt,
+                        "execution_error_message": public_execution_error,
+                    },
+                ),
+                client_request_id=f"discord:{channel_id}:{uuid.uuid4().hex[:12]}",
+                sandbox_policy=sandbox_policy,
+                begin_execution=_begin_execution,
             ),
-            client_request_id=f"discord:{channel_id}:{uuid.uuid4().hex[:12]}",
-            sandbox_policy=sandbox_policy,
-            begin_execution=_begin_execution,
+            timeout=DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS,
         )
+    except asyncio.TimeoutError as exc:
+        log_event(
+            service._logger,
+            logging.ERROR,
+            "discord.turn.submission_timeout",
+            channel_id=channel_id,
+            thread_target_id=managed_thread_id,
+            timeout_seconds=DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS,
+            pma_enabled=pma_enabled,
+            workspace_root=str(workspace_root),
+            agent=logical_agent,
+        )
+        await _stop_progress_heartbeat()
+        if progress_message_id:
+            await service._delete_channel_message_safe(
+                channel_id,
+                progress_message_id,
+                record_id=(
+                    f"discord:runtime-submit-timeout:{managed_thread_id}:"
+                    f"{uuid.uuid4().hex[:8]}"
+                ),
+            )
+        raise RuntimeError(
+            "Discord turn failed to start before runtime execution was created"
+        ) from exc
     except (RuntimeError, ConnectionError, OSError, ValueError, TypeError):
         await _stop_progress_heartbeat()
         if progress_message_id:

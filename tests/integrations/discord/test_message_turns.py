@@ -13,6 +13,7 @@ from tests.discord_message_turns_support import (
     test_orchestrated_turn_interrupt_send_hands_off_progress_message,
     test_orchestrated_turn_interrupt_send_reuses_existing_progress_message,
     test_orchestrated_turn_placeholder_sent_before_runtime_begin,
+    test_orchestrated_turn_submission_timeout_deletes_progress_placeholder,
     test_orchestrated_turn_queued_updates_placeholder_skips_finalize,
     test_resolve_discord_turn_policies_maps_safe_to_prompted_workspace_write,
     test_resolve_discord_turn_policies_prefers_binding_preset,

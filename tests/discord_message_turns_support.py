@@ -1069,6 +1069,119 @@ async def test_orchestrated_turn_begin_failure_deletes_progress_placeholder(
 
 
 @pytest.mark.asyncio
+async def test_orchestrated_turn_submission_timeout_deletes_progress_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    rest = _FakeRest()
+    thread = SimpleNamespace(thread_target_id="thread-1")
+    submit_started = asyncio.Event()
+
+    class _Store:
+        async def get_binding(self, *, channel_id: str) -> dict[str, Any]:
+            assert channel_id == "channel-1"
+            return {}
+
+    class _Service:
+        def __init__(self) -> None:
+            self._config = _config(tmp_path)
+            self._store = _Store()
+            self._rest = rest
+            self._logger = logging.getLogger(__name__)
+
+        async def _send_channel_message(
+            self, channel_id: str, payload: dict[str, Any]
+        ) -> dict[str, Any]:
+            return await rest.create_channel_message(
+                channel_id=channel_id,
+                payload=payload,
+            )
+
+        async def _delete_channel_message_safe(
+            self,
+            channel_id: str,
+            message_id: str,
+            *,
+            record_id: Optional[str] = None,
+        ) -> None:
+            _ = record_id
+            await rest.delete_channel_message(
+                channel_id=channel_id,
+                message_id=message_id,
+            )
+
+        def _register_discord_turn_approval_context(self, **kwargs: Any) -> None:
+            _ = kwargs
+
+        def _clear_discord_turn_approval_context(self, **kwargs: Any) -> None:
+            _ = kwargs
+
+        def _resolve_agent_state(self, binding: Any) -> tuple[str, Optional[str]]:
+            _ = binding
+            return "codex", None
+
+        def _runtime_agent_for_binding(self, binding: Any) -> str:
+            _ = binding
+            return "codex"
+
+    async def _hanging_submit(self, *args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        submit_started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "resolve_discord_thread_target",
+        lambda *args, **kwargs: (SimpleNamespace(), thread),
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "DISCORD_MANAGED_THREAD_SUBMISSION_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module.ManagedThreadTurnCoordinator,
+        "submit_execution",
+        _hanging_submit,
+    )
+
+    service = _Service()
+    with pytest.raises(
+        RuntimeError,
+        match="failed to start before runtime execution was created",
+    ):
+        await discord_message_turns_module._run_discord_orchestrated_turn_for_message(
+            service,
+            workspace_root=tmp_path,
+            prompt_text="hi",
+            input_items=None,
+            source_message_id=None,
+            agent="codex",
+            model_override=None,
+            reasoning_effort=None,
+            session_key="s1",
+            orchestrator_channel_key="channel-1",
+            managed_thread_surface_key=None,
+            mode="pma",
+            pma_enabled=True,
+            execution_prompt="<user_message>\nhi\n</user_message>\n",
+            public_execution_error="err",
+            timeout_error="timeout",
+            interrupted_error="interrupt",
+            approval_mode="never",
+            sandbox_policy="dangerFullAccess",
+            max_actions=12,
+            min_edit_interval_seconds=1.0,
+            heartbeat_interval_seconds=2.0,
+        )
+
+    assert submit_started.is_set()
+    assert len(rest.channel_messages) == 1
+    assert rest.deleted_channel_messages
+    assert rest.deleted_channel_messages[-1]["message_id"] == "msg-1"
+
+
+@pytest.mark.asyncio
 async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
