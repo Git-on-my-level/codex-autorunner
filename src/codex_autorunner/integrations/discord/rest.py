@@ -20,8 +20,10 @@ _DISCORD_ATTACHMENT_HOSTS = frozenset({"cdn.discordapp.com", "media.discordapp.n
 # Initial interaction callback must reach Discord before the ~3s interaction
 # deadline. A 2s read timeout caused avoidable "application did not respond"
 # when the API or network was slightly slow; stay under 3s but allow headroom.
+# These callbacks must not retry: a second attempt can push the ack past
+# Discord's hard deadline even if it uses zero backoff.
 DISCORD_INTERACTION_CALLBACK_TIMEOUT_SECONDS = 2.85
-DISCORD_INTERACTION_CALLBACK_MAX_RETRIES = 1
+DISCORD_INTERACTION_CALLBACK_MAX_RETRIES = 0
 
 
 class DiscordRestClient:
@@ -106,7 +108,7 @@ class DiscordRestClient:
         self, *, path: str, max_retries: int
     ) -> bool:
         return (
-            max_retries <= DISCORD_INTERACTION_CALLBACK_MAX_RETRIES
+            max_retries == DISCORD_INTERACTION_CALLBACK_MAX_RETRIES
             and path.startswith("/interactions/")
             and path.endswith("/callback")
         )

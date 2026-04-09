@@ -245,7 +245,7 @@ async def test_interaction_4xx_does_not_open_shared_breaker() -> None:
 
 
 @pytest.mark.anyio
-async def test_interaction_callback_retries_fast_transient_network_error(
+async def test_interaction_callback_does_not_retry_transient_network_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attempts = {"count": 0}
@@ -272,15 +272,16 @@ async def test_interaction_callback_retries_fast_transient_network_error(
     )
     await _configure_mock_client(client, httpx.MockTransport(handler))
     try:
-        await client.create_interaction_response(
-            interaction_id="123",
-            interaction_token="token",
-            payload={"type": 5},
-        )
+        with pytest.raises(DiscordTransientError, match="network error"):
+            await client.create_interaction_response(
+                interaction_id="123",
+                interaction_token="token",
+                payload={"type": 5},
+            )
     finally:
         await client.close()
 
-    assert attempts["count"] == 2
+    assert attempts["count"] == 1
     assert sleeps == []
 
 
