@@ -217,38 +217,46 @@ async def publish_automation_result(
         )
         if raw_workspace:
             workspace_root = Path(raw_workspace)
-    outcome = await deliver_pma_notification(
-        hub_root=hub_root,
-        message=message,
-        correlation_id=correlation_id,
-        delivery="auto",
-        source_kind=(
-            normalize_optional_text(
-                lifecycle_event_dict.get("event_type") if lifecycle_event_dict else None
-            )
-            or normalize_optional_text(
-                wake_up_dict.get("event_type") if wake_up_dict else None
-            )
-            or normalize_optional_text(
-                wake_up_dict.get("source") if wake_up_dict else None
-            )
-            or "automation"
-        ),
-        repo_id=target_repo_id,
-        workspace_root=workspace_root,
-        run_id=normalize_optional_text(
-            (lifecycle_event_dict or {}).get("run_id")
-            or (wake_up_dict or {}).get("run_id")
-        ),
-        managed_thread_id=normalize_optional_text(
-            (wake_up_dict or {}).get("thread_id")
-        ),
-        context_payload={
-            "result": dict(result or {}),
-            "lifecycle_event": dict(lifecycle_event_dict or {}),
-            "wake_up": dict(wake_up_dict or {}),
-        },
-    )
+    outcome: dict[str, Any] = {"route": "auto", "targets": 0, "published": 0}
+
+    async def _deliver() -> None:
+        nonlocal outcome
+        outcome = await deliver_pma_notification(
+            hub_root=hub_root,
+            message=message,
+            correlation_id=correlation_id,
+            delivery="auto",
+            source_kind=(
+                normalize_optional_text(
+                    lifecycle_event_dict.get("event_type")
+                    if lifecycle_event_dict
+                    else None
+                )
+                or normalize_optional_text(
+                    wake_up_dict.get("event_type") if wake_up_dict else None
+                )
+                or normalize_optional_text(
+                    wake_up_dict.get("source") if wake_up_dict else None
+                )
+                or "automation"
+            ),
+            repo_id=target_repo_id,
+            workspace_root=workspace_root,
+            run_id=normalize_optional_text(
+                (lifecycle_event_dict or {}).get("run_id")
+                or (wake_up_dict or {}).get("run_id")
+            ),
+            managed_thread_id=normalize_optional_text(
+                (wake_up_dict or {}).get("thread_id")
+            ),
+            context_payload={
+                "result": dict(result or {}),
+                "lifecycle_event": dict(lifecycle_event_dict or {}),
+                "wake_up": dict(wake_up_dict or {}),
+            },
+        )
+
+    await enqueue_with_retry(_deliver)
     targets = int(outcome.get("targets", 0) or 0)
     published = int(outcome.get("published", 0) or 0)
     delivery_status = "success" if published > 0 else "skipped"

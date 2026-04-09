@@ -712,11 +712,22 @@ async def _execute_harness_turn(
         try:
             resumed = await harness.resume_conversation(hub_root, conversation_id)
         except (
-            OSError,
-            RuntimeError,
-            ValueError,
-        ):  # intentional: resume may fail, fallback to new conversation
-            conversation_id = None
+            Exception
+        ) as exc:  # intentional: resume may fail, fallback to new conversation
+            if _requires_fresh_pma_conversation(exc) or isinstance(
+                exc,
+                (
+                    OSError,
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    ConnectionError,
+                ),
+            ):
+                conversation_id = None
+            else:
+                raise
         else:
             resolved_conversation_id = getattr(resumed, "id", None)
             if isinstance(resolved_conversation_id, str) and resolved_conversation_id:
@@ -750,9 +761,7 @@ async def _execute_harness_turn(
             sandbox_policy="dangerFullAccess",
         )
     except (
-        OSError,
-        RuntimeError,
-        ValueError,
+        Exception
     ) as exc:  # intentional: start_turn may fail, checks for retryable errors
         if not had_existing_conversation or not _requires_fresh_pma_conversation(exc):
             raise

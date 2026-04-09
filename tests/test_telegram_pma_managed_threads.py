@@ -1,0 +1,22 @@
+# ruff: noqa: F401
+
+from tests.telegram_pma_routing_support import (
+    test_managed_thread_queue_worker_wraps_execution_with_typing_indicator,
+    test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_registry,
+    test_pma_interrupt_recovers_missing_backend_thread_for_text_turns,
+    test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns,
+    test_pma_managed_opencode_turn_edits_placeholder_with_thinking_and_tool_progress,
+    test_pma_managed_thread_turn_edits_placeholder_with_live_progress,
+    test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_completion,
+    test_pma_missing_thread_resets_registry_and_recovers,
+    test_pma_native_input_items_route_through_managed_thread_execution,
+    test_pma_text_messages_route_repeated_messages_through_managed_thread_queue,
+    test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns,
+    test_repo_interrupt_uses_orchestration_binding_for_text_turns,
+    test_repo_media_turns_preserve_input_items_via_orchestration,
+    test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_execution,
+    test_repo_message_ingress_callback_reaches_orchestrated_thread_execution,
+    test_repo_text_turns_use_orchestration_binding_and_preserve_thread_continuity,
+    test_resolve_telegram_managed_thread_ignores_backend_thread_id_binding,
+    test_resolve_telegram_managed_thread_reuses_archived_thread,
+)

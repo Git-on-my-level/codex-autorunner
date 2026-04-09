@@ -1,0 +1,31 @@
+# ruff: noqa: F401
+
+import pytest
+from tests.discord_message_turns_support import (
+    test_car_session_compact_finishes_interaction_when_finalize_fails,
+    test_car_session_compact_keeps_previous_thread_when_summary_is_blank,
+    test_car_session_compact_restores_previous_thread_when_seed_save_fails,
+    test_car_session_compact_uses_transcript_fallback_when_summary_is_blank,
+    test_message_create_after_compact_uses_pending_seed_and_clears_it,
+    test_message_create_attachment_and_text_keeps_text_and_adds_file_context,
+    test_message_create_attachment_only_downloads_to_inbox_and_runs_turn,
+    test_message_create_audio_attachment_does_not_transcribe_when_voice_disabled,
+    test_message_create_audio_attachment_injects_transcript_context,
+    test_message_create_audio_attachment_with_generic_content_type_transcribes,
+    test_message_create_audio_attachment_without_content_type_still_transcribes,
+    test_message_create_flush_outbox_preserves_root_file_when_pending_symlink_points_to_it,
+    test_message_create_flush_outbox_skips_symlink_outside_pending,
+    test_message_create_flushes_pending_outbox_files_after_turn,
+    test_message_create_flushes_root_outbox_files_after_turn,
+    test_message_create_injects_car_context_for_car_trigger,
+    test_message_create_mixed_audio_and_file_attachment_keeps_outbox_hint,
+    test_message_create_non_pma_injects_filebox_hint_for_inbox_keyword,
+    test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword,
+    test_message_create_non_pma_injects_prompt_context_hints,
+    test_message_create_non_pma_prompt_hint_ignores_reply_context_prompt_text,
+    test_message_create_non_pma_uses_raw_message_for_github_link_source,
+    test_message_create_video_attachment_does_not_transcribe,
+    test_message_event_submits_through_surface_orchestration_ingress,
+)
+
+pytestmark = pytest.mark.slow

@@ -1,0 +1,33 @@
+# ruff: noqa: F401
+
+import pytest
+from tests.discord_message_turns_support import (
+    test_is_user_ticket_pause_detects_in_workspace_user_ticket,
+    test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapshot,
+    test_message_create_attachment_only_resumes_paused_flow_run,
+    test_message_create_bang_shell_attaches_oversized_output,
+    test_message_create_bang_shell_executes_in_bound_workspace,
+    test_message_create_bang_shell_honors_shell_disable_flag,
+    test_message_create_bang_shell_resumes_paused_flow_run_in_repo_mode,
+    test_message_create_command_only_destination_allows_bang_commands_only,
+    test_message_create_denied_by_guild_allowlist,
+    test_message_create_denied_by_user_allowlist_logs_policy_outcome,
+    test_message_create_honors_shared_turn_policy_gate,
+    test_message_create_ignores_slash_prefixed_text,
+    test_message_create_image_attachment_in_pma_mode_adds_native_local_image_item,
+    test_message_create_in_pma_mode_falls_back_to_hub_root_when_binding_path_invalid,
+    test_message_create_in_pma_mode_uses_pma_session_key,
+    test_message_create_mentions_only_destination_requires_discord_mention,
+    test_message_create_resumes_paused_flow_run_in_repo_mode,
+    test_message_create_sends_queued_notice_when_dispatch_queue_is_busy,
+    test_message_create_silent_destination_ignores_plain_text_and_commands,
+    test_message_create_skips_inbox_reply_for_user_ticket_pause,
+    test_message_create_unbound_channel_stays_silent_and_logs,
+    test_pma_message_create_image_attachment_routes_through_managed_thread_execution,
+    test_pma_message_create_routes_repeated_messages_through_managed_thread_queue,
+    test_pma_message_create_streams_progress_before_terminal_reply,
+    test_repo_message_create_routes_repeated_messages_through_orchestration_thread,
+    test_repo_message_create_routes_repeated_messages_through_orchestration_thread_for_hermes_profile,
+)
+
+pytestmark = pytest.mark.slow
