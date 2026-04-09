@@ -85,6 +85,20 @@ Surfaces → Adapters → Control Plane → Engine
 - Control Plane importing Adapters or Surfaces
 - Adapters importing Surfaces
 
+## Chat Turn Authority
+
+Ordinary Telegram and Discord chat turns have one lifecycle authority:
+orchestration-managed thread targets in hub `orchestration.sqlite3`.
+
+- Shared ingress decides whether an inbound message targets a paused flow or a
+  managed thread.
+- The shared managed-thread coordinator owns submission, queueing,
+  interruption, recovery, and execution finalization.
+- Discord and Telegram keep transport concerns only: parsing, placeholders,
+  progress rendering, attachments, callbacks, rate limits, and outbox delivery.
+- Transport-local state may mirror routing or delivery context, but it must not
+  become authoritative for durable thread identity or execution state.
+
 ## Enforcement
 
 Architecture boundaries are enforced by an automated test:

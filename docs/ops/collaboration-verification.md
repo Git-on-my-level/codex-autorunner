@@ -146,7 +146,8 @@ across runtime threads, bindings, PMA shims, and flow targets:
 6. PMA thread status, tail, and list routes use the orchestration service.
 7. Flow routes use the orchestration service for status and resume operations.
 8. No PMA-only bypasses or transport-local binding authority are used for
-   routing decisions.
+   routing decisions; ordinary chat routing must resolve through shared
+   orchestration-managed thread targets.
 
 ### Hermes and ZeroClaw capability verification
 

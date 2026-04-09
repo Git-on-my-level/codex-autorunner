@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
-import inspect
 import json
 import logging
 import os
@@ -2824,56 +2823,34 @@ class DiscordBotService:
     ) -> DiscordMessageTurnResult:
         async def _run_turn() -> DiscordMessageTurnResult:
             if orchestrator_channel_key.startswith("pma:"):
-                managed_turn_kwargs: dict[str, Any] = {
-                    "workspace_root": workspace_root,
-                    "prompt_text": prompt_text,
-                    "input_items": input_items,
-                    "agent": agent,
-                    "model_override": model_override,
-                    "reasoning_effort": reasoning_effort,
-                    "session_key": session_key,
-                    "orchestrator_channel_key": orchestrator_channel_key,
-                    "managed_thread_surface_key": managed_thread_surface_key,
-                }
-                try:
-                    if (
-                        "source_message_id"
-                        in inspect.signature(
-                            run_managed_thread_turn_for_message
-                        ).parameters
-                    ):
-                        managed_turn_kwargs["source_message_id"] = source_message_id
-                except (TypeError, ValueError):
-                    pass
                 return await run_managed_thread_turn_for_message(
                     self,
-                    **managed_turn_kwargs,
+                    workspace_root=workspace_root,
+                    prompt_text=prompt_text,
+                    input_items=input_items,
+                    source_message_id=source_message_id,
+                    agent=agent,
+                    model_override=model_override,
+                    reasoning_effort=reasoning_effort,
+                    session_key=session_key,
+                    orchestrator_channel_key=orchestrator_channel_key,
+                    managed_thread_surface_key=managed_thread_surface_key,
                 )
-            repo_turn_kwargs: dict[str, Any] = {
-                "workspace_root": workspace_root,
-                "prompt_text": prompt_text,
-                "input_items": input_items,
-                "agent": agent,
-                "model_override": model_override,
-                "reasoning_effort": reasoning_effort,
-                "session_key": session_key,
-                "orchestrator_channel_key": orchestrator_channel_key,
-                "max_actions": DISCORD_TURN_PROGRESS_MAX_ACTIONS,
-                "min_edit_interval_seconds": DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
-                "heartbeat_interval_seconds": DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
-                "log_event_fn": log_event,
-            }
-            try:
-                if (
-                    "source_message_id"
-                    in inspect.signature(run_agent_turn_for_message).parameters
-                ):
-                    repo_turn_kwargs["source_message_id"] = source_message_id
-            except (TypeError, ValueError):
-                pass
             return await run_agent_turn_for_message(
                 self,
-                **repo_turn_kwargs,
+                workspace_root=workspace_root,
+                prompt_text=prompt_text,
+                input_items=input_items,
+                source_message_id=source_message_id,
+                agent=agent,
+                model_override=model_override,
+                reasoning_effort=reasoning_effort,
+                session_key=session_key,
+                orchestrator_channel_key=orchestrator_channel_key,
+                max_actions=DISCORD_TURN_PROGRESS_MAX_ACTIONS,
+                min_edit_interval_seconds=DISCORD_TURN_PROGRESS_MIN_EDIT_INTERVAL_SECONDS,
+                heartbeat_interval_seconds=DISCORD_TURN_PROGRESS_HEARTBEAT_INTERVAL_SECONDS,
+                log_event_fn=log_event,
             )
 
         turn_result: Optional[DiscordMessageTurnResult] = None

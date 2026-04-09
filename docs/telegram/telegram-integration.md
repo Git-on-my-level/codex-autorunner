@@ -191,6 +191,8 @@ The Telegram integration guarantees the following invariants:
 - State includes transport-local delivery/cache state, approvals, and outbox
   records; authoritative binding and durable-thread metadata live in hub
   `orchestration.sqlite3`
+- Telegram-local state mirrors routing context for convenience, but ordinary
+  turn identity and lifecycle authority stay in orchestration thread targets
 - State survives bot restarts and process crashes
 
 ### Topic Keys Are Unique

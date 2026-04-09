@@ -2,7 +2,8 @@
 
 ## Purpose
 
-Operate and troubleshoot the Telegram polling bot that proxies CAR-backed agent sessions.
+Operate and troubleshoot the Telegram polling bot that routes Telegram traffic
+through CAR's orchestration-managed chat runtime.
 
 ## Prerequisites
 
@@ -38,6 +39,8 @@ Operate and troubleshoot the Telegram polling bot that proxies CAR-backed agent 
 - Send `/help` to confirm command handling.
 - Send `/ids` and confirm the chat/user/thread ids plus the generated collaboration snippet match the intended topic.
 - Send a normal message and verify a single agent response.
+- Confirm the turn is attached to the same durable thread on repeated messages
+  unless `/new`, `/resume`, reset, or archive actions intentionally replace it.
 - Send an image with an optional caption and confirm a response (image is stored under the bound workspace).
 - Send a voice note and confirm it transcribes (requires Whisper/voice config).
 
@@ -91,6 +94,8 @@ Operate and troubleshoot the Telegram polling bot that proxies CAR-backed agent 
 - Turns failing:
   - Check `telegram.turn.failed` and runtime logs for the selected backend.
   - Verify the configured backend runtime is installed and healthy. For Codex specifically, confirm the app-server is available via `telegram_bot.app_server_command` or `CAR_TELEGRAM_APP_SERVER_COMMAND`. For Hermes, also verify `hermes acp --help` and review `docs/ops/hermes-acp.md`.
+  - If routing looks wrong, inspect orchestration bindings first; ordinary turns
+    should not depend on Telegram-local thread identity as the authority.
 - Turns hanging:
   - Look for `telegram.turn.timeout` in the hub log.
   - Adjust `telegram_bot.app_server.turn_timeout_seconds` if longer turns are expected.

@@ -73,10 +73,10 @@ Compatibility expectations:
 - `status_reason`, `status_changed_at`, `status_terminal`, and `status_turn_id`
   continue to expose the last raw transition details without translation.
 
-As of the orchestration cutover, PMA thread create/list/get/resume/archive and
-status/tail reads go through the shared orchestration service seam. PMA keeps
-its operator-facing response shape, but the web and CLI surfaces no longer
-treat direct PMA store access as the primary runtime-thread query/control path.
+PMA thread create/list/get/resume/archive and status/tail reads go through the
+shared orchestration service seam. PMA keeps its operator-facing response
+shape, but the web and CLI surfaces no longer treat direct PMA store access as
+the primary runtime-thread query/control path.
 
 ## Resource Ownership And Bindings
 

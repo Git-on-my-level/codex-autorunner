@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import logging
 import time
 import uuid
@@ -759,23 +758,10 @@ async def handle_message_event(
             ),
         }
         if notification_reply is not None:
-            surface_key = notification_surface_key(notification_reply.notification_id)
-            try:
-                if (
-                    "managed_thread_surface_key"
-                    in inspect.signature(service._run_agent_turn_for_message).parameters
-                ):
-                    run_turn_kwargs["managed_thread_surface_key"] = surface_key
-            except (TypeError, ValueError):
-                pass
-        try:
-            if (
-                "source_message_id"
-                in inspect.signature(service._run_agent_turn_for_message).parameters
-            ):
-                run_turn_kwargs["source_message_id"] = event.message.message_id
-        except (TypeError, ValueError):
-            pass
+            run_turn_kwargs["managed_thread_surface_key"] = notification_surface_key(
+                notification_reply.notification_id
+            )
+        run_turn_kwargs["source_message_id"] = event.message.message_id
         if turn_input_items:
             run_turn_kwargs["input_items"] = turn_input_items
         try:
@@ -977,12 +963,7 @@ def build_discord_thread_orchestration_service(service: Any) -> Any:
     if cached is not None:
         return cached
 
-    try:
-        descriptors = get_registered_agents(service)
-    except TypeError as exc:
-        if "positional argument" not in str(exc):
-            raise
-        descriptors = get_registered_agents()
+    descriptors = get_registered_agents(service)
 
     def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
         descriptor = descriptors.get(agent_id)

@@ -384,6 +384,7 @@ async def test_orchestrated_turn_interrupt_send_hands_off_progress_message(
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
@@ -509,6 +510,7 @@ async def test_orchestrated_turn_interrupt_send_reuses_existing_progress_message
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
@@ -1103,6 +1105,7 @@ async def test_orchestrated_turn_queued_updates_placeholder_skips_finalize(
             self._config = _config(tmp_path)
             self._store = _Store()
             self._rest = rest
+            self._spawn_task = asyncio.create_task
 
         async def _send_channel_message(
             self, channel_id: str, payload: dict[str, Any]
@@ -1505,7 +1508,7 @@ def _patch_streaming_harness(
     monkeypatch.setattr(
         discord_message_turns_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             agent_id: AgentDescriptor(
                 id=agent_id,
                 name=agent_id.title(),
@@ -1666,6 +1669,8 @@ async def test_message_create_personal_bound_channel_runs_without_collaboration_
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         captured.append(
             {
@@ -1761,6 +1766,8 @@ async def test_car_session_compact_finishes_interaction_when_finalize_fails(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -1861,6 +1868,8 @@ async def test_car_session_compact_restores_previous_thread_when_seed_save_fails
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -1984,6 +1993,8 @@ async def test_car_session_compact_keeps_previous_thread_when_summary_is_blank(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2101,6 +2112,8 @@ async def test_car_session_compact_uses_transcript_fallback_when_summary_is_blan
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -2293,6 +2306,8 @@ async def test_message_create_after_compact_uses_pending_seed_and_clears_it(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2363,6 +2378,8 @@ async def test_message_create_flushes_pending_outbox_files_after_turn(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2433,6 +2450,8 @@ async def test_message_create_flushes_root_outbox_files_after_turn(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2508,6 +2527,8 @@ async def test_message_create_flush_outbox_skips_symlink_outside_pending(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2582,6 +2603,8 @@ async def test_message_create_flush_outbox_preserves_root_file_when_pending_syml
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2653,6 +2676,8 @@ async def test_message_create_non_pma_injects_prompt_context_hints(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2736,6 +2761,8 @@ async def test_message_create_non_pma_prompt_hint_ignores_reply_context_prompt_t
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2802,6 +2829,8 @@ async def test_message_create_non_pma_injects_filebox_hint_for_outbox_keyword(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2868,6 +2897,8 @@ async def test_message_create_non_pma_injects_filebox_hint_for_inbox_keyword(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -2952,6 +2983,8 @@ async def test_message_create_non_pma_uses_raw_message_for_github_link_source(
         input_items: Optional[list[dict[str, Any]]] = None,
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3040,6 +3073,8 @@ async def test_message_create_attachment_only_downloads_to_inbox_and_runs_turn(
         input_items: Optional[list[dict[str, Any]]] = None,
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3133,6 +3168,8 @@ async def test_message_create_attachment_and_text_keeps_text_and_adds_file_conte
         input_items: Optional[list[dict[str, Any]]] = None,
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3210,6 +3247,8 @@ async def test_message_create_injects_car_context_for_car_trigger(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3298,6 +3337,8 @@ async def test_message_create_audio_attachment_injects_transcript_context(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3404,6 +3445,8 @@ async def test_message_create_audio_attachment_does_not_transcribe_when_voice_di
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3497,6 +3540,8 @@ async def test_message_create_audio_attachment_without_content_type_still_transc
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3592,6 +3637,8 @@ async def test_message_create_audio_attachment_with_generic_content_type_transcr
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3695,6 +3742,8 @@ async def test_message_create_mixed_audio_and_file_attachment_keeps_outbox_hint(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -3788,6 +3837,8 @@ async def test_message_create_video_attachment_does_not_transcribe(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -6586,6 +6637,8 @@ async def test_message_create_in_pma_mode_uses_pma_session_key(tmp_path: Path) -
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         captured.append(
             {
@@ -6682,6 +6735,8 @@ async def test_message_create_attachment_only_in_pma_mode_uses_hub_inbox_snapsho
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             agent,
@@ -6788,6 +6843,8 @@ async def test_message_create_image_attachment_in_pma_mode_adds_native_local_ima
         input_items: Optional[list[dict[str, Any]]] = None,
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         _ = (
             workspace_root,
@@ -6855,6 +6912,8 @@ async def test_message_create_in_pma_mode_falls_back_to_hub_root_when_binding_pa
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         captured.append(
             {
@@ -7288,6 +7347,8 @@ async def test_message_create_skips_inbox_reply_for_user_ticket_pause(
         reasoning_effort: Optional[str],
         session_key: Optional[str] = None,
         orchestrator_channel_key: Optional[str] = None,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
         input_items: Optional[list[dict[str, Any]]] = None,
     ) -> str:
         _ = (
@@ -7395,6 +7456,8 @@ async def test_message_create_sends_queued_notice_when_dispatch_queue_is_busy(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         nonlocal turn_count
         turn_count += 1
@@ -7589,7 +7652,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
     monkeypatch.setattr(
         discord_message_turns_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -7808,7 +7871,7 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
     monkeypatch.setattr(
         discord_message_turns_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "hermes": AgentDescriptor(
                 id="hermes",
                 name="Hermes",
@@ -8023,7 +8086,7 @@ async def test_pma_message_create_streams_progress_before_terminal_reply(
     monkeypatch.setattr(
         discord_message_turns_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -8196,7 +8259,7 @@ async def test_pma_message_create_routes_repeated_messages_through_managed_threa
     monkeypatch.setattr(
         discord_message_turns_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -8386,7 +8449,7 @@ async def test_pma_message_create_image_attachment_routes_through_managed_thread
     monkeypatch.setattr(
         discord_message_turns_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -8450,6 +8513,8 @@ async def test_message_create_enqueues_outbox_when_channel_send_fails(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> str:
         return "queued reply"
 
@@ -8820,6 +8885,8 @@ async def test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flus
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -8946,6 +9013,8 @@ async def test_car_session_compact_reuses_preview_without_part_numbering(
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,
@@ -9137,6 +9206,8 @@ async def test_car_session_compact_places_continue_button_on_last_chunk_without_
         reasoning_effort: Optional[str],
         session_key: str,
         orchestrator_channel_key: str,
+        source_message_id: Optional[str] = None,
+        managed_thread_surface_key: Optional[str] = None,
     ) -> DiscordMessageTurnResult:
         _ = (
             workspace_root,

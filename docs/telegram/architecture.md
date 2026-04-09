@@ -2,11 +2,12 @@
 
 ## Overview
 
-The Telegram integration is a polling bot that bridges Telegram chats to the Codex
-app-server. It runs as a long-lived process (`car telegram start`) and uses the
-Telegram Bot API to fetch updates, route them through CAR, and stream responses
-back to Telegram. This is separate from the lightweight `notifications.telegram`
-settings (which only send one-way notifications).
+The Telegram integration is a polling bot that bridges Telegram chats to CAR's
+shared chat-turn stack. It runs as a long-lived process (`car telegram start`)
+and uses the Telegram Bot API to fetch updates, route them through shared
+orchestration ingress, and stream responses back to Telegram. This is separate
+from the lightweight `notifications.telegram` settings (which only send one-way
+notifications).
 
 ## Configuration and inputs
 
@@ -48,8 +49,10 @@ can further narrow root-chat vs topic behavior.
    chat/topic to a consistent durable CAR thread under the selected resource
    (repo workspace, PMA, or an agent-workspace-backed thread).
 4) Commands (`/bind`, `/new`, `/resume`, `/approvals`, `/interrupt`) run locally;
-   normal messages are forwarded to the Codex app-server. `!<cmd>` runs a shell
-   command in the bound workspace (if enabled).
+   ordinary messages go through shared orchestration ingress, which resolves a
+   paused flow target or an orchestration-managed thread target before any
+   runtime turn is started. `!<cmd>` runs a shell command in the bound workspace
+   (if enabled).
 5) Responses are streamed back to Telegram with edits/chunks based on length.
 
 ## State and persistence
@@ -58,8 +61,9 @@ Per-chat/topic delivery state is stored in `.codex-autorunner/telegram_state.sql
 Authoritative binding and durable-thread metadata live in hub
 `.codex-autorunner/orchestration.sqlite3`. Telegram keeps the transport-local
 state it still owns, such as delivery bookkeeping, approval mode, and cached
-topic routing details. Each forum topic (or chat root when topics are disabled)
-has its own routing key.
+topic routing details. Those transport records are mirrors and convenience
+state, not lifecycle authority. Each forum topic (or chat root when topics are
+disabled) has its own routing key.
 
 ## Security and multi-user expectations
 

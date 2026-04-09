@@ -234,7 +234,9 @@ These transport-specific databases remain authoritative for:
 - Platform-specific message metadata
 - Webhook state and callback tracking
 
-After the orchestration SQLite cutover, **binding metadata** (which agent thread is bound to which Discord channel/Telegram chat) moves to hub `orchestration.sqlite3`, but **delivery state** remains in the transport databases.
+Binding metadata for Discord and Telegram ordinary turns lives in hub
+`orchestration.sqlite3`, while **delivery state** remains in the transport
+databases.
 
 ### Legacy PMA Artifacts (Migration/Compatibility)
 

@@ -1892,7 +1892,7 @@ async def test_pma_managed_thread_turn_edits_placeholder_with_live_progress(
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -2082,7 +2082,7 @@ async def test_pma_managed_opencode_turn_edits_placeholder_with_thinking_and_too
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "opencode": AgentDescriptor(
                 id="opencode",
                 name="OpenCode",
@@ -2250,7 +2250,7 @@ async def test_pma_managed_thread_turn_recovers_if_wait_disconnects_after_comple
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -2408,7 +2408,7 @@ async def test_pma_text_messages_route_repeated_messages_through_managed_thread_
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -2589,7 +2589,7 @@ async def test_pma_followup_turn_without_new_thread_reuses_managed_thread_and_re
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -2665,7 +2665,7 @@ async def test_resolve_telegram_managed_thread_reuses_archived_thread(
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -2900,7 +2900,7 @@ async def test_pma_native_input_items_route_through_managed_thread_execution(
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -3069,7 +3069,7 @@ async def test_pma_interrupt_uses_managed_thread_orchestration_for_text_turns(
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -3279,7 +3279,7 @@ async def test_pma_interrupt_recovers_missing_backend_thread_for_text_turns(
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -3454,7 +3454,7 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -3625,7 +3625,7 @@ async def test_repo_media_turns_preserve_input_items_via_orchestration(
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -3788,7 +3788,7 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -4015,7 +4015,7 @@ async def test_repo_message_ingress_callback_reaches_orchestrated_thread_executi
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "codex": AgentDescriptor(
                 id="codex",
                 name="Codex",
@@ -4220,7 +4220,7 @@ async def test_repo_message_ingress_callback_reaches_hermes_orchestrated_thread_
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "hermes": AgentDescriptor(
                 id="hermes",
                 name="Hermes",
@@ -4395,7 +4395,7 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
     monkeypatch.setattr(
         execution_commands_module,
         "get_registered_agents",
-        lambda: {
+        lambda context=None: {
             "hermes": AgentDescriptor(
                 id="hermes",
                 name="Hermes",

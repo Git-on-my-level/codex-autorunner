@@ -20,8 +20,12 @@ tradeoffs involved.
 
 - **Telegram Bot API**: All messages and media originate from Telegram. The bot
   trusts Telegram to authenticate users, but still enforces allowlists.
-- **Codex app-server**: The bot proxies messages to a local Codex app-server
-  process that executes turns and tools on the host.
+- **Orchestration-managed thread targets**: Ordinary chat turns are admitted
+  through CAR orchestration first; that layer owns durable thread identity,
+  queueing, interruption, and recovery.
+- **Backend runtime**: After orchestration resolves the thread target, CAR uses
+  the selected runtime (for example Codex app-server) to execute the turn and
+  tools on the host.
 - **Local filesystem**: The bot reads/writes state and downloads media into the
   bound workspace.
 
@@ -43,7 +47,8 @@ tradeoffs involved.
 
 ## Execution surface
 
-- Normal messages are forwarded to the Codex app-server for tool execution.
+- Normal messages are routed through shared orchestration ingress and then
+  delivered to the resolved managed thread target for tool execution.
 - `/approvals` controls the approval mode and policies per topic.
 - The default approval mode is `yolo`, which is equivalent to:
   - `approval_policy = never`
@@ -76,7 +81,8 @@ tradeoffs involved.
 
 - Per-topic transport state is stored in `.codex-autorunner/telegram_state.sqlite3`.
   Authoritative binding and durable-thread metadata live in hub
-  `.codex-autorunner/orchestration.sqlite3`.
+  `.codex-autorunner/orchestration.sqlite3`. Telegram state remains transport
+  convenience state, not authoritative routing state.
 - Logs include chat IDs, user IDs, and event metadata; review your log retention
   and access controls accordingly.
 

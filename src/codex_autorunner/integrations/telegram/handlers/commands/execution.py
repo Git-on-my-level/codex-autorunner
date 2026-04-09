@@ -257,12 +257,7 @@ def _build_telegram_thread_orchestration_service(handlers: Any) -> Any:
     if cached is not None:
         return cached
 
-    try:
-        descriptors = get_registered_agents(handlers)
-    except TypeError as exc:
-        if "positional argument" not in str(exc):
-            raise
-        descriptors = get_registered_agents()
+    descriptors = get_registered_agents(handlers)
 
     def _make_harness(agent_id: str, profile: Optional[str] = None) -> Any:
         descriptor = descriptors.get(agent_id)

@@ -8,13 +8,15 @@ Keep long-running repos from diverging between control surfaces (web, PMA, Teleg
 
 ## Managed-Thread Cutover Smoke
 
-Run this focused suite to verify managed-thread cutover integrity:
+Run this focused suite to verify the canonical managed-thread path:
 
 ```bash
 make test-managed-thread-cutover
 ```
 
-This covers runtime-thread event contract, hub supervisor wiring, PMA lifecycle, Telegram/Discord routing, and unified error sanitization. Use this for quick regression checks after changes to managed-thread paths.
+This covers runtime-thread event contract, hub supervisor wiring, PMA
+lifecycle, Telegram/Discord routing, and unified error sanitization. Use this
+for quick regression checks after changes to the shared managed-thread path.
 
 ## Cross-Surface Chat Contract Checks
 
