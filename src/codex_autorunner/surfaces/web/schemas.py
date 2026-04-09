@@ -18,6 +18,7 @@ from pydantic import (
 
 from ...core.car_context import CarContextProfile
 from ...core.text_utils import _normalize_text
+from ...flows.review.models import ReviewStateSnapshot, ReviewStatus
 from ...integrations.chat.approval_modes import normalize_approval_mode
 
 
@@ -667,11 +668,11 @@ class ReviewStartRequest(Payload):
 
 
 class ReviewStatusResponse(ResponseModel):
-    review: Dict[str, Any]
+    review: ReviewStateSnapshot
 
 
 class ReviewControlResponse(ResponseModel):
-    status: str
+    status: ReviewStatus
     detail: Optional[str] = None
 
 

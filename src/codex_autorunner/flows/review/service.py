@@ -26,6 +26,13 @@ from ...core.runtime import RuntimeContext
 from ...core.state import now_iso
 from ...core.utils import atomic_write, read_json
 from ...integrations.chat.agents import DEFAULT_CHAT_AGENT_MODELS
+from .models import (
+    ACTIVE_REVIEW_STATUSES,
+    ReviewPromptKind,
+    ReviewState,
+    ReviewStateSnapshot,
+    ReviewStatus,
+)
 
 REVIEW_STATE_VERSION = 1
 REVIEW_TIMEOUT_SECONDS = 3600
@@ -363,31 +370,8 @@ def _workflow_root(repo_root: Path) -> Path:
     return repo_root / ".codex-autorunner" / "review"
 
 
-def _default_state() -> dict[str, Any]:
-    return {
-        "version": REVIEW_STATE_VERSION,
-        "id": None,
-        "status": "idle",
-        "agent": None,
-        "model": None,
-        "reasoning": None,
-        "max_wallclock_seconds": None,
-        "run_dir": None,
-        "scratchpad_dir": None,
-        "final_output_path": None,
-        "session_id": None,
-        "turn_id": None,
-        "stop_requested": False,
-        "worker_id": None,
-        "worker_pid": None,
-        "worker_started_at": None,
-        "started_at": None,
-        "updated_at": None,
-        "finished_at": None,
-        "scratchpad_bundle_path": None,
-        "last_error": None,
-        "prompt_kind": "code",
-    }
+def _default_state() -> ReviewState:
+    return ReviewState(version=REVIEW_STATE_VERSION)
 
 
 class ReviewService:
@@ -417,24 +401,20 @@ class ReviewService:
             raise ReviewError("Review requires a repo workspace config")
         return self.ctx.config
 
-    def status(self) -> dict[str, Any]:
+    def status(self) -> ReviewStateSnapshot:
         state = self._load_state()
         lock_info = read_lock_info(self._lock_path)
         lock_alive = bool(lock_info.pid and process_alive(lock_info.pid))
         is_running = bool(self._thread and self._thread.is_alive()) or lock_alive
-        state["running"] = is_running
-        if state.get("status") in ("running", "stopping") and not is_running:
-            state["status"] = "interrupted"
-            state["last_error"] = "Recovered from restart"
-            state["stop_requested"] = False
-            state["updated_at"] = now_iso()
+        if state.status in ACTIVE_REVIEW_STATUSES and not is_running:
+            state = state.recover_after_restart()
             self._save_state(state)
-        return state
+        return state.with_runtime(running=is_running)
 
-    def start(self, *, payload: dict[str, Any]) -> dict[str, Any]:
+    def start(self, *, payload: dict[str, Any]) -> ReviewState:
         with self._thread_lock:
-            state = self.status()
-            if state.get("status") in ("running", "stopping"):
+            snapshot = self.status()
+            if snapshot.status in ACTIVE_REVIEW_STATUSES:
                 raise ReviewBusyError("Review already running", status_code=409)
             if self._thread and self._thread.is_alive():
                 raise ReviewBusyError("Review already running", status_code=409)
@@ -447,17 +427,21 @@ class ReviewService:
             thread_started = False
             try:
                 state = self._initialize_state(payload=payload)
+                if state.id is None:
+                    raise ReviewError("Review state is incomplete")
                 self._stop_event.clear()
-                state["worker_id"] = uuid.uuid4().hex
-                state["worker_pid"] = os.getpid()
-                state["worker_started_at"] = now_iso()
+                state = state.with_worker(
+                    worker_id=uuid.uuid4().hex,
+                    worker_pid=os.getpid(),
+                    worker_started_at=now_iso(),
+                )
                 self._save_state(state)
                 self._thread = threading.Thread(
-                    target=self._run_review, args=(state["id"],), daemon=True
+                    target=self._run_review, args=(state.id,), daemon=True
                 )
                 self._thread.start()
                 thread_started = True
-                self._log(f"Started review run {state['id']}")
+                self._log(f"Started review run {state.id}")
                 return state
             finally:
                 if not thread_started:
@@ -467,13 +451,13 @@ class ReviewService:
         self,
         *,
         payload: dict[str, Any],
-        prompt_kind: str,
+        prompt_kind: ReviewPromptKind | str,
         seed_context_files: Optional[dict[str, str]] = None,
         ignore_repo_busy: bool = False,
-    ) -> dict[str, Any]:
+    ) -> ReviewState:
         with self._thread_lock:
-            state = self.status()
-            if state.get("status") in ("running", "stopping"):
+            snapshot = self.status()
+            if snapshot.status in ACTIVE_REVIEW_STATUSES:
                 raise ReviewBusyError("Review already running", status_code=409)
             busy_reason = self.ctx.repo_busy_reason()
             if busy_reason and not ignore_repo_busy:
@@ -483,25 +467,34 @@ class ReviewService:
             self._acquire_lock()
             try:
                 state = self._initialize_state(payload=payload, prompt_kind=prompt_kind)
+                if state.id is None or state.scratchpad_dir is None:
+                    raise ReviewError("Review state is incomplete")
                 self._stop_event.clear()
-                state["worker_id"] = uuid.uuid4().hex
-                state["worker_pid"] = os.getpid()
-                state["worker_started_at"] = now_iso()
+                state = state.with_worker(
+                    worker_id=uuid.uuid4().hex,
+                    worker_pid=os.getpid(),
+                    worker_started_at=now_iso(),
+                )
                 self._save_state(state)
-                self._log(f"Started review run {state['id']} (blocking)")
+                self._log(f"Started review run {state.id} (blocking)")
             except (
                 Exception
             ):  # intentional: re-raise safety net to guarantee lock release
                 self._release_lock()
                 raise
 
-        scratchpad_dir = Path(state["scratchpad_dir"])
+        run_id = state.id
+        scratchpad_dir_str = state.scratchpad_dir
+        if run_id is None or scratchpad_dir_str is None:
+            raise ReviewError("Review state is incomplete")
+
+        scratchpad_dir = Path(scratchpad_dir_str)
         if seed_context_files:
             self._write_seed_context_files(scratchpad_dir, seed_context_files)
 
         try:
             try:
-                await self._run_review_async(state["id"])
+                await self._run_review_async(run_id)
             except (
                 ReviewError,
                 ValueError,
@@ -512,11 +505,7 @@ class ReviewService:
                 ConnectionResetError,
             ) as exc:  # intentional: top-level review error handler, must capture any agent/infra failure
                 self._log(f"Review run failed: {exc}")
-                failure_state = self._load_state()
-                failure_state["status"] = "failed"
-                failure_state["last_error"] = str(exc)
-                failure_state["finished_at"] = now_iso()
-                failure_state["updated_at"] = now_iso()
+                failure_state = self._load_state().mark_failed(str(exc))
                 self._save_state(failure_state)
                 raise
             return self._load_state()
@@ -527,10 +516,10 @@ class ReviewService:
         self,
         *,
         payload: dict[str, Any],
-        prompt_kind: str,
+        prompt_kind: ReviewPromptKind | str,
         seed_context_files: Optional[dict[str, str]] = None,
         ignore_repo_busy: bool = False,
-    ) -> dict[str, Any]:
+    ) -> ReviewState:
         return asyncio.run(
             self.run_blocking_async(
                 payload=payload,
@@ -540,21 +529,19 @@ class ReviewService:
             )
         )
 
-    def stop(self) -> dict[str, Any]:
+    def stop(self) -> ReviewState:
         self._stop_event.set()
         state = self._load_state()
-        state["stop_requested"] = True
-        if state.get("status") in ("running", "stopping"):
-            state["status"] = "stopping"
-            state["updated_at"] = now_iso()
-            self._save_state(state)
+        next_state = state.request_stop()
+        if state.status in ACTIVE_REVIEW_STATUSES:
+            self._save_state(next_state)
             self._log("Stop requested")
-        return state
+        return next_state
 
-    def reset(self) -> dict[str, Any]:
+    def reset(self) -> ReviewState:
         with self._thread_lock:
-            state = self.status()
-            if state.get("status") in ("running", "stopping"):
+            snapshot = self.status()
+            if snapshot.status in ACTIVE_REVIEW_STATUSES:
                 raise ReviewBusyError(
                     "Cannot reset while review is running", status_code=409
                 )
@@ -585,38 +572,35 @@ class ReviewService:
             self._logger.debug("Lock release failed: %s", e)
         self._lock_handle = None
 
-    def _load_state(self) -> dict[str, Any]:
+    def _load_state(self) -> ReviewState:
         state = read_json(self._state_path) or {}
         if not isinstance(state, dict):
-            state = {}
-        base = _default_state()
-        base.update(state)
-        return base
+            return _default_state()
+        return ReviewState.model_validate(state)
 
-    def _save_state(self, state: dict[str, Any]) -> None:
+    def _save_state(self, state: ReviewState) -> None:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(self._state_path, json.dumps(state, indent=2) + "\n")
+        atomic_write(
+            self._state_path,
+            json.dumps(state.persist_payload(), indent=2) + "\n",
+        )
 
-    def _workflow_log_path(
-        self, state: Optional[dict[str, Any]] = None
-    ) -> Optional[Path]:
+    def _workflow_log_path(self, state: Optional[ReviewState] = None) -> Optional[Path]:
         if state is None:
             state = self._load_state()
-        if not isinstance(state, dict):
-            return None
-        run_dir = state.get("run_dir")
+        run_dir = state.run_dir
         if not run_dir:
             return None
         return Path(run_dir) / "review.log"
 
-    def _ensure_workflow_log(self, state: dict[str, Any]) -> None:
+    def _ensure_workflow_log(self, state: ReviewState) -> None:
         log_path = self._workflow_log_path(state)
         if log_path is None or log_path.exists():
             return
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
-            started_at = state.get("started_at") or now_iso()
-            run_id = state.get("id") or "unknown"
+            started_at = state.started_at or now_iso()
+            run_id = state.id or "unknown"
             log_path.write_text(
                 f"[{started_at}] Review run {run_id} started\n",
                 encoding="utf-8",
@@ -636,12 +620,12 @@ class ReviewService:
             self._log("Failed to append workflow log")
 
     def _render_prompt(
-        self, *, state: dict[str, Any], scratchpad_dir: Path, final_output_path: Path
+        self, *, state: ReviewState, scratchpad_dir: Path, final_output_path: Path
     ) -> str:
-        prompt_kind = str(state.get("prompt_kind") or "code").lower()
+        prompt_kind = state.prompt_kind
         template = (
             REVIEW_PROMPT_SPEC_PROGRESS
-            if prompt_kind == "spec_progress"
+            if prompt_kind == ReviewPromptKind.SPEC_PROGRESS
             else REVIEW_PROMPT
         )
         return template.replace("{{scratchpad_dir}}", str(scratchpad_dir)).replace(
@@ -661,39 +645,39 @@ class ReviewService:
                 self._log(f"Failed to write seed context '{name}': {exc}")
 
     def _initialize_state(
-        self, *, payload: dict[str, Any], prompt_kind: str = "code"
-    ) -> dict[str, Any]:
+        self,
+        *,
+        payload: dict[str, Any],
+        prompt_kind: ReviewPromptKind | str = ReviewPromptKind.CODE,
+    ) -> ReviewState:
         config = self._repo_config()
         review_cfg = config.raw.get("review") or {}
-        state = _default_state()
-        state["id"] = uuid.uuid4().hex[:12]
-        state["status"] = "running"
+        run_id = uuid.uuid4().hex[:12]
         agent_input = payload.get("agent") or review_cfg.get("agent") or "opencode"
         try:
-            state["agent"] = validate_agent_id(agent_input, config)
+            agent_id = validate_agent_id(agent_input, config)
         except ValueError as exc:
             raise ReviewError(
                 f"Invalid agent '{agent_input}': {exc}",
                 status_code=400,
             ) from exc
 
-        state["model"] = (
+        model = (
             payload.get("model")
             or review_cfg.get("model")
             or DEFAULT_CHAT_AGENT_MODELS.get("opencode")
         )
-        state["reasoning"] = payload.get("reasoning") or review_cfg.get("reasoning")
-        state["max_wallclock_seconds"] = payload.get(
+        reasoning = payload.get("reasoning") or review_cfg.get("reasoning")
+        max_wallclock_seconds = payload.get("max_wallclock_seconds") or review_cfg.get(
             "max_wallclock_seconds"
-        ) or review_cfg.get("max_wallclock_seconds")
+        )
 
-        if not has_capability(state["agent"], "review"):
+        if not has_capability(agent_id, "review"):
             raise ReviewError(
-                f"Agent '{state['agent']}' does not support review.",
+                f"Agent '{agent_id}' does not support review.",
                 status_code=400,
             )
 
-        run_id = state["id"]
         runs_dir = _workflow_root(self.ctx.repo_root) / "runs"
         run_dir = runs_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -702,13 +686,25 @@ class ReviewService:
         scratchpad_dir.mkdir(parents=True, exist_ok=True)
 
         final_output_path = run_dir / "final_report.md"
+        prompt_kind_value = (
+            ReviewPromptKind(prompt_kind) if prompt_kind else ReviewPromptKind.CODE
+        )
 
-        state["run_dir"] = run_dir.as_posix()
-        state["scratchpad_dir"] = scratchpad_dir.as_posix()
-        state["final_output_path"] = final_output_path.as_posix()
-        state["started_at"] = now_iso()
-        state["updated_at"] = now_iso()
-        state["prompt_kind"] = prompt_kind or "code"
+        state = ReviewState(
+            version=REVIEW_STATE_VERSION,
+            id=run_id,
+            status=ReviewStatus.RUNNING,
+            agent=agent_id,
+            model=model,
+            reasoning=reasoning,
+            max_wallclock_seconds=max_wallclock_seconds,
+            run_dir=run_dir.as_posix(),
+            scratchpad_dir=scratchpad_dir.as_posix(),
+            final_output_path=final_output_path.as_posix(),
+            started_at=now_iso(),
+            updated_at=now_iso(),
+            prompt_kind=prompt_kind_value,
+        )
         self._ensure_workflow_log(state)
         return state
 
@@ -720,21 +716,20 @@ class ReviewService:
         ) as exc:  # intentional: top-level thread error handler, must capture any async failure
             self._log(f"Review run failed: {exc}")
             state = self._load_state()
-            state["status"] = "failed"
-            state["last_error"] = str(exc)
-            state["finished_at"] = now_iso()
-            state["updated_at"] = now_iso()
-            self._save_state(state)
+            if state.id == run_id:
+                self._save_state(state.mark_failed(str(exc)))
         finally:
             self._release_lock()
 
     async def _run_review_async(self, run_id: str) -> None:
         state = self._load_state()
-        if state["id"] != run_id:
+        if state.id != run_id:
             return
+        if not state.scratchpad_dir or not state.final_output_path:
+            raise ReviewError("Review state is incomplete")
 
-        scratchpad_dir = Path(state["scratchpad_dir"])
-        final_output_path = Path(state["final_output_path"])
+        scratchpad_dir = Path(state.scratchpad_dir)
+        final_output_path = Path(state.final_output_path)
 
         prompt = self._render_prompt(
             state=state,
@@ -742,22 +737,22 @@ class ReviewService:
             final_output_path=final_output_path,
         )
 
-        max_seconds = state.get("max_wallclock_seconds")
+        max_seconds = state.max_wallclock_seconds
         timeout_seconds = (
             max_seconds if max_seconds is not None else REVIEW_TIMEOUT_SECONDS
         )
 
-        agent_id = state.get("agent") or "opencode"
+        agent_id = state.agent or "opencode"
         if agent_id == "codex":
             if self._app_server_supervisor is None:
                 raise ReviewError("Codex backend is not configured")
             client = await self._app_server_supervisor.get_client(self.ctx.repo_root)
             thread_id = uuid.uuid4().hex
             review_kwargs: dict[str, Any] = {}
-            if state.get("model"):
-                review_kwargs["model"] = state["model"]
-            if state.get("reasoning"):
-                review_kwargs["effort"] = state["reasoning"]
+            if state.model:
+                review_kwargs["model"] = state.model
+            if state.reasoning:
+                review_kwargs["effort"] = state.reasoning
             handle = await client.review_start(
                 thread_id=thread_id,
                 target={"type": "custom", "instructions": prompt},
@@ -766,9 +761,7 @@ class ReviewService:
                 **review_kwargs,
             )
 
-            state["session_id"] = thread_id
-            state["turn_id"] = handle.turn_id
-            state["updated_at"] = now_iso()
+            state = state.with_session(session_id=thread_id, turn_id=handle.turn_id)
             self._save_state(state)
 
             stop_task = asyncio.create_task(asyncio.to_thread(self._stop_event.wait))
@@ -798,10 +791,7 @@ class ReviewService:
                     Exception
                 ) as exc:  # intentional: cancelled task cleanup, must not block stop
                     self._log(f"Cancelled review task raised: {exc}")
-                state["status"] = "stopped"
-                state["finished_at"] = now_iso()
-                state["updated_at"] = now_iso()
-                self._save_state(state)
+                self._save_state(self._load_state().mark_stopped())
                 return
 
             stop_task.cancel()
@@ -838,8 +828,8 @@ class ReviewService:
 
             config = OpenCodeRunConfig(
                 agent=agent_id,
-                model=state["model"],
-                reasoning=state.get("reasoning"),
+                model=state.model,
+                reasoning=state.reasoning,
                 prompt=prompt,
                 workspace_root=str(self.ctx.repo_root),
                 timeout_seconds=timeout_seconds,
@@ -854,16 +844,14 @@ class ReviewService:
                 logger=self._logger,
             )
 
-            state["session_id"] = opencode_result.session_id
-            state["turn_id"] = opencode_result.turn_id
-            state["updated_at"] = now_iso()
+            state = state.with_session(
+                session_id=opencode_result.session_id,
+                turn_id=opencode_result.turn_id,
+            )
             self._save_state(state)
 
             if opencode_result.stopped:
-                state["status"] = "stopped"
-                state["finished_at"] = now_iso()
-                state["updated_at"] = now_iso()
-                self._save_state(state)
+                self._save_state(self._load_state().mark_stopped())
                 return
 
             if opencode_result.timed_out:
@@ -885,17 +873,21 @@ class ReviewService:
             f"Review completed successfully. Report length: {len(final_report)} chars"
         )
 
+        if state.run_dir is None or state.id is None:
+            raise ReviewError("Review state is incomplete")
         scratchpad_bundle_path = self._create_scratchpad_bundle(
-            Path(state["run_dir"]),
-            state["id"],
+            Path(state.run_dir),
+            state.id,
         )
-        if scratchpad_bundle_path:
-            state["scratchpad_bundle_path"] = scratchpad_bundle_path.as_posix()
-
-        state["status"] = "completed"
-        state["finished_at"] = now_iso()
-        state["updated_at"] = now_iso()
-        self._save_state(state)
+        self._save_state(
+            self._load_state().mark_completed(
+                scratchpad_bundle_path=(
+                    scratchpad_bundle_path.as_posix()
+                    if scratchpad_bundle_path is not None
+                    else None
+                )
+            )
+        )
 
     def _create_scratchpad_bundle(self, run_dir: Path, run_id: str) -> Optional[Path]:
         scratchpad_dir = run_dir / "scratchpad"
