@@ -2,27 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Any, Optional, cast
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from .....agents.registry import get_registered_agents, wrap_requested_agent_context
-from .....core.car_context import (
-    default_managed_thread_context_profile,
-    normalize_car_context_profile,
-)
 from .....core.chat_bindings import active_chat_binding_metadata_by_thread
-from .....core.managed_thread_status import derive_managed_thread_operator_status
 from .....core.orchestration import build_harness_backed_orchestration_service
 from .....core.orchestration.catalog import RuntimeAgentDescriptor
-from .....core.orchestration.models import ThreadTarget
 from .....core.orchestration.turn_timeline import list_turn_timeline
 from .....core.pma_automation_store import PmaAutomationThreadNotFoundError
 from .....core.pma_thread_store import PmaThreadStore
-from .....core.text_utils import _truncate_text
-from .....integrations.chat.approval_modes import normalize_approval_mode
 from ...schemas import (
     PmaAutomationSubscriptionCreateRequest,
     PmaAutomationTimerCancelRequest,
@@ -35,7 +25,6 @@ from ...schemas import (
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
-    resolve_managed_thread_followup_policy,
 )
 from .automation_adapter import (
     call_store_action_with_id,
@@ -44,198 +33,27 @@ from .automation_adapter import (
     get_automation_store,
     normalize_optional_text,
 )
+from .managed_thread_route_helpers import (
+    _apply_chat_binding_fields,
+    _attach_latest_execution_fields,
+    _serialize_managed_thread,
+    _serialize_thread_target,
+    resolve_managed_thread_create_resolution,
+    resolve_managed_thread_list_query,
+    resolve_owner_scoped_query,
+    serialize_active_work_summary,
+    serialize_binding_record,
+    serialize_managed_thread_turn_summary,
+)
 
 if TYPE_CHECKING:
     pass
 
-_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+
 _logger = logging.getLogger(__name__)
 
 
-def _is_within_root(path: Path, root: Path) -> bool:
-    from .....core.state_roots import is_within_allowed_root
-
-    return is_within_allowed_root(path, allowed_roots=[root], resolve=True)
-
-
-def _normalize_workspace_root_input(workspace_root: str) -> PurePosixPath:
-    cleaned = (workspace_root or "").strip()
-    if not cleaned:
-        raise HTTPException(status_code=400, detail="workspace_root is invalid")
-    if "\\" in cleaned or "\x00" in cleaned or _DRIVE_PREFIX_RE.match(cleaned):
-        raise HTTPException(status_code=400, detail="workspace_root is invalid")
-    normalized = PurePosixPath(cleaned)
-    if ".." in normalized.parts:
-        raise HTTPException(status_code=400, detail="workspace_root is invalid")
-    return normalized
-
-
-def _resolve_workspace_from_repo_id(request: Request, repo_id: str) -> Path:
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
-    if supervisor is None:
-        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
-    for snapshot in supervisor.list_repos():
-        if getattr(snapshot, "id", None) != repo_id:
-            continue
-        repo_path = getattr(snapshot, "path", None)
-        if isinstance(repo_path, str):
-            repo_path = Path(repo_path)
-        if isinstance(repo_path, Path):
-            return repo_path.absolute()
-    raise HTTPException(status_code=404, detail=f"Repo not found: {repo_id}")
-
-
-def _resolve_workspace_from_resource_owner(
-    request: Request,
-    *,
-    resource_kind: str,
-    resource_id: str,
-) -> tuple[Path, Optional[str], Optional[str]]:
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
-    if supervisor is None:
-        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
-    if resource_kind == "repo":
-        return _resolve_workspace_from_repo_id(request, resource_id), resource_id, None
-    if resource_kind == "agent_workspace":
-        for snapshot in supervisor.list_agent_workspaces():
-            if getattr(snapshot, "id", None) != resource_id:
-                continue
-            workspace_path = getattr(snapshot, "path", None)
-            if isinstance(workspace_path, str):
-                workspace_path = Path(workspace_path)
-            if isinstance(workspace_path, Path):
-                runtime = getattr(snapshot, "runtime", None)
-                normalized_runtime = (
-                    str(runtime).strip().lower()
-                    if isinstance(runtime, str) and runtime.strip()
-                    else None
-                )
-                return workspace_path.absolute(), None, normalized_runtime
-        raise HTTPException(
-            status_code=404,
-            detail=f"Agent workspace not found: {resource_id}",
-        )
-    raise HTTPException(status_code=400, detail="resource_kind is invalid")
-
-
-def _resolve_workspace_from_input(hub_root: Path, workspace_root: str) -> Path:
-    normalized = _normalize_workspace_root_input(workspace_root)
-    hub_root_resolved = hub_root.absolute()
-    workspace = Path(normalized)
-    if not workspace.is_absolute():
-        workspace = (hub_root_resolved / workspace).absolute()
-    else:
-        workspace = workspace.absolute()
-    if not _is_within_root(workspace, hub_root):
-        raise HTTPException(status_code=400, detail="workspace_root is invalid")
-    return workspace
-
-
-def _normalize_resource_owner(
-    *,
-    resource_kind: Optional[str],
-    resource_id: Optional[str],
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    normalized_resource_kind = normalize_optional_text(resource_kind)
-    normalized_resource_id = normalize_optional_text(resource_id)
-    if normalized_resource_id and normalized_resource_kind is None:
-        raise HTTPException(
-            status_code=400,
-            detail="resource_kind is required when resource_id is provided",
-        )
-    if normalized_resource_kind and normalized_resource_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail="resource_id is required when resource_kind is provided",
-        )
-    if normalized_resource_kind not in {None, "repo", "agent_workspace"}:
-        raise HTTPException(
-            status_code=400,
-            detail="resource_kind must be one of: repo, agent_workspace",
-        )
-    normalized_repo_id = (
-        normalized_resource_id if normalized_resource_kind == "repo" else None
-    )
-    return normalized_resource_kind, normalized_resource_id, normalized_repo_id
-
-
-def _build_operator_status_fields(
-    *,
-    normalized_status: Optional[str],
-    lifecycle_status: Optional[str],
-) -> dict[str, Any]:
-    operator_status = derive_managed_thread_operator_status(
-        normalized_status=normalized_status,
-        lifecycle_status=lifecycle_status,
-    )
-    return {
-        "operator_status": operator_status,
-        "is_reusable": operator_status
-        in {
-            "idle",
-            "reusable",
-        },
-    }
-
-
-def _serialize_managed_thread(thread: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(thread)
-    lifecycle_status = normalize_optional_text(
-        thread.get("lifecycle_status") or thread.get("status")
-    )
-    normalized_status = normalize_optional_text(thread.get("normalized_status"))
-    payload["lifecycle_status"] = lifecycle_status
-    payload["normalized_status"] = normalized_status or lifecycle_status or ""
-    payload["status"] = payload["normalized_status"]
-    payload["status_reason"] = normalize_optional_text(
-        thread.get("status_reason") or thread.get("status_reason_code")
-    )
-    payload["status_changed_at"] = normalize_optional_text(
-        thread.get("status_changed_at") or thread.get("status_updated_at")
-    )
-    payload["status_terminal"] = bool(thread.get("status_terminal"))
-    payload["status_turn_id"] = normalize_optional_text(thread.get("status_turn_id"))
-    payload["accepts_messages"] = lifecycle_status == "active"
-    payload["resource_kind"] = normalize_optional_text(thread.get("resource_kind"))
-    payload["resource_id"] = normalize_optional_text(thread.get("resource_id"))
-    metadata = thread.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-    payload["context_profile"] = normalize_car_context_profile(
-        metadata.get("context_profile"),
-        default=default_managed_thread_context_profile(
-            resource_kind=payload["resource_kind"]
-        ),
-    )
-    payload["approval_mode"] = normalize_approval_mode(
-        metadata.get("approval_mode"),
-        default="yolo",
-    )
-    payload["agent_profile"] = normalize_optional_text(
-        thread.get("agent_profile") or metadata.get("agent_profile")
-    )
-    payload.update(
-        _build_operator_status_fields(
-            normalized_status=payload["normalized_status"],
-            lifecycle_status=lifecycle_status,
-        )
-    )
-    return payload
-
-
-def _chat_binding_defaults() -> dict[str, Any]:
-    return {
-        "chat_bound": False,
-        "binding_kind": None,
-        "binding_id": None,
-        "binding_count": 0,
-        "binding_kinds": [],
-        "binding_ids": [],
-        "cleanup_protected": False,
-    }
-
-
-def _load_chat_binding_metadata_by_thread(hub_root: Path) -> dict[str, dict[str, Any]]:
+def _load_chat_binding_metadata_by_thread(hub_root):
     try:
         return active_chat_binding_metadata_by_thread(hub_root=hub_root)
     except Exception as exc:  # intentional: non-critical metadata load
@@ -243,147 +61,6 @@ def _load_chat_binding_metadata_by_thread(hub_root: Path) -> dict[str, dict[str,
             "Could not load PMA chat-binding metadata for thread response: %s", exc
         )
         return {}
-
-
-def _apply_chat_binding_fields(
-    payload: dict[str, Any],
-    *,
-    managed_thread_id: Optional[str],
-    binding_metadata_by_thread: Optional[dict[str, dict[str, Any]]] = None,
-) -> dict[str, Any]:
-    payload.update(_chat_binding_defaults())
-    if not managed_thread_id:
-        return payload
-    binding_metadata = (binding_metadata_by_thread or {}).get(managed_thread_id, {})
-    if not isinstance(binding_metadata, dict):
-        return payload
-    payload.update(
-        {
-            "chat_bound": bool(binding_metadata.get("chat_bound")),
-            "binding_kind": normalize_optional_text(
-                binding_metadata.get("binding_kind")
-            ),
-            "binding_id": normalize_optional_text(binding_metadata.get("binding_id")),
-            "binding_count": int(binding_metadata.get("binding_count") or 0),
-            "binding_kinds": list(binding_metadata.get("binding_kinds") or []),
-            "binding_ids": list(binding_metadata.get("binding_ids") or []),
-            "cleanup_protected": bool(binding_metadata.get("cleanup_protected")),
-        }
-    )
-    return payload
-
-
-def _attach_latest_execution_fields(
-    payload: dict[str, Any],
-    *,
-    service: Any,
-    managed_thread_id: str,
-) -> dict[str, Any]:
-    get_running_execution = getattr(service, "get_running_execution", None)
-    get_latest_execution = getattr(service, "get_latest_execution", None)
-    execution = None
-    if callable(get_running_execution):
-        execution = get_running_execution(managed_thread_id)
-    if execution is None and callable(get_latest_execution):
-        execution = get_latest_execution(managed_thread_id)
-    if execution is None:
-        payload.update(
-            {
-                "latest_turn_id": None,
-                "latest_turn_status": None,
-                "latest_assistant_text": "",
-                "latest_output_excerpt": "",
-            }
-        )
-        return payload
-
-    assistant_text = str(getattr(execution, "output_text", "") or "")
-    payload.update(
-        {
-            "latest_turn_id": normalize_optional_text(
-                getattr(execution, "execution_id", None)
-            ),
-            "latest_turn_status": normalize_optional_text(
-                getattr(execution, "status", None)
-            ),
-            "latest_assistant_text": assistant_text,
-            "latest_output_excerpt": _truncate_text(assistant_text, 240),
-        }
-    )
-    return payload
-
-
-def _serialize_thread_target(
-    thread: ThreadTarget,
-    *,
-    binding_metadata_by_thread: Optional[dict[str, dict[str, Any]]] = None,
-) -> dict[str, Any]:
-    payload = {
-        "managed_thread_id": thread.thread_target_id,
-        "agent": thread.agent_id,
-        "agent_profile": normalize_optional_text(thread.agent_profile),
-        "repo_id": thread.repo_id,
-        "resource_kind": thread.resource_kind,
-        "resource_id": thread.resource_id,
-        "workspace_root": thread.workspace_root,
-        "name": thread.display_name,
-        "backend_thread_id": thread.backend_thread_id,
-        "lifecycle_status": thread.lifecycle_status,
-        "normalized_status": thread.status,
-        "status": thread.status,
-        "status_reason": thread.status_reason,
-        "status_changed_at": thread.status_changed_at,
-        "status_terminal": bool(thread.status_terminal),
-        "status_turn_id": thread.status_turn_id,
-        "last_turn_id": thread.last_execution_id,
-        "last_message_preview": thread.last_message_preview,
-        "compact_seed": thread.compact_seed,
-        "context_profile": normalize_car_context_profile(
-            thread.context_profile,
-            default=default_managed_thread_context_profile(
-                resource_kind=thread.resource_kind
-            ),
-        ),
-        "approval_mode": normalize_approval_mode(thread.approval_mode, default="yolo"),
-        "accepts_messages": thread.lifecycle_status == "active",
-    }
-    payload.update(
-        _build_operator_status_fields(
-            normalized_status=thread.status,
-            lifecycle_status=thread.lifecycle_status,
-        )
-    )
-    return _apply_chat_binding_fields(
-        payload,
-        managed_thread_id=thread.thread_target_id,
-        binding_metadata_by_thread=binding_metadata_by_thread,
-    )
-
-
-def _raise_agent_workspace_runtime_not_ready(
-    request: Request, resource_id: str
-) -> None:
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
-    if supervisor is None:
-        raise HTTPException(status_code=500, detail="Hub supervisor unavailable")
-    snapshot = supervisor.get_agent_workspace_snapshot(resource_id)
-    if not snapshot.enabled:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Agent workspace '{resource_id}' is disabled",
-        )
-    readiness = supervisor.get_agent_workspace_runtime_readiness(resource_id)
-    if not isinstance(readiness, dict):
-        return
-    status = str(readiness.get("status") or "").strip().lower()
-    if status in {"", "ready", "deferred"}:
-        return
-    message = str(readiness.get("message") or "").strip()
-    fix = str(readiness.get("fix") or "").strip()
-    detail = message or f"Agent workspace runtime '{snapshot.runtime}' is not ready"
-    if fix:
-        detail = f"{detail} Fix: {fix}"
-    raise HTTPException(status_code=400, detail=detail)
 
 
 def build_managed_thread_orchestration_service(request: Request):
@@ -629,139 +306,23 @@ def build_managed_thread_crud_routes(
         request: Request, payload: PmaManagedThreadCreateRequest
     ) -> dict[str, Any]:
         hub_root = request.app.state.config.root
-        pma_config = request.app.state.config.pma
-        agent_id = normalize_optional_text(payload.agent)
-        resource_kind, resource_id, resolved_repo_id = _normalize_resource_owner(
-            resource_kind=payload.resource_kind,
-            resource_id=payload.resource_id,
-        )
-        workspace_root = normalize_optional_text(payload.workspace_root)
-        followup_policy = resolve_managed_thread_followup_policy(
-            payload,
-            default_terminal_followup=(
-                pma_config.managed_thread_terminal_followup_default
-            ),
-        )
-
-        owner_present = resource_kind is not None and resource_id is not None
-        if owner_present == bool(workspace_root):
-            raise HTTPException(
-                status_code=400,
-                detail="Exactly one of resource owner or workspace_root is required",
-            )
-
-        resolved_runtime: Optional[str] = None
-        if owner_present:
-            assert resource_kind is not None
-            assert resource_id is not None
-            resolved_workspace, resolved_repo_id, resolved_runtime = (
-                _resolve_workspace_from_resource_owner(
-                    request,
-                    resource_kind=resource_kind,
-                    resource_id=resource_id,
-                )
-            )
-            if not _is_within_root(resolved_workspace, hub_root):
-                raise HTTPException(
-                    status_code=400, detail="Resolved resource path is invalid"
-                )
-        else:
-            if workspace_root is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="workspace_root is required when resource owner is omitted",
-                )
-            resolved_workspace = _resolve_workspace_from_input(hub_root, workspace_root)
-
-        if resource_kind == "agent_workspace":
-            if resolved_runtime is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Agent workspace runtime is unavailable",
-                )
-            if agent_id is None:
-                agent_id = resolved_runtime
-            elif agent_id != resolved_runtime:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "agent must match the agent workspace runtime "
-                        f"('{resolved_runtime}')"
-                    ),
-                )
-            assert resource_id is not None
-            _raise_agent_workspace_runtime_not_ready(request, resource_id)
-
-        if agent_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "agent is required unless an agent workspace owner supplies "
-                    "the runtime"
-                ),
-            )
-        requested_profile = normalize_optional_text(payload.profile)
-        config = getattr(request.app.state, "config", None)
-        profile_getter = getattr(config, "agent_profiles", None)
-        default_profile_getter = getattr(config, "agent_default_profile", None)
-        available_profiles: dict[str, Any] = {}
-        if callable(profile_getter):
-            try:
-                available_profiles = profile_getter(agent_id) or {}
-            except (ValueError, TypeError):
-                available_profiles = {}
-        if requested_profile is None and callable(default_profile_getter):
-            try:
-                requested_profile = normalize_optional_text(
-                    default_profile_getter(agent_id)
-                )
-            except (ValueError, TypeError):
-                requested_profile = None
-        valid_profiles = set(available_profiles.keys())
-        if agent_id == "hermes":
-            try:
-                from .....integrations.chat.agents import chat_hermes_profile_options
-
-                valid_profiles |= {
-                    opt.profile
-                    for opt in chat_hermes_profile_options(request.app.state)
-                }
-            except Exception:  # intentional: optional hermes integration
-                _logger.debug(
-                    "Failed to resolve hermes profile options for managed thread",
-                    exc_info=True,
-                )
-        if requested_profile is not None and requested_profile not in valid_profiles:
-            raise HTTPException(status_code=400, detail="profile is invalid")
-        context_profile = normalize_car_context_profile(
-            payload.context_profile,
-            default=default_managed_thread_context_profile(resource_kind=resource_kind),
-        )
-        if context_profile is None:
-            raise HTTPException(status_code=400, detail="context_profile is invalid")
-        approval_mode = normalize_approval_mode(payload.approval_mode, default="yolo")
-        metadata = {
-            "context_profile": context_profile,
-            "approval_mode": approval_mode,
-        }
-        if requested_profile is not None:
-            metadata["agent_profile"] = requested_profile
+        resolved = resolve_managed_thread_create_resolution(request, payload)
 
         service = build_managed_thread_orchestration_service(request)
         try:
             thread = service.create_thread_target(
-                agent_id,
-                resolved_workspace,
-                repo_id=resolved_repo_id,
-                resource_kind=resource_kind,
-                resource_id=resource_id,
+                resolved.agent_id,
+                resolved.workspace_root,
+                repo_id=resolved.repo_id,
+                resource_kind=resolved.resource_kind,
+                resource_id=resolved.resource_id,
                 display_name=normalize_optional_text(payload.name),
-                metadata=metadata,
+                metadata=resolved.metadata,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         notification: Optional[dict[str, Any]] = None
-        if followup_policy.event_mode == "terminal":
+        if resolved.followup_policy.event_mode == "terminal":
             automation_client = ManagedThreadAutomationClient(
                 request,
                 get_runtime_state,
@@ -769,14 +330,14 @@ def build_managed_thread_crud_routes(
             try:
                 notification = await automation_client.create_terminal_followup(
                     managed_thread_id=thread.thread_target_id,
-                    lane_id=followup_policy.lane_id,
-                    notify_once=followup_policy.notify_once,
+                    lane_id=resolved.followup_policy.lane_id,
+                    notify_once=resolved.followup_policy.notify_once,
                     idempotency_key=(
                         f"managed-thread-notify:{thread.thread_target_id}"
-                        if followup_policy.notify_once
+                        if resolved.followup_policy.notify_once
                         else None
                     ),
-                    required=followup_policy.required,
+                    required=resolved.followup_policy.required,
                 )
             except ManagedThreadAutomationUnavailable as exc:
                 raise HTTPException(
@@ -803,33 +364,23 @@ def build_managed_thread_crud_routes(
         resource_id: Optional[str] = None,
         limit: int = 200,
     ) -> dict[str, Any]:
-        if limit <= 0:
-            raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        normalized_status = normalize_optional_text(status)
-        normalized_lifecycle_status = normalize_optional_text(lifecycle_status)
-        if (
-            normalized_status in {"active", "archived"}
-            and normalized_lifecycle_status is None
-        ):
-            normalized_lifecycle_status = normalized_status
-            normalized_status = None
-        (
-            normalized_resource_kind,
-            normalized_resource_id,
-            normalized_repo_id,
-        ) = _normalize_resource_owner(
+        query = resolve_managed_thread_list_query(
+            agent=agent,
+            status=status,
+            lifecycle_status=lifecycle_status,
             resource_kind=resource_kind,
             resource_id=resource_id,
+            limit=limit,
         )
         service = build_managed_thread_orchestration_service(request)
         threads = service.list_thread_targets(
-            agent_id=normalize_optional_text(agent),
-            lifecycle_status=normalized_lifecycle_status,
-            runtime_status=normalized_status,
-            repo_id=normalized_repo_id,
-            resource_kind=normalized_resource_kind,
-            resource_id=normalized_resource_id,
-            limit=limit,
+            agent_id=query.agent_id,
+            lifecycle_status=query.lifecycle_status,
+            runtime_status=query.runtime_status,
+            repo_id=query.repo_id,
+            resource_kind=query.resource_kind,
+            resource_id=query.resource_id,
+            limit=query.limit,
         )
         binding_metadata = _load_chat_binding_metadata_by_thread(
             request.app.state.config.root
@@ -1007,21 +558,7 @@ def build_managed_thread_crud_routes(
 
         turns = store.list_turns(managed_thread_id, limit=limit)
         return {
-            "turns": [
-                {
-                    "managed_turn_id": turn.get("managed_turn_id"),
-                    "request_kind": turn.get("request_kind"),
-                    "status": turn.get("status"),
-                    "prompt_preview": _truncate_text(turn.get("prompt") or "", 120),
-                    "assistant_preview": _truncate_text(
-                        turn.get("assistant_text") or "", 120
-                    ),
-                    "started_at": turn.get("started_at"),
-                    "finished_at": turn.get("finished_at"),
-                    "error": turn.get("error"),
-                }
-                for turn in turns
-            ]
+            "turns": [serialize_managed_thread_turn_summary(turn) for turn in turns]
         }
 
     @router.get("/threads/{managed_thread_id}/turns/{managed_turn_id}")
@@ -1056,45 +593,23 @@ def build_managed_thread_crud_routes(
         include_disabled: bool = False,
         limit: int = 200,
     ) -> dict[str, Any]:
-        if limit <= 0:
-            raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        (
-            normalized_resource_kind,
-            normalized_resource_id,
-            normalized_repo_id,
-        ) = _normalize_resource_owner(
+        query = resolve_owner_scoped_query(
+            agent=agent,
             resource_kind=resource_kind,
             resource_id=resource_id,
+            limit=limit,
         )
         service = build_managed_thread_orchestration_service(request)
         bindings = service.list_bindings(
-            agent_id=normalize_optional_text(agent),
-            repo_id=normalized_repo_id,
-            resource_kind=normalized_resource_kind,
-            resource_id=normalized_resource_id,
+            agent_id=query.agent_id,
+            repo_id=query.repo_id,
+            resource_kind=query.resource_kind,
+            resource_id=query.resource_id,
             surface_kind=normalize_optional_text(surface_kind),
             include_disabled=include_disabled,
-            limit=limit,
+            limit=query.limit,
         )
-        return {
-            "bindings": [
-                {
-                    "binding_id": b.binding_id,
-                    "surface_kind": b.surface_kind,
-                    "surface_key": b.surface_key,
-                    "thread_target_id": b.thread_target_id,
-                    "agent_id": b.agent_id,
-                    "repo_id": b.repo_id,
-                    "resource_kind": b.resource_kind,
-                    "resource_id": b.resource_id,
-                    "mode": b.mode,
-                    "created_at": b.created_at,
-                    "updated_at": b.updated_at,
-                    "disabled_at": b.disabled_at,
-                }
-                for b in bindings
-            ]
-        }
+        return {"bindings": [serialize_binding_record(binding) for binding in bindings]}
 
     @router.get("/bindings/active")
     def get_active_thread_for_binding(
@@ -1122,43 +637,18 @@ def build_managed_thread_crud_routes(
         limit: int = 200,
     ) -> dict[str, Any]:
         """List busy thread summaries for running or queued work only."""
-        if limit <= 0:
-            raise HTTPException(status_code=400, detail="limit must be greater than 0")
-        (
-            normalized_resource_kind,
-            normalized_resource_id,
-            normalized_repo_id,
-        ) = _normalize_resource_owner(
+        query = resolve_owner_scoped_query(
+            agent=agent,
             resource_kind=resource_kind,
             resource_id=resource_id,
+            limit=limit,
         )
         service = build_managed_thread_orchestration_service(request)
         summaries = service.list_active_work_summaries(
-            agent_id=normalize_optional_text(agent),
-            repo_id=normalized_repo_id,
-            resource_kind=normalized_resource_kind,
-            resource_id=normalized_resource_id,
-            limit=limit,
+            agent_id=query.agent_id,
+            repo_id=query.repo_id,
+            resource_kind=query.resource_kind,
+            resource_id=query.resource_id,
+            limit=query.limit,
         )
-        return {
-            "summaries": [
-                {
-                    "thread_target_id": s.thread_target_id,
-                    "agent_id": s.agent_id,
-                    "repo_id": s.repo_id,
-                    "resource_kind": s.resource_kind,
-                    "resource_id": s.resource_id,
-                    "workspace_root": s.workspace_root,
-                    "display_name": s.display_name,
-                    "lifecycle_status": s.lifecycle_status,
-                    "runtime_status": s.runtime_status,
-                    "execution_id": s.execution_id,
-                    "execution_status": s.execution_status,
-                    "queued_count": s.queued_count,
-                    "message_preview": s.message_preview,
-                    "binding_count": s.binding_count,
-                    "surface_kinds": list(s.surface_kinds),
-                }
-                for s in summaries
-            ]
-        }
+        return {"summaries": [serialize_active_work_summary(s) for s in summaries]}
