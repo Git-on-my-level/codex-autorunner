@@ -33,6 +33,10 @@ from .....integrations.app_server.threads import (
     pma_base_key,
     pma_topic_scoped_key,
 )
+from .....integrations.chat.agents import (
+    normalize_chat_agent,
+    normalize_hermes_profile,
+)
 from .....integrations.chat.channel_directory import (
     ChannelDirectoryStore,
     channel_entry_key,
@@ -167,10 +171,42 @@ class HubChannelService:
                 names.add(name)
         return names
 
+    def _resolve_agent_state(
+        self,
+        agent: Any,
+        profile: Any = None,
+    ) -> tuple[str, Optional[str]]:
+        normalized_agent = normalize_chat_agent(
+            agent,
+            default=None,
+            context=self._context,
+        )
+        legacy_hermes_profile = normalize_hermes_profile(
+            agent,
+            context=self._context,
+        )
+        if normalized_agent is None and legacy_hermes_profile is not None:
+            normalized_agent = "hermes"
+        if normalized_agent is None:
+            raw_agent = str(agent or "").strip().lower()
+            normalized_agent = raw_agent or "codex"
+        normalized_profile: Optional[str] = None
+        if normalized_agent == "hermes":
+            normalized_profile = normalize_hermes_profile(
+                profile,
+                context=self._context,
+            )
+            if normalized_profile is None:
+                normalized_profile = legacy_hermes_profile
+            if normalized_profile is None and isinstance(profile, str):
+                raw_profile = profile.strip().lower()
+                if raw_profile:
+                    normalized_profile = raw_profile
+        return normalized_agent, normalized_profile
+
     def _normalize_agent(self, value: Any) -> str:
-        if isinstance(value, str) and value.strip().lower() == "opencode":
-            return "opencode"
-        return "codex"
+        normalized_agent, _ = self._resolve_agent_state(value)
+        return normalized_agent
 
     def _normalize_scope(self, value: Any) -> Optional[str]:
         if not isinstance(value, str):
@@ -250,6 +286,7 @@ class HubChannelService:
                 "resource_id",
                 "pma_enabled",
                 "agent",
+                "agent_profile",
                 "updated_at",
             ):
                 if col in columns:
@@ -269,6 +306,10 @@ class HubChannelService:
                     row["repo_id"] if "repo_id" in columns else None,
                     workspace_path_raw,
                     repo_id_by_workspace,
+                )
+                agent, agent_profile = self._resolve_agent_state(
+                    row["agent"] if "agent" in columns else None,
+                    row["agent_profile"] if "agent_profile" in columns else None,
                 )
                 binding = {
                     "platform": "discord",
@@ -293,9 +334,8 @@ class HubChannelService:
                     "pma_enabled": (
                         bool(row["pma_enabled"]) if "pma_enabled" in columns else False
                     ),
-                    "agent": self._normalize_agent(
-                        row["agent"] if "agent" in columns else None
-                    ),
+                    "agent": agent,
+                    "agent_profile": agent_profile,
                     "active_thread_id": None,
                 }
                 primary_key = f"discord:{binding['chat_id']}"
@@ -448,7 +488,10 @@ class HubChannelService:
                 resource_id = payload.get("resource_id") or payload.get("resourceId")
                 if not isinstance(resource_id, str) or not resource_id.strip():
                     resource_id = None
-                agent = self._normalize_agent(payload.get("agent"))
+                agent, agent_profile = self._resolve_agent_state(
+                    payload.get("agent"),
+                    payload.get("agent_profile") or payload.get("agentProfile"),
+                )
                 key = (
                     f"telegram:{parsed_chat_id}"
                     if parsed_thread_id is None
@@ -471,6 +514,7 @@ class HubChannelService:
                         "resource_id": resource_id,
                         "pma_enabled": pma_enabled,
                         "agent": agent,
+                        "agent_profile": agent_profile,
                         "active_thread_id": active_thread_id,
                     },
                 )
@@ -608,7 +652,14 @@ class HubChannelService:
                     workspace_raw,
                     repo_id_by_workspace,
                 )
-                agent = self._normalize_agent(row.get("agent"))
+                metadata_raw = row.get("metadata")
+                metadata: dict[str, Any] = (
+                    metadata_raw if isinstance(metadata_raw, dict) else {}
+                )
+                agent, agent_profile = self._resolve_agent_state(
+                    row.get("agent"),
+                    metadata.get("agent_profile"),
+                )
                 name = row.get("name")
                 if not isinstance(name, str) or not name.strip():
                     name = None
@@ -631,13 +682,11 @@ class HubChannelService:
                     status_reason_code = None
                 else:
                     status_reason_code = status_reason_code.strip()
-                metadata = (
-                    row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-                )
                 threads.append(
                     {
                         "managed_thread_id": managed_thread_id.strip(),
                         "agent": agent,
+                        "agent_profile": agent_profile,
                         "repo_id": repo_id,
                         "workspace_path": workspace_path,
                         "name": name,
@@ -791,6 +840,7 @@ class HubChannelService:
         repo_id: Any,
         workspace_path: Any,
         agent: str,
+        agent_profile: Optional[str],
     ) -> Optional[str]:
         normalized_repo_id = (
             repo_id.strip() if isinstance(repo_id, str) and repo_id.strip() else None
@@ -803,11 +853,18 @@ class HubChannelService:
         if not pma_threads:
             return None
 
-        def _matches(thread: dict[str, Any], *, exact_agent: bool) -> bool:
+        def _matches(
+            thread: dict[str, Any],
+            *,
+            exact_agent: bool,
+            exact_profile: bool,
+        ) -> bool:
             managed_thread_id = thread.get("managed_thread_id")
             if not isinstance(managed_thread_id, str) or not managed_thread_id.strip():
                 return False
             if exact_agent and self._normalize_agent(thread.get("agent")) != agent:
+                return False
+            if exact_profile and thread.get("agent_profile") != agent_profile:
                 return False
             thread_workspace = thread.get("workspace_path")
             thread_repo_id = thread.get("repo_id")
@@ -825,9 +882,17 @@ class HubChannelService:
                 return True
             return False
 
-        for exact_agent in (True, False):
+        for exact_agent, exact_profile in (
+            (True, True),
+            (True, False),
+            (False, False),
+        ):
             for thread in pma_threads:
-                if _matches(thread, exact_agent=exact_agent):
+                if _matches(
+                    thread,
+                    exact_agent=exact_agent,
+                    exact_profile=exact_profile,
+                ):
                     managed_thread_id = thread.get("managed_thread_id")
                     if isinstance(managed_thread_id, str) and managed_thread_id.strip():
                         return managed_thread_id.strip()
@@ -859,10 +924,13 @@ class HubChannelService:
         telegram_require_topics: bool,
     ) -> Optional[str]:
         platform = str(binding.get("platform") or "").strip().lower()
-        agent = self._normalize_agent(binding.get("agent"))
+        agent, agent_profile = self._resolve_agent_state(
+            binding.get("agent"),
+            binding.get("agent_profile"),
+        )
         pma_enabled = bool(binding.get("pma_enabled"))
         if pma_enabled:
-            base_key = pma_base_key(agent)
+            base_key = pma_base_key(agent, agent_profile)
             if platform != "telegram" or not telegram_require_topics:
                 return base_key
             chat_id_raw = entry.get("chat_id")
@@ -884,7 +952,11 @@ class HubChannelService:
                 except (TypeError, ValueError):
                     thread_id = None
             return pma_topic_scoped_key(
-                agent, chat_id, thread_id, topic_key_fn=topic_key
+                agent,
+                chat_id,
+                thread_id,
+                topic_key_fn=topic_key,
+                profile=agent_profile,
             )
 
         if platform != "discord":
@@ -1151,6 +1223,7 @@ class HubChannelService:
                                 repo_id=repo_id,
                                 workspace_path=workspace_path,
                                 agent=agent,
+                                agent_profile=binding.get("agent_profile"),
                             )
                         row["source"] = "pma_thread"
                         row["provenance"] = {

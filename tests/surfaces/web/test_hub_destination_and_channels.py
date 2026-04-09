@@ -33,6 +33,7 @@ from codex_autorunner.integrations.app_server.threads import (
     FILE_CHAT_PREFIX,
     PMA_KEY,
     PMA_OPENCODE_KEY,
+    pma_base_key,
 )
 from codex_autorunner.integrations.chat.channel_directory import ChannelDirectoryStore
 from codex_autorunner.integrations.telegram.state import topic_key as telegram_topic_key
@@ -96,6 +97,7 @@ def _write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
                     resource_id TEXT,
                     pma_enabled INTEGER,
                     agent TEXT,
+                    agent_profile TEXT,
                     updated_at TEXT
                 )
                 """
@@ -112,9 +114,10 @@ def _write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
                         resource_id,
                         pma_enabled,
                         agent,
+                        agent_profile,
                         updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(channel_id) DO UPDATE SET
                         guild_id=excluded.guild_id,
                         workspace_path=excluded.workspace_path,
@@ -123,6 +126,7 @@ def _write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
                         resource_id=excluded.resource_id,
                         pma_enabled=excluded.pma_enabled,
                         agent=excluded.agent,
+                        agent_profile=excluded.agent_profile,
                         updated_at=excluded.updated_at
                     """,
                     (
@@ -134,6 +138,7 @@ def _write_discord_binding_rows(db_path: Path, rows: list[dict]) -> None:
                         row.get("resource_id"),
                         row.get("pma_enabled"),
                         row.get("agent"),
+                        row.get("agent_profile"),
                         row.get("updated_at"),
                     ),
                 )
@@ -1433,6 +1438,64 @@ def test_hub_channel_directory_route_keeps_standalone_pending_pma_thread(
     standalone_row = rows[standalone_key]
     assert standalone_row["source"] == "pma_thread"
     assert standalone_row["active_thread_id"] == pma_thread["managed_thread_id"]
+
+
+def test_hub_channel_directory_route_uses_profiled_pma_registry_key(
+    tmp_path: Path,
+) -> None:
+    hub_root = tmp_path / "hub"
+    supervisor = _create_hub_supervisor(hub_root)
+    repo = supervisor.create_repo("work")
+
+    store = ChannelDirectoryStore(hub_root)
+    store.record_seen("discord", "chan-hermes", None, "PMA / #hermes", {})
+
+    _write_discord_binding_rows(
+        hub_root / ".codex-autorunner" / "discord_state.sqlite3",
+        rows=[
+            {
+                "channel_id": "chan-hermes",
+                "guild_id": None,
+                "workspace_path": str(repo.path),
+                "repo_id": "work",
+                "pma_enabled": 1,
+                "agent": "hermes",
+                "agent_profile": "m4-pma",
+                "updated_at": "2026-01-01T00:00:02Z",
+            }
+        ],
+    )
+    _write_app_server_threads(
+        repo.path / ".codex-autorunner" / "app_server_threads.json",
+        threads={
+            pma_base_key("hermes", "m4-pma"): "discord-hermes-pma-thread",
+        },
+    )
+
+    pma_thread = PmaThreadStore(hub_root).create_thread(
+        "hermes",
+        repo.path,
+        repo_id="work",
+        name="discord:chan-hermes",
+        metadata={"agent_profile": "m4-pma"},
+    )
+
+    client = TestClient(create_hub_app(hub_root))
+    response = client.get("/hub/chat/channels")
+    assert response.status_code == 200
+    rows = {entry["key"]: entry for entry in response.json()["entries"]}
+
+    channel_row = rows["discord:chan-hermes"]
+    assert channel_row["source"] == "pma_thread"
+    assert channel_row["active_thread_id"] == "discord-hermes-pma-thread"
+    assert channel_row["provenance"]["agent"] == "hermes"
+    assert (
+        channel_row["provenance"]["managed_thread_id"]
+        == pma_thread["managed_thread_id"]
+    )
+
+    standalone_key = f"pma_thread:{pma_thread['managed_thread_id']}"
+    assert standalone_key not in rows
 
 
 def test_hub_ui_exposes_destination_and_channel_directory_controls() -> None:
