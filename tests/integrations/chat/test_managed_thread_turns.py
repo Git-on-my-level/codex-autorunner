@@ -78,12 +78,21 @@ async def test_managed_thread_turn_coordinator_runs_lifecycle_hooks(
     started = _build_started_execution(tmp_path)
     events: list[Any] = []
 
-    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+    async def _fake_finalize(
+        **kwargs: Any,
+    ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
         assert kwargs["started"] is started
         assert kwargs["runtime_event_state"] is not None
         assert kwargs["on_progress_event"] is progress_handler
         events.append("finalize")
-        return {"status": "ok", "managed_turn_id": "exec-1"}
+        return managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="exec-1",
+            backend_thread_id=None,
+        )
 
     def _on_started(started_execution: RuntimeThreadExecution) -> None:
         assert started_execution is started
@@ -122,7 +131,7 @@ async def test_managed_thread_turn_coordinator_runs_lifecycle_hooks(
 
     result = await coordinator.run_started_execution(
         started,
-        hooks=managed_thread_turns_module.ManagedThreadCoordinatorHooks(
+        hooks=managed_thread_turns_module.ManagedThreadExecutionHooks(
             on_execution_started=_on_started,
             on_execution_finished=_on_finished,
             on_progress_event=progress_handler,
@@ -130,7 +139,14 @@ async def test_managed_thread_turn_coordinator_runs_lifecycle_hooks(
         runtime_event_state=RuntimeThreadRunEventState(),
     )
 
-    assert result == {"status": "ok", "managed_turn_id": "exec-1"}
+    assert result == managed_thread_turns_module.ManagedThreadFinalizationResult(
+        status="ok",
+        assistant_text="",
+        error=None,
+        managed_thread_id="thread-1",
+        managed_turn_id="exec-1",
+        backend_thread_id=None,
+    )
     assert events == ["started", "finalize", "finished"]
 
 
@@ -142,9 +158,18 @@ async def test_managed_thread_turn_coordinator_uses_preview_builder_per_executio
     started = _build_started_execution(tmp_path)
     captured_preview: dict[str, str] = {}
 
-    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+    async def _fake_finalize(
+        **kwargs: Any,
+    ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
         captured_preview["value"] = kwargs["turn_preview"]
-        return {"status": "ok", "managed_turn_id": "exec-1"}
+        return managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="exec-1",
+            backend_thread_id=None,
+        )
 
     monkeypatch.setattr(
         managed_thread_turns_module,
@@ -185,13 +210,19 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
     events: list[Any] = []
     begin_calls = 0
 
-    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+    async def _fake_finalize(
+        **kwargs: Any,
+    ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
         assert kwargs["started"] is started
         events.append("finalize")
-        return {
-            "status": "ok",
-            "managed_turn_id": started.execution.execution_id,
-        }
+        return managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="",
+            error=None,
+            managed_thread_id=started.thread.thread_target_id,
+            managed_turn_id=started.execution.execution_id,
+            backend_thread_id=None,
+        )
 
     async def _fake_begin_next(
         orchestration_service: object,
@@ -204,8 +235,10 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
             return started
         return None
 
-    async def _deliver_result(finalized: dict[str, Any]) -> None:
-        events.append(("deliver", finalized["managed_turn_id"]))
+    async def _deliver_result(
+        finalized: managed_thread_turns_module.ManagedThreadFinalizationResult,
+    ) -> None:
+        events.append(("deliver", finalized.managed_turn_id))
 
     async def _run_with_indicator(work: Any) -> None:
         events.append("indicator:start")
@@ -246,11 +279,15 @@ async def test_managed_thread_turn_coordinator_queue_worker_uses_hooks(
         managed_thread_id="thread-1",
         spawn_task=lambda coro: spawned_tasks.append(asyncio.create_task(coro))
         or spawned_tasks[-1],
-        hooks=managed_thread_turns_module.ManagedThreadCoordinatorHooks(
-            on_execution_started=lambda started_execution: events.append("started"),
-            on_execution_finished=lambda started_execution: events.append("finished"),
+        hooks=managed_thread_turns_module.ManagedThreadQueueWorkerHooks(
             deliver_result=_deliver_result,
             run_with_indicator=_run_with_indicator,
+            execution_hooks=managed_thread_turns_module.ManagedThreadExecutionHooks(
+                on_execution_started=lambda started_execution: events.append("started"),
+                on_execution_finished=lambda started_execution: events.append(
+                    "finished"
+                ),
+            ),
         ),
         begin_next_execution=_fake_begin_next,
     )
@@ -283,14 +320,20 @@ async def test_managed_thread_turn_coordinator_queue_worker_recovers_and_continu
     delivered: list[tuple[str, str]] = []
     recorded_errors: list[tuple[str, str, str]] = []
 
-    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+    async def _fake_finalize(
+        **kwargs: Any,
+    ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
         started = kwargs["started"]
         if started.execution.execution_id == "exec-1":
             raise RuntimeError("worker finalize exploded")
-        return {
-            "status": "ok",
-            "managed_turn_id": started.execution.execution_id,
-        }
+        return managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="",
+            error=None,
+            managed_thread_id=started.thread.thread_target_id,
+            managed_turn_id=started.execution.execution_id,
+            backend_thread_id=None,
+        )
 
     async def _fake_begin_next(
         orchestration_service: object,
@@ -305,11 +348,13 @@ async def test_managed_thread_turn_coordinator_queue_worker_recovers_and_continu
             return second
         return None
 
-    async def _deliver_result(finalized: dict[str, Any]) -> None:
+    async def _deliver_result(
+        finalized: managed_thread_turns_module.ManagedThreadFinalizationResult,
+    ) -> None:
         delivered.append(
             (
-                str(finalized["managed_turn_id"]),
-                str(finalized["status"]),
+                finalized.managed_turn_id,
+                finalized.status,
             )
         )
 
@@ -350,7 +395,7 @@ async def test_managed_thread_turn_coordinator_queue_worker_recovers_and_continu
         managed_thread_id="thread-1",
         spawn_task=lambda coro: spawned_tasks.append(asyncio.create_task(coro))
         or spawned_tasks[-1],
-        hooks=managed_thread_turns_module.ManagedThreadCoordinatorHooks(
+        hooks=managed_thread_turns_module.ManagedThreadQueueWorkerHooks(
             deliver_result=_deliver_result,
         ),
         begin_next_execution=_fake_begin_next,
@@ -373,10 +418,19 @@ async def test_complete_managed_thread_execution_runs_direct_hooks_and_ensures_w
     started = _build_started_execution(tmp_path)
     events: list[Any] = []
 
-    async def _fake_finalize(**kwargs: Any) -> dict[str, Any]:
+    async def _fake_finalize(
+        **kwargs: Any,
+    ) -> managed_thread_turns_module.ManagedThreadFinalizationResult:
         assert kwargs["started"] is started
         events.append("finalize")
-        return {"status": "ok", "managed_turn_id": started.execution.execution_id}
+        return managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="",
+            error=None,
+            managed_thread_id=started.thread.thread_target_id,
+            managed_turn_id=started.execution.execution_id,
+            backend_thread_id=None,
+        )
 
     monkeypatch.setattr(
         managed_thread_turns_module,
@@ -409,7 +463,7 @@ async def test_complete_managed_thread_execution_runs_direct_hooks_and_ensures_w
             queued=False,
         ),
         ensure_queue_worker=lambda: events.append("ensure"),
-        direct_hooks=managed_thread_turns_module.ManagedThreadCoordinatorHooks(
+        direct_hooks=managed_thread_turns_module.ManagedThreadExecutionHooks(
             on_execution_started=lambda started_execution: events.append("started"),
             on_execution_finished=lambda started_execution: events.append("finished"),
         ),
@@ -417,7 +471,17 @@ async def test_complete_managed_thread_execution_runs_direct_hooks_and_ensures_w
     )
 
     assert result.queued is False
-    assert result.finalized == {"status": "ok", "managed_turn_id": "exec-1"}
+    assert (
+        result.finalized
+        == managed_thread_turns_module.ManagedThreadFinalizationResult(
+            status="ok",
+            assistant_text="",
+            error=None,
+            managed_thread_id="thread-1",
+            managed_turn_id="exec-1",
+            backend_thread_id=None,
+        )
+    )
     assert events == ["started", "finalize", "finished", "ensure"]
 
 
