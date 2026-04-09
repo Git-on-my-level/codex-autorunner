@@ -32,6 +32,7 @@ from typing import AsyncGenerator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts.drift_check_utils import compare_nested_data, load_json_document
 from scripts.protocol_utils import validate_binary_path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -89,48 +90,6 @@ def generate_current_codex_schema() -> dict | None:
             return None
 
 
-def compare_dicts(name: str, vendor: dict, current: dict) -> list[str]:
-    """Compare two dicts and return differences."""
-    differences: list[str] = []
-
-    # Check for added/removed top-level keys
-    vendor_keys = set(vendor.keys())
-    current_keys = set(current.keys())
-
-    added_keys = current_keys - vendor_keys
-    removed_keys = vendor_keys - current_keys
-
-    if added_keys:
-        differences.append(f"  Added keys: {', '.join(sorted(added_keys))}")
-    if removed_keys:
-        differences.append(f"  Removed keys: {', '.join(sorted(removed_keys))}")
-
-    # Compare nested structures for common keys
-    common_keys = vendor_keys & current_keys
-    for key in sorted(common_keys):
-        v_val = vendor[key]
-        c_val = current[key]
-
-        if v_val != c_val:
-            if isinstance(v_val, dict) and isinstance(c_val, dict):
-                nested_diffs = compare_dicts(f"{name}.{key}", v_val, c_val)
-                if nested_diffs:
-                    differences.extend(nested_diffs)
-            elif isinstance(v_val, list) and isinstance(c_val, list):
-                if len(v_val) != len(c_val):
-                    differences.append(
-                        f"  {name}.{key}: list length changed from {len(v_val)} to {len(c_val)}"
-                    )
-                else:
-                    for i, (v_item, c_item) in enumerate(zip(v_val, c_val)):
-                        if v_item != c_item:
-                            differences.append(f"  {name}.{key}[{i}]: value changed")
-            else:
-                differences.append(f"  {name}.{key}: value changed")
-
-    return differences
-
-
 def compare_codex_schema(vendor_path: Path) -> tuple[int, list[str]]:
     """Compare vendor Codex schema with current generated schema."""
     if not vendor_path.exists():
@@ -140,7 +99,14 @@ def compare_codex_schema(vendor_path: Path) -> tuple[int, list[str]]:
             "Fallback: python scripts/update_vendor_codex_schema.py",
         ]
 
-    vendor_schema = json.loads(vendor_path.read_text(encoding="utf-8"))
+    try:
+        vendor_schema = load_json_document(vendor_path, label="Vendor schema")
+    except (FileNotFoundError, ValueError) as exc:
+        return 2, [
+            str(exc),
+            f"Run: {RECOMMENDED_REFRESH_COMMAND}",
+            "Fallback: python scripts/update_vendor_codex_schema.py",
+        ]
     current_schema = generate_current_codex_schema()
 
     if current_schema is None:
@@ -149,7 +115,7 @@ def compare_codex_schema(vendor_path: Path) -> tuple[int, list[str]]:
             "Skipping Codex schema check",
         ]
 
-    differences = compare_dicts("codex", vendor_schema, current_schema)
+    differences = compare_nested_data("codex", vendor_schema, current_schema)
 
     if differences:
         return 1, [
@@ -277,7 +243,14 @@ def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
             "Fallback: python scripts/update_vendor_opencode_openapi.py",
         ]
 
-    vendor_spec = json.loads(vendor_path.read_text(encoding="utf-8"))
+    try:
+        vendor_spec = load_json_document(vendor_path, label="Vendor OpenAPI spec")
+    except (FileNotFoundError, ValueError) as exc:
+        return 2, [
+            str(exc),
+            f"Run: {RECOMMENDED_REFRESH_COMMAND}",
+            "Fallback: python scripts/update_vendor_opencode_openapi.py",
+        ]
     current_spec, opencode_bin = generate_current_opencode_openapi()
 
     if current_spec is None:
@@ -308,7 +281,7 @@ def compare_opencode_openapi(vendor_path: Path) -> tuple[int, list[str]]:
         )
         return 0, messages
 
-    differences = compare_dicts("opencode", vendor_spec, current_spec)
+    differences = compare_nested_data("opencode", vendor_spec, current_spec)
 
     if differences:
         return 1, [
