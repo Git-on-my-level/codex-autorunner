@@ -30,6 +30,10 @@ class TelegramWorkspaceAndTurnMixin:
     - Workspace path resolution and client acquisition
     - Turn context registration and lookup
     - Message rendering and formatting
+
+    Ordinary interactive turns should acquire runtime capability through the
+    shared orchestration-managed thread path. Direct supervisor/client helpers
+    here are a compatibility boundary for maintenance and transport-local flows.
     """
 
     async def _resolve_topic_key(self, chat_id: int, thread_id: Optional[int]) -> str:

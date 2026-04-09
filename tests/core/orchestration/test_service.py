@@ -589,6 +589,21 @@ async def test_send_message_starts_fresh_when_backend_runtime_instance_is_stale(
     assert binding.backend_runtime_instance_id == "runtime-new"
 
 
+async def test_acquire_workspace_runtime_uses_harness_supervision_contract(
+    tmp_path: Path,
+) -> None:
+    harness = _FakeHarness(backend_runtime_instance_id_value="runtime-123")
+    service = _build_service(tmp_path, harness)
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir()
+
+    acquired = await service.acquire_workspace_runtime("codex", workspace_root)
+
+    assert acquired.harness is harness
+    assert acquired.backend_runtime_instance_id == "runtime-123"
+    assert harness.ensure_ready_calls == [workspace_root]
+
+
 async def test_send_message_retries_with_fresh_conversation_when_existing_binding_is_invalid(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,

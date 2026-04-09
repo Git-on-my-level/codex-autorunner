@@ -30,6 +30,7 @@ from .interfaces import (
     RuntimeThreadHarness,
     RuntimeTurnHandle,
     ThreadExecutionStore,
+    WorkspaceRuntimeAcquisition,
 )
 from .migrations import (
     ORCHESTRATION_SCHEMA_VERSION,
@@ -141,6 +142,7 @@ __all__ = [
     "TranscriptMirrorRow",
     "TranscriptMirrorStore",
     "TranscriptParityResult",
+    "WorkspaceRuntimeAcquisition",
     "apply_orchestration_migrations",
     "await_runtime_thread_outcome",
     "begin_runtime_thread_execution",

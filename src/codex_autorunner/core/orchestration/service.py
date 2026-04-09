@@ -26,6 +26,7 @@ from .interfaces import (
     OrchestrationThreadService,
     RuntimeThreadHarness,
     ThreadExecutionStore,
+    WorkspaceRuntimeAcquisition,
 )
 from .models import (
     AgentDefinition,
@@ -682,12 +683,24 @@ class HarnessBackedOrchestrationService(OrchestrationThreadService):
             raise KeyError(f"Unknown thread target '{thread_target_id}'")
         return thread
 
+    async def acquire_workspace_runtime(
+        self, agent_id: str, workspace_root: Path
+    ) -> WorkspaceRuntimeAcquisition:
+        harness = self._harness_for_agent(agent_id)
+        await harness.ensure_ready(workspace_root)
+        return WorkspaceRuntimeAcquisition(
+            harness=harness,
+            backend_runtime_instance_id=await _resolve_harness_runtime_instance_id(
+                harness,
+                workspace_root,
+            ),
+        )
+
     async def resolve_backend_runtime_instance_id(
         self, agent_id: str, workspace_root: Path
     ) -> Optional[str]:
-        harness = self._harness_for_agent(agent_id)
-        await harness.ensure_ready(workspace_root)
-        return await _resolve_harness_runtime_instance_id(harness, workspace_root)
+        runtime = await self.acquire_workspace_runtime(agent_id, workspace_root)
+        return runtime.backend_runtime_instance_id
 
     def archive_thread_target(self, thread_target_id: str) -> ThreadTarget:
         thread = self.thread_store.archive_thread_target(thread_target_id)

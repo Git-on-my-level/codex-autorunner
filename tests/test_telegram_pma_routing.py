@@ -4886,9 +4886,9 @@ async def test_sync_telegram_thread_binding_archives_after_lost_backend_recovery
 
     assert thread.thread_target_id == "thread-2"
     assert calls == [
-        ("resolve", "codex"),
         ("stop", "thread-1"),
         ("archive", "thread-1"),
+        ("resolve", "codex"),
         ("create", "codex"),
         ("bind", "thread-2"),
     ]
@@ -4969,7 +4969,6 @@ async def test_sync_telegram_thread_binding_ignores_backend_id_in_pma_mode() -> 
         (
             "thread-1",
             {
-                "backend_thread_id": None,
                 "backend_runtime_instance_id": None,
             },
         ),
@@ -5824,9 +5823,9 @@ async def test_sync_telegram_thread_binding_keeps_requested_backend_thread_id_fo
     assert current_thread.thread_target_id == "thread-2"
     assert current_thread.backend_thread_id == "backend-new"
     assert calls == [
-        ("resolve", "codex", str(workspace)),
         ("stop", "thread-1", None),
         ("archive", "thread-1", None),
+        ("resolve", "codex", str(workspace)),
         ("create", "codex", "backend-new"),
         ("bind", "thread-2", "repo"),
     ]

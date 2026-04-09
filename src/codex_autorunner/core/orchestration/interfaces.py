@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
@@ -127,6 +128,14 @@ class RuntimeThreadHarness(Protocol):
     def stream_events(
         self, workspace_root: Path, conversation_id: str, turn_id: str
     ) -> AsyncIterator[Any]: ...
+
+
+@dataclass(frozen=True)
+class WorkspaceRuntimeAcquisition:
+    """Shared runtime-supervision result for chat orchestration callers."""
+
+    harness: RuntimeThreadHarness
+    backend_runtime_instance_id: Optional[str] = None
 
 
 @runtime_checkable
@@ -311,6 +320,10 @@ class OrchestrationThreadService(Protocol):
         backend_thread_id: Optional[str] = None,
         backend_runtime_instance_id: Optional[str] = None,
     ) -> ThreadTarget: ...
+
+    async def acquire_workspace_runtime(
+        self, agent_id: str, workspace_root: Path
+    ) -> WorkspaceRuntimeAcquisition: ...
 
     async def resolve_backend_runtime_instance_id(
         self, agent_id: str, workspace_root: Path

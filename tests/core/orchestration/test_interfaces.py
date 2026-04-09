@@ -16,6 +16,7 @@ from codex_autorunner.core.orchestration import (
     ThreadExecutionStore,
     ThreadStopOutcome,
     ThreadTarget,
+    WorkspaceRuntimeAcquisition,
 )
 
 
@@ -339,6 +340,15 @@ class _FakeService:
     ) -> Optional[str]:
         _ = agent_id, workspace_root
         return None
+
+    async def acquire_workspace_runtime(
+        self, agent_id: str, workspace_root: Path
+    ) -> WorkspaceRuntimeAcquisition:
+        _ = agent_id, workspace_root
+        return WorkspaceRuntimeAcquisition(
+            harness=_FakeHarness(),
+            backend_runtime_instance_id=None,
+        )
 
     def archive_thread_target(self, thread_target_id: str) -> ThreadTarget:
         return self.store.archive_thread_target(thread_target_id) or self.store.thread
