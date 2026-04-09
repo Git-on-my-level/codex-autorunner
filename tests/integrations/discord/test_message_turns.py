@@ -7649,6 +7649,231 @@ async def test_repo_message_create_routes_repeated_messages_through_orchestratio
 
 
 @pytest.mark.anyio
+async def test_repo_message_create_routes_repeated_messages_through_orchestration_thread_for_hermes_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed_hub_files(tmp_path, force=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    store = DiscordStateStore(tmp_path / "discord_state.sqlite3")
+    await store.initialize()
+    await store.upsert_binding(
+        channel_id="channel-1",
+        guild_id="guild-1",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+    )
+    await store.update_agent_state(
+        channel_id="channel-1",
+        agent="hermes",
+        agent_profile="m4-pma",
+    )
+
+    rest = _FakeRest()
+    gateway = _FakeGateway(
+        [
+            (
+                "MESSAGE_CREATE",
+                _message_create("first hermes orchestration prompt", message_id="m-1"),
+            ),
+            (
+                "MESSAGE_CREATE",
+                _message_create("second hermes orchestration prompt", message_id="m-2"),
+            ),
+        ]
+    )
+    service = DiscordBotService(
+        _config(tmp_path),
+        logger=logging.getLogger("test"),
+        rest_client=rest,
+        gateway_client=gateway,
+        state_store=store,
+        outbox_manager=_FakeOutboxManager(),
+    )
+
+    first_started = asyncio.Event()
+    release_first = asyncio.Event()
+
+    class _FakeHarness:
+        display_name = "Hermes"
+        capabilities = frozenset(
+            {
+                "durable_threads",
+                "message_turns",
+                "interrupt",
+                "event_streaming",
+                "approvals",
+            }
+        )
+
+        def __init__(self) -> None:
+            self.turn_prompts: list[str] = []
+            self.resume_conversation_calls: list[tuple[Path, str]] = []
+
+        async def ensure_ready(self, workspace_root: Path) -> None:
+            _ = workspace_root
+
+        def supports(self, capability: str) -> bool:
+            return capability in self.capabilities
+
+        async def new_conversation(
+            self, workspace_root: Path, title: Optional[str] = None
+        ) -> SimpleNamespace:
+            _ = workspace_root, title
+            return SimpleNamespace(id="hermes-backend-thread-1")
+
+        async def resume_conversation(
+            self, workspace_root: Path, conversation_id: str
+        ) -> SimpleNamespace:
+            self.resume_conversation_calls.append((workspace_root, conversation_id))
+            return SimpleNamespace(id=conversation_id)
+
+        async def start_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            prompt: str,
+            model: Optional[str],
+            reasoning: Optional[str],
+            *,
+            approval_mode: Optional[str],
+            sandbox_policy: Optional[Any],
+            input_items: Optional[list[dict[str, Any]]] = None,
+        ) -> SimpleNamespace:
+            _ = (
+                workspace_root,
+                conversation_id,
+                model,
+                reasoning,
+                approval_mode,
+                sandbox_policy,
+                input_items,
+            )
+            turn_id = f"hermes-backend-turn-{len(self.turn_prompts) + 1}"
+            self.turn_prompts.append(prompt)
+            return SimpleNamespace(conversation_id=conversation_id, turn_id=turn_id)
+
+        async def start_review(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
+            raise AssertionError("review mode should not be used in this test")
+
+        async def wait_for_turn(
+            self,
+            workspace_root: Path,
+            conversation_id: str,
+            turn_id: Optional[str],
+            *,
+            timeout: Optional[float] = None,
+        ) -> SimpleNamespace:
+            _ = workspace_root, conversation_id, timeout
+            if turn_id == "hermes-backend-turn-1":
+                first_started.set()
+                await release_first.wait()
+                return SimpleNamespace(
+                    status="ok",
+                    assistant_text="first hermes orchestration reply",
+                    errors=[],
+                )
+            return SimpleNamespace(
+                status="ok",
+                assistant_text="second hermes orchestration reply",
+                errors=[],
+            )
+
+        async def interrupt(
+            self, workspace_root: Path, conversation_id: str, turn_id: Optional[str]
+        ) -> None:
+            _ = workspace_root, conversation_id, turn_id
+
+        async def stream_events(
+            self, workspace_root: Path, conversation_id: str, turn_id: str
+        ):
+            _ = workspace_root, conversation_id, turn_id
+            if False:
+                yield ""
+
+    harness = _FakeHarness()
+    hub_config = SimpleNamespace(
+        agent_profiles=lambda agent_id: (
+            {"m4-pma": SimpleNamespace(display_name="M4 PMA")}
+            if agent_id == "hermes"
+            else {}
+        ),
+        agent_binary=lambda agent_id, **kw: agent_id,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.agents.registry._resolve_runtime_agent_config",
+        lambda ctx: hub_config,
+    )
+    monkeypatch.setattr(
+        discord_message_turns_module,
+        "get_registered_agents",
+        lambda: {
+            "hermes": AgentDescriptor(
+                id="hermes",
+                name="Hermes",
+                capabilities=harness.capabilities,
+                make_harness=lambda _ctx: harness,
+            )
+        },
+    )
+
+    async def _release_later() -> None:
+        await first_started.wait()
+        await asyncio.sleep(0.05)
+        release_first.set()
+
+    release_task = asyncio.create_task(_release_later())
+    try:
+        await asyncio.wait_for(service.run_forever(), timeout=5)
+        with anyio.fail_after(2):
+            while not any(
+                "second hermes orchestration reply" in msg["payload"].get("content", "")
+                for msg in rest.channel_messages
+            ):
+                await anyio.sleep(0.05)
+
+        contents = [msg["payload"].get("content", "") for msg in rest.channel_messages]
+        assert any(
+            "Queued (waiting for available worker...)" in content
+            for content in contents
+        )
+        assert any(
+            "first hermes orchestration reply" in content for content in contents
+        )
+        assert any(
+            "second hermes orchestration reply" in content for content in contents
+        )
+
+        orchestration_service = service._discord_thread_service()
+        binding = orchestration_service.get_binding(
+            surface_kind="discord",
+            surface_key="channel-1",
+        )
+        assert binding is not None
+        resolved_thread = orchestration_service.get_thread_target(
+            binding.thread_target_id
+        )
+        assert resolved_thread is not None
+        assert resolved_thread.agent_id == "hermes"
+        assert resolved_thread.agent_profile == "m4-pma"
+
+        thread_store = discord_message_turns_module.PmaThreadStore(tmp_path)
+        turns = thread_store.list_turns(resolved_thread.thread_target_id, limit=10)
+        assert len(turns) == 2
+        assert [turn["status"] for turn in turns] == ["ok", "ok"]
+        assert harness.resume_conversation_calls == [
+            (workspace.resolve(), "hermes-backend-thread-1")
+        ]
+    finally:
+        if not release_task.done():
+            release_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await release_task
+        await store.close()
+
+
+@pytest.mark.anyio
 async def test_pma_message_create_streams_progress_before_terminal_reply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
