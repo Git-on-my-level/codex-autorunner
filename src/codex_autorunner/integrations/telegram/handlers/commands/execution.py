@@ -746,31 +746,6 @@ def _sync_pma_registry_thread_id(
     registry.set_thread_id(pma_key, backend_thread_id)
 
 
-async def _maybe_handlers_send_failure(
-    handlers: Any,
-    message: TelegramMessage,
-    failure_message: str,
-    *,
-    send: bool,
-    placeholder_id: Optional[int] = None,
-    transcript_message_id: Optional[int] = None,
-    transcript_text: Optional[str] = None,
-) -> _TurnRunFailure:
-    if send:
-        await handlers._send_message(
-            message.chat_id,
-            failure_message,
-            thread_id=message.thread_id,
-            reply_to=message.message_id,
-        )
-    return _TurnRunFailure(
-        failure_message,
-        placeholder_id,
-        transcript_message_id,
-        transcript_text,
-    )
-
-
 async def _run_telegram_managed_thread_turn(
     handlers: Any,
     *,
@@ -803,143 +778,9 @@ async def _run_telegram_managed_thread_turn(
         queued=False,
     )
     workspace_root = canonicalize_path(Path(record.workspace_path or ""))
-    agent = handlers._effective_agent(record)
     agent_profile = handlers._effective_agent_profile(record)
     runtime_agent = handlers._effective_runtime_agent(record)
     repo_id = record.repo_id.strip() if isinstance(record.repo_id, str) else None
-    current_backend_thread_id = (
-        str(record.active_thread_id).strip()
-        if (
-            not pma_enabled
-            and isinstance(getattr(record, "active_thread_id", None), str)
-            and str(record.active_thread_id).strip()
-        )
-        else None
-    )
-    if (
-        not pma_enabled
-        and not current_backend_thread_id
-        and allow_new_thread
-        and agent != "opencode"
-    ):
-        try:
-            client = await handlers._client_for_workspace(record.workspace_path)
-        except AppServerUnavailableError as exc:
-            log_event(
-                handlers._logger,
-                logging.WARNING,
-                "telegram.app_server.unavailable",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            failure_message = APP_SERVER_UNAVAILABLE_MESSAGE
-            return await _maybe_handlers_send_failure(
-                handlers,
-                message,
-                failure_message,
-                send=send_failure_response,
-                placeholder_id=prepared_placeholder_id,
-                transcript_message_id=transcript_message_id,
-                transcript_text=transcript_text,
-            )
-
-        if client is None:
-            return await _maybe_handlers_send_failure(
-                handlers,
-                message,
-                TOPIC_NOT_BOUND_MESSAGE,
-                send=send_failure_response,
-                placeholder_id=prepared_placeholder_id,
-                transcript_message_id=transcript_message_id,
-                transcript_text=transcript_text,
-            )
-            return _TurnRunFailure(
-                failure_message,
-                prepared_placeholder_id,
-                transcript_message_id,
-                transcript_text,
-            )
-        if client is None:
-            failure_message = TOPIC_NOT_BOUND_MESSAGE
-            if send_failure_response:
-                await handlers._send_message(
-                    message.chat_id,
-                    failure_message,
-                    thread_id=message.thread_id,
-                    reply_to=message.message_id,
-                )
-            return _TurnRunFailure(
-                failure_message,
-                prepared_placeholder_id,
-                transcript_message_id,
-                transcript_text,
-            )
-        try:
-            thread_result = await client.thread_start(
-                record.workspace_path,
-                **handlers._thread_start_kwargs(record),
-            )
-        except (
-            RuntimeError,
-            OSError,
-            ValueError,
-            TypeError,
-            ConnectionError,
-        ) as exc:  # intentional: user-facing error display
-            log_event(
-                handlers._logger,
-                logging.WARNING,
-                "telegram.turn.thread_start.failed",
-                chat_id=message.chat_id,
-                thread_id=message.thread_id,
-                exc=exc,
-            )
-            failure_message = "Failed to start a new thread; check logs for details."
-            return await _maybe_handlers_send_failure(
-                handlers,
-                message,
-                failure_message,
-                send=send_failure_response,
-                placeholder_id=prepared_placeholder_id,
-                transcript_message_id=transcript_message_id,
-                transcript_text=transcript_text,
-            )
-        if not await handlers._require_thread_workspace(
-            message,
-            record.workspace_path,
-            thread_result,
-            action="thread_start",
-        ):
-            if prepared_placeholder_id is not None:
-                await handlers._delete_message(message.chat_id, prepared_placeholder_id)
-            return _TurnRunFailure(
-                "Failed to start a new thread.",
-                prepared_placeholder_id,
-                transcript_message_id,
-                transcript_text,
-            )
-        current_backend_thread_id = _extract_thread_id(thread_result)
-        if not current_backend_thread_id:
-            return await _maybe_handlers_send_failure(
-                handlers,
-                message,
-                "Failed to start a new thread.",
-                send=send_failure_response,
-                placeholder_id=prepared_placeholder_id,
-                transcript_message_id=transcript_message_id,
-                transcript_text=transcript_text,
-            )
-        apply_thread_result = getattr(handlers, "_apply_thread_result", None)
-        if callable(apply_thread_result):
-            updated_record = await apply_thread_result(
-                message.chat_id,
-                message.thread_id,
-                thread_result,
-                active_thread_id=current_backend_thread_id,
-            )
-            if updated_record is not None:
-                record = updated_record
     orchestration_service, thread = await _resolve_telegram_managed_thread(
         handlers,
         surface_key=topic_key,
@@ -951,7 +792,6 @@ async def _run_telegram_managed_thread_turn(
         resource_id=getattr(record, "resource_id", None),
         mode=mode,
         pma_enabled=pma_enabled,
-        backend_thread_id=current_backend_thread_id,
         allow_new_thread=allow_new_thread,
     )
     if thread is None:
@@ -988,8 +828,6 @@ async def _run_telegram_managed_thread_turn(
     backend_from_thread = str(thread.backend_thread_id or "").strip()
     if backend_from_thread:
         compact_active_candidates.append(backend_from_thread)
-    if current_backend_thread_id:
-        compact_active_candidates.append(current_backend_thread_id)
     if pma_enabled and isinstance(getattr(record, "active_thread_id", None), str):
         rid = str(record.active_thread_id).strip()
         if rid:
@@ -3188,7 +3026,17 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 transcript_text=transcript_text,
             )
 
-        if record.active_thread_id and not pma_enabled:
+        agent = self._effective_agent(record)
+        has_managed_thread_runtime = getattr(
+            self._config, "root", None
+        ) is not None and callable(getattr(self, "_spawn_task", None))
+        uses_managed_thread_runtime = has_managed_thread_runtime or agent == "opencode"
+
+        if (
+            record.active_thread_id
+            and not pma_enabled
+            and not uses_managed_thread_runtime
+        ):
             conflict_key = await self._find_thread_conflict(
                 record.active_thread_id,
                 key=key,
@@ -3287,10 +3135,6 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 ),
             )
 
-        agent = self._effective_agent(record)
-        has_managed_thread_runtime = getattr(
-            self._config, "root", None
-        ) is not None and callable(getattr(self, "_spawn_task", None))
         if pma_enabled and (has_managed_thread_runtime or agent == "opencode"):
             approval_policy, sandbox_policy = self._effective_policies(record)
             return await _run_telegram_managed_thread_turn(

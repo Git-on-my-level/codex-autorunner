@@ -3357,6 +3357,8 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
         workspace_path=str(tmp_path),
         repo_id="repo-1",
         agent="codex",
+        active_thread_id="stale-active-thread",
+        thread_ids=["stale-active-thread"],
     )
     handler = _ManagedThreadPMAHandler(record, tmp_path)
 
@@ -3428,7 +3430,7 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
             timeout: Optional[float] = None,
         ) -> SimpleNamespace:
             _ = workspace_root, timeout
-            assert conversation_id == "fresh-1"
+            assert conversation_id == "repo-backend-thread-1"
             assert isinstance(turn_id, str)
             return SimpleNamespace(
                 status="ok",
@@ -3487,11 +3489,12 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
     await handler._handle_normal_message(second_message, runtime=_RuntimeStub())
 
     assert harness.start_calls == [
-        ("fresh-1", "first repo orchestration prompt"),
-        ("fresh-1", "second repo orchestration prompt"),
+        ("repo-backend-thread-1", "first repo orchestration prompt"),
+        ("repo-backend-thread-1", "second repo orchestration prompt"),
     ]
-    assert record.active_thread_id == "fresh-1"
-    assert record.thread_ids[0] == "fresh-1"
+    assert handler._client.thread_start_calls == []
+    assert record.active_thread_id == "repo-backend-thread-1"
+    assert record.thread_ids[0] == "repo-backend-thread-1"
     assert "reply for repo-backend-turn-1" in handler._sent
     assert "reply for repo-backend-turn-2" in handler._sent
 
@@ -3506,7 +3509,7 @@ async def test_repo_text_turns_use_orchestration_binding_and_preserve_thread_con
     assert binding.mode == "repo"
     thread = orchestration_service.get_thread_target(binding.thread_target_id)
     assert thread is not None
-    assert thread.backend_thread_id == "fresh-1"
+    assert thread.backend_thread_id == "repo-backend-thread-1"
 
 
 @pytest.mark.anyio
@@ -3658,7 +3661,8 @@ async def test_repo_media_turns_preserve_input_items_via_orchestration(
     assert isinstance(result, _TurnRunResult)
     assert result.response == "repo media orchestration reply"
     assert harness.input_items == input_items
-    assert record.active_thread_id == "fresh-1"
+    assert handler._client.thread_start_calls == []
+    assert record.active_thread_id == "repo-media-thread-1"
 
 
 @pytest.mark.anyio
@@ -3836,7 +3840,10 @@ async def test_repo_interrupt_uses_orchestration_binding_for_text_turns(
                 await anyio.sleep(0.05)
         await first_task
 
-        assert harness.interrupt_calls == [(tmp_path, "fresh-1", "repo-backend-turn-1")]
+        assert handler._client.thread_start_calls == []
+        assert harness.interrupt_calls == [
+            (tmp_path, "repo-backend-thread-1", "repo-backend-turn-1")
+        ]
         assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
         assert "unexpected queued repo reply" not in handler._sent
     finally:
@@ -4440,7 +4447,10 @@ async def test_repo_interrupt_uses_orchestration_binding_for_hermes_text_turns(
                 await anyio.sleep(0.05)
         await first_task
 
-        assert harness.interrupt_calls == [(tmp_path, "fresh-1", "hermes-turn-1")]
+        assert handler._client.thread_start_calls == []
+        assert harness.interrupt_calls == [
+            (tmp_path, "hermes-fresh-1", "hermes-turn-1")
+        ]
         assert "Interrupted active turn. Cancelled 1 queued turn(s)." in handler._sent
         assert "unexpected hermes queued reply" not in handler._sent
     finally:
