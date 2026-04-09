@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
+from .event_decoder import APPROVAL_METHODS, decode_notification
 from .ids import extract_turn_id
+from .protocol_types import ApprovalRequest, NotificationResult
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,23 @@ class NormalizedServerRequest:
 class NormalizedNotification:
     method: str
     params: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ApprovalRequestEnvelope:
+    request_id: Any
+    method: str
+    params: dict[str, Any]
+    request: ApprovalRequest
+    raw_message: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class NotificationEnvelope:
+    method: str
+    params: dict[str, Any]
+    notification: NotificationResult
+    raw_message: dict[str, Any]
 
 
 def normalize_response(message: dict[str, Any]) -> Optional[NormalizedResponse]:
@@ -68,6 +88,67 @@ def normalize_notification(message: dict[str, Any]) -> Optional[NormalizedNotifi
         method=method,
         params=params,
     )
+
+
+def normalize_approval_request(
+    message: dict[str, Any],
+) -> Optional[ApprovalRequestEnvelope]:
+    normalized = normalize_server_request(message)
+    if normalized is None or normalized.method not in APPROVAL_METHODS:
+        return None
+    decoded = decode_notification(message)
+    if not isinstance(decoded, ApprovalRequest):
+        return None
+    return ApprovalRequestEnvelope(
+        request_id=normalized.request_id,
+        method=normalized.method,
+        params=normalized.params,
+        request=decoded,
+        raw_message=message,
+    )
+
+
+def normalize_notification_envelope(
+    message: dict[str, Any],
+) -> Optional[NotificationEnvelope]:
+    normalized = normalize_notification(message)
+    if normalized is None:
+        return None
+    return NotificationEnvelope(
+        method=normalized.method,
+        params=normalized.params,
+        notification=decode_notification(message),
+        raw_message=message,
+    )
+
+
+class RawApprovalRequestAdapter:
+    def __init__(
+        self,
+        handler: Optional[Callable[[dict[str, Any]], Awaitable[Any]]],
+        *,
+        default_decision: Any,
+    ) -> None:
+        self._handler = handler
+        self._default_decision = default_decision
+
+    async def decide(self, envelope: ApprovalRequestEnvelope) -> Any:
+        if self._handler is None:
+            return self._default_decision
+        return await _maybe_await(self._handler(envelope.raw_message))
+
+
+class RawNotificationAdapter:
+    def __init__(
+        self,
+        handler: Optional[Callable[[dict[str, Any]], Awaitable[None]]],
+    ) -> None:
+        self._handler = handler
+
+    async def notify(self, envelope: NotificationEnvelope) -> None:
+        if self._handler is None:
+            return
+        await _maybe_await(self._handler(envelope.raw_message))
 
 
 def extract_resume_snapshot(
@@ -241,6 +322,12 @@ def _extract_agent_message_phase(item: Any) -> Optional[str]:
     if normalized in {"commentary", "final_answer"}:
         return normalized
     return None
+
+
+async def _maybe_await(value: Any) -> Any:
+    if asyncio.iscoroutine(value):
+        return await value
+    return value
 
 
 def _extract_errors_from_container(container: Any) -> list[str]:

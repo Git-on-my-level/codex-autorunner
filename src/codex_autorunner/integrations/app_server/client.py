@@ -9,7 +9,6 @@ import time
 import uuid
 import weakref
 from collections import deque
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -39,21 +38,35 @@ from ...core.managed_processes.registry import (
     write_process_record,
 )
 from ...core.retry import retry_transient
-from .event_decoder import decode_notification
 from .ids import extract_thread_id, extract_thread_id_for_turn, extract_turn_id
 from .protocol_helpers import (
-    _extract_agent_message_phase,
-    _extract_agent_message_text,
+    RawApprovalRequestAdapter,
+    RawNotificationAdapter,
     extract_resume_snapshot,
-    normalize_notification,
+    normalize_approval_request,
+    normalize_notification_envelope,
     normalize_response,
-    normalize_server_request,
+)
+from .protocol_helpers import (
+    _extract_agent_message_phase as _protocol_extract_agent_message_phase,
+)
+from .protocol_helpers import (
+    _extract_agent_message_text as _protocol_extract_agent_message_text,
+)
+from .transport import AppServerReadBuffer, build_message
+from .turn_state import (
+    TurnKey,
+    TurnResult,
+    TurnState,
+    TurnStateManager,
+    extract_notification_item_id,
+    status_is_terminal,
 )
 
 ApprovalDecision = Union[str, Dict[str, Any]]
 ApprovalHandler = Callable[[Dict[str, Any]], Awaitable[ApprovalDecision]]
 NotificationHandler = Callable[[Dict[str, Any]], Awaitable[None]]
-TurnKey = tuple[str, str]
+_TurnState = TurnState
 
 APPROVAL_METHODS = {
     "item/commandExecution/requestApproval",
@@ -134,15 +147,12 @@ def is_missing_thread_error(exc: Exception) -> bool:
     return any(marker in message for marker in _MISSING_THREAD_MARKERS)
 
 
-@dataclass
-class TurnResult:
-    turn_id: str
-    status: Optional[str]
-    final_message: str
-    agent_messages: list[str]
-    errors: list[str]
-    raw_events: list[Dict[str, Any]]
-    commentary_messages: list[str] = field(default_factory=list)
+def _extract_agent_message_text(item: Any) -> Optional[str]:
+    return _protocol_extract_agent_message_text(item)
+
+
+def _extract_agent_message_phase(item: Any) -> Optional[str]:
+    return _protocol_extract_agent_message_phase(item)
 
 
 class TurnHandle:
@@ -157,39 +167,6 @@ class TurnHandle:
         return await self._client.wait_for_turn(
             self.turn_id, thread_id=self.thread_id, timeout=timeout
         )
-
-
-@dataclass
-class _TurnState:
-    turn_id: str
-    thread_id: Optional[str]
-    future: asyncio.Future["TurnResult"]
-    agent_messages: list[str] = field(default_factory=list)
-    commentary_messages: list[str] = field(default_factory=list)
-    final_answer_messages: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
-    raw_events: list[Dict[str, Any]] = field(default_factory=list)
-    status: Optional[str] = None
-    last_event_at: float = field(default_factory=time.monotonic)
-    last_method: Optional[str] = None
-    recovery_attempts: int = 0
-    last_recovery_at: float = 0.0
-    agent_message_deltas: Dict[str, str] = field(default_factory=dict)
-    turn_completed_seen: bool = False
-    completion_settle_task: Optional[asyncio.Task[None]] = None
-    item_completed_count: int = 0
-    completion_gap_started_at: Optional[float] = None
-    active_item_ids: set[str] = field(default_factory=set)
-    completion_gap_recovery_attempts: int = 0
-    last_completion_gap_recovery_at: float = 0.0
-
-
-@dataclass
-class _ReadLoopState:
-    dropping_oversize: bool = False
-    drain_limit_reached: bool = False
-    oversize_preview: bytearray = field(default_factory=bytearray)
-    oversize_bytes_dropped: int = 0
 
 
 class CodexAppServerClient:
@@ -288,8 +265,21 @@ class CodexAppServerClient:
         self._data_lock: Optional[asyncio.Lock] = None
         self._pending: Dict[str, asyncio.Future[Any]] = {}
         self._pending_methods: Dict[str, str] = {}
-        self._turns: Dict[TurnKey, _TurnState] = {}
-        self._pending_turns: Dict[str, _TurnState] = {}
+        self._turn_state_manager = TurnStateManager(
+            logger=self._logger,
+            output_policy=self._output_policy,
+            completion_settle_seconds=_TURN_COMPLETION_SETTLE_SECONDS,
+            max_turn_raw_events=_MAX_TURN_RAW_EVENTS,
+        )
+        self._turns: Dict[TurnKey, _TurnState] = self._turn_state_manager.turns
+        self._pending_turns: Dict[str, _TurnState] = (
+            self._turn_state_manager.pending_turns
+        )
+        self._approval_adapter = RawApprovalRequestAdapter(
+            approval_handler,
+            default_decision=default_approval_decision,
+        )
+        self._notification_adapter = RawNotificationAdapter(notification_handler)
         self._next_id: str = str(uuid.uuid4())
         self._initialized = False
         self._initializing = False
@@ -716,7 +706,7 @@ class CodexAppServerClient:
         effective_status = status or state.status
         if (
             effective_status
-            and _status_is_terminal(effective_status)
+            and status_is_terminal(effective_status)
             and not state.future.done()
         ):
             await self._emit_recovered_turn_completed_notification(
@@ -734,7 +724,7 @@ class CodexAppServerClient:
             )
             self._set_turn_result_if_pending(state)
             return
-        if effective_status and not _status_is_terminal(effective_status):
+        if effective_status and not status_is_terminal(effective_status):
             self._reset_completion_gap_recovery(state)
             state.last_event_at = now
             log_event(
@@ -843,7 +833,7 @@ class CodexAppServerClient:
 
         status = self._apply_resume_snapshot(state, snapshot)
 
-        if status and _status_is_terminal(status) and not state.future.done():
+        if status and status_is_terminal(status) and not state.future.done():
             await self._emit_recovered_turn_completed_notification(
                 state, thread_id=thread_id, recovery_source="turn_stall"
             )
@@ -865,21 +855,7 @@ class CodexAppServerClient:
         state: _TurnState,
         snapshot: tuple[Optional[str], list[str], list[str], list[str], list[str]],
     ) -> Optional[str]:
-        status, agent_messages, commentary_messages, final_answer_messages, errors = (
-            snapshot
-        )
-        if agent_messages:
-            state.agent_messages = agent_messages
-            state.commentary_messages = commentary_messages
-            state.final_answer_messages = final_answer_messages
-            # Resume snapshots include full message bodies, so older streaming
-            # deltas from before recovery are stale once we adopt them.
-            state.agent_message_deltas.clear()
-        if errors:
-            state.errors.extend(errors)
-        if status:
-            state.status = status
-        return status
+        return self._turn_state_manager.apply_resume_snapshot(state, snapshot)
 
     async def _emit_recovered_turn_completed_notification(
         self,
@@ -912,13 +888,15 @@ class CodexAppServerClient:
     def _schedule_notification_handler(
         self, message: Dict[str, Any], *, method: str, handled: bool = True
     ) -> None:
-        handler = self._notification_handler
-        if handler is None:
+        if self._notification_handler is None:
+            return
+        envelope = normalize_notification_envelope(message)
+        if envelope is None:
             return
 
         async def _invoke_notification_handler() -> None:
             try:
-                await _maybe_await(handler(message))
+                await self._notification_adapter.notify(envelope)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -945,51 +923,15 @@ class CodexAppServerClient:
         reason: str,
         recovery_status: Optional[str],
     ) -> None:
-        if state.future.done():
-            return
-        max_attempts = self._turn_stall_max_recovery_attempts
-        if max_attempts is None or state.recovery_attempts < max_attempts:
-            return
-
-        error = (
-            "Turn stalled and recovery exhausted: "
-            f"attempts={state.recovery_attempts}, "
-            f"max_attempts={max_attempts}, "
-            f"reason={reason}, "
-            f"last_method={state.last_method or 'unknown'}, "
-            f"status={recovery_status or state.status or 'unknown'}."
-        )
-        state.status = "failed"
-        state.errors.append(error)
-        state.raw_events.append(
-            {
-                "method": "turn/stalledRecoveryExhausted",
-                "params": {
-                    "turnId": turn_id,
-                    "threadId": thread_id,
-                    "reason": reason,
-                    "recoveryAttempts": state.recovery_attempts,
-                    "maxRecoveryAttempts": max_attempts,
-                    "lastMethod": state.last_method,
-                    "status": recovery_status or state.status,
-                    "idleSeconds": round(idle_seconds, 2),
-                },
-            }
-        )
-        log_event(
-            self._logger,
-            logging.ERROR,
-            "app_server.turn_recovery.exhausted",
+        self._turn_state_manager.maybe_fail_stalled_turn(
+            state,
             turn_id=turn_id,
             thread_id=thread_id,
+            idle_seconds=idle_seconds,
             reason=reason,
-            idle_seconds=round(idle_seconds, 2),
-            last_method=state.last_method,
-            status=recovery_status or state.status,
-            recovery_attempts=state.recovery_attempts,
-            max_recovery_attempts=max_attempts,
+            recovery_status=recovery_status,
+            max_attempts=self._turn_stall_max_recovery_attempts,
         )
-        self._set_turn_result_if_pending(state)
 
     def _maybe_fail_completion_gap_turn(
         self,
@@ -1001,57 +943,15 @@ class CodexAppServerClient:
         reason: str,
         recovery_status: Optional[str],
     ) -> None:
-        if state.future.done():
-            return
-        max_attempts = self._turn_stall_max_recovery_attempts
-        if (
-            max_attempts is None
-            or state.completion_gap_recovery_attempts < max_attempts
-        ):
-            return
-
-        error = (
-            "Turn completion-gap recovery exhausted: "
-            f"attempts={state.completion_gap_recovery_attempts}, "
-            f"max_attempts={max_attempts}, "
-            f"reason={reason}, "
-            f"last_method={state.last_method or 'unknown'}, "
-            f"status={recovery_status or state.status or 'unknown'}, "
-            f"item_completed_count={state.item_completed_count}."
-        )
-        state.status = "failed"
-        state.errors.append(error)
-        state.raw_events.append(
-            {
-                "method": "turn/completionGapRecoveryExhausted",
-                "params": {
-                    "turnId": turn_id,
-                    "threadId": thread_id,
-                    "reason": reason,
-                    "recoveryAttempts": state.completion_gap_recovery_attempts,
-                    "maxRecoveryAttempts": max_attempts,
-                    "lastMethod": state.last_method,
-                    "status": recovery_status or state.status,
-                    "completionGapSeconds": round(completion_gap_seconds, 2),
-                    "itemCompletedCount": state.item_completed_count,
-                },
-            }
-        )
-        log_event(
-            self._logger,
-            logging.ERROR,
-            "app_server.turn_completion_gap_recovery.exhausted",
+        self._turn_state_manager.maybe_fail_completion_gap_turn(
+            state,
             turn_id=turn_id,
             thread_id=thread_id,
-            completion_gap_seconds=round(completion_gap_seconds, 2),
-            recovery_attempts=state.completion_gap_recovery_attempts,
-            max_recovery_attempts=max_attempts,
+            completion_gap_seconds=completion_gap_seconds,
             reason=reason,
-            last_method=state.last_method,
-            status=recovery_status or state.status,
-            item_completed_count=state.item_completed_count,
+            recovery_status=recovery_status,
+            max_attempts=self._turn_stall_max_recovery_attempts,
         )
-        self._set_turn_result_if_pending(state)
 
     async def _ensure_process(self) -> None:
         async with self._circuit_breaker.call():
@@ -1201,18 +1101,16 @@ class CodexAppServerClient:
         result: Optional[Any] = None,
         error: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        message: Dict[str, Any] = {}
-        if req_id is not None:
-            message["id"] = req_id
-        if method is not None:
-            message["method"] = method
-        if params is not None:
-            message["params"] = params
-        if result is not None:
-            message["result"] = result
-        if error is not None:
-            message["error"] = error
-        return message
+        return cast(
+            Dict[str, Any],
+            build_message(
+                method,
+                params=params,
+                req_id=req_id,
+                result=result,
+                error=error,
+            ),
+        )
 
     def _next_request_id(self) -> str:
         self._next_id = str(uuid.uuid4())
@@ -1236,25 +1134,20 @@ class CodexAppServerClient:
     async def _read_loop(self) -> None:
         assert self._process is not None
         assert self._process.stdout is not None
-        buffer = bytearray()
-        loop_state = _ReadLoopState()
+        read_buffer = AppServerReadBuffer(
+            max_message_bytes=self._max_message_bytes,
+            oversize_preview_bytes=self._oversize_preview_bytes,
+            max_oversize_drain_bytes=self._max_oversize_drain_bytes,
+            on_payload_line=self._handle_payload_line,
+            on_oversize=self._emit_oversize_warning,
+        )
         try:
             while True:
                 chunk = await self._process.stdout.read(_READ_CHUNK_SIZE)
                 if not chunk:
                     break
-                if loop_state.dropping_oversize:
-                    await self._read_loop_drain_oversize_chunk(
-                        chunk, buffer=buffer, state=loop_state
-                    )
-                else:
-                    await self._read_loop_collect_chunk(
-                        chunk, buffer=buffer, state=loop_state
-                    )
-                if loop_state.dropping_oversize:
-                    continue
-                await self._handle_partial_payload_lines(buffer)
-            await self._finalize_read_loop(buffer, loop_state)
+                await read_buffer.feed(chunk, initializing=self._initializing)
+            await read_buffer.finalize()
         except (
             OSError,
             RuntimeError,
@@ -1266,107 +1159,6 @@ class CodexAppServerClient:
             log_event(self._logger, logging.WARNING, "app_server.read.failed", exc=exc)
         finally:
             await self._handle_disconnect()
-
-    async def _read_loop_collect_chunk(
-        self, chunk: bytes, *, buffer: bytearray, state: _ReadLoopState
-    ) -> None:
-        buffer.extend(chunk)
-        await self._drain_buffer_lines(buffer=buffer)
-        if self._initializing or len(buffer) <= self._max_message_bytes:
-            return
-        oversized = bytes(buffer)
-        buffer.clear()
-        state.dropping_oversize = True
-        await self._read_loop_drain_oversize_chunk(
-            oversized, buffer=buffer, state=state
-        )
-
-    async def _read_loop_drain_oversize_chunk(
-        self, chunk: bytes, *, buffer: bytearray, state: _ReadLoopState
-    ) -> None:
-        newline_index = chunk.find(b"\n")
-        if newline_index == -1:
-            await self._track_oversize_fragment(chunk=chunk, state=state)
-            return
-        before = chunk[: newline_index + 1]
-        after = chunk[newline_index + 1 :]
-        if not state.drain_limit_reached:
-            self._append_oversize_preview(chunk=before, state=state)
-            state.oversize_bytes_dropped += len(before)
-            await self._emit_oversize_warning(
-                bytes_dropped=state.oversize_bytes_dropped,
-                preview=state.oversize_preview,
-            )
-        state.dropping_oversize = False
-        state.drain_limit_reached = False
-        state.oversize_preview = bytearray()
-        state.oversize_bytes_dropped = 0
-        if after:
-            buffer.extend(after)
-            await self._handle_partial_payload_lines(buffer)
-            if len(buffer) > self._max_message_bytes:
-                state.oversize_preview = bytearray(
-                    buffer[: self._oversize_preview_bytes]
-                )
-                state.oversize_bytes_dropped = len(buffer)
-                buffer.clear()
-                state.dropping_oversize = True
-
-    async def _handle_partial_payload_lines(self, buffer: bytearray) -> None:
-        await self._drain_buffer_lines(buffer=buffer)
-
-    async def _track_oversize_fragment(
-        self, *, chunk: bytes, state: _ReadLoopState
-    ) -> None:
-        if state.drain_limit_reached:
-            return
-        self._append_oversize_preview(chunk=chunk, state=state)
-        state.oversize_bytes_dropped += len(chunk)
-        if state.oversize_bytes_dropped >= self._max_oversize_drain_bytes:
-            await self._emit_oversize_warning(
-                bytes_dropped=state.oversize_bytes_dropped,
-                preview=state.oversize_preview,
-                aborted=True,
-                drain_limit=self._max_oversize_drain_bytes,
-            )
-            state.drain_limit_reached = True
-
-    def _append_oversize_preview(self, *, chunk: bytes, state: _ReadLoopState) -> None:
-        if len(state.oversize_preview) >= self._oversize_preview_bytes:
-            return
-        remaining = self._oversize_preview_bytes - len(state.oversize_preview)
-        state.oversize_preview.extend(chunk[:remaining])
-
-    async def _finalize_read_loop(
-        self, buffer: bytearray, state: _ReadLoopState
-    ) -> None:
-        if state.dropping_oversize:
-            if state.oversize_bytes_dropped:
-                await self._emit_oversize_warning(
-                    bytes_dropped=state.oversize_bytes_dropped,
-                    preview=state.oversize_preview,
-                    truncated=True,
-                )
-            return
-        if not buffer:
-            return
-        if len(buffer) > self._max_message_bytes:
-            await self._emit_oversize_warning(
-                bytes_dropped=len(buffer),
-                preview=buffer[: self._oversize_preview_bytes],
-                truncated=True,
-            )
-        else:
-            await self._handle_payload_line(buffer)
-
-    async def _drain_buffer_lines(self, *, buffer: bytearray) -> None:
-        while True:
-            newline_index = buffer.find(b"\n")
-            if newline_index == -1:
-                break
-            line = buffer[:newline_index]
-            del buffer[: newline_index + 1]
-            await self._handle_payload_line(line)
 
     async def _handle_payload_line(self, line: bytes) -> None:
         if not line:
@@ -1579,18 +1371,15 @@ class CodexAppServerClient:
         future.set_result(normalized.result)
 
     async def _handle_server_request(self, message: Dict[str, Any]) -> None:
-        normalized = normalize_server_request(message)
-        if normalized is None:
-            return
-
-        method = normalized.method
-        req_id = normalized.request_id
-        params = normalized.params
-        decoded_request = decode_notification(message)
-        if method in APPROVAL_METHODS:
+        approval = normalize_approval_request(message)
+        method = message.get("method")
+        req_id = message.get("id")
+        if approval is not None:
+            method = approval.method
+            req_id = approval.request_id
             turn_id = (
-                getattr(decoded_request, "turn_id", None)
-                if decoded_request is not None
+                getattr(approval.request, "turn_id", None)
+                if approval.request is not None
                 else None
             )
             log_event(
@@ -1599,39 +1388,37 @@ class CodexAppServerClient:
                 "app_server.approval.requested",
                 request_id=req_id,
                 method=method,
-                turn_id=turn_id or params.get("turnId"),
+                turn_id=turn_id or approval.params.get("turnId"),
             )
-            decision: ApprovalDecision = self._default_approval_decision
-            if self._approval_handler is not None:
-                try:
-                    decision = await _maybe_await(self._approval_handler(message))
-                except (
-                    RuntimeError,
-                    ValueError,
-                    TypeError,
-                    KeyError,
-                    AttributeError,
-                    OSError,
-                    ConnectionError,
-                ) as exc:
-                    log_event(
-                        self._logger,
-                        logging.WARNING,
-                        "app_server.approval.failed",
-                        request_id=req_id,
-                        method=method,
-                        exc=exc,
+            try:
+                decision = await self._approval_adapter.decide(approval)
+            except (
+                RuntimeError,
+                ValueError,
+                TypeError,
+                KeyError,
+                AttributeError,
+                OSError,
+                ConnectionError,
+            ) as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "app_server.approval.failed",
+                    request_id=req_id,
+                    method=method,
+                    exc=exc,
+                )
+                await self._send_message(
+                    self._build_message(
+                        req_id=req_id,
+                        error={
+                            "code": -32001,
+                            "message": "approval handler failed",
+                        },
                     )
-                    await self._send_message(
-                        self._build_message(
-                            req_id=req_id,
-                            error={
-                                "code": -32001,
-                                "message": "approval handler failed",
-                            },
-                        )
-                    )
-                    return
+                )
+                return
             result = decision if isinstance(decision, dict) else {"decision": decision}
             log_event(
                 self._logger,
@@ -1643,6 +1430,8 @@ class CodexAppServerClient:
             )
             await self._send_message(self._build_message(req_id=req_id, result=result))
             return
+        if req_id is None or not isinstance(method, str):
+            return
         await self._send_message(
             self._build_message(
                 req_id=req_id,
@@ -1651,13 +1440,13 @@ class CodexAppServerClient:
         )
 
     async def _handle_notification(self, message: Dict[str, Any]) -> None:
-        normalized = normalize_notification(message)
-        if normalized is None:
+        envelope = normalize_notification_envelope(message)
+        if envelope is None:
             return
 
-        method = normalized.method
-        params = normalized.params
-        decoded_notification = decode_notification(message)
+        method = envelope.method
+        params = envelope.params
+        decoded_notification = envelope.notification
         handled = False
         await self._mark_notification_turn_hint(method=method, params=params)
         handler = self._resolve_notification_handler(method)
@@ -1665,7 +1454,7 @@ class CodexAppServerClient:
             handled = await handler(message, params, decoded_notification)
         if self._notification_handler is not None:
             try:
-                await _maybe_await(self._notification_handler(message))
+                await self._notification_adapter.notify(envelope)
             except (
                 RuntimeError,
                 ValueError,
@@ -1704,31 +1493,17 @@ class CodexAppServerClient:
         *,
         create_pending: bool = True,
     ) -> Optional[_TurnState]:
-        if not turn_id:
-            return None
-        _key, state = await self._find_turn_state(turn_id, thread_id=thread_id)
-        if state is not None:
-            return state
-        if thread_id:
-            return self._ensure_turn_state(turn_id, thread_id)
-        if create_pending:
-            return self._ensure_pending_turn_state(turn_id)
-        return None
+        return self._turn_state_manager.resolve_notification_turn_state(
+            turn_id,
+            thread_id,
+            create_pending=create_pending,
+        )
 
     def _reset_completion_gap_recovery(self, state: _TurnState) -> None:
-        state.completion_gap_started_at = None
-        state.completion_gap_recovery_attempts = 0
-        state.last_completion_gap_recovery_at = 0.0
+        self._turn_state_manager.reset_completion_gap_recovery(state)
 
     def _mark_notification_event(self, *, state: _TurnState, method: str) -> None:
-        now = time.monotonic()
-        state.last_event_at = now
-        state.last_method = method
-        if state.turn_completed_seen:
-            return
-        self._reset_completion_gap_recovery(state)
-        if method == "item/completed":
-            return
+        self._turn_state_manager.mark_notification_event(state=state, method=method)
 
     async def _handle_notification_agent_message_delta(
         self, message: Dict[str, Any], params: dict[str, Any], decoded: Any = None
@@ -1759,7 +1534,7 @@ class CodexAppServerClient:
                 state.agent_message_deltas.get(item_id, "") + delta
             )
         self._mark_notification_event(state=state, method="item/agentMessage/delta")
-        _record_raw_event(state, message)
+        self._turn_state_manager.record_raw_event(state, message)
         if state.turn_completed_seen and not state.future.done():
             self._schedule_turn_completion_settle(state)
         return True
@@ -1783,10 +1558,10 @@ class CodexAppServerClient:
         if state is None:
             return True
         self._mark_notification_event(state=state, method="item/started")
-        item_id = _extract_notification_item_id(params, decoded)
+        item_id = extract_notification_item_id(params, decoded)
         if item_id is not None:
             state.active_item_ids.add(item_id)
-        _record_raw_event(state, message)
+        self._turn_state_manager.record_raw_event(state, message)
         return True
 
     async def _handle_notification_item_completed(
@@ -1872,207 +1647,43 @@ class CodexAppServerClient:
         if data_lock is None:
             raise CodexAppServerProtocolError("data lock unavailable")
         async with data_lock:
-            key = _turn_key(thread_id, turn_id)
-            if key is not None:
-                state = self._turns.get(key)
-                if state is not None:
-                    return key, state
-        matches = [
-            (candidate_key, state)
-            for candidate_key, state in self._turns.items()
-            if candidate_key[1] == turn_id
-        ]
-        if len(matches) == 1:
-            candidate_key, state = matches[0]
-            if key is not None and candidate_key != key:
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "app_server.turn.thread_mismatch",
-                    turn_id=turn_id,
-                    requested_thread_id=thread_id,
-                    actual_thread_id=candidate_key[0],
-                )
-            return candidate_key, state
-        if len(matches) > 1:
-            log_event(
-                self._logger,
-                logging.WARNING,
-                "app_server.turn.ambiguous",
-                turn_id=turn_id,
-                matches=len(matches),
+            return self._turn_state_manager.find_turn_state(
+                turn_id, thread_id=thread_id
             )
-        return None, None
 
     def _ensure_turn_state(self, turn_id: str, thread_id: str) -> _TurnState:
-        key = _turn_key(thread_id, turn_id)
-        if key is None:
-            raise CodexAppServerProtocolError("turn state missing thread id")
-        state = self._turns.get(key)
-        if state is not None:
-            return state
-        loop = asyncio.get_running_loop()
-        future = cast(asyncio.Future[TurnResult], loop.create_future())
-        state = _TurnState(
-            turn_id=turn_id,
-            thread_id=thread_id,
-            future=future,
-        )
-        self._turns[key] = state
-        return state
+        try:
+            return self._turn_state_manager.ensure_turn_state(turn_id, thread_id)
+        except ValueError as exc:
+            raise CodexAppServerProtocolError(str(exc)) from exc
 
     def _ensure_pending_turn_state(self, turn_id: str) -> _TurnState:
-        state = self._pending_turns.get(turn_id)
-        if state is not None:
-            return state
-        loop = asyncio.get_running_loop()
-        future = cast(asyncio.Future[TurnResult], loop.create_future())
-        state = _TurnState(
-            turn_id=turn_id,
-            thread_id=None,
-            future=future,
-        )
-        self._pending_turns[turn_id] = state
-        return state
+        return self._turn_state_manager.ensure_pending_turn_state(turn_id)
 
     def _merge_turn_state(self, target: _TurnState, source: _TurnState) -> None:
-        target_last_event_at = target.last_event_at
-        source_last_event_at = source.last_event_at
-        if not target.agent_messages:
-            target.agent_messages = list(source.agent_messages)
-        else:
-            target.agent_messages.extend(source.agent_messages)
-        if not target.commentary_messages:
-            target.commentary_messages = list(source.commentary_messages)
-        else:
-            target.commentary_messages.extend(source.commentary_messages)
-        if not target.final_answer_messages:
-            target.final_answer_messages = list(source.final_answer_messages)
-        else:
-            target.final_answer_messages.extend(source.final_answer_messages)
-        if source.agent_message_deltas:
-            target.agent_message_deltas.update(source.agent_message_deltas)
-        if not target.raw_events:
-            target.raw_events = list(source.raw_events)
-        else:
-            target.raw_events.extend(source.raw_events)
-        _trim_raw_events(target)
-        if not target.errors:
-            target.errors = list(source.errors)
-        else:
-            target.errors.extend(source.errors)
-        if source.last_event_at > target.last_event_at:
-            target.last_event_at = source.last_event_at
-            target.last_method = source.last_method
-        elif target.last_method is None and source.last_method is not None:
-            target.last_method = source.last_method
-        target.turn_completed_seen = (
-            target.turn_completed_seen or source.turn_completed_seen
-        )
-        target.item_completed_count = max(
-            target.item_completed_count, source.item_completed_count
-        )
-        if source_last_event_at > target_last_event_at:
-            target.completion_gap_started_at = source.completion_gap_started_at
-            target.completion_gap_recovery_attempts = (
-                source.completion_gap_recovery_attempts
-            )
-            target.last_completion_gap_recovery_at = (
-                source.last_completion_gap_recovery_at
-            )
-        elif source_last_event_at == target_last_event_at:
-            if (
-                target.completion_gap_started_at is None
-                or source.completion_gap_started_at is None
-            ):
-                target.completion_gap_started_at = None
-            elif source.completion_gap_started_at is not None:
-                target.completion_gap_started_at = max(
-                    target.completion_gap_started_at,
-                    source.completion_gap_started_at,
-                )
-            target.completion_gap_recovery_attempts = max(
-                target.completion_gap_recovery_attempts,
-                source.completion_gap_recovery_attempts,
-            )
-            target.last_completion_gap_recovery_at = max(
-                target.last_completion_gap_recovery_at,
-                source.last_completion_gap_recovery_at,
-            )
-        if target.turn_completed_seen or source.turn_completed_seen:
-            target.active_item_ids.clear()
-        elif source.active_item_ids:
-            target.active_item_ids.update(source.active_item_ids)
-        if target.status is None and source.status is not None:
-            target.status = source.status
-        if source.future.done() and not target.future.done():
-            self._set_turn_result_if_pending(target)
-            return
-        if source.turn_completed_seen and not target.future.done():
-            self._schedule_turn_completion_settle(target)
-        self._cancel_turn_completion_settle(source)
+        self._turn_state_manager.merge_turn_state(target, source)
 
     def _build_turn_result(self, state: _TurnState) -> TurnResult:
-        return TurnResult(
-            turn_id=state.turn_id,
-            status=state.status,
-            final_message=_final_message_for_result(state, policy=self._output_policy),
-            agent_messages=_agent_messages_for_result(state),
-            commentary_messages=list(state.commentary_messages),
-            errors=list(state.errors),
-            raw_events=list(state.raw_events),
-        )
+        return self._turn_state_manager.build_turn_result(state)
 
     def _cancel_turn_completion_settle(self, state: _TurnState) -> None:
-        settle_task = state.completion_settle_task
-        if settle_task is not None and not settle_task.done():
-            settle_task.cancel()
-        state.completion_settle_task = None
+        self._turn_state_manager.cancel_turn_completion_settle(state)
 
     def _set_turn_result_if_pending(
         self, state: _TurnState, *, cancel_settle_task: bool = True
     ) -> None:
-        if state.future.done():
-            return
-        if cancel_settle_task:
-            self._cancel_turn_completion_settle(state)
-        state.future.set_result(self._build_turn_result(state))
+        self._turn_state_manager.set_turn_result_if_pending(
+            state, cancel_settle_task=cancel_settle_task
+        )
 
     def _schedule_turn_completion_settle(self, state: _TurnState) -> None:
-        if state.future.done():
-            return
-        delay_seconds = max(float(_TURN_COMPLETION_SETTLE_SECONDS), 0.0)
-        if delay_seconds <= 0:
-            self._set_turn_result_if_pending(state)
-            return
-        self._cancel_turn_completion_settle(state)
-
-        async def _finalize_after_settle() -> None:
-            try:
-                await asyncio.sleep(delay_seconds)
-            except asyncio.CancelledError:
-                return
-            state.completion_settle_task = None
-            self._set_turn_result_if_pending(state, cancel_settle_task=False)
-
-        state.completion_settle_task = asyncio.create_task(_finalize_after_settle())
+        self._turn_state_manager.schedule_turn_completion_settle(state)
 
     def _register_turn_state(self, turn_id: str, thread_id: str) -> _TurnState:
-        key = _turn_key(thread_id, turn_id)
-        if key is None:
-            raise CodexAppServerProtocolError("turn/start missing thread id")
-        pending = self._pending_turns.pop(turn_id, None)
-        state = self._turns.get(key)
-        if pending is not None:
-            if state is None:
-                pending.thread_id = thread_id
-                self._turns[key] = pending
-                return pending
-            self._merge_turn_state(state, pending)
-            return state
-        if state is None:
-            return self._ensure_turn_state(turn_id, thread_id)
-        return state
+        try:
+            return self._turn_state_manager.register_turn_state(turn_id, thread_id)
+        except ValueError as exc:
+            raise CodexAppServerProtocolError(str(exc)) from exc
 
     def _apply_item_completed(
         self,
@@ -2081,48 +1692,7 @@ class CodexAppServerClient:
         params: Any,
         decoded: Any = None,
     ) -> None:
-        item = params.get("item") if isinstance(params, dict) else None
-        item_id = _extract_notification_item_id(params, decoded)
-        matched_active_item_id = item_id if isinstance(item_id, str) else None
-        if item_id is not None:
-            state.active_item_ids.discard(item_id)
-        text: Optional[str] = None
-
-        if isinstance(item, dict) and item.get("type") == "agentMessage":
-            delta_text: Optional[str] = None
-            text = _extract_agent_message_text(item)
-            phase = _extract_agent_message_phase(item)
-            if isinstance(item_id, str):
-                delta_text = state.agent_message_deltas.pop(item_id, None)
-            elif text:
-                matched_active_item_id = _prune_unambiguous_stale_delta(
-                    state.agent_message_deltas, completed_text=text
-                )
-            if not text:
-                text = delta_text
-            _append_agent_message_for_phase(state, text, phase=phase)
-        if item_id is None:
-            _discard_completed_active_item(
-                state.active_item_ids,
-                matched_item_id=matched_active_item_id,
-            )
-        review_text = _extract_review_text(item)
-        if review_text and review_text != text:
-            _append_agent_message(state.agent_messages, review_text)
-        state.item_completed_count += 1
-        if not state.turn_completed_seen:
-            state.completion_gap_started_at = state.last_event_at
-        item_type = item.get("type") if isinstance(item, dict) else None
-        log_event(
-            self._logger,
-            logging.INFO,
-            "app_server.item.completed",
-            turn_id=state.turn_id,
-            thread_id=state.thread_id,
-            item_type=item_type,
-            item_completed_count=state.item_completed_count,
-        )
-        _record_raw_event(state, message)
+        self._turn_state_manager.apply_item_completed(state, message, params, decoded)
 
     def _apply_error(
         self,
@@ -2131,31 +1701,7 @@ class CodexAppServerClient:
         params: Any,
         decoded: Any = None,
     ) -> None:
-        error_message = getattr(decoded, "message", None) or _extract_error_message(
-            params
-        )
-        if error_message:
-            state.errors.append(error_message)
-        error_payload = params.get("error") if isinstance(params, dict) else None
-        error_code = getattr(decoded, "code", None)
-        if error_code is None:
-            error_code = (
-                error_payload.get("code") if isinstance(error_payload, dict) else None
-            )
-        will_retry = getattr(decoded, "will_retry", None)
-        if will_retry is None and isinstance(params, dict):
-            will_retry = params.get("willRetry")
-        log_event(
-            self._logger,
-            logging.WARNING,
-            "app_server.turn_error",
-            turn_id=state.turn_id,
-            thread_id=state.thread_id,
-            message=error_message,
-            code=error_code,
-            will_retry=will_retry,
-        )
-        _record_raw_event(state, message)
+        self._turn_state_manager.apply_error(state, message, params, decoded)
 
     def _apply_turn_completed(
         self,
@@ -2164,34 +1710,7 @@ class CodexAppServerClient:
         params: Any,
         decoded: Any = None,
     ) -> None:
-        _record_raw_event(state, message)
-        status = getattr(decoded, "status", None)
-        if status is None and isinstance(params, dict):
-            status = params.get("status")
-            if status is None and isinstance(params.get("turn"), dict):
-                turn_status = params["turn"].get("status")
-                if isinstance(turn_status, dict):
-                    status = turn_status.get("type") or turn_status.get("status")
-                elif isinstance(turn_status, str):
-                    status = turn_status
-        state.status = status if status is not None else state.status
-        log_event(
-            self._logger,
-            logging.INFO,
-            "app_server.turn.completed",
-            turn_id=state.turn_id,
-            thread_id=state.thread_id,
-            status=state.status,
-        )
-        state.turn_completed_seen = True
-        state.active_item_ids.clear()
-        state.completion_gap_started_at = None
-        if _status_prefers_completion_settle(state.status) or not _status_is_terminal(
-            state.status
-        ):
-            self._schedule_turn_completion_settle(state)
-            return
-        self._set_turn_result_if_pending(state)
+        self._turn_state_manager.apply_turn_completed(state, message, params, decoded)
 
     async def _handle_disconnect(self) -> None:
         self._initialized = False
@@ -2576,56 +2095,6 @@ def _preview_excerpt(text: str, limit: int = 256) -> str:
     return f"{normalized[:limit].rstrip()}..."
 
 
-def _turn_key(thread_id: Optional[str], turn_id: Optional[str]) -> Optional[TurnKey]:
-    if not thread_id or not turn_id:
-        return None
-    return (thread_id, turn_id)
-
-
-def _extract_review_text(item: Any) -> Optional[str]:
-    if not isinstance(item, dict):
-        return None
-    exited = item.get("exitedReviewMode")
-    if isinstance(exited, dict):
-        review = exited.get("review")
-        if isinstance(review, str) and review.strip():
-            return review
-    if item.get("type") == "review":
-        text = item.get("text")
-        if isinstance(text, str) and text.strip():
-            return text
-    review = item.get("review")
-    if isinstance(review, str) and review.strip():
-        return review
-    return None
-
-
-def _extract_error_message(payload: Any) -> Optional[str]:
-    if not isinstance(payload, dict):
-        return None
-    error = payload.get("error")
-    message: Optional[str] = None
-    details: Optional[str] = None
-    if isinstance(error, dict):
-        raw_message = error.get("message")
-        if isinstance(raw_message, str):
-            message = raw_message.strip() or None
-        raw_details = error.get("additionalDetails") or error.get("details")
-        if isinstance(raw_details, str):
-            details = raw_details.strip() or None
-    elif isinstance(error, str):
-        message = error.strip() or None
-    if message is None:
-        fallback = payload.get("message")
-        if isinstance(fallback, str):
-            message = fallback.strip() or None
-    if details and details != message:
-        if message:
-            return f"{message} ({details})"
-        return details
-    return message
-
-
 _SANDBOX_POLICY_CANONICAL = {
     "dangerfullaccess": "dangerFullAccess",
     "readonly": "readOnly",
@@ -2663,183 +2132,11 @@ def _normalize_sandbox_policy_type(raw: str) -> str:
     return canonical or raw.strip()
 
 
-def _extract_notification_item_id(params: Any, decoded: Any = None) -> Optional[str]:
-    item_id = getattr(decoded, "item_id", None)
-    if isinstance(item_id, str):
-        return item_id
-    if not isinstance(params, dict):
-        return None
-    item_id = params.get("itemId")
-    if isinstance(item_id, str):
-        return item_id
-    item = params.get("item")
-    if isinstance(item, dict):
-        nested_item_id = item.get("id")
-        if isinstance(nested_item_id, str):
-            return nested_item_id
-    return None
-
-
-def _append_agent_message(messages: list[str], candidate: Optional[str]) -> None:
-    if not candidate:
-        return
-    if messages and messages[-1] == candidate:
-        return
-    messages.append(candidate)
-
-
-def _append_agent_message_for_phase(
-    state: _TurnState,
-    candidate: Optional[str],
-    *,
-    phase: Optional[str],
-) -> None:
-    if not candidate:
-        return
-    _append_agent_message(state.agent_messages, candidate)
-    if phase == "commentary":
-        _append_agent_message(state.commentary_messages, candidate)
-    elif phase == "final_answer":
-        _append_agent_message(state.final_answer_messages, candidate)
-
-
-def _record_raw_event(state: _TurnState, message: Dict[str, Any]) -> None:
-    state.raw_events.append(message)
-    _trim_raw_events(state)
-
-
-def _trim_raw_events(state: _TurnState) -> None:
-    if len(state.raw_events) > _MAX_TURN_RAW_EVENTS:
-        state.raw_events = state.raw_events[-_MAX_TURN_RAW_EVENTS:]
-
-
-def _agent_message_deltas_as_list(agent_message_deltas: Dict[str, str]) -> list[str]:
-    return [
-        text for text in agent_message_deltas.values() if isinstance(text, str) and text
-    ]
-
-
-def _prune_unambiguous_stale_delta(
-    agent_message_deltas: Dict[str, str], *, completed_text: str
-) -> Optional[str]:
-    cleaned_completed = completed_text.strip()
-    if not cleaned_completed:
-        return None
-    matching_keys = [
-        item_id
-        for item_id, delta_text in agent_message_deltas.items()
-        if isinstance(delta_text, str)
-        and delta_text.strip()
-        and cleaned_completed.startswith(delta_text.strip())
-    ]
-    if len(matching_keys) == 1:
-        matched_item_id = matching_keys[0]
-        agent_message_deltas.pop(matched_item_id, None)
-        return matched_item_id
-    return None
-
-
-def _discard_completed_active_item(
-    active_item_ids: set[str], *, matched_item_id: Optional[str]
-) -> None:
-    if matched_item_id is not None:
-        active_item_ids.discard(matched_item_id)
-        return
-    if len(active_item_ids) == 1:
-        active_item_ids.clear()
-
-
-def _agent_messages_for_result(state: _TurnState) -> list[str]:
-    messages = list(state.agent_messages)
-    pending_deltas = _agent_message_deltas_as_list(state.agent_message_deltas)
-    if not messages:
-        return pending_deltas
-    for text in pending_deltas:
-        if not isinstance(text, str):
-            continue
-        candidate = text.strip()
-        if not candidate:
-            continue
-        last = messages[-1].strip() if isinstance(messages[-1], str) else ""
-        if last == candidate:
-            continue
-        messages.append(candidate)
-    return messages
-
-
 def _normalize_output_policy(policy: Optional[str]) -> str:
     candidate = str(policy or "").strip().lower()
     if candidate in _OUTPUT_POLICIES:
         return candidate
     return _DEFAULT_OUTPUT_POLICY
-
-
-def _final_message_for_result(state: _TurnState, *, policy: str) -> str:
-    final_answers = [
-        msg.strip()
-        for msg in state.final_answer_messages
-        if isinstance(msg, str) and msg.strip()
-    ]
-    if final_answers:
-        if policy == "all_agent_messages":
-            return "\n\n".join(
-                msg.strip()
-                for msg in _agent_messages_for_result(state)
-                if isinstance(msg, str) and msg.strip()
-            )
-        return final_answers[-1]
-    messages = _agent_messages_for_result(state)
-    cleaned = [msg.strip() for msg in messages if isinstance(msg, str) and msg.strip()]
-    if not cleaned:
-        return ""
-    if policy == "all_agent_messages":
-        return "\n\n".join(cleaned)
-    return cleaned[-1]
-
-
-def _extract_status_value(value: Any) -> Optional[str]:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("type", "status", "state"):
-            candidate = value.get(key)
-            if isinstance(candidate, str):
-                return candidate
-    return None
-
-
-def _status_is_terminal(status: Any) -> bool:
-    normalized = _extract_status_value(status)
-    if not isinstance(normalized, str):
-        return False
-    normalized = normalized.lower()
-    return normalized in {
-        "completed",
-        "complete",
-        "done",
-        "failed",
-        "error",
-        "errored",
-        "cancelled",
-        "canceled",
-        "interrupted",
-        "stopped",
-        "success",
-        "succeeded",
-    }
-
-
-def _status_prefers_completion_settle(status: Any) -> bool:
-    normalized = _extract_status_value(status)
-    if not isinstance(normalized, str):
-        return False
-    return normalized.lower() in {
-        "completed",
-        "complete",
-        "done",
-        "success",
-        "succeeded",
-    }
 
 
 @no_type_check

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import APIRouter, HTTPException
 
 from ...schemas import (
+    HubAgentWorkspaceListResponse,
+    HubAgentWorkspaceMutationResponse,
+    HubAgentWorkspaceResponse,
+    HubAgentWorkspaceSummaryResponse,
     HubCreateAgentWorkspaceRequest,
     HubDeleteAgentWorkspaceRequest,
     HubDestinationSetRequest,
@@ -37,6 +41,13 @@ class HubAgentWorkspaceService:
             )
         return manifest, workspace
 
+    def _serialize_agent_workspace_snapshot(
+        self, snapshot: Any
+    ) -> HubAgentWorkspaceSummaryResponse:
+        return HubAgentWorkspaceSummaryResponse.model_validate(
+            snapshot.to_dict(self._context.config.root)
+        )
+
     def _workspace_payload(self, workspace_id: str) -> dict[str, Any]:
         from .....core.destinations import (
             resolve_effective_agent_workspace_destination,
@@ -44,15 +55,64 @@ class HubAgentWorkspaceService:
 
         manifest, workspace = self._load_workspace(workspace_id)
         snapshot = self._context.supervisor.get_agent_workspace_snapshot(workspace_id)
-        payload = snapshot.to_dict(self._context.config.root)
         resolution = resolve_effective_agent_workspace_destination(workspace)
-        payload["configured_destination"] = workspace.destination
-        payload["source"] = "configured" if workspace.destination else "default"
-        payload["issues"] = [
-            *manifest.issues_for_repo(workspace.id),
-            *list(resolution.issues or ()),
+        response = HubAgentWorkspaceResponse(
+            **self._serialize_agent_workspace_snapshot(snapshot).model_dump(),
+            configured_destination=workspace.destination,
+            source="configured" if workspace.destination else "default",
+            issues=[
+                *manifest.issues_for_repo(workspace.id),
+                *list(resolution.issues or ()),
+            ],
+        )
+        return response.model_dump(exclude_none=True)
+
+    def _build_docker_destination_payload(
+        self, payload: HubDestinationSetRequest
+    ) -> dict[str, Any]:
+        destination: dict[str, Any] = {
+            "kind": "docker",
+            "image": (payload.image or "").strip(),
+        }
+        optional_text_fields = {
+            "container_name": payload.container_name,
+            "profile": payload.profile,
+            "workdir": payload.workdir,
+        }
+        for key, raw_value in optional_text_fields.items():
+            value = (raw_value or "").strip()
+            if value:
+                destination[key] = value
+
+        env_passthrough = [
+            str(item).strip()
+            for item in (payload.env_passthrough or [])
+            if str(item).strip()
         ]
-        return cast(dict[str, Any], payload)
+        if env_passthrough:
+            destination["env_passthrough"] = env_passthrough
+        if payload.env:
+            destination["env"] = dict(payload.env)
+
+        mounts = [self._normalize_mount_payload(item) for item in payload.mounts or []]
+        if mounts:
+            destination["mounts"] = mounts
+        return destination
+
+    def _normalize_mount_payload(self, item: Any) -> dict[str, Any]:
+        raw_item = item if isinstance(item, dict) else {}
+        mount_payload: dict[str, Any] = {
+            "source": str(raw_item.get("source") or ""),
+            "target": str(raw_item.get("target") or ""),
+        }
+        read_only = raw_item.get("read_only")
+        if read_only is None and "readOnly" in raw_item:
+            read_only = raw_item.get("readOnly")
+        if read_only is None and "readonly" in raw_item:
+            read_only = raw_item.get("readonly")
+        if read_only is not None:
+            mount_payload["read_only"] = read_only
+        return mount_payload
 
     def _normalize_destination_payload(
         self, payload: HubDestinationSetRequest
@@ -60,44 +120,10 @@ class HubAgentWorkspaceService:
         from .....core.destinations import validate_destination_write_payload
 
         normalized_kind = payload.kind.strip().lower()
-        destination: dict[str, Any]
         if normalized_kind == "local":
-            destination = {"kind": "local"}
+            destination: dict[str, Any] = {"kind": "local"}
         elif normalized_kind == "docker":
-            destination = {"kind": "docker", "image": (payload.image or "").strip()}
-            container_name = (payload.container_name or "").strip()
-            if container_name:
-                destination["container_name"] = container_name
-            profile = (payload.profile or "").strip()
-            if profile:
-                destination["profile"] = profile
-            workdir = (payload.workdir or "").strip()
-            if workdir:
-                destination["workdir"] = workdir
-            env_passthrough = [
-                str(item).strip()
-                for item in (payload.env_passthrough or [])
-                if str(item).strip()
-            ]
-            if env_passthrough:
-                destination["env_passthrough"] = env_passthrough
-            if payload.env:
-                destination["env"] = dict(payload.env)
-            mounts: list[dict[str, Any]] = []
-            for item in payload.mounts or []:
-                source = str((item or {}).get("source") or "")
-                target = str((item or {}).get("target") or "")
-                mount_payload: dict[str, Any] = {"source": source, "target": target}
-                read_only = (item or {}).get("read_only")
-                if read_only is None and "readOnly" in (item or {}):
-                    read_only = (item or {}).get("readOnly")
-                if read_only is None and "readonly" in (item or {}):
-                    read_only = (item or {}).get("readonly")
-                if read_only is not None:
-                    mount_payload["read_only"] = read_only
-                mounts.append(mount_payload)
-            if mounts:
-                destination["mounts"] = mounts
+            destination = self._build_docker_destination_payload(payload)
         else:
             raise HTTPException(
                 status_code=400,
@@ -119,11 +145,13 @@ class HubAgentWorkspaceService:
         workspaces = await asyncio.to_thread(
             self._context.supervisor.list_agent_workspaces, use_cache=False
         )
-        return {
-            "agent_workspaces": [
-                workspace.to_dict(self._context.config.root) for workspace in workspaces
+        response = HubAgentWorkspaceListResponse(
+            agent_workspaces=[
+                self._serialize_agent_workspace_snapshot(workspace)
+                for workspace in workspaces
             ]
-        }
+        )
+        return response.model_dump(exclude_none=True)
 
     async def create_agent_workspace(
         self, payload: HubCreateAgentWorkspaceRequest
@@ -152,7 +180,7 @@ class HubAgentWorkspaceService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return cast(dict[str, Any], snapshot.to_dict(self._context.config.root))
+        return self._serialize_agent_workspace_snapshot(snapshot).model_dump()
 
     async def create_agent_workspace_job(
         self, payload: HubCreateAgentWorkspaceRequest
@@ -253,7 +281,11 @@ class HubAgentWorkspaceService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"status": "ok", "workspace_id": workspace_id, "delete_dir": False}
+        return HubAgentWorkspaceMutationResponse(
+            status="ok",
+            workspace_id=workspace_id,
+            delete_dir=False,
+        ).model_dump()
 
     async def remove_agent_workspace_job(
         self,
@@ -301,7 +333,11 @@ class HubAgentWorkspaceService:
             )
         except (ValueError, OSError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"status": "ok", "workspace_id": workspace_id, "delete_dir": True}
+        return HubAgentWorkspaceMutationResponse(
+            status="ok",
+            workspace_id=workspace_id,
+            delete_dir=True,
+        ).model_dump()
 
     async def delete_agent_workspace_job(
         self,
@@ -336,11 +372,14 @@ def build_hub_agent_workspace_router(context: HubAppContext) -> APIRouter:
     router = APIRouter()
     service = HubAgentWorkspaceService(context)
 
-    @router.get("/hub/agent-workspaces")
+    @router.get("/hub/agent-workspaces", response_model=HubAgentWorkspaceListResponse)
     async def list_agent_workspaces():
         return await service.list_agent_workspaces()
 
-    @router.post("/hub/agent-workspaces")
+    @router.post(
+        "/hub/agent-workspaces",
+        response_model=HubAgentWorkspaceSummaryResponse,
+    )
     async def create_agent_workspace(payload: HubCreateAgentWorkspaceRequest):
         return await service.create_agent_workspace(payload)
 
@@ -348,27 +387,42 @@ def build_hub_agent_workspace_router(context: HubAppContext) -> APIRouter:
     async def create_agent_workspace_job(payload: HubCreateAgentWorkspaceRequest):
         return await service.create_agent_workspace_job(payload)
 
-    @router.get("/hub/agent-workspaces/{workspace_id}")
+    @router.get(
+        "/hub/agent-workspaces/{workspace_id}",
+        response_model=HubAgentWorkspaceResponse,
+    )
     async def get_agent_workspace(workspace_id: str):
         return await service.get_agent_workspace(workspace_id)
 
-    @router.patch("/hub/agent-workspaces/{workspace_id}")
+    @router.patch(
+        "/hub/agent-workspaces/{workspace_id}",
+        response_model=HubAgentWorkspaceResponse,
+    )
     async def update_agent_workspace(
         workspace_id: str, payload: HubUpdateAgentWorkspaceRequest
     ):
         return await service.update_agent_workspace(workspace_id, payload)
 
-    @router.get("/hub/agent-workspaces/{workspace_id}/destination")
+    @router.get(
+        "/hub/agent-workspaces/{workspace_id}/destination",
+        response_model=HubAgentWorkspaceResponse,
+    )
     async def get_agent_workspace_destination(workspace_id: str):
         return await service.get_agent_workspace_destination(workspace_id)
 
-    @router.post("/hub/agent-workspaces/{workspace_id}/destination")
+    @router.post(
+        "/hub/agent-workspaces/{workspace_id}/destination",
+        response_model=HubAgentWorkspaceResponse,
+    )
     async def set_agent_workspace_destination(
         workspace_id: str, payload: HubDestinationSetRequest
     ):
         return await service.set_agent_workspace_destination(workspace_id, payload)
 
-    @router.post("/hub/agent-workspaces/{workspace_id}/remove")
+    @router.post(
+        "/hub/agent-workspaces/{workspace_id}/remove",
+        response_model=HubAgentWorkspaceMutationResponse,
+    )
     async def remove_agent_workspace(
         workspace_id: str, payload: Optional[HubRemoveAgentWorkspaceRequest] = None
     ):
@@ -383,7 +437,10 @@ def build_hub_agent_workspace_router(context: HubAppContext) -> APIRouter:
     ):
         return await service.remove_agent_workspace_job(workspace_id, payload)
 
-    @router.post("/hub/agent-workspaces/{workspace_id}/delete")
+    @router.post(
+        "/hub/agent-workspaces/{workspace_id}/delete",
+        response_model=HubAgentWorkspaceMutationResponse,
+    )
     async def delete_agent_workspace(
         workspace_id: str, payload: Optional[HubDeleteAgentWorkspaceRequest] = None
     ):

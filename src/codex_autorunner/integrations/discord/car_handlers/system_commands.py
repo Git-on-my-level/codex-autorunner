@@ -19,7 +19,6 @@ from ....core.update_paths import resolve_update_paths
 from ....core.update_targets import get_update_target_label
 from ....core.utils import canonicalize_path
 from ...chat.constants import TOPIC_NOT_BOUND_DISCORD_MESSAGE
-from ...chat.update_notifier import format_update_status_message
 from ..components import (
     DISCORD_BUTTON_STYLE_DANGER,
     build_action_row,
@@ -28,6 +27,11 @@ from ..components import (
 )
 from ..rendering import (
     format_discord_message,
+)
+from ..service_normalization import (
+    DiscordMessagePayload,
+    DiscordUpdateNoticeContext,
+    format_discord_update_status_message,
 )
 
 UPDATE_TARGET_SELECT_ID = "update_target_select"
@@ -114,17 +118,7 @@ def _update_status_path(service: Any) -> Path:
 def _format_update_status_message(
     service: Any, status: Optional[dict[str, Any]]
 ) -> str:
-    rendered = format_update_status_message(status)
-    if not status:
-        return rendered
-    lines = [rendered]
-    repo_ref = status.get("repo_ref")
-    if isinstance(repo_ref, str) and repo_ref.strip():
-        lines.append(f"Ref: {repo_ref.strip()}")
-    log_path = status.get("log_path")
-    if isinstance(log_path, str) and log_path.strip():
-        lines.append(f"Log: {log_path.strip()}")
-    return "\n".join(lines)
+    return format_discord_update_status_message(status)
 
 
 def _dynamic_update_target_definitions(service: Any):
@@ -149,16 +143,12 @@ def _dynamic_update_target_definitions(service: Any):
 async def _send_update_status_notice(
     service: Any, notify_context: dict[str, Any], text: str
 ) -> None:
-    channel_raw = notify_context.get("chat_id")
-    if isinstance(channel_raw, int) and not isinstance(channel_raw, bool):
-        channel_id = str(channel_raw)
-    elif isinstance(channel_raw, str) and channel_raw.strip():
-        channel_id = channel_raw.strip()
-    else:
+    context = DiscordUpdateNoticeContext.from_raw(notify_context)
+    if context is None:
         return
     await service._send_channel_message_safe(
-        channel_id,
-        {"content": format_discord_message(text)},
+        context.chat_id,
+        DiscordMessagePayload(content=text).to_payload(),
     )
 
 

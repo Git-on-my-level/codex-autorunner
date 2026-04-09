@@ -255,6 +255,190 @@ def test_pma_active_help_shows_json_option():
     assert "--json" in output, "PMA active should support --json output mode"
 
 
+def test_pma_tail_snapshot_render_lines_use_typed_serializer() -> None:
+    snapshot = pma_cli._PmaTailSnapshot.from_dict(
+        {
+            "managed_turn_id": "turn-9",
+            "turn_status": "running",
+            "activity": "waiting",
+            "phase": "tool",
+            "elapsed_seconds": 125,
+            "idle_seconds": 35,
+            "guidance": "waiting on tool",
+            "active_turn_diagnostics": {
+                "request_kind": "message",
+                "model": "gpt-5",
+                "reasoning": "low",
+                "stream_available": True,
+                "stalled": True,
+                "stall_reason": "tool timeout",
+            },
+            "last_tool": {
+                "name": "status-check",
+                "status": "running",
+                "in_flight": True,
+            },
+            "lifecycle_events": ["turn_started", "tool_invoked"],
+            "events": [],
+        }
+    )
+
+    assert snapshot.render_lines() == [
+        "turn=turn-9 status=running activity=waiting phase=tool elapsed=2m05s idle=35s",
+        "guidance: waiting on tool",
+        "active_turn: kind=message model=gpt-5 reasoning=low stream=yes stalled=yes",
+        "stall_reason: tool timeout",
+        "last_tool=status-check status=running in_flight=yes",
+        "lifecycle: turn_started, tool_invoked",
+        "No tail events.",
+        "No events for 35s (possibly stalled).",
+    ]
+
+
+def test_pma_thread_status_snapshot_render_lines_include_queue_and_excerpt() -> None:
+    snapshot = pma_cli._PmaThreadStatusSnapshot.from_dict(
+        {
+            "managed_thread_id": "thread-1",
+            "thread": {
+                "agent": "codex",
+                "repo_id": "repo-1",
+                "status": "completed",
+                "lifecycle_status": "active",
+                "status_reason": "managed_turn_completed",
+            },
+            "status": "completed",
+            "status_reason": "managed_turn_completed",
+            "is_alive": True,
+            "turn": {
+                "managed_turn_id": "turn-1",
+                "status": "ok",
+                "activity": "completed",
+                "phase": "finalize",
+                "elapsed_seconds": 61,
+                "idle_seconds": 0,
+                "guidance": "wrap up",
+                "last_tool": {
+                    "name": "status-check",
+                    "status": "ok",
+                    "in_flight": False,
+                },
+            },
+            "active_turn_diagnostics": {
+                "request_kind": "message",
+                "model": "gpt-5",
+                "reasoning": "high",
+                "stream_available": True,
+                "stalled": False,
+                "last_event_at": "2026-03-17T10:11:12Z",
+                "last_event_type": "tool_completed",
+                "last_event_summary": "tool: status-check",
+            },
+            "recent_progress": [
+                {
+                    "event_type": "assistant_output",
+                    "summary": "Drafted a reply",
+                    "received_at": "2026-03-17T10:11:13Z",
+                    "event_id": 3,
+                }
+            ],
+            "queue_depth": 2,
+            "queued_turns": [
+                {
+                    "managed_turn_id": "turn-2",
+                    "enqueued_at": "2026-03-17T10:12:00Z",
+                    "prompt_preview": "follow up on the same thread",
+                }
+            ],
+            "latest_output_excerpt": "assistant conclusion",
+        }
+    )
+
+    lines = snapshot.render_lines()
+
+    assert (
+        "id=thread-1 agent=codex repo=repo-1 status=reusable last_turn=completed alive=yes"
+        in lines
+    )
+    assert "reason=managed_turn_completed" in lines
+    assert (
+        "turn=turn-1 status=ok activity=completed phase=finalize elapsed=1m01s idle=0s"
+        in lines
+    )
+    assert "guidance: wrap up" in lines
+    assert (
+        "active_turn: kind=message model=gpt-5 reasoning=high stream=yes stalled=no"
+        in lines
+    )
+    assert "last_event: tool_completed @10:11:12 tool: status-check" in lines
+    assert "last_tool=status-check status=ok in_flight=no" in lines
+    assert "recent progress:" in lines
+    assert "[10:11:13] #3 assistant_output: Drafted a reply" in lines
+    assert "queued=2" in lines
+    assert (
+        "queued_turn=turn-2 enqueued=2026-03-17T10:12:00Z prompt=follow up on the same thread"
+        in lines
+    )
+    assert lines[-2:] == ["latest output:", "assistant conclusion"]
+
+
+def test_pma_thread_send_request_and_response_helpers() -> None:
+    request = pma_cli._ManagedThreadSendRequest(
+        message="follow up",
+        busy_policy="interrupt",
+        defer_execution=True,
+        model="gpt-5",
+        reasoning="high",
+        notify_on="terminal",
+        notify_lane="lane-1",
+        notify_once=False,
+    )
+
+    assert request.to_payload() == {
+        "message": "follow up",
+        "busy_policy": "interrupt",
+        "defer_execution": True,
+        "model": "gpt-5",
+        "reasoning": "high",
+        "notify_on": "terminal",
+        "notify_lane": "lane-1",
+        "notify_once": False,
+    }
+
+    response = pma_cli._ManagedThreadSendResponse.from_http(
+        200,
+        {
+            "status": "ok",
+            "send_state": "accepted",
+            "execution_state": "running",
+            "managed_turn_id": "turn-2",
+            "active_managed_turn_id": "turn-1",
+            "queue_depth": "1",
+            "delivered_message": "follow up",
+        },
+        default_message="fallback",
+    )
+    error_response = pma_cli._ManagedThreadSendResponse.from_http(
+        409,
+        {
+            "status": "error",
+            "send_state": "rejected",
+            "detail": "Managed thread send failed",
+            "next_step": "wait for the active turn",
+        },
+        default_message="fallback",
+    )
+
+    assert response.is_ok is True
+    assert response.accepted_line() == (
+        "send_state=accepted managed_turn_id=turn-2 "
+        "active_managed_turn_id=turn-1 queue_depth=1"
+    )
+    assert response.delivered_message == "follow up"
+    assert error_response.is_ok is False
+    assert error_response.error_detail() == "Managed thread send failed"
+    assert error_response.next_step == "wait for the active turn"
+
+
 def test_pma_hygiene_help_shows_apply_and_category_options():
     runner = CliRunner()
     result = runner.invoke(pma_app, ["hygiene", "--help"])

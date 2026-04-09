@@ -1,0 +1,20 @@
+# ruff: noqa: F401
+
+import pytest
+from tests.discord_message_turns_support import (
+    test_car_review_single_chunk_deletes_preview_and_sends_chunk_when_flush_fails,
+    test_car_session_compact_places_continue_button_on_last_chunk_without_preview,
+    test_car_session_compact_reuses_preview_without_part_numbering,
+    test_discord_harness_factory_accepts_profile,
+    test_discord_managed_thread_coordinator_prefers_started_execution_error,
+    test_discord_managed_thread_coordinator_uses_started_execution_preview,
+    test_discord_managed_thread_queue_worker_formats_local_file_links,
+    test_discord_managed_thread_queue_worker_sends_placeholder_for_empty_reply,
+    test_message_create_enqueues_outbox_when_channel_send_fails,
+    test_reset_discord_thread_binding_preserves_logical_hermes_profile,
+    test_resolve_discord_thread_target_reuses_archived_managed_thread,
+    test_resolve_discord_thread_target_reuses_legacy_hermes_runtime_alias_thread,
+    test_resolve_discord_thread_target_stores_agent_profile_in_metadata,
+)
+
+pytestmark = pytest.mark.slow

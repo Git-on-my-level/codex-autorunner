@@ -101,8 +101,11 @@ from ..state import (
     topic_key,
 )
 from ..types import (
+    CompactStatusState,
     ModelPickerState,
     SelectionState,
+    TelegramNoticeContext,
+    UpdateConfirmState,
 )
 
 if TYPE_CHECKING:
@@ -2789,7 +2792,7 @@ Summary applied.""",
         update_target: Optional[str] = None,
     ) -> None:
         key = await self._resolve_topic_key(message.chat_id, message.thread_id)
-        self._update_confirm_options[key] = {"target": update_target}
+        self._update_confirm_options[key] = UpdateConfirmState(target=update_target)
         self._touch_cache_timestamp("update_confirm_options", key)
         prompt = (
             _format_update_confirmation_warning(
@@ -2842,14 +2845,13 @@ Summary applied.""",
         timeout_seconds: float = 300.0,
         interval_seconds: float = 2.0,
     ) -> None:
-        notify_context: dict[str, Any] = {
-            "chat_id": chat_id,
-            "thread_id": thread_id,
-        }
-        if reply_to is not None:
-            notify_context["reply_to"] = reply_to
+        notify_context = TelegramNoticeContext(
+            chat_id=chat_id,
+            thread_id=thread_id,
+            reply_to=reply_to,
+        )
         self._update_status_notifier.schedule_watch(
-            notify_context,
+            notify_context.to_payload(),
             timeout_seconds=timeout_seconds,
             interval_seconds=interval_seconds,
         )
@@ -2857,20 +2859,14 @@ Summary applied.""",
     async def _send_update_status_notice(
         self, notify_context: dict[str, Any], text: str
     ) -> None:
-        chat_id = notify_context.get("chat_id")
-        if not isinstance(chat_id, int) or isinstance(chat_id, bool):
+        context = TelegramNoticeContext.from_payload(notify_context)
+        if context is None:
             return
-        thread_id = notify_context.get("thread_id")
-        if not isinstance(thread_id, int) or isinstance(thread_id, bool):
-            thread_id = None
-        reply_to = notify_context.get("reply_to")
-        if not isinstance(reply_to, int) or isinstance(reply_to, bool):
-            reply_to = None
         await self._send_message(
-            chat_id,
+            context.chat_id,
             text,
-            thread_id=thread_id,
-            reply_to=reply_to,
+            thread_id=context.thread_id,
+            reply_to=context.reply_to,
         )
 
     def _mark_update_notified(self, status: dict[str, Any]) -> None:
@@ -2884,7 +2880,7 @@ Summary applied.""",
     def _compact_status_path(self) -> Path:
         return resolve_update_paths().compact_status_path
 
-    def _read_compact_status(self) -> Optional[dict[str, Any]]:
+    def _read_compact_status(self) -> Optional[CompactStatusState]:
         path = self._compact_status_path()
         if not path.exists():
             return None
@@ -2892,21 +2888,60 @@ Summary applied.""",
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError, ValueError):
             return None
-        return data if isinstance(data, dict) else None
+        return CompactStatusState.from_payload(data)
 
     def _write_compact_status(
         self, status: str, message: str, **extra: Any
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "status": status,
-            "message": message,
-            "at": time.time(),
-        }
-        payload.update(extra)
+    ) -> CompactStatusState:
+        payload = CompactStatusState(
+            status=status,
+            message=message,
+            at=time.time(),
+            chat_id=(
+                extra["chat_id"]
+                if isinstance(extra.get("chat_id"), int)
+                and not isinstance(extra.get("chat_id"), bool)
+                else None
+            ),
+            thread_id=(
+                extra["thread_id"]
+                if isinstance(extra.get("thread_id"), int)
+                and not isinstance(extra.get("thread_id"), bool)
+                else None
+            ),
+            message_id=(
+                extra["message_id"]
+                if isinstance(extra.get("message_id"), int)
+                and not isinstance(extra.get("message_id"), bool)
+                else None
+            ),
+            display_text=(
+                extra["display_text"]
+                if isinstance(extra.get("display_text"), str)
+                else None
+            ),
+            error_detail=(
+                extra["error_detail"]
+                if isinstance(extra.get("error_detail"), str)
+                else None
+            ),
+            started_at=(
+                float(extra["started_at"])
+                if isinstance(extra.get("started_at"), (int, float))
+                and not isinstance(extra.get("started_at"), bool)
+                else None
+            ),
+            notify_sent_at=(
+                float(extra["notify_sent_at"])
+                if isinstance(extra.get("notify_sent_at"), (int, float))
+                and not isinstance(extra.get("notify_sent_at"), bool)
+                else None
+            ),
+        )
         path = self._compact_status_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(payload), encoding="utf-8")
+            path.write_text(json.dumps(payload.to_payload()), encoding="utf-8")
         except (OSError, TypeError) as exc:
             log_event(
                 self._logger,
@@ -2916,12 +2951,11 @@ Summary applied.""",
             )
         return payload
 
-    def _mark_compact_notified(self, status: dict[str, Any]) -> None:
+    def _mark_compact_notified(self, status: CompactStatusState) -> None:
         path = self._compact_status_path()
-        updated = dict(status)
-        updated["notify_sent_at"] = time.time()
+        updated = status.with_notify_sent_at(time.time())
         try:
-            path.write_text(json.dumps(updated), encoding="utf-8")
+            path.write_text(json.dumps(updated.to_payload()), encoding="utf-8")
         except (OSError, TypeError) as exc:
             log_event(
                 self._logger,
@@ -2935,22 +2969,16 @@ Summary applied.""",
 
     async def _maybe_send_compact_status_notice(self) -> None:
         status = self._read_compact_status()
-        if not status or status.get("notify_sent_at"):
+        if not status or status.notify_sent_at is not None:
             return
-        chat_id = status.get("chat_id")
-        if not isinstance(chat_id, int):
+        chat_id = status.chat_id
+        if chat_id is None:
             return
-        thread_id = status.get("thread_id")
-        if not isinstance(thread_id, int):
-            thread_id = None
-        message_id = status.get("message_id")
-        if not isinstance(message_id, int):
-            message_id = None
-        display_text = status.get("display_text")
-        if not isinstance(display_text, str):
-            display_text = None
-        state = str(status.get("status") or "")
-        message = str(status.get("message") or "")
+        thread_id = status.thread_id
+        message_id = status.message_id
+        display_text = status.display_text
+        state = status.status
+        message = status.message
         if state == "running":
             message = "Compact apply interrupted by restart. Please retry."
             status = self._write_compact_status(
@@ -2960,7 +2988,7 @@ Summary applied.""",
                 thread_id=thread_id,
                 message_id=message_id,
                 display_text=display_text,
-                started_at=status.get("at"),
+                started_at=status.at,
             )
         sent = False
         if message_id is not None and display_text is not None and message:

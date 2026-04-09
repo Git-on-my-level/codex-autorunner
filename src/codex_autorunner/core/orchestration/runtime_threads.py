@@ -101,21 +101,26 @@ async def begin_next_queued_runtime_thread_execution(
 ) -> Optional[RuntimeThreadExecution]:
     """Claim and start the next queued execution for a thread target."""
 
-    claimed = service.claim_next_queued_execution_request(thread_target_id)
+    claimed = service.claim_next_queued_execution_context(thread_target_id)
     if claimed is None:
         return None
-    thread, execution, request, _client_request_id, sandbox_policy = claimed
     refreshed, harness = await service._start_claimed_execution_request(
-        thread,
-        request,
-        execution,
-        workspace_root=(Path(thread.workspace_root) if thread.workspace_root else None),
-        sandbox_policy=sandbox_policy,
+        claimed.thread,
+        claimed.request,
+        claimed.execution,
+        workspace_root=(
+            Path(claimed.thread.workspace_root)
+            if claimed.thread.workspace_root
+            else None
+        ),
+        sandbox_policy=claimed.sandbox_policy,
     )
     refreshed_thread = service.get_thread_target(thread_target_id)
     if refreshed_thread is None:
         raise KeyError(f"Unknown thread target '{thread_target_id}' after queue start")
-    resolved_workspace_root = refreshed_thread.workspace_root or thread.workspace_root
+    resolved_workspace_root = (
+        refreshed_thread.workspace_root or claimed.thread.workspace_root
+    )
     if not resolved_workspace_root:
         raise RuntimeError("Thread target is missing workspace_root after queue start")
     return RuntimeThreadExecution(
@@ -124,7 +129,7 @@ async def begin_next_queued_runtime_thread_execution(
         thread=refreshed_thread,
         execution=refreshed,
         workspace_root=Path(resolved_workspace_root),
-        request=request,
+        request=claimed.request,
     )
 
 

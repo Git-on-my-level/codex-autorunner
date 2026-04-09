@@ -8,7 +8,7 @@ import time
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 import httpx
 
@@ -42,6 +42,7 @@ from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
 )
 from .....core.orchestration.runtime_threads import (
+    RuntimeThreadExecution,
     begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
@@ -70,11 +71,14 @@ from .....integrations.chat.managed_thread_lifecycle import (
     resolve_surface_thread_binding,
 )
 from .....integrations.chat.managed_thread_turns import (
-    ManagedThreadCoordinatorHooks,
     ManagedThreadErrorMessages,
+    ManagedThreadExecutionHooks,
+    ManagedThreadFinalizationResult,
+    ManagedThreadQueueWorkerHooks,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
+    coerce_managed_thread_finalization_result,
     complete_managed_thread_execution,
 )
 from .....integrations.chat.managed_thread_turns import (
@@ -168,6 +172,24 @@ class _TurnRunFailure:
     placeholder_id: Optional[int]
     transcript_message_id: Optional[int]
     transcript_text: Optional[str]
+
+
+@dataclass
+class _TurnDeliveryState:
+    intermediate_response: str = ""
+
+    def capture_progress_summary(
+        self, handlers: Any, turn_key: Optional[TurnKey]
+    ) -> None:
+        if turn_key is None:
+            return
+        render_fn = getattr(handlers, "_render_turn_progress_summary", None)
+        if callable(render_fn):
+            self.intermediate_response = render_fn(turn_key)
+            return
+        render_fn = getattr(handlers, "_render_final_turn_progress", None)
+        if callable(render_fn):
+            self.intermediate_response = render_fn(turn_key)
 
 
 @dataclass(frozen=True)
@@ -694,9 +716,9 @@ def _ensure_telegram_managed_thread_queue_worker(
                         exc=exc,
                     )
 
-    async def _deliver_result(finalized: dict[str, Any]) -> None:
-        if finalized["status"] == "ok":
-            message_text = str(finalized.get("assistant_text") or "").strip()
+    async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
+        if finalized.status == "ok":
+            message_text = finalized.assistant_text.strip()
             if not message_text:
                 message_text = "(No response text returned.)"
             await handlers._send_message(
@@ -714,7 +736,7 @@ def _ensure_telegram_managed_thread_queue_worker(
             return
         await handlers._send_message(
             chat_id,
-            ("Turn failed: " f"{finalized.get('error') or public_execution_error}"),
+            ("Turn failed: " f"{finalized.error or public_execution_error}"),
             thread_id=thread_id,
             reply_to=None,
         )
@@ -729,15 +751,25 @@ def _ensure_telegram_managed_thread_queue_worker(
         timeout_error=timeout_error,
         interrupted_error=interrupted_error,
     )
+
+    async def _begin_next_execution(
+        queued_orchestration_service: Any,
+        queued_managed_thread_id: str,
+    ) -> Optional[RuntimeThreadExecution]:
+        return await begin_next_queued_runtime_thread_execution(
+            queued_orchestration_service,
+            queued_managed_thread_id,
+        )
+
     coordinator.ensure_queue_worker(
         task_map=task_map,
         managed_thread_id=managed_thread_id,
         spawn_task=lambda coro: _spawn_telegram_background_task(handlers, coro),
-        hooks=ManagedThreadCoordinatorHooks(
+        hooks=ManagedThreadQueueWorkerHooks(
             deliver_result=_deliver_result,
             run_with_indicator=_run_with_telegram_typing_indicator,
         ),
-        begin_next_execution=begin_next_queued_runtime_thread_execution,
+        begin_next_execution=_begin_next_execution,
     )
 
 
@@ -878,6 +910,20 @@ async def _run_telegram_managed_thread_turn(
         interrupted_error=interrupted_error,
     )
 
+    async def _begin_execution(
+        queued_orchestration_service: Any,
+        request: MessageRequest,
+        *,
+        client_request_id: Optional[str],
+        sandbox_policy: Optional[Any],
+    ) -> RuntimeThreadExecution:
+        return await begin_runtime_thread_execution(
+            queued_orchestration_service,
+            request,
+            client_request_id=client_request_id,
+            sandbox_policy=sandbox_policy,
+        )
+
     def ensure_queue_worker() -> None:
         _ensure_telegram_managed_thread_queue_worker(
             handlers,
@@ -910,7 +956,7 @@ async def _run_telegram_managed_thread_turn(
             ),
             client_request_id=(f"telegram:{topic_key}:{secrets.token_hex(6)}"),
             sandbox_policy=sandbox_policy,
-            begin_execution=begin_runtime_thread_execution,
+            begin_execution=_begin_execution,
         )
     except (
         RuntimeError,
@@ -1010,7 +1056,7 @@ async def _run_telegram_managed_thread_turn(
             coordinator,
             submission,
             ensure_queue_worker=ensure_queue_worker,
-            direct_hooks=ManagedThreadCoordinatorHooks(
+            direct_hooks=ManagedThreadExecutionHooks(
                 on_progress_event=(
                     (
                         lambda run_event: handlers._apply_run_event_to_progress(
@@ -1048,11 +1094,12 @@ async def _run_telegram_managed_thread_turn(
         runtime.current_turn_key = None
         runtime.interrupt_requested = False
 
-    finalized = cast(dict[str, Any], finalized_flow.finalized)
-    if finalized["status"] != "ok":
-        failure_message = str(finalized.get("error") or public_execution_error)
+    finalized = coerce_managed_thread_finalization_result(finalized_flow.finalized)
+    assert finalized is not None
+    if finalized.status != "ok":
+        failure_message = str(finalized.error or public_execution_error)
         interrupt_status_fallback_text: Optional[str] = None
-        if finalized["status"] == "interrupted":
+        if finalized.status == "interrupted":
             failure_message = _compose_interrupt_response(failure_message)
             if (
                 runtime.interrupt_message_id is not None
@@ -1084,7 +1131,7 @@ async def _run_telegram_managed_thread_turn(
             transcript_message_id,
             transcript_text,
         )
-    resolved_backend_thread_id = str(finalized.get("backend_thread_id") or "") or None
+    resolved_backend_thread_id = finalized.backend_thread_id or None
     if pma_enabled and resolved_backend_thread_id:
         _sync_pma_registry_thread_id(
             handlers,
@@ -1107,7 +1154,7 @@ async def _run_telegram_managed_thread_turn(
         )
         user_preview = _preview_from_text(prompt_text, RESUME_PREVIEW_USER_LIMIT)
         assistant_preview = _preview_from_text(
-            str(finalized.get("assistant_text") or ""),
+            finalized.assistant_text,
             RESUME_PREVIEW_ASSISTANT_LIMIT,
         )
 
@@ -1133,7 +1180,7 @@ async def _run_telegram_managed_thread_turn(
             message.thread_id,
             _apply_state,
         )
-    response_text = str(finalized.get("assistant_text") or "")
+    response_text = finalized.assistant_text
     interrupt_status_fallback_text = None
     if runtime.interrupt_turn_id == backend_turn_id:
         interrupt_status_fallback_text = "Interrupt requested; turn completed."
@@ -1144,7 +1191,7 @@ async def _run_telegram_managed_thread_turn(
         response=response_text,
         placeholder_id=prepared_placeholder_id,
         elapsed_seconds=None,
-        token_usage=cast(Optional[dict[str, Any]], finalized.get("token_usage")),
+        token_usage=finalized.token_usage,
         transcript_message_id=transcript_message_id,
         transcript_text=transcript_text,
         intermediate_response=intermediate_response,
@@ -1426,17 +1473,11 @@ class ExecutionCommands(TelegramCommandSupportMixin):
     def _finalize_turn_progress(
         self,
         turn_key: Optional[TurnKey],
-        turn_delivery_state: dict[str, str],
+        turn_delivery_state: _TurnDeliveryState,
     ) -> None:
+        turn_delivery_state.capture_progress_summary(self, turn_key)
         if turn_key is None:
             return
-        render_fn = getattr(self, "_render_turn_progress_summary", None)
-        if callable(render_fn):
-            turn_delivery_state["intermediate_response"] = render_fn(turn_key)
-        else:
-            render_fn = getattr(self, "_render_final_turn_progress", None)
-            if callable(render_fn):
-                turn_delivery_state["intermediate_response"] = render_fn(turn_key)
         self._turn_contexts.pop(turn_key, None)
         self._clear_thinking_preview(turn_key)
         self._clear_turn_progress(turn_key)
@@ -1497,7 +1538,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         pma_thread_key: Optional[str] = None,
     ) -> _TurnRunResult | _TurnRunFailure:
         supervisor = getattr(self, "_opencode_supervisor", None)
-        turn_delivery_state: dict[str, str] = {}
+        turn_delivery_state = _TurnDeliveryState()
         if supervisor is None:
             return await self._maybe_send_failure(
                 message,
@@ -2284,9 +2325,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
                 token_usage=token_usage,
                 transcript_message_id=transcript_message_id,
                 transcript_text=transcript_text,
-                intermediate_response=turn_delivery_state.get(
-                    "intermediate_response", ""
-                ),
+                intermediate_response=turn_delivery_state.intermediate_response,
             )
         except Exception as exc:  # intentional: top-level command handler
             log_extra: dict[str, Any] = {}
@@ -2347,7 +2386,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
         turn_handle = None
         turn_key: Optional[TurnKey] = None
         turn_started_at: Optional[float] = None
-        turn_delivery_state: dict[str, str] = {}
+        turn_delivery_state = _TurnDeliveryState()
 
         def _is_missing_thread_error(exc: Exception) -> bool:
             if not isinstance(exc, CodexAppServerResponseError):
@@ -2800,7 +2839,7 @@ class ExecutionCommands(TelegramCommandSupportMixin):
             token_usage=token_usage,
             transcript_message_id=transcript_message_id,
             transcript_text=transcript_text,
-            intermediate_response=turn_delivery_state.get("intermediate_response", ""),
+            intermediate_response=turn_delivery_state.intermediate_response,
             interrupt_status_turn_id=turn_handle_id,
             interrupt_status_fallback_text=interrupt_status_fallback_text,
         )

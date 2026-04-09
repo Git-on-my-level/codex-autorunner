@@ -64,11 +64,15 @@ from ..chat.managed_thread_progress import (
     apply_run_event_to_progress_tracker,
 )
 from ..chat.managed_thread_turns import (
-    ManagedThreadCoordinatorHooks,
     ManagedThreadErrorMessages,
+    ManagedThreadExecutionHooks,
+    ManagedThreadFinalizationResult,
+    ManagedThreadQueuedExecutionStarter,
+    ManagedThreadQueueWorkerHooks,
     ManagedThreadSurfaceInfo,
     ManagedThreadTargetRequest,
     ManagedThreadTurnCoordinator,
+    coerce_managed_thread_finalization_result,
     complete_managed_thread_execution,
 )
 from ..chat.managed_thread_turns import (
@@ -1177,7 +1181,7 @@ def _build_discord_queue_worker_hooks(
     channel_id: str,
     managed_thread_id: str,
     public_execution_error: str,
-) -> ManagedThreadCoordinatorHooks:
+) -> ManagedThreadQueueWorkerHooks:
     async def _run_with_discord_typing_indicator(work: Any) -> None:
         run_with_typing = getattr(service, "_run_with_typing_indicator", None)
         if callable(run_with_typing):
@@ -1198,9 +1202,9 @@ def _build_discord_queue_worker_hooks(
             started_execution=started_execution
         )
 
-    async def _deliver_result(finalized: dict[str, Any]) -> None:
-        if finalized["status"] == "ok":
-            assistant_text = str(finalized.get("assistant_text") or "").strip()
+    async def _deliver_result(finalized: ManagedThreadFinalizationResult) -> None:
+        if finalized.status == "ok":
+            assistant_text = finalized.assistant_text.strip()
             message = (
                 format_discord_message(assistant_text)
                 if assistant_text
@@ -1210,29 +1214,26 @@ def _build_discord_queue_worker_hooks(
                 channel_id,
                 {"content": message},
                 record_id=(
-                    "discord-queued:"
-                    f"{managed_thread_id}:{finalized['managed_turn_id']}"
+                    "discord-queued:" f"{managed_thread_id}:{finalized.managed_turn_id}"
                 ),
             )
             return
         await service._send_channel_message_safe(
             channel_id,
-            {
-                "content": (
-                    f"Turn failed: {finalized.get('error') or public_execution_error}"
-                )
-            },
+            {"content": (f"Turn failed: {finalized.error or public_execution_error}")},
             record_id=(
                 "discord-queued-error:"
-                f"{managed_thread_id}:{finalized['managed_turn_id']}"
+                f"{managed_thread_id}:{finalized.managed_turn_id}"
             ),
         )
 
-    return ManagedThreadCoordinatorHooks(
-        on_execution_started=_on_execution_started,
-        on_execution_finished=_on_execution_finished,
+    return ManagedThreadQueueWorkerHooks(
         deliver_result=_deliver_result,
         run_with_indicator=_run_with_discord_typing_indicator,
+        execution_hooks=ManagedThreadExecutionHooks(
+            on_execution_started=_on_execution_started,
+            on_execution_finished=_on_execution_finished,
+        ),
     )
 
 
@@ -1396,6 +1397,29 @@ async def _run_discord_orchestrated_turn_for_message(
                 await progress_heartbeat_task
             progress_heartbeat_task = None
 
+    async def _begin_next_execution(
+        orchestration_service: Any,
+        queued_managed_thread_id: str,
+    ) -> Optional[RuntimeThreadExecution]:
+        return await begin_next_queued_runtime_thread_execution(
+            orchestration_service,
+            queued_managed_thread_id,
+        )
+
+    async def _begin_execution(
+        orchestration_service: Any,
+        request: MessageRequest,
+        *,
+        client_request_id: Optional[str],
+        sandbox_policy: Optional[Any],
+    ) -> RuntimeThreadExecution:
+        return await begin_runtime_thread_execution(
+            orchestration_service,
+            request,
+            client_request_id=client_request_id,
+            sandbox_policy=sandbox_policy,
+        )
+
     def ensure_queue_worker() -> None:
         coordinator.ensure_queue_worker(
             task_map=_get_discord_thread_queue_task_map(service),
@@ -1407,7 +1431,10 @@ async def _run_discord_orchestrated_turn_for_message(
                 managed_thread_id=managed_thread_id,
                 public_execution_error=public_execution_error,
             ),
-            begin_next_execution=begin_next_queued_runtime_thread_execution,
+            begin_next_execution=cast(
+                ManagedThreadQueuedExecutionStarter,
+                _begin_next_execution,
+            ),
         )
 
     try:
@@ -1470,7 +1497,7 @@ async def _run_discord_orchestrated_turn_for_message(
             ),
             client_request_id=f"discord:{channel_id}:{uuid.uuid4().hex[:12]}",
             sandbox_policy=sandbox_policy,
-            begin_execution=begin_runtime_thread_execution,
+            begin_execution=_begin_execution,
         )
     except (RuntimeError, ConnectionError, OSError, ValueError, TypeError):
         await _stop_progress_heartbeat()
@@ -1522,7 +1549,7 @@ async def _run_discord_orchestrated_turn_for_message(
             coordinator,
             submission,
             ensure_queue_worker=ensure_queue_worker,
-            direct_hooks=ManagedThreadCoordinatorHooks(
+            direct_hooks=ManagedThreadExecutionHooks(
                 on_execution_started=(
                     lambda active_execution: service._register_discord_turn_approval_context(
                         started_execution=active_execution,
@@ -1546,9 +1573,10 @@ async def _run_discord_orchestrated_turn_for_message(
     finally:
         await _stop_progress_heartbeat()
 
-    finalized = cast(dict[str, Any], finalized_flow.finalized)
-    if finalized["status"] != "ok":
-        if finalized["status"] == "interrupted":
+    finalized = coerce_managed_thread_finalization_result(finalized_flow.finalized)
+    assert finalized is not None
+    if finalized.status != "ok":
+        if finalized.status == "interrupted":
             reuse_request = _peek_discord_progress_reuse_request(
                 service,
                 thread_target_id=managed_thread_id,
@@ -1583,7 +1611,7 @@ async def _run_discord_orchestrated_turn_for_message(
                     ),
                     send_final_message=not acknowledgement_delivered,
                 )
-        raise RuntimeError(str(finalized.get("error") or public_execution_error))
+        raise RuntimeError(str(finalized.error or public_execution_error))
     summary_snapshot = render_progress_text(
         tracker,
         max_length=max_progress_len,
@@ -1601,10 +1629,10 @@ async def _run_discord_orchestrated_turn_for_message(
             render_mode="final",
         )
     return DiscordMessageTurnResult(
-        final_message=str(finalized.get("assistant_text") or ""),
+        final_message=finalized.assistant_text,
         preview_message_id=progress_message_id,
         intermediate_message=intermediate_message,
-        token_usage=cast(Optional[dict[str, Any]], finalized.get("token_usage")),
+        token_usage=finalized.token_usage,
         elapsed_seconds=max(0.0, time.monotonic() - tracker.started_at),
     )
 

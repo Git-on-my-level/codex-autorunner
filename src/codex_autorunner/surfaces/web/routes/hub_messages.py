@@ -21,6 +21,11 @@ from ..app_state import (
     HubAppContext,
     _record_message_resolution,
 )
+from ..schemas import (
+    HubMessagesFreshnessResponse,
+    HubMessageSnapshotResponse,
+    HubMessagesResponse,
+)
 from ..services import hub_gather as hub_gather_service
 
 HUB_MESSAGE_SECTIONS = frozenset(
@@ -51,6 +56,56 @@ def _normalize_hub_message_sections(raw: Optional[str]) -> set[str]:
     return requested
 
 
+def _build_hub_messages_payload(
+    snapshot: HubMessageSnapshotResponse,
+    *,
+    requested_sections: set[str],
+    generated_at: str,
+    stale_threshold_seconds: int,
+) -> dict[str, Any]:
+    items = snapshot.items or []
+    payload = HubMessagesResponse(
+        generated_at=generated_at,
+        freshness=(
+            HubMessagesFreshnessResponse(
+                schema_version=1,
+                generated_at=generated_at,
+                stale_threshold_seconds=stale_threshold_seconds,
+                sections={
+                    "inbox": summarize_section_freshness(
+                        items,
+                        generated_at=generated_at,
+                        stale_threshold_seconds=stale_threshold_seconds,
+                        extractor=lambda item: (
+                            (item.get("canonical_state_v1") or {}).get("freshness")
+                            if isinstance(item, dict)
+                            else None
+                        ),
+                    )
+                },
+            )
+            if "freshness" in requested_sections
+            else None
+        ),
+        items=items if "inbox" in requested_sections else None,
+        pma_threads=(
+            snapshot.pma_threads if "pma_threads" in requested_sections else None
+        ),
+        pma_files_detail=(
+            snapshot.pma_files_detail
+            if "pma_files_detail" in requested_sections
+            else None
+        ),
+        automation=(
+            snapshot.automation if "automation" in requested_sections else None
+        ),
+        action_queue=(
+            snapshot.action_queue if "action_queue" in requested_sections else None
+        ),
+    )
+    return payload.model_dump(exclude_none=True)
+
+
 def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
     router = APIRouter()
     hub_dismissal_locks: dict[str, asyncio.Lock] = {}
@@ -65,7 +120,11 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
                 hub_dismissal_locks[key] = lock
             return lock
 
-    @router.get("/hub/messages")
+    @router.get(
+        "/hub/messages",
+        response_model=HubMessagesResponse,
+        response_model_exclude_none=True,
+    )
     async def hub_messages(
         limit: int = 100,
         scope_key: Optional[str] = None,
@@ -91,38 +150,17 @@ def build_hub_messages_routes(context: HubAppContext) -> APIRouter:
             scope_key=scope_key,
             sections=snapshot_sections,
         )
-        items = snapshot.get("items", []) if isinstance(snapshot, dict) else []
+        snapshot_payload = HubMessageSnapshotResponse.model_validate(snapshot)
         generated_at = iso_now()
         stale_threshold_seconds = resolve_stale_threshold_seconds(
             getattr(context.config.pma, "freshness_stale_threshold_seconds", None)
         )
-        payload: dict[str, Any] = {
-            "generated_at": generated_at,
-        }
-        if "freshness" in requested_sections:
-            payload["freshness"] = {
-                "schema_version": 1,
-                "generated_at": generated_at,
-                "stale_threshold_seconds": stale_threshold_seconds,
-                "sections": {
-                    "inbox": summarize_section_freshness(
-                        items,
-                        generated_at=generated_at,
-                        stale_threshold_seconds=stale_threshold_seconds,
-                        extractor=lambda item: (
-                            (item.get("canonical_state_v1") or {}).get("freshness")
-                            if isinstance(item, dict)
-                            else None
-                        ),
-                    )
-                },
-            }
-        if "inbox" in requested_sections:
-            payload["items"] = items if isinstance(items, list) else []
-        for key in ("pma_threads", "pma_files_detail", "automation", "action_queue"):
-            if key in requested_sections and isinstance(snapshot, dict):
-                payload[key] = snapshot.get(key)
-        return payload
+        return _build_hub_messages_payload(
+            snapshot_payload,
+            requested_sections=requested_sections,
+            generated_at=generated_at,
+            stale_threshold_seconds=stale_threshold_seconds,
+        )
 
     @router.post("/hub/messages/dismiss")
     async def dismiss_hub_message(payload: dict[str, Any]):

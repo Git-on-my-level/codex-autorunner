@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from typer.testing import CliRunner
 
 from codex_autorunner.bootstrap import seed_hub_files
@@ -76,3 +78,35 @@ def test_resumable_run_prefers_non_latest_active_run() -> None:
     assert run is not None
     assert run.id == "older-active"
     assert reason == "active"
+
+
+def test_flow_command_exports_bridge_uses_typed_attributes(monkeypatch) -> None:
+    calls: list[object] = []
+    fake_exports = SimpleNamespace(
+        ticket_flow_resumable_run=lambda records: ("fake-run", records),
+        _ticket_flow_preflight=lambda engine, ticket_dir: (
+            "preflight",
+            engine,
+            ticket_dir,
+        ),
+        ticket_flow_print_preflight_report=lambda report: calls.append(
+            ("print", report)
+        ),
+        ticket_flow_start=lambda *args, **kwargs: ("start", args, kwargs),
+    )
+
+    monkeypatch.setattr(cli_module, "FLOW_COMMANDS", fake_exports)
+
+    assert cli_module._resumable_run(["record"]) == ("fake-run", ["record"])
+    assert cli_module._ticket_flow_preflight("engine", "tickets") == (
+        "preflight",
+        "engine",
+        "tickets",
+    )
+    cli_module._print_preflight_report("report")
+    assert calls == [("print", "report")]
+    assert cli_module.ticket_flow_start("repo", force=True) == (
+        "start",
+        ("repo",),
+        {"force": True},
+    )

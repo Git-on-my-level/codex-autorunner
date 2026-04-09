@@ -60,7 +60,7 @@ def build_review_routes() -> APIRouter:
             service = _review(request)
             state = service.start(payload=payload.model_dump(exclude_none=True))
             return ReviewControlResponse(
-                status=state.get("status", "unknown"),
+                status=state.status,
                 detail="Review started",
             )
         except ReviewBusyError as exc:
@@ -83,7 +83,7 @@ def build_review_routes() -> APIRouter:
             service = _review(request)
             state = service.stop()
             return ReviewControlResponse(
-                status=state.get("status", "unknown"),
+                status=state.status,
                 detail="Review stopped",
             )
         except ReviewError as exc:
@@ -104,7 +104,7 @@ def build_review_routes() -> APIRouter:
             service = _review(request)
             state = service.reset()
             return ReviewControlResponse(
-                status=state.get("status", "idle"),
+                status=state.status,
                 detail="Review state reset",
             )
         except ReviewBusyError as exc:
@@ -133,9 +133,9 @@ def build_review_routes() -> APIRouter:
             status = service.status()
 
             mapping = {
-                "final_report": status.get("final_output_path"),
-                "workflow_log": status.get("run_dir"),
-                "scratchpad_bundle": status.get("scratchpad_bundle_path"),
+                "final_report": status.final_output_path,
+                "workflow_log": status.run_dir,
+                "scratchpad_bundle": status.scratchpad_bundle_path,
             }
 
             raw_path = mapping.get(kind)

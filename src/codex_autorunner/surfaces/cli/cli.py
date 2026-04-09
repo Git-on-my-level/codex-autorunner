@@ -320,24 +320,36 @@ FLOW_COMMANDS = register_flow_commands(
 )
 
 # Legacy CLI module compatibility exports.
-PreflightCheck = FLOW_COMMANDS["PreflightCheck"]
-PreflightReport = FLOW_COMMANDS["PreflightReport"]
+PreflightCheck = FLOW_COMMANDS.PreflightCheck
+PreflightReport = FLOW_COMMANDS.PreflightReport
 
 
 def _resumable_run(records):  # pragma: no cover - compatibility path
-    return FLOW_COMMANDS["ticket_flow_resumable_run"](records)
+    return FLOW_COMMANDS.ticket_flow_resumable_run(records)
 
 
 def _ticket_flow_preflight(engine, ticket_dir):
-    return FLOW_COMMANDS["_ticket_flow_preflight"](engine, ticket_dir)
+    return FLOW_COMMANDS._ticket_flow_preflight(engine, ticket_dir)
 
 
 def _print_preflight_report(report) -> None:
-    return FLOW_COMMANDS["ticket_flow_print_preflight_report"](report)
+    return FLOW_COMMANDS.ticket_flow_print_preflight_report(report)
 
 
 def ticket_flow_start(*args, **kwargs):
-    return FLOW_COMMANDS["ticket_flow_start"](*args, **kwargs)
+    return FLOW_COMMANDS.ticket_flow_start(*args, **kwargs)
+
+
+def _hub_ticket_flow_preflight(*args, **kwargs):
+    return _ticket_flow_preflight(*args, **kwargs)
+
+
+def _hub_print_preflight_report(report) -> None:
+    return _print_preflight_report(report)
+
+
+def _hub_ticket_flow_start(*args, **kwargs):
+    return ticket_flow_start(*args, **kwargs)
 
 
 register_hub_tickets_commands(
@@ -347,11 +359,9 @@ register_hub_tickets_commands(
     require_templates_enabled_func=_require_templates_enabled,
     fetch_template_with_scan_func=_fetch_template_with_scan,
     build_hub_supervisor=_build_hub_supervisor,
-    ticket_flow_preflight=lambda *args, **kwargs: _ticket_flow_preflight(
-        *args, **kwargs
-    ),
-    print_preflight_report=lambda report: _print_preflight_report(report),
-    ticket_flow_start=lambda *args, **kwargs: ticket_flow_start(*args, **kwargs),
+    ticket_flow_preflight=_hub_ticket_flow_preflight,
+    print_preflight_report=_hub_print_preflight_report,
+    ticket_flow_start=_hub_ticket_flow_start,
 )
 if __name__ == "__main__":
     app()

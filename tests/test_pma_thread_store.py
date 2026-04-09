@@ -16,6 +16,7 @@ from codex_autorunner.core.pma_thread_store import (
     default_pma_threads_db_path,
     pma_threads_db_lock_path,
 )
+from codex_autorunner.core.pma_thread_store_rows import PmaThreadRecord
 from codex_autorunner.core.sqlite_utils import open_sqlite
 
 
@@ -70,7 +71,7 @@ def test_create_thread_enriches_head_branch_metadata(
     workspace_root = tmp_path / "workspace"
     workspace_root.mkdir()
     monkeypatch.setattr(
-        "codex_autorunner.core.pma_thread_store.git_branch",
+        "codex_autorunner.core.pma_thread_store_rows.workspace_head_branch",
         lambda repo_root: "feature/pr-binding",
     )
 
@@ -305,6 +306,44 @@ def test_claim_next_queued_turn_promotes_queued_execution(tmp_path: Path) -> Non
     assert payload["request"]["kind"] == "review"
     assert payload["request"]["message_text"] == "second"
     assert store.get_queue_depth(thread["managed_thread_id"]) == 0
+
+
+def test_cancel_queued_turns_marks_only_pending_queue_items_interrupted(
+    tmp_path: Path,
+) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    thread = store.create_thread("codex", tmp_path / "workspace")
+
+    running_turn = store.create_turn(thread["managed_thread_id"], prompt="first")
+    queued_turn = store.create_turn(
+        thread["managed_thread_id"],
+        prompt="second queued",
+        request_kind="review",
+        busy_policy="queue",
+        client_turn_id="client-queued",
+        queue_payload={"request": {"message_text": "second queued", "kind": "review"}},
+    )
+
+    cancelled = store.cancel_queued_turns(thread["managed_thread_id"])
+    assert cancelled == 1
+
+    running_after = store.get_turn(
+        thread["managed_thread_id"], running_turn["managed_turn_id"]
+    )
+    assert running_after is not None
+    assert running_after["status"] == "running"
+    assert running_after["error"] is None
+
+    queued_after = store.get_turn(
+        thread["managed_thread_id"], queued_turn["managed_turn_id"]
+    )
+    assert queued_after is not None
+    assert queued_after["status"] == "interrupted"
+    assert queued_after["error"] == "interrupted"
+    assert queued_after["finished_at"]
+
+    assert store.get_queue_depth(thread["managed_thread_id"]) == 0
+    assert store.list_pending_turn_queue_items(thread["managed_thread_id"]) == []
 
 
 def test_create_turn_recovers_stale_running_execution_before_admission(
@@ -891,6 +930,40 @@ def test_count_threads_by_repo_filters_empty_values(tmp_path: Path) -> None:
     assert counts["repo-a"] == 2
     assert counts["repo-b"] == 2
     assert "" not in counts
+
+
+def test_thread_record_normalizes_legacy_status_aliases(tmp_path: Path) -> None:
+    store = PmaThreadStore(tmp_path / "hub")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    created = store.create_thread(
+        "codex",
+        workspace,
+        metadata={"head_branch": "feature/demo"},
+    )
+
+    with store._read_conn() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+              FROM orch_thread_targets
+             WHERE thread_target_id = ?
+            """,
+            (created["managed_thread_id"],),
+        ).fetchone()
+
+    assert row is not None
+    record = PmaThreadRecord.from_orchestration_row(row).to_dict()
+
+    assert record["status"] == "active"
+    assert record["lifecycle_status"] == "active"
+    assert record["normalized_status"] == "idle"
+    assert record["status_reason_code"] == "thread_created"
+    assert record["status_reason"] == "thread_created"
+    assert record["status_updated_at"] == created["status_updated_at"]
+    assert record["status_changed_at"] == created["status_changed_at"]
+    assert record["status_terminal"] is False
+    assert record["metadata"]["head_branch"] == "feature/demo"
 
 
 def test_concurrentish_writes_smoke(tmp_path: Path) -> None:

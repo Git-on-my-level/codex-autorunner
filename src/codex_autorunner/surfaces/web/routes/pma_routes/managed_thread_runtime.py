@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import json
 import logging
 import re
-import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Literal, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -18,37 +16,20 @@ from .....agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
-from .....agents.managed_runtime import sync_managed_workspace_compat_files
-from .....core.car_context import (
-    build_car_context_bundle,
-    default_managed_thread_context_profile,
-    normalize_car_context_profile,
-    render_injected_car_context,
-)
-from .....core.chat_bindings import (
-    DISCORD_STATE_FILE_DEFAULT,
-    TELEGRAM_STATE_FILE_DEFAULT,
-)
-from .....core.config import PMA_DEFAULT_MAX_TEXT_CHARS
 from .....core.orchestration import MessageRequest
-from .....core.orchestration.bindings import OrchestrationBindingStore
 from .....core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     merge_runtime_thread_raw_events,
     normalize_runtime_thread_raw_event,
 )
 from .....core.orchestration.runtime_threads import (
-    RUNTIME_THREAD_INTERRUPTED_ERROR,
-    RUNTIME_THREAD_TIMEOUT_ERROR,
     RuntimeThreadExecution,
     RuntimeThreadOutcome,
     await_runtime_thread_outcome,
-    begin_next_queued_runtime_thread_execution,
     begin_runtime_thread_execution,
 )
 from .....core.orchestration.service import BusyInterruptFailedError
 from .....core.orchestration.turn_timeline import persist_turn_timeline
-from .....core.pma_context import format_pma_discoverability_preamble
 from .....core.pma_thread_store import (
     ManagedThreadAlreadyHasRunningTurnError,
     ManagedThreadNotActiveError,
@@ -59,34 +40,40 @@ from .....core.ports.run_event import Completed, Failed, RunEvent
 from .....core.pr_binding_runtime import claim_pr_binding_for_thread
 from .....core.text_utils import _truncate_text
 from .....core.time_utils import now_iso
-from .....integrations.app_server.event_buffer import AppServerEventBuffer
-from .....integrations.chat.approval_modes import resolve_approval_mode_policies
-from .....integrations.discord.rendering import (
-    chunk_discord_message,
-    format_discord_message,
-)
-from .....integrations.discord.state import DiscordStateStore
-from .....integrations.discord.state import OutboxRecord as DiscordOutboxRecord
 from .....integrations.github.service import GitHubError, GitHubService
-from .....integrations.telegram.state import OutboxRecord as TelegramOutboxRecord
-from .....integrations.telegram.state import TelegramStateStore, parse_topic_key
 from ...schemas import PmaManagedThreadMessageRequest
 from ...services.pma.managed_thread_followup import (
     ManagedThreadAutomationClient,
     ManagedThreadAutomationUnavailable,
 )
-from .automation_adapter import (
-    first_callable,
-    get_automation_store,
-    normalize_optional_text,
+from .automation_adapter import normalize_optional_text
+from .managed_thread_runtime_control import (
+    deliver_bound_chat_assistant_output,
+    ensure_queue_worker,
+    interrupt_managed_thread_via_orchestration,
+    notify_managed_thread_terminal_transition,
+    recover_orphaned_executions,
+    restart_queue_workers,
+)
+from .managed_thread_runtime_payloads import (
+    MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
+    build_accepted_send_payload,
+    build_archived_thread_payload,
+    build_execution_setup_error_payload,
+    build_interrupt_failure_payload,
+    build_not_active_thread_payload,
+    build_queued_send_payload,
+    build_running_turn_exists_payload,
+    build_started_execution_error_payload,
+    resolve_managed_thread_message_options,
+    sanitize_managed_thread_result_error,
+    sync_zeroclaw_context_if_needed,
+)
+from .managed_thread_runtime_payloads import (
+    get_live_thread_runtime_binding as _get_live_thread_runtime_binding,
 )
 from .managed_threads import (
     build_managed_thread_orchestration_service as _shared_managed_thread_orchestration_service,
-)
-from .publish import (
-    PMA_DISCORD_MESSAGE_MAX_LEN,
-    enqueue_with_retry,
-    resolve_chat_state_path,
 )
 
 if TYPE_CHECKING:
@@ -94,15 +81,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-MANAGED_THREAD_PUBLIC_EXECUTION_ERROR = "Managed thread execution failed"
-MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR = "Failed to interrupt backend turn"
-MANAGED_THREAD_INTERRUPT_FAILED_DETAIL = (
-    "Interrupt attempt failed; the active managed turn is still running"
-)
 PMA_TIMEOUT_SECONDS = 7200
-PMA_MAX_TEXT = PMA_DEFAULT_MAX_TEXT_CHARS
-BOUND_CHAT_SURFACE_KINDS = frozenset({"discord", "telegram"})
-BOUND_CHAT_CLIENT_TURN_PREFIXES = ("discord:", "telegram:")
 _GITHUB_PR_URL_RE = re.compile(
     r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+",
     re.IGNORECASE,
@@ -141,142 +120,6 @@ def _track_managed_thread_task(app: Any, task: asyncio.Task[Any]) -> None:
     task_pool = _managed_thread_task_pool(app)
     task_pool.add(task)
     task.add_done_callback(lambda done: task_pool.discard(done))
-
-
-def _resolve_managed_thread_policies(
-    thread: dict[str, Any],
-) -> tuple[Optional[str], Optional[Any]]:
-    metadata = thread.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-    return resolve_approval_mode_policies(
-        normalize_optional_text(
-            thread.get("approval_mode") or metadata.get("approval_mode")
-        ),
-        default_approval_policy="never",
-        default_sandbox_policy="dangerFullAccess",
-        override_approval_policy=normalize_optional_text(
-            thread.get("approval_policy") or metadata.get("approval_policy")
-        ),
-        override_sandbox_policy=(
-            thread.get("sandbox_policy")
-            if thread.get("sandbox_policy") is not None
-            else metadata.get("sandbox_policy")
-        ),
-    )
-
-
-def _compose_compacted_prompt(compact_seed: str, message: str) -> str:
-    return (
-        "Context summary (from compaction):\n"
-        f"{compact_seed}\n\n"
-        "User message:\n"
-        f"{message}"
-    )
-
-
-def _compose_execution_prompt(
-    *,
-    agent: Any,
-    hub_root: Path,
-    stored_backend_id: Optional[str],
-    compact_seed: Optional[str],
-    message: str,
-    context_profile: Any,
-) -> str:
-    execution_message = message
-    if not stored_backend_id and compact_seed:
-        execution_message = _compose_compacted_prompt(compact_seed, message)
-
-    # ZeroClaw persists user turns into durable session history via
-    # `--session-state-file`, so PMA bootstrap/docs must not be wrapped into
-    # the conversational turn payload.
-    if str(agent or "").strip().lower() == "zeroclaw":
-        return execution_message
-
-    preamble = format_pma_discoverability_preamble(hub_root=hub_root)
-    user_message = f"<user_message>\n{execution_message}\n</user_message>\n"
-    bundle = build_car_context_bundle(
-        context_profile,
-        prompt_text=message,
-    )
-    car_context = render_injected_car_context(bundle)
-    if not car_context:
-        return f"{preamble}{user_message}"
-    return f"{preamble}{car_context}\n\n{user_message}"
-
-
-def _get_live_thread_runtime_binding(service: Any, managed_thread_id: str) -> Any:
-    getter = getattr(service, "get_thread_runtime_binding", None)
-    if not callable(getter):
-        return None
-    try:
-        return getter(managed_thread_id)
-    except (
-        AttributeError,
-        TypeError,
-        RuntimeError,
-    ):  # intentional: defensive fallback for dynamic getter call
-        logger.debug(
-            "Failed to resolve live runtime binding for managed thread %s",
-            managed_thread_id,
-            exc_info=True,
-        )
-        return None
-
-
-def _sanitize_managed_thread_result_error(detail: Any) -> str:
-    sanitized = normalize_optional_text(detail)
-    if sanitized in {RUNTIME_THREAD_TIMEOUT_ERROR, "PMA chat timed out"}:
-        return "PMA chat timed out"
-    if sanitized in {RUNTIME_THREAD_INTERRUPTED_ERROR, "PMA chat interrupted"}:
-        return "PMA chat interrupted"
-    if sanitized in {"PMA chat timed out", "PMA chat interrupted"}:
-        return sanitized
-    return MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
-
-
-def _normalize_busy_policy(value: Any) -> Literal["queue", "interrupt", "reject"]:
-    normalized = normalize_optional_text(value)
-    if normalized is None:
-        return "queue"
-    busy_policy = normalized.lower()
-    if busy_policy not in {"queue", "interrupt", "reject"}:
-        raise HTTPException(
-            status_code=400,
-            detail="busy_policy must be one of: queue, interrupt, reject",
-        )
-    return cast(Literal["queue", "interrupt", "reject"], busy_policy)
-
-
-def _interrupt_failure_payload(
-    *,
-    managed_thread_id: str,
-    managed_turn_id: Optional[str],
-    backend_thread_id: str,
-    detail: str,
-    delivery_payload: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "status": "error",
-        "send_state": "rejected",
-        "interrupt_state": "failed",
-        "execution_state": "running",
-        "reason": "interrupt_failed",
-        "detail": detail,
-        "next_step": (
-            "Wait for the active turn to finish, inspect thread status, "
-            "or retry the interrupt after checking runtime health."
-        ),
-        "active_turn_status": "running",
-        "managed_thread_id": managed_thread_id,
-        "managed_turn_id": None,
-        "active_managed_turn_id": managed_turn_id,
-        "backend_thread_id": backend_thread_id,
-        "assistant_text": "",
-        "error": detail,
-        **delivery_payload,
-    }
 
 
 def _runtime_output_suggests_pr_open(
@@ -424,176 +267,6 @@ def _self_claim_pr_bindings_for_managed_thread(
         managed_thread_id=managed_thread_id,
         workspace_root=workspace_root,
     )
-
-
-def _interrupt_recovered_lost_backend_payload(
-    *,
-    managed_thread_id: str,
-    managed_turn_id: str,
-    updated_turn: Optional[dict[str, Any]],
-    backend_error: Optional[str],
-    backend_interrupt_attempted: bool,
-) -> dict[str, Any]:
-    return {
-        "status": "ok",
-        "interrupt_state": "recovered_lost_backend",
-        "managed_thread_id": managed_thread_id,
-        "managed_turn_id": managed_turn_id,
-        "turn": updated_turn,
-        "backend_error": backend_error,
-        "detail": "Recovered stale managed-thread state after backend thread was lost.",
-        "backend_interrupt_attempted": backend_interrupt_attempted,
-        "recovered_lost_backend": True,
-    }
-
-
-async def _interrupt_managed_thread_via_orchestration(
-    *,
-    managed_thread_id: str,
-    request: Request,
-) -> dict[str, Any]:
-    from .....agents.registry import get_available_agents
-    from .....core.orchestration.catalog import map_agent_capabilities
-
-    hub_root = request.app.state.config.root
-    store = PmaThreadStore(hub_root)
-    thread = store.get_thread(managed_thread_id)
-    if thread is None:
-        raise HTTPException(status_code=404, detail="Managed thread not found")
-
-    agent = str(thread.get("agent") or "").strip().lower()
-    if agent:
-        available = get_available_agents(request.app.state)
-        descriptor = available.get(agent)
-        if descriptor is not None:
-            capabilities = map_agent_capabilities(descriptor.capabilities)
-            if "interrupt" not in capabilities:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"Agent '{agent}' does not support interrupt (missing capability: interrupt)",
-                )
-
-    running_turn = store.get_running_turn(managed_thread_id)
-    if running_turn is None:
-        raise HTTPException(
-            status_code=409, detail="Managed thread has no running turn"
-        )
-    managed_turn_id = str(running_turn.get("managed_turn_id") or "")
-    if not managed_turn_id:
-        raise HTTPException(status_code=500, detail="Running turn is missing id")
-
-    service = _build_managed_thread_orchestration_service(
-        request,
-        thread_store=store,
-    )
-    runtime_binding = _get_live_thread_runtime_binding(service, managed_thread_id)
-    backend_thread_id = normalize_optional_text(
-        getattr(runtime_binding, "backend_thread_id", None)
-    )
-    backend_turn_id = normalize_optional_text(running_turn.get("backend_turn_id"))
-    backend_error: Optional[str] = None
-    try:
-        stop_outcome = await service.stop_thread(managed_thread_id)
-    except Exception:  # intentional: top-level error handler for thread interrupt
-        logger.exception(
-            "Failed to interrupt managed-thread turn via orchestration service (managed_thread_id=%s, managed_turn_id=%s)",
-            managed_thread_id,
-            managed_turn_id,
-        )
-        interrupted_execution = service.get_execution(
-            managed_thread_id,
-            managed_turn_id,
-        )
-        stop_outcome = None
-        if interrupted_execution is None or interrupted_execution.status == "running":
-            backend_error = MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR
-    else:
-        interrupted_execution = stop_outcome.execution
-
-    if stop_outcome and stop_outcome.interrupted_active:
-        recovered_lost_backend = bool(stop_outcome.recovered_lost_backend)
-        await notify_managed_thread_terminal_transition(
-            request,
-            thread=thread,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=managed_turn_id,
-            to_state="interrupted",
-            reason="managed_turn_interrupted",
-        )
-        store.append_action(
-            "managed_thread_interrupt",
-            managed_thread_id=managed_thread_id,
-            payload_json=json.dumps(
-                {
-                    "agent": agent,
-                    "managed_turn_id": managed_turn_id,
-                    "backend_thread_id": backend_thread_id,
-                    "backend_turn_id": backend_turn_id,
-                    "backend_interrupt_attempted": bool(backend_thread_id)
-                    and not recovered_lost_backend,
-                    "backend_error": backend_error,
-                    "recovered_lost_backend": recovered_lost_backend,
-                },
-                ensure_ascii=True,
-            ),
-        )
-        updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
-        return {
-            "status": "ok",
-            "interrupt_state": (
-                "recovered_lost_backend" if recovered_lost_backend else "succeeded"
-            ),
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "turn": updated_turn,
-            "backend_error": backend_error,
-            "recovered_lost_backend": recovered_lost_backend,
-        }
-
-    if stop_outcome and stop_outcome.recovered_lost_backend:
-        await notify_managed_thread_terminal_transition(
-            request,
-            thread=thread,
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=managed_turn_id,
-            to_state="interrupted",
-            reason="managed_turn_interrupted",
-        )
-        store.append_action(
-            "managed_thread_interrupt",
-            managed_thread_id=managed_thread_id,
-            payload_json=json.dumps(
-                {
-                    "agent": agent,
-                    "managed_turn_id": managed_turn_id,
-                    "backend_thread_id": backend_thread_id,
-                    "backend_turn_id": backend_turn_id,
-                    "backend_interrupt_attempted": False,
-                    "backend_error": None,
-                    "recovered_lost_backend": True,
-                },
-                ensure_ascii=True,
-            ),
-        )
-        updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
-        return _interrupt_recovered_lost_backend_payload(
-            managed_thread_id=managed_thread_id,
-            managed_turn_id=managed_turn_id,
-            updated_turn=updated_turn,
-            backend_error=None,
-            backend_interrupt_attempted=False,
-        )
-
-    updated_turn = store.get_turn(managed_thread_id, managed_turn_id)
-    return {
-        "status": "error",
-        "interrupt_state": "failed",
-        "managed_thread_id": managed_thread_id,
-        "managed_turn_id": managed_turn_id,
-        "turn": updated_turn,
-        "backend_error": backend_error or MANAGED_THREAD_PUBLIC_INTERRUPT_ERROR,
-        "detail": MANAGED_THREAD_INTERRUPT_FAILED_DETAIL,
-    }
 
 
 def _build_managed_thread_turn_metadata(
@@ -869,7 +542,12 @@ async def _run_managed_thread_execution(
                 assistant_text=outcome.assistant_text,
             )
             transcript_turn_id = current_turn_id
-        except (OSError, TypeError, ValueError):  # best-effort transcript persistence
+        except (
+            OSError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):  # best-effort transcript persistence
             logger.exception(
                 "Failed to persist managed-thread transcript (managed_thread_id=%s, managed_turn_id=%s)",
                 managed_thread_id,
@@ -902,9 +580,7 @@ async def _run_managed_thread_execution(
                 response_status = "interrupted"
                 transition_state = "interrupted"
             elif finalized_status == "error" and finalized_execution is not None:
-                detail = _sanitize_managed_thread_result_error(
-                    finalized_execution.error
-                )
+                detail = sanitize_managed_thread_result_error(finalized_execution.error)
             await notify_managed_thread_terminal_transition(
                 request,
                 thread=current_thread_row,
@@ -997,7 +673,7 @@ async def _run_managed_thread_execution(
             **response_payload,
         }
 
-    detail = _sanitize_managed_thread_result_error(outcome.error)
+    detail = sanitize_managed_thread_result_error(outcome.error)
     timeline_events.append(Failed(timestamp=now_iso(), error_message=detail))
     _persist_managed_thread_timeline(
         hub_root=hub_root,
@@ -1050,494 +726,42 @@ async def _run_managed_thread_execution(
 
 
 def ensure_managed_thread_queue_worker(app: Any, managed_thread_id: str) -> None:
-    task_map = getattr(app.state, "pma_managed_thread_queue_tasks", None)
-    if not isinstance(task_map, dict):
-        task_map = {}
-        app.state.pma_managed_thread_queue_tasks = task_map
-    existing = task_map.get(managed_thread_id)
-    if isinstance(existing, asyncio.Task) and not existing.done():
-        return
-
-    worker_task: Optional[asyncio.Task[Any]] = None
-
-    async def _queue_worker() -> None:
-        request = _managed_thread_request_for_app(app)
-        try:
-            thread_store = PmaThreadStore(app.state.config.root)
-            service = _build_managed_thread_orchestration_service_for_app(
-                app,
-                thread_store=thread_store,
-            )
-            while True:
-                if service.get_running_execution(managed_thread_id) is not None:
-                    await asyncio.sleep(0.1)
-                    continue
-                started = await begin_next_queued_runtime_thread_execution(
-                    service,
-                    managed_thread_id,
-                )
-                if started is None:
-                    break
-                current_thread_row = thread_store.get_thread(managed_thread_id) or {}
-                await _run_managed_thread_execution(
-                    request,
-                    service=service,
-                    thread_store=thread_store,
-                    thread=current_thread_row,
-                    started=started,
-                )
-        except BaseException:
-            logger.exception(
-                "Managed-thread queue worker failed (managed_thread_id=%s)",
-                managed_thread_id,
-            )
-            try:
-                _thread_store = PmaThreadStore(app.state.config.root)
-                _service = _build_managed_thread_orchestration_service_for_app(
-                    app,
-                    thread_store=_thread_store,
-                )
-                running = _service.get_running_execution(managed_thread_id)
-                if running is not None:
-                    _service.record_execution_result(
-                        managed_thread_id,
-                        running.execution_id,
-                        status="error",
-                        assistant_text="",
-                        error="Queue worker terminated unexpectedly",
-                        backend_turn_id=None,
-                        transcript_turn_id=None,
-                    )
-            except (OSError, RuntimeError):  # intentional: cleanup in error handler
-                logger.exception(
-                    "Failed to clean up running execution after queue worker failure "
-                    "(managed_thread_id=%s)",
-                    managed_thread_id,
-                )
-            raise
-        finally:
-            if (
-                worker_task is not None
-                and task_map.get(managed_thread_id) is worker_task
-            ):
-                task_map.pop(managed_thread_id, None)
-
-    worker_task = asyncio.create_task(_queue_worker())
-    task_map[managed_thread_id] = worker_task
-    _track_managed_thread_task(app, worker_task)
+    ensure_queue_worker(
+        app,
+        managed_thread_id,
+        managed_thread_request_for_app=_managed_thread_request_for_app,
+        build_service_for_app=_build_managed_thread_orchestration_service_for_app,
+        run_managed_thread_execution=_run_managed_thread_execution,
+        track_managed_thread_task=_track_managed_thread_task,
+    )
 
 
 async def restart_managed_thread_queue_workers(app: Any) -> None:
-    thread_store = PmaThreadStore(app.state.config.root)
-    for managed_thread_id in thread_store.list_thread_ids_with_pending_queue(
-        limit=None
-    ):
-        ensure_managed_thread_queue_worker(app, managed_thread_id)
-
-
-def _has_bound_chat_surface(
-    binding_store: OrchestrationBindingStore, managed_thread_id: str
-) -> bool:
-    return any(
-        binding.surface_kind in BOUND_CHAT_SURFACE_KINDS
-        for binding in binding_store.list_bindings(
-            thread_target_id=managed_thread_id,
-            include_disabled=False,
-            limit=1000,
-        )
-    )
-
-
-def _is_chat_origin_running_execution(
-    thread_store: PmaThreadStore, managed_thread_id: str
-) -> bool:
-    running_turn = thread_store.get_running_turn(managed_thread_id)
-    client_turn_id = normalize_optional_text(
-        running_turn.get("client_turn_id") if running_turn is not None else None
-    )
-    if not client_turn_id:
-        return False
-    client_turn_id = client_turn_id.lower()
-    return any(
-        client_turn_id.startswith(prefix) for prefix in BOUND_CHAT_CLIENT_TURN_PREFIXES
+    await restart_queue_workers(
+        app,
+        ensure_queue_worker_callback=ensure_managed_thread_queue_worker,
     )
 
 
 async def recover_orphaned_managed_thread_executions(app: Any) -> None:
-    thread_store = PmaThreadStore(app.state.config.root)
-    binding_store = OrchestrationBindingStore(app.state.config.root)
-    service = _build_managed_thread_orchestration_service_for_app(
+    await recover_orphaned_executions(
         app,
-        thread_store=thread_store,
+        build_service_for_app=_build_managed_thread_orchestration_service_for_app,
     )
-    app_server_events = getattr(app.state, "app_server_events", None)
-    for managed_thread_id in thread_store.list_thread_ids_with_running_executions(
-        limit=None,
-    ):
-        try:
-            thread = service.get_thread_target(managed_thread_id)
-            execution = service.get_running_execution(managed_thread_id)
-            if thread is None or execution is None:
-                continue
-            if _has_bound_chat_surface(
-                binding_store, managed_thread_id
-            ) and _is_chat_origin_running_execution(thread_store, managed_thread_id):
-                continue
-            has_turn = getattr(app_server_events, "has_turn", None)
-            if (
-                callable(has_turn)
-                and thread.backend_thread_id
-                and execution.backend_id
-                and await has_turn(thread.backend_thread_id, execution.backend_id)
-            ):
-                continue
-            if app_server_events is not None and not isinstance(
-                app_server_events, AppServerEventBuffer
-            ):
-                if callable(
-                    getattr(app_server_events, "list_events", None)
-                ) or callable(getattr(app_server_events, "stream_entries", None)):
-                    continue
-            if (
-                str(thread.agent_id or "").strip().lower() == "zeroclaw"
-                and thread.workspace_root
-                and thread.backend_thread_id
-                and execution.backend_id
-            ):
-                zeroclaw_supervisor = getattr(app.state, "zeroclaw_supervisor", None)
-                list_turn_events = getattr(
-                    zeroclaw_supervisor, "list_turn_events", None
-                )
-                if callable(list_turn_events):
-                    try:
-                        live_events = await list_turn_events(
-                            Path(str(thread.workspace_root)),
-                            thread.backend_thread_id,
-                            execution.backend_id,
-                        )
-                    except (
-                        AttributeError,
-                        TypeError,
-                        RuntimeError,
-                    ):  # intentional: defensive fallback for dynamic supervisor call
-                        live_events = []
-                    if live_events:
-                        continue
-            service.recover_running_execution_after_restart(managed_thread_id)
-        except (
-            RuntimeError,
-            OSError,
-            ValueError,
-            TypeError,
-            KeyError,
-        ):  # intentional: top-level error handler for thread recovery loop
-            logger.exception(
-                "Managed-thread running execution recovery failed (managed_thread_id=%s)",
-                managed_thread_id,
-            )
 
 
-async def deliver_bound_chat_assistant_output(
-    request: Request,
+async def _interrupt_managed_thread_via_orchestration(
     *,
     managed_thread_id: str,
-    managed_turn_id: str,
-    assistant_text: str,
-) -> None:
-    message = str(assistant_text or "").strip()
-    if not message:
-        return
-
-    hub_root = request.app.state.config.root
-    binding_store = OrchestrationBindingStore(hub_root)
-    bindings = [
-        binding
-        for binding in binding_store.list_bindings(
-            thread_target_id=managed_thread_id,
-            include_disabled=False,
-            limit=1000,
-        )
-        if binding.surface_kind in BOUND_CHAT_SURFACE_KINDS
-    ]
-    if not bindings:
-        return
-
-    discord_store: Optional[DiscordStateStore] = None
-    telegram_store: Optional[TelegramStateStore] = None
-    created_at = now_iso()
-    try:
-        for binding in bindings:
-            try:
-                if binding.surface_kind == "discord":
-                    if discord_store is None:
-                        discord_store = DiscordStateStore(
-                            resolve_chat_state_path(
-                                request,
-                                section="discord_bot",
-                                default_state_file=DISCORD_STATE_FILE_DEFAULT,
-                            )
-                        )
-                    channel_id = normalize_optional_text(binding.surface_key)
-                    if channel_id is None:
-                        continue
-                    chunks = chunk_discord_message(
-                        format_discord_message(message),
-                        max_len=PMA_DISCORD_MESSAGE_MAX_LEN,
-                        with_numbering=False,
-                    )
-                    if not chunks:
-                        chunks = [format_discord_message(message)]
-                    for index, chunk in enumerate(chunks, start=1):
-                        digest = hashlib.sha256(
-                            (
-                                f"managed-thread:{managed_turn_id}:discord:{channel_id}:{index}"
-                            ).encode("utf-8")
-                        ).hexdigest()[:24]
-                        record_id = f"managed-thread:{digest}"
-                        if await discord_store.get_outbox(record_id) is not None:
-                            continue
-                        record = DiscordOutboxRecord(
-                            record_id=record_id,
-                            channel_id=channel_id,
-                            message_id=None,
-                            operation="send",
-                            payload_json={"content": chunk},
-                            created_at=created_at,
-                        )
-                        store = discord_store
-                        await enqueue_with_retry(
-                            lambda record=record, store=store: store.enqueue_outbox(
-                                record
-                            )
-                        )
-                    continue
-
-                if binding.surface_kind != "telegram":
-                    continue
-                if telegram_store is None:
-                    telegram_store = TelegramStateStore(
-                        resolve_chat_state_path(
-                            request,
-                            section="telegram_bot",
-                            default_state_file=TELEGRAM_STATE_FILE_DEFAULT,
-                        )
-                    )
-                surface_key = normalize_optional_text(binding.surface_key)
-                if surface_key is None:
-                    continue
-                try:
-                    chat_id, thread_id, _scope = parse_topic_key(surface_key)
-                except ValueError:
-                    logger.warning(
-                        "Failed to parse telegram bound-chat surface key for managed-thread delivery: %s",
-                        surface_key,
-                    )
-                    continue
-                digest = hashlib.sha256(
-                    (
-                        f"managed-thread:{managed_turn_id}:telegram:{chat_id}:{thread_id or 'root'}"
-                    ).encode("utf-8")
-                ).hexdigest()[:24]
-                record_id = f"managed-thread:{digest}"
-                if await telegram_store.get_outbox(record_id) is not None:
-                    continue
-                outbox_key = f"managed-thread:{managed_turn_id}:{chat_id}:{thread_id or 'root'}:send"
-                telegram_record = TelegramOutboxRecord(
-                    record_id=record_id,
-                    chat_id=chat_id,
-                    thread_id=thread_id,
-                    reply_to_message_id=None,
-                    placeholder_message_id=None,
-                    text=message,
-                    created_at=created_at,
-                    operation="send",
-                    message_id=None,
-                    outbox_key=outbox_key,
-                )
-                telegram_delivery_store = telegram_store
-                await enqueue_with_retry(
-                    lambda record=telegram_record, store=telegram_delivery_store: store.enqueue_outbox(
-                        record
-                    )
-                )
-            except (
-                RuntimeError,
-                OSError,
-                ValueError,
-                TypeError,
-                KeyError,
-            ):  # intentional: best-effort per-binding delivery
-                logger.exception(
-                    "Failed to enqueue bound-chat delivery target (managed_thread_id=%s, managed_turn_id=%s, surface_kind=%s, surface_key=%s)",
-                    managed_thread_id,
-                    managed_turn_id,
-                    binding.surface_kind,
-                    binding.surface_key,
-                )
-    finally:
-        if discord_store is not None:
-            try:
-                await discord_store.close()
-            except (
-                sqlite3.Error,
-                OSError,
-                RuntimeError,
-            ):  # intentional: best-effort store close
-                logger.exception("Failed to close discord bound-chat delivery store")
-        if telegram_store is not None:
-            try:
-                await telegram_store.close()
-            except (
-                sqlite3.Error,
-                OSError,
-                RuntimeError,
-            ):  # intentional: best-effort store close
-                logger.exception("Failed to close telegram bound-chat delivery store")
-
-
-async def notify_managed_thread_terminal_transition(
     request: Request,
-    *,
-    thread: dict[str, Any],
-    managed_thread_id: str,
-    managed_turn_id: str,
-    to_state: str,
-    reason: str,
-) -> None:
-    normalized_to_state = (to_state or "").strip().lower() or "failed"
-    await _notify_hub_automation_transition(
-        request,
-        repo_id=normalize_optional_text(thread.get("repo_id")),
-        resource_kind=normalize_optional_text(thread.get("resource_kind")),
-        resource_id=normalize_optional_text(thread.get("resource_id")),
-        run_id=None,
-        thread_id=managed_thread_id,
-        from_state="running",
-        to_state=normalized_to_state,
-        reason=reason,
-        extra={
-            "event_type": f"managed_thread_{normalized_to_state}",
-            "transition_id": f"managed_turn:{managed_turn_id}:{normalized_to_state}",
-            "idempotency_key": (
-                f"managed_turn:{managed_turn_id}:{normalized_to_state}"
-            ),
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "agent": normalize_optional_text(thread.get("agent")) or "",
-        },
+) -> dict[str, Any]:
+    return await interrupt_managed_thread_via_orchestration(
+        managed_thread_id=managed_thread_id,
+        request=request,
+        build_service=_build_managed_thread_orchestration_service,
+        get_live_thread_runtime_binding=_get_live_thread_runtime_binding,
+        notify_transition=notify_managed_thread_terminal_transition,
     )
-
-
-async def _notify_hub_automation_transition(
-    request: Request,
-    *,
-    repo_id: Optional[str] = None,
-    resource_kind: Optional[str] = None,
-    resource_id: Optional[str] = None,
-    run_id: Optional[str] = None,
-    thread_id: Optional[str] = None,
-    from_state: str,
-    to_state: str,
-    reason: Optional[str] = None,
-    timestamp: Optional[str] = None,
-    extra: Optional[dict[str, Any]] = None,
-) -> None:
-    from .....core.time_utils import now_iso
-
-    payload: dict[str, Any] = {
-        "from_state": (from_state or "").strip(),
-        "to_state": (to_state or "").strip(),
-        "reason": normalize_optional_text(reason) or "",
-        "timestamp": normalize_optional_text(timestamp) or now_iso(),
-    }
-    normalized_repo_id = normalize_optional_text(repo_id)
-    normalized_resource_kind = normalize_optional_text(resource_kind)
-    normalized_resource_id = normalize_optional_text(resource_id)
-    normalized_run_id = normalize_optional_text(run_id)
-    normalized_thread_id = normalize_optional_text(thread_id)
-    if normalized_repo_id:
-        payload["repo_id"] = normalized_repo_id
-    if normalized_resource_kind:
-        payload["resource_kind"] = normalized_resource_kind
-    if normalized_resource_id:
-        payload["resource_id"] = normalized_resource_id
-    if normalized_run_id:
-        payload["run_id"] = normalized_run_id
-    if normalized_thread_id:
-        payload["thread_id"] = normalized_thread_id
-    if isinstance(extra, dict):
-        payload.update(extra)
-
-    supervisor = getattr(request.app.state, "hub_supervisor", None)
-    store = await get_automation_store(request, None)
-    if store is None:
-        return
-
-    method = first_callable(
-        store,
-        ("notify_transition",),
-    )
-    if method is None:
-        return
-
-    async def await_if_needed(value: Any) -> Any:
-        if asyncio.iscoroutine(value):
-            return await value
-        return value
-
-    async def call_with_fallbacks(
-        method: Any, attempts: list[tuple[tuple[Any, ...], dict[str, Any]]]
-    ) -> Any:
-        last_type_error: Optional[TypeError] = None
-        for args, kwargs in attempts:
-            try:
-                return await await_if_needed(method(*args, **kwargs))
-            except TypeError as exc:
-                last_type_error = exc
-                continue
-        if last_type_error is not None:
-            raise last_type_error
-        raise RuntimeError("No automation method call attempts were provided")
-
-    try:
-        await call_with_fallbacks(
-            method,
-            [
-                ((dict(payload),), {}),
-                ((), {"payload": dict(payload)}),
-                ((), dict(payload)),
-            ],
-        )
-    except (
-        AttributeError,
-        TypeError,
-        RuntimeError,
-    ):  # intentional: defensive catch for dynamic automation call
-        logger.exception("Failed to notify hub automation transition")
-        return
-
-    process_now = (
-        getattr(supervisor, "process_pma_automation_now", None)
-        if supervisor is not None
-        else None
-    )
-    if not callable(process_now):
-        return
-    try:
-        await await_if_needed(process_now(include_timers=False))
-    except TypeError:
-        try:
-            await await_if_needed(process_now())
-        except (
-            AttributeError,
-            RuntimeError,
-        ):  # intentional: defensive catch for dynamic supervisor call
-            logger.exception("Failed immediate PMA automation processing")
-    except (
-        AttributeError,
-        RuntimeError,
-    ):  # intentional: defensive catch for dynamic supervisor call
-        logger.exception("Failed immediate PMA automation processing")
 
 
 def build_managed_thread_runtime_routes(
@@ -1546,202 +770,91 @@ def build_managed_thread_runtime_routes(
 ) -> None:
     """Build managed-thread runtime routes (send message, interrupt)."""
 
-    def _get_pma_config(request: Request) -> dict[str, Any]:
-        raw = getattr(request.app.state.config, "raw", {})
-        return _pma_config_from_raw(raw)
-
-    def _pma_config_from_raw(raw: dict[str, Any]) -> dict[str, Any]:
-        defaults: dict[str, Any] = {
-            "enabled": True,
-            "max_text_chars": PMA_DEFAULT_MAX_TEXT_CHARS,
-        }
-        if not isinstance(raw, dict):
-            return defaults
-        pma = raw.get("pma")
-        if not isinstance(pma, dict):
-            return defaults
-        return {**defaults, **pma}
-
     @router.post("/threads/{managed_thread_id}/messages")
     async def send_managed_thread_message(
         managed_thread_id: str,
         request: Request,
         payload: PmaManagedThreadMessageRequest,
     ) -> Any:
-        busy_policy = _normalize_busy_policy(payload.busy_policy)
-
-        message = payload.message or ""
-        if not message.strip():
-            raise HTTPException(status_code=400, detail="message is required")
-
-        defaults = _get_pma_config(request)
-        max_text_chars = int(defaults.get("max_text_chars", 0) or 0)
-        if max_text_chars > 0 and len(message) > max_text_chars:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"message exceeds max_text_chars ({max_text_chars} characters)"
-                ),
-            )
-
         hub_root = request.app.state.config.root
         thread_store = PmaThreadStore(hub_root)
         thread = thread_store.get_thread(managed_thread_id)
         if thread is None:
             raise HTTPException(status_code=404, detail="Managed thread not found")
-
-        notify_on = normalize_optional_text(payload.notify_on)
-        if notify_on and notify_on != "terminal":
-            raise HTTPException(
-                status_code=400, detail="notify_on must be 'terminal' when provided"
-            )
-        notify_on = None if not notify_on else notify_on
-
-        notify_lane = normalize_optional_text(payload.notify_lane)
-        notify_once = bool(payload.notify_once)
-        defer_execution = bool(payload.defer_execution)
-        delivery_payload = {"delivered_message": message}
-
-        if (thread.get("status") or "") == "archived":
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "status": "error",
-                    "send_state": "rejected",
-                    "reason": "thread_archived",
-                    "detail": "Managed thread is archived and read-only",
-                    "next_step": "Use `car pma thread resume` or spawn a new thread.",
-                    "managed_thread_id": managed_thread_id,
-                    "managed_turn_id": None,
-                    "backend_thread_id": normalize_optional_text(
-                        thread.get("backend_thread_id")
-                    )
-                    or "",
-                    "assistant_text": "",
-                    "error": "Managed thread is archived and read-only",
-                },
-            )
-        model = normalize_optional_text(payload.model) or defaults.get("model")
-        reasoning = normalize_optional_text(payload.reasoning) or defaults.get(
-            "reasoning"
-        )
-        compact_seed = normalize_optional_text(thread.get("compact_seed"))
-        metadata = thread.get("metadata")
-        if not isinstance(metadata, dict):
-            metadata = {}
-        agent_profile = normalize_optional_text(
-            thread.get("agent_profile") or metadata.get("agent_profile")
-        )
-        context_profile = normalize_car_context_profile(
-            thread.get("context_profile") or metadata.get("context_profile"),
-            default=default_managed_thread_context_profile(
-                resource_kind=thread.get("resource_kind")
-            ),
-        )
-        approval_policy, sandbox_policy = _resolve_managed_thread_policies(thread)
         service = _build_managed_thread_orchestration_service(
             request,
             thread_store=thread_store,
         )
-        runtime_binding = _get_live_thread_runtime_binding(service, managed_thread_id)
-        live_backend_thread_id = normalize_optional_text(
-            getattr(runtime_binding, "backend_thread_id", None)
+        options = resolve_managed_thread_message_options(
+            request,
+            payload,
+            managed_thread_id=managed_thread_id,
+            thread=thread,
+            service=service,
         )
-        execution_prompt = _compose_execution_prompt(
-            agent=thread.get("agent"),
-            hub_root=hub_root,
-            stored_backend_id=live_backend_thread_id,
-            compact_seed=compact_seed,
-            message=message,
-            context_profile=context_profile,
-        )
-        if str(thread.get("agent") or "").strip().lower() == "zeroclaw":
-            sync_managed_workspace_compat_files(
-                "zeroclaw",
-                runtime_workspace_root=Path(thread["workspace_root"]) / "workspace",
-                bundle=build_car_context_bundle(
-                    context_profile,
-                    prompt_text=message,
+
+        if (thread.get("status") or "") == "archived":
+            return JSONResponse(
+                status_code=409,
+                content=build_archived_thread_payload(
+                    managed_thread_id=managed_thread_id,
+                    backend_thread_id=normalize_optional_text(
+                        thread.get("backend_thread_id")
+                    )
+                    or "",
                 ),
             )
+        sync_zeroclaw_context_if_needed(thread=thread, options=options)
         try:
             started_execution = await begin_runtime_thread_execution(
                 service,
                 MessageRequest(
                     target_id=managed_thread_id,
                     target_kind="thread",
-                    message_text=message,
-                    busy_policy=busy_policy,
-                    agent_profile=agent_profile,
-                    model=model,
-                    reasoning=reasoning,
-                    approval_mode=approval_policy,
-                    context_profile=context_profile,
+                    message_text=options.message,
+                    busy_policy=options.busy_policy,
+                    agent_profile=options.agent_profile,
+                    model=options.model,
+                    reasoning=options.reasoning,
+                    approval_mode=options.approval_policy,
+                    context_profile=options.context_profile,
                     metadata={
-                        "runtime_prompt": execution_prompt,
-                        "execution_error_message": (
-                            MANAGED_THREAD_PUBLIC_EXECUTION_ERROR
-                        ),
+                        "runtime_prompt": options.execution_prompt,
+                        "execution_error_message": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
                     },
                 ),
-                sandbox_policy=sandbox_policy,
+                sandbox_policy=options.sandbox_policy,
             )
         except ManagedThreadNotActiveError as exc:
-            if exc.status == "archived":
-                detail = "Managed thread is archived and read-only"
-            else:
-                detail = "Managed thread is not active"
             return JSONResponse(
                 status_code=409,
-                content={
-                    "status": "error",
-                    "send_state": "rejected",
-                    "reason": "thread_not_active",
-                    "detail": detail,
-                    "next_step": "Resume the thread or create a new active thread.",
-                    "managed_thread_id": managed_thread_id,
-                    "managed_turn_id": None,
-                    "backend_thread_id": live_backend_thread_id or "",
-                    "assistant_text": "",
-                    "error": detail,
-                },
+                content=build_not_active_thread_payload(
+                    managed_thread_id=managed_thread_id,
+                    backend_thread_id=options.live_backend_thread_id,
+                    exc=exc,
+                ),
             )
         except ManagedThreadAlreadyHasRunningTurnError:
             running_turn = thread_store.get_running_turn(managed_thread_id)
             return JSONResponse(
                 status_code=409,
-                content={
-                    "status": "error",
-                    "send_state": "already_in_flight",
-                    "reason": "running_turn_exists",
-                    "detail": (
-                        f"Managed thread {managed_thread_id} already has a running turn"
-                    ),
-                    "next_step": (
-                        "Wait for the running turn to finish, use --watch, "
-                        "or subscribe with --notify-on terminal."
-                    ),
-                    "managed_thread_id": managed_thread_id,
-                    "managed_turn_id": str(
-                        (running_turn or {}).get("managed_turn_id") or ""
-                    )
-                    or None,
-                    "backend_thread_id": live_backend_thread_id or "",
-                    "assistant_text": "",
-                    "error": "Managed thread already has a running turn",
-                },
+                content=build_running_turn_exists_payload(
+                    managed_thread_id=managed_thread_id,
+                    backend_thread_id=options.live_backend_thread_id,
+                    running_turn=running_turn,
+                ),
             )
         except BusyInterruptFailedError as exc:
             return JSONResponse(
                 status_code=409,
-                content=_interrupt_failure_payload(
+                content=build_interrupt_failure_payload(
                     managed_thread_id=managed_thread_id,
                     managed_turn_id=exc.active_execution_id,
                     backend_thread_id=exc.backend_thread_id
-                    or live_backend_thread_id
+                    or options.live_backend_thread_id
                     or "",
                     detail=exc.detail,
-                    delivery_payload=delivery_payload,
+                    delivery_payload=options.delivery_payload,
                 ),
             )
         except Exception:  # intentional: top-level error handler for execution setup
@@ -1749,30 +862,24 @@ def build_managed_thread_runtime_routes(
                 "Managed thread execution setup failed (managed_thread_id=%s)",
                 managed_thread_id,
             )
-            return {
-                "status": "error",
-                "send_state": "accepted",
-                "execution_state": "completed",
-                "managed_thread_id": managed_thread_id,
-                "managed_turn_id": None,
-                "backend_thread_id": live_backend_thread_id or "",
-                "assistant_text": "",
-                "error": MANAGED_THREAD_PUBLIC_EXECUTION_ERROR,
-                **delivery_payload,
-            }
+            return build_execution_setup_error_payload(
+                managed_thread_id=managed_thread_id,
+                backend_thread_id=options.live_backend_thread_id,
+                delivery_payload=options.delivery_payload,
+            )
         managed_turn_id = started_execution.execution.execution_id
         if not managed_turn_id:
             raise HTTPException(status_code=500, detail="Failed to create managed turn")
         backend_thread_id = (
             normalize_optional_text(started_execution.thread.backend_thread_id)
-            or live_backend_thread_id
+            or options.live_backend_thread_id
             or ""
         )
         execution_status = str(
             getattr(started_execution.execution, "status", "running") or "running"
         ).strip()
         if execution_status not in {"running", "queued"}:
-            detail = _sanitize_managed_thread_result_error(
+            detail = sanitize_managed_thread_result_error(
                 started_execution.execution.error
             )
             await notify_managed_thread_terminal_transition(
@@ -1783,29 +890,25 @@ def build_managed_thread_runtime_routes(
                 to_state="failed",
                 reason=detail,
             )
-            return {
-                "status": "error",
-                "send_state": "accepted",
-                "execution_state": "completed",
-                "managed_thread_id": managed_thread_id,
-                "managed_turn_id": managed_turn_id,
-                "backend_thread_id": backend_thread_id or "",
-                "assistant_text": "",
-                "error": detail,
-                **delivery_payload,
-            }
+            return build_started_execution_error_payload(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=backend_thread_id or "",
+                error=detail,
+                delivery_payload=options.delivery_payload,
+            )
 
         notification: Optional[dict[str, Any]] = None
-        if notify_on == "terminal":
+        if options.notify_on == "terminal":
             automation_client = ManagedThreadAutomationClient(request, lambda: None)
             try:
                 notification = await automation_client.create_terminal_followup(
                     managed_thread_id=managed_thread_id,
-                    lane_id=notify_lane,
-                    notify_once=notify_once,
+                    lane_id=options.notify_lane,
+                    notify_once=options.notify_once,
                     idempotency_key=(
                         f"managed-thread-send-notify:{managed_turn_id}"
-                        if notify_once
+                        if options.notify_once
                         else None
                     ),
                     required=True,
@@ -1822,53 +925,44 @@ def build_managed_thread_runtime_routes(
                 thread_store=thread_store,
                 thread=thread,
                 started=started,
-                fallback_backend_thread_id=live_backend_thread_id,
-                delivery_payload=delivery_payload,
+                fallback_backend_thread_id=options.live_backend_thread_id,
+                delivery_payload=options.delivery_payload,
             )
 
         if getattr(started_execution.execution, "status", "running") == "queued":
             running_execution = service.get_running_execution(managed_thread_id)
-            queued_payload: dict[str, Any] = {
-                "status": "ok",
-                "send_state": "queued",
-                "execution_state": "queued",
-                "managed_thread_id": managed_thread_id,
-                "managed_turn_id": managed_turn_id,
-                "backend_thread_id": backend_thread_id or "",
-                "assistant_text": "",
-                "error": None,
-                **delivery_payload,
-                "queue_depth": service.get_queue_depth(managed_thread_id),
-                "active_managed_turn_id": (
+            return build_queued_send_payload(
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=backend_thread_id or "",
+                delivery_payload=options.delivery_payload,
+                queue_depth=service.get_queue_depth(managed_thread_id),
+                active_managed_turn_id=(
                     running_execution.execution_id
                     if running_execution is not None
                     else None
                 ),
-            }
-            if notification is not None:
-                queued_payload["notification"] = notification
-            return queued_payload
+                notification=notification,
+            )
 
-        accepted_payload: dict[str, Any] = {
-            "status": "ok",
-            "send_state": "accepted",
-            "execution_state": "running",
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "backend_thread_id": backend_thread_id or "",
-            "assistant_text": "",
-            "error": None,
-            **delivery_payload,
-        }
-        if notification is not None:
-            accepted_payload["notification"] = notification
+        accepted_payload = build_accepted_send_payload(
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            backend_thread_id=backend_thread_id or "",
+            delivery_payload=options.delivery_payload,
+            notification=notification,
+        )
 
-        if defer_execution:
+        if options.defer_execution:
 
             async def _background_run() -> None:
                 try:
                     await _run_execution(started_execution)
-                    ensure_managed_thread_queue_worker(request.app, managed_thread_id)
+                    if service.get_queue_depth(managed_thread_id) > 0:
+                        ensure_managed_thread_queue_worker(
+                            request.app,
+                            managed_thread_id,
+                        )
                 except BaseException:
                     logger.exception(
                         "Managed-thread background execution failed (managed_thread_id=%s, managed_turn_id=%s)",
@@ -1919,7 +1013,6 @@ def build_managed_thread_runtime_routes(
             return accepted_payload
 
         response = await _run_execution(started_execution)
-        ensure_managed_thread_queue_worker(request.app, managed_thread_id)
         response["send_state"] = "accepted"
         response["execution_state"] = "completed"
         if notification is not None:

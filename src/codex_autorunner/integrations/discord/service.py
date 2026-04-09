@@ -66,22 +66,17 @@ from ...core.flows.ux_helpers import (
     ensure_worker,
     select_default_ticket_flow_run,
     select_ticket_flow_run_record,
-    summarize_flow_freshness,
     ticket_progress,
 )
 from ...core.git_utils import (  # noqa: F401 - kept for test monkeypatching
     GitError,
     reset_branch_from_origin_main,
 )
-from ...core.injected_context import wrap_injected_context
 from ...core.logging_utils import log_event
 from ...core.managed_processes import reap_managed_processes
 from ...core.orchestration import build_ticket_flow_orchestration_service
 from ...core.pma_notification_store import PmaNotificationStore
 from ...core.state_roots import resolve_global_state_root
-from ...core.ticket_flow_summary import (
-    build_ticket_flow_display,
-)
 from ...core.update import (  # noqa: F401 - kept for test monkeypatching
     UpdateInProgressError,
     _available_update_target_definitions,
@@ -154,10 +149,6 @@ from ...integrations.chat.managed_thread_lifecycle import (
 )
 from ...integrations.chat.media import (
     audio_content_type_for_input,
-    audio_extension_for_input,
-    is_audio_mime_or_path,
-    is_image_mime_or_path,
-    normalize_mime_type,
 )
 from ...integrations.chat.model_selection import (
     REASONING_EFFORT_VALUES,
@@ -213,12 +204,8 @@ from .command_runner import CommandRunner as _CommandRunner
 from .command_runner import RunnerConfig as _RunnerConfig
 from .commands import build_application_commands
 from .components import (
-    DISCORD_BUTTON_STYLE_SUCCESS,
     DISCORD_SELECT_OPTION_MAX_OPTIONS,
-    build_action_row,
-    build_button,
     build_model_effort_picker,
-    build_queue_notice_buttons,
     build_ticket_filter_picker,
     build_ticket_picker,
 )
@@ -293,6 +280,14 @@ from .rendering import (
 )
 from .response_helpers import DiscordResponder
 from .rest import DiscordRestClient
+from .service_normalization import (
+    DiscordAttachmentAdapter,
+    SavedDiscordAttachment,
+    build_attachment_context_payload,
+    build_discord_approval_message,
+    build_discord_queue_notice_message,
+    format_hub_flow_overview_line,
+)
 from .state import DiscordStateStore, OutboxRecord
 from .workspace_commands import (
     handle_bind,
@@ -317,6 +312,8 @@ THREAD_LIST_PAGE_LIMIT = 100
 APP_SERVER_START_BACKOFF_INITIAL_SECONDS = 1.0
 APP_SERVER_START_BACKOFF_MAX_SECONDS = 30.0
 DISCORD_OPENCODE_PRUNE_FALLBACK_INTERVAL_SECONDS = 300.0
+# Kept for test compatibility; queued notice payloads are shaped in
+# service_normalization.py.
 DISCORD_QUEUED_PLACEHOLDER_TEXT = "Queued (waiting for available worker...)"
 DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER = (
     "Note: transcribed from user voice. If confusing or possibly inaccurate and you "
@@ -353,18 +350,6 @@ def _opencode_prune_interval(idle_ttl_seconds: Optional[int]) -> Optional[float]
     if not idle_ttl_seconds or idle_ttl_seconds <= 0:
         return None
     return float(min(600.0, max(60.0, idle_ttl_seconds / 2)))
-
-
-@dataclass(frozen=True)
-class _SavedDiscordAttachment:
-    original_name: str
-    path: Path
-    mime_type: Optional[str]
-    size_bytes: int
-    is_audio: bool
-    is_image: bool
-    transcript_text: Optional[str] = None
-    transcript_warning: Optional[str] = None
 
 
 @dataclass
@@ -1023,13 +1008,13 @@ class DiscordBotService:
             return
         channel_id = dispatch_result.context.chat_id
         source_message_id = event.message.message_id
+        queued_notice_payload = build_discord_queue_notice_message(
+            source_message_id=source_message_id,
+        )
         try:
             response = await self._send_channel_message(
                 channel_id,
-                {
-                    "content": format_discord_message(DISCORD_QUEUED_PLACEHOLDER_TEXT),
-                    "components": [build_queue_notice_buttons(source_message_id)],
-                },
+                queued_notice_payload.to_payload(),
             )
             notice_message_id = response.get("id")
             if isinstance(notice_message_id, str) and notice_message_id:
@@ -1039,7 +1024,7 @@ class DiscordBotService:
         except (DiscordAPIError, OSError, TypeError, ValueError):
             await self._send_channel_message_safe(
                 channel_id,
-                {"content": format_discord_message(DISCORD_QUEUED_PLACEHOLDER_TEXT)},
+                build_discord_queue_notice_message(source_message_id=None).to_payload(),
                 record_id=f"queue-notice:{channel_id}:{dispatch_result.context.update_id}",
             )
         log_event(
@@ -1444,15 +1429,8 @@ class DiscordBotService:
         return service, voice_config
 
     def _is_audio_attachment(self, attachment: Any, mime_type: Optional[str]) -> bool:
-        kind = getattr(attachment, "kind", None)
-        file_name = getattr(attachment, "file_name", None)
-        source_url = getattr(attachment, "source_url", None)
-        return is_audio_mime_or_path(
-            mime_type=mime_type,
-            file_name=file_name if isinstance(file_name, str) else None,
-            source_url=source_url if isinstance(source_url, str) else None,
-            kind=kind if isinstance(kind, str) else None,
-        )
+        normalized = DiscordAttachmentAdapter.from_raw(attachment)
+        return normalized.is_audio(mime_type=mime_type)
 
     def _transcription_filename_for_attachment(
         self,
@@ -1461,26 +1439,11 @@ class DiscordBotService:
         saved_name: str,
         mime_type: Optional[str],
     ) -> str:
-        raw_name = getattr(attachment, "file_name", None)
-        if not isinstance(raw_name, str) or not raw_name.strip():
-            return saved_name
-
-        candidate = Path(raw_name).name.strip()
-        if not candidate:
-            return saved_name
-        if not self._is_audio_attachment(attachment, mime_type):
-            return candidate
-
-        # Discord voice notes can arrive with generic names like ".bin". Reuse the
-        # normalized inbox filename so transcription providers get a recognizable
-        # audio extension/content type.
-        if audio_content_type_for_input(
-            mime_type=None,
-            file_name=candidate,
-            source_url=None,
-        ):
-            return candidate
-        return saved_name
+        normalized = DiscordAttachmentAdapter.from_raw(attachment)
+        return normalized.transcription_filename(
+            saved_name=saved_name,
+            mime_type=mime_type,
+        )
 
     async def _transcribe_voice_attachment(
         self,
@@ -1586,43 +1549,38 @@ class DiscordBotService:
 
         inbox = inbox_dir(workspace_root)
         inbox.mkdir(parents=True, exist_ok=True)
-        saved: list[_SavedDiscordAttachment] = []
+        saved: list[SavedDiscordAttachment] = []
         failed = 0
         for index, attachment in enumerate(attachments, start=1):
-            source_url = getattr(attachment, "source_url", None)
-            if not isinstance(source_url, str) or not source_url.strip():
+            normalized = DiscordAttachmentAdapter.from_raw(attachment)
+            if normalized.source_url is None:
                 failed += 1
                 continue
             try:
-                size_bytes = getattr(attachment, "size_bytes", None)
                 if (
-                    isinstance(size_bytes, int)
-                    and size_bytes > DISCORD_ATTACHMENT_MAX_BYTES
+                    normalized.size_bytes is not None
+                    and normalized.size_bytes > DISCORD_ATTACHMENT_MAX_BYTES
                 ):
                     raise RuntimeError(
-                        f"attachment exceeds max size ({size_bytes} > {DISCORD_ATTACHMENT_MAX_BYTES})"
+                        "attachment exceeds max size "
+                        f"({normalized.size_bytes} > {DISCORD_ATTACHMENT_MAX_BYTES})"
                     )
                 data = await self._rest.download_attachment(
-                    url=source_url,
+                    url=normalized.source_url,
                     max_size_bytes=DISCORD_ATTACHMENT_MAX_BYTES,
                 )
                 file_name = self._build_attachment_filename(attachment, index=index)
                 path = inbox / file_name
                 path.write_bytes(data)
-                original_name = getattr(attachment, "file_name", None) or path.name
-                mime_type = getattr(attachment, "mime_type", None)
-                is_audio = self._is_audio_attachment(
-                    attachment, mime_type if isinstance(mime_type, str) else None
-                )
+                original_name = normalized.file_name or path.name
+                mime_type = normalized.mime_type
+                is_audio = normalized.is_audio(mime_type=mime_type)
                 transcription_name = self._transcription_filename_for_attachment(
                     attachment,
                     saved_name=path.name,
-                    mime_type=mime_type if isinstance(mime_type, str) else None,
+                    mime_type=mime_type,
                 )
-                is_image = is_image_mime_or_path(
-                    mime_type if isinstance(mime_type, str) else None,
-                    str(original_name),
-                )
+                is_image = normalized.is_image(original_name=str(original_name))
                 (
                     transcript_text,
                     transcript_warning,
@@ -1635,10 +1593,10 @@ class DiscordBotService:
                     mime_type=mime_type if isinstance(mime_type, str) else None,
                 )
                 saved.append(
-                    _SavedDiscordAttachment(
+                    SavedDiscordAttachment(
                         original_name=str(original_name),
                         path=path,
-                        mime_type=mime_type if isinstance(mime_type, str) else None,
+                        mime_type=mime_type,
                         size_bytes=len(data),
                         is_audio=is_audio,
                         is_image=is_image,
@@ -1653,51 +1611,18 @@ class DiscordBotService:
                     logging.WARNING,
                     "discord.turn.attachment.download_failed",
                     channel_id=channel_id,
-                    file_id=getattr(attachment, "file_id", None),
+                    file_id=normalized.file_id,
                     exc=exc,
                 )
 
         if not saved:
             return prompt_text, 0, failed, None, None
 
-        transcript_lines: list[str] = []
-        transcript_items = [item for item in saved if item.transcript_text]
-        if len(transcript_items) == 1:
-            transcript_lines = ["User:", transcript_items[0].transcript_text or ""]
-        elif transcript_items:
-            transcript_lines = ["User:"]
-            for item in transcript_items:
-                transcript_lines.append(f"[{item.original_name}]")
-                transcript_lines.append(item.transcript_text or "")
-                transcript_lines.append("")
-            while transcript_lines and not transcript_lines[-1].strip():
-                transcript_lines.pop()
-        user_visible_transcript = None
-        if transcript_lines:
-            transcript_text = "\n".join(transcript_lines)
-            max_len = max(int(self._config.max_message_length), 32)
-            user_visible_transcript = truncate_for_discord(
-                format_discord_message(transcript_text),
-                max_len=max_len,
-            )
-
-        details: list[str] = ["Inbound Discord attachments:"]
-        for item in saved:
-            details.append(f"- Name: {item.original_name}")
-            details.append(f"  Saved to: {item.path}")
-            details.append(f"  Size: {item.size_bytes} bytes")
-            if item.mime_type:
-                details.append(f"  Mime: {item.mime_type}")
-            if item.transcript_text:
-                details.append(f"  Transcript: {item.transcript_text}")
-            elif item.transcript_warning:
-                details.append(f"  Transcript: {item.transcript_warning}")
-
+        provider_name: Optional[str] = None
         if any(item.transcript_text for item in saved):
             voice_service, voice_config = self._voice_service_for_workspace(
                 workspace_root
             )
-            provider_name = ""
             if voice_service is not None:
                 with contextlib.suppress(RuntimeError, AttributeError, ValueError):
                     provider_name = voice_service.effective_provider_name()
@@ -1707,99 +1632,29 @@ class DiscordBotService:
                 and isinstance(voice_config.provider, str)
             ):
                 provider_name = normalize_voice_provider(voice_config.provider)
-            if provider_name == "openai_whisper":
-                details.append("")
-                details.append(
-                    wrap_injected_context(DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER)
-                )
 
-        if any(not item.is_audio for item in saved):
-            details.append("")
-            details.append(
-                wrap_injected_context(
-                    "\n".join(
-                        [
-                            f"Inbox: {inbox}",
-                            f"Outbox: {outbox_dir(workspace_root)}",
-                            f"Outbox (pending): {outbox_pending_dir(workspace_root)}",
-                            "Use inbox files as local inputs and place reply files in outbox.",
-                        ]
-                    )
-                )
-            )
-        attachment_context = "\n".join(details)
-        native_input_items = [
-            {"type": "localImage", "path": str(item.path)}
-            for item in saved
-            if item.is_image
-        ]
-        native_input_items_payload: Optional[list[dict[str, Any]]] = (
-            native_input_items if native_input_items else None
+        payload = build_attachment_context_payload(
+            prompt_text=prompt_text,
+            saved=saved,
+            failed=failed,
+            inbox_path=inbox,
+            outbox_path=outbox_dir(workspace_root),
+            outbox_pending_path=outbox_pending_dir(workspace_root),
+            max_message_length=int(self._config.max_message_length),
+            voice_provider_name=provider_name,
+            whisper_transcript_disclaimer=DISCORD_WHISPER_TRANSCRIPT_DISCLAIMER,
         )
-
-        if prompt_text.strip():
-            separator = "\n" if prompt_text.endswith("\n") else "\n\n"
-            return (
-                f"{prompt_text}{separator}{attachment_context}",
-                len(saved),
-                failed,
-                user_visible_transcript,
-                native_input_items_payload,
-            )
         return (
-            attachment_context,
-            len(saved),
-            failed,
-            user_visible_transcript,
-            native_input_items_payload,
+            payload.prompt_text,
+            payload.saved_count,
+            payload.failed_count,
+            payload.user_visible_transcript,
+            cast(Optional[list[dict[str, Any]]], payload.native_input_items_payload),
         )
 
     def _build_attachment_filename(self, attachment: Any, *, index: int) -> str:
-        raw_name = getattr(attachment, "file_name", None) or f"attachment-{index}"
-        base_name = Path(str(raw_name)).name.strip()
-        if not base_name or base_name in {".", ".."}:
-            base_name = f"attachment-{index}"
-        safe_name = "".join(
-            ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in base_name
-        ).strip("._")
-        if not safe_name:
-            safe_name = f"attachment-{index}"
-
-        path = Path(safe_name)
-        stem = path.stem or f"attachment-{index}"
-        suffix = path.suffix.lower()
-        if not suffix:
-            mime_type = getattr(attachment, "mime_type", None)
-            if isinstance(mime_type, str):
-                mime_key = normalize_mime_type(mime_type) or ""
-                suffix = {
-                    "image/png": ".png",
-                    "image/jpeg": ".jpg",
-                    "image/jpg": ".jpg",
-                    "image/gif": ".gif",
-                    "image/webp": ".webp",
-                    "application/pdf": ".pdf",
-                    "text/plain": ".txt",
-                }.get(mime_key, "")
-        source_url = getattr(attachment, "source_url", None)
-        is_audio = is_audio_mime_or_path(
-            mime_type=getattr(attachment, "mime_type", None),
-            file_name=getattr(attachment, "file_name", None),
-            source_url=source_url if isinstance(source_url, str) else None,
-            kind=getattr(attachment, "kind", None),
-        )
-        if is_audio and not audio_content_type_for_input(
-            mime_type=None,
-            file_name=f"attachment{suffix}" if suffix else None,
-            source_url=None,
-        ):
-            suffix = audio_extension_for_input(
-                mime_type=getattr(attachment, "mime_type", None),
-                file_name=getattr(attachment, "file_name", None),
-                source_url=source_url if isinstance(source_url, str) else None,
-                default=".ogg",
-            )
-        return f"{stem[:64]}-{uuid.uuid4().hex[:8]}{suffix}"
+        normalized = DiscordAttachmentAdapter.from_raw(attachment)
+        return normalized.build_saved_name(index=index, token=uuid.uuid4().hex[:8])
 
     async def _find_paused_flow_run(
         self, workspace_root: Path
@@ -2200,60 +2055,6 @@ class DiscordBotService:
             if turn_id:
                 self._discord_turn_approval_contexts.pop(turn_id, None)
 
-    @staticmethod
-    def _format_discord_approval_prompt(request: dict[str, Any]) -> str:
-        method = request.get("method")
-        params_value = request.get("params")
-        params: dict[str, Any] = params_value if isinstance(params_value, dict) else {}
-        lines = ["Approval required"]
-        reason = params.get("reason")
-        if isinstance(reason, str) and reason:
-            lines.append(f"Reason: {reason}")
-        if method == "item/commandExecution/requestApproval":
-            command = params.get("command")
-            if isinstance(command, list):
-                command = " ".join(str(part) for part in command).strip()
-            if isinstance(command, str) and command:
-                lines.append(f"Command: {command}")
-        elif method == "item/fileChange/requestApproval":
-            files = params.get("paths")
-            if isinstance(files, list):
-                normalized = [str(path).strip() for path in files if str(path).strip()]
-                if len(normalized) == 1:
-                    lines.append(f"File: {normalized[0]}")
-                elif normalized:
-                    lines.append("Files:")
-                    lines.extend(f"- {path}" for path in normalized[:10])
-                    if len(normalized) > 10:
-                        lines.append("- ...")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _build_discord_approval_components(token: str) -> list[dict[str, Any]]:
-        return [
-            build_action_row(
-                [
-                    build_button(
-                        "Accept",
-                        f"approval:{token}:accept",
-                        style=DISCORD_BUTTON_STYLE_SUCCESS,
-                    ),
-                    build_button(
-                        "Decline",
-                        f"approval:{token}:decline",
-                    ),
-                ]
-            ),
-            build_action_row(
-                [
-                    build_button(
-                        "Cancel",
-                        f"approval:{token}:cancel",
-                    )
-                ]
-            ),
-        ]
-
     async def _handle_backend_approval_request(
         self, request: dict[str, Any]
     ) -> ApprovalDecision:
@@ -2269,23 +2070,20 @@ class DiscordBotService:
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ApprovalDecision] = loop.create_future()
         token = uuid.uuid4().hex[:12]
-        prompt = self._format_discord_approval_prompt(request)
+        approval_message = build_discord_approval_message(request, token=token)
         pending = _DiscordPendingApproval(
             token=token,
             request_id=request_id,
             turn_id=turn_id,
             channel_id=context.channel_id,
             message_id=None,
-            prompt=prompt,
+            prompt=approval_message.content,
             future=future,
         )
         try:
             response = await self._send_channel_message(
                 context.channel_id,
-                {
-                    "content": format_discord_message(prompt),
-                    "components": self._build_discord_approval_components(token),
-                },
+                approval_message.to_payload(),
             )
         except (DiscordAPIError, OSError) as exc:
             log_event(
@@ -5563,40 +5361,30 @@ class DiscordBotService:
             try:
                 latest = select_default_ticket_flow_run(store)
                 progress = ticket_progress(entry.repo_root)
-                display = build_ticket_flow_display(
-                    status=latest.status.value if latest else None,
-                    done_count=progress.get("done", 0),
-                    total_count=progress.get("total", 0),
-                    run_id=latest.id if latest else None,
-                )
-                run_id = display.get("run_id")
-                run_suffix = f" run {run_id}" if run_id else ""
-                duration_suffix = ""
+                duration_label: Optional[str] = None
                 if latest is not None and latest.finished_at:
                     duration_label = format_flow_duration(
                         flow_run_duration_seconds(latest)
                     )
-                    if duration_label:
-                        duration_suffix = f" · took {duration_label}"
-                freshness_suffix = ""
+                freshness = None
                 if latest is not None:
                     snapshot = build_flow_status_snapshot(
                         entry.repo_root, latest, store
                     )
-                    freshness = snapshot.get("freshness")
-                    freshness_summary = summarize_flow_freshness(freshness)
-                    if (
-                        isinstance(freshness, dict)
-                        and freshness.get("is_stale") is True
-                    ):
-                        freshness_suffix = (
-                            f" · snapshot {freshness_summary}"
-                            if freshness_summary
-                            else " · snapshot stale"
-                        )
-                line = (
-                    f"{line_prefix}{display['status_icon']} {line_label}: "
-                    f"{display['status_label']} {display['done_count']}/{display['total_count']}{run_suffix}{duration_suffix}{freshness_suffix}"
+                    freshness = (
+                        snapshot.get("freshness")
+                        if isinstance(snapshot, dict)
+                        else None
+                    )
+                line = format_hub_flow_overview_line(
+                    line_label=line_label,
+                    is_worktree=entry.is_worktree,
+                    status=latest.status.value if latest else None,
+                    done_count=progress.get("done", 0),
+                    total_count=progress.get("total", 0),
+                    run_id=latest.id if latest else None,
+                    duration_label=duration_label,
+                    freshness=cast(Optional[dict[str, Any]], freshness),
                 )
             except (OSError, ValueError, RuntimeError, KeyError):
                 line = f"{line_prefix}❓ {line_label}: Error reading state"

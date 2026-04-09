@@ -241,6 +241,64 @@ STANDARD_FUNCTION_BUDGETS = (
     ),
 )
 
+TEST_FILE_CAPS = (
+    FileBudget(
+        path="tests/discord_message_turns_support.py",
+        max_lines=9800,
+        reason="The extracted Discord message-turn support module is still large, but obvious regrowth should fail while the split layout settles.",
+    ),
+    FileBudget(
+        path="tests/telegram_pma_routing_support.py",
+        max_lines=7300,
+        reason="The extracted Telegram PMA routing support module is still large, but obvious regrowth should fail while follow-on splits land.",
+    ),
+    FileBudget(
+        path="tests/fixtures/telegram_command_helpers.py",
+        max_lines=60,
+        reason="Telegram command test helpers should stay as a tiny shared fixture seam.",
+    ),
+    FileBudget(
+        path="tests/integrations/discord/test_message_turns.py",
+        max_lines=60,
+        reason="The Discord message-turn wrapper should stay a thin import-only entrypoint over the shared support module.",
+    ),
+    FileBudget(
+        path="tests/integrations/discord/test_message_turns_routing.py",
+        max_lines=60,
+        reason="The Discord routing wrapper should stay a thin import-only entrypoint over the shared support module.",
+    ),
+    FileBudget(
+        path="tests/integrations/discord/test_message_turns_message_flow.py",
+        max_lines=60,
+        reason="The Discord message-flow wrapper should stay a thin import-only entrypoint over the shared support module.",
+    ),
+    FileBudget(
+        path="tests/integrations/discord/test_message_turns_streaming.py",
+        max_lines=60,
+        reason="The Discord streaming wrapper should stay a thin import-only entrypoint over the shared support module.",
+    ),
+    FileBudget(
+        path="tests/integrations/discord/test_message_turns_managed_threads.py",
+        max_lines=50,
+        reason="The Discord managed-thread wrapper should stay a thin import-only entrypoint over the shared support module.",
+    ),
+    FileBudget(
+        path="tests/test_telegram_pma_routing.py",
+        max_lines=40,
+        reason="The Telegram PMA routing wrapper should stay a thin import-only entrypoint over the shared support module.",
+    ),
+    FileBudget(
+        path="tests/test_telegram_pma_managed_threads.py",
+        max_lines=40,
+        reason="The Telegram PMA managed-thread wrapper should stay a thin import-only entrypoint over the shared support module.",
+    ),
+    FileBudget(
+        path="tests/test_telegram_pma_workspace_commands.py",
+        max_lines=60,
+        reason="The Telegram PMA workspace wrapper should stay a thin import-only entrypoint over the shared support module.",
+    ),
+)
+
 LEGACY_FILE_CAPS = (
     FileBudget(
         path="src/codex_autorunner/surfaces/web/routes/flows.py",
@@ -348,6 +406,17 @@ HELPER_OWNERSHIP_RULES = (
         scan_roots=("src/codex_autorunner/integrations/telegram/handlers",),
         reason="Telegram OpenCode usage helpers should stay centralized in handlers/utils.py.",
     ),
+    HelperOwnershipRule(
+        owner_path="tests/fixtures/telegram_command_helpers.py",
+        helper_names=(
+            "README_REVISIT_GUIDANCE_MIN_MODULE_THRESHOLD",
+            "noop_handler",
+            "bot_command_entity",
+            "make_command_spec",
+        ),
+        scan_roots=("tests",),
+        reason="Shared Telegram command-test helpers should stay owned by tests/fixtures/telegram_command_helpers.py.",
+    ),
 )
 
 
@@ -386,14 +455,32 @@ def _function_spans(path: str) -> dict[str, int]:
     return spans
 
 
+def _assignment_names(target: ast.expr) -> set[str]:
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names: set[str] = set()
+        for element in target.elts:
+            names.update(_assignment_names(element))
+        return names
+    return set()
+
+
 @lru_cache(maxsize=None)
-def _top_level_functions(path: str) -> set[str]:
+def _top_level_symbols(path: str) -> set[str]:
     module = _module_ast(path)
-    return {
-        node.name
-        for node in module.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    symbols: set[str] = set()
+    for node in module.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            symbols.add(node.name)
+            continue
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                symbols.update(_assignment_names(target))
+            continue
+        if isinstance(node, ast.AnnAssign):
+            symbols.update(_assignment_names(node.target))
+    return symbols
 
 
 def _check_file_budgets(budgets: tuple[FileBudget, ...], *, label: str) -> list[str]:
@@ -433,17 +520,17 @@ def _check_helper_ownership() -> list[str]:
     failures: list[str] = []
     for rule in HELPER_OWNERSHIP_RULES:
         owner = rule.owner_path
-        owner_defs = _top_level_functions(owner)
+        owner_symbols = _top_level_symbols(owner)
         for helper_name in rule.helper_names:
             locations: list[str] = []
-            if helper_name in owner_defs:
+            if helper_name in owner_symbols:
                 locations.append(owner)
             for root in rule.scan_roots:
                 for path in sorted(_repo_path(root).rglob("*.py")):
                     relative = str(path.relative_to(REPO_ROOT))
                     if relative == owner:
                         continue
-                    if helper_name in _top_level_functions(relative):
+                    if helper_name in _top_level_symbols(relative):
                         locations.append(relative)
             if not locations:
                 failures.append(
@@ -467,6 +554,7 @@ def _fail_if_any(failures: list[str]) -> None:
 def test_hotspot_file_budgets() -> None:
     failures = []
     failures.extend(_check_file_budgets(STANDARD_FILE_BUDGETS, label="Budget"))
+    failures.extend(_check_file_budgets(TEST_FILE_CAPS, label="Test cap"))
     failures.extend(_check_file_budgets(LEGACY_FILE_CAPS, label="Legacy cap"))
     _fail_if_any(failures)
 

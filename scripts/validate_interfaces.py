@@ -5,11 +5,20 @@ from __future__ import annotations
 
 import argparse
 import ast
-import json
 import re
 import sys
 from pathlib import Path
 from typing import Dict, Iterable, Set, Tuple
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.drift_check_utils import (  # noqa: E402
+    emit_cli_report,
+    load_json_document,
+    load_text_document,
+)
 
 SCHEMA_BINDINGS = {
     "RepoSnapshot": {
@@ -26,9 +35,7 @@ SCHEMA_BINDINGS = {
 
 
 def _load_schema(schema_path: Path) -> Dict[str, Dict[str, object]]:
-    if not schema_path.exists():
-        raise FileNotFoundError(f"Schema not found: {schema_path}")
-    return json.loads(schema_path.read_text(encoding="utf-8"))
+    return load_json_document(schema_path, label="Schema")
 
 
 def _find_matching_brace(text: str, start: int) -> int:
@@ -45,7 +52,7 @@ def _find_matching_brace(text: str, start: int) -> int:
 
 
 def _extract_ts_interfaces(ts_path: Path) -> Dict[str, Set[str]]:
-    content = ts_path.read_text(encoding="utf-8")
+    content = load_text_document(ts_path, label="TypeScript interface file")
     interfaces: Dict[str, Set[str]] = {}
     for match in re.finditer(r"\binterface\s+(\w+)\s*{", content):
         name = match.group(1)
@@ -82,7 +89,7 @@ def _is_dataclass(node: ast.ClassDef) -> bool:
 
 
 def _extract_python_classes(py_path: Path) -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
-    content = py_path.read_text(encoding="utf-8")
+    content = load_text_document(py_path, label="Python interface file")
     tree = ast.parse(content)
     classes: Dict[str, Set[str]] = {}
     to_dict_keys: Dict[str, Set[str]] = {}
@@ -191,13 +198,22 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    ok, errors = validate_interfaces(args.schema, args.typescript, args.python)
-    if not ok:
-        for error in errors:
-            print(f"✗ {error}", file=sys.stderr)
-        return 1
-    print("✓ Hub interface contracts match schema")
-    return 0
+    try:
+        ok, errors = validate_interfaces(args.schema, args.typescript, args.python)
+    except (FileNotFoundError, ValueError, SyntaxError) as exc:
+        return emit_cli_report(
+            success_message="✓ Hub interface contracts match schema",
+            issues=[str(exc)],
+            failure_stream=sys.stderr,
+            bullet_prefix="✗ ",
+        )
+
+    return emit_cli_report(
+        success_message="✓ Hub interface contracts match schema",
+        issues=[] if ok else errors,
+        failure_stream=sys.stderr,
+        bullet_prefix="✗ ",
+    )
 
 
 if __name__ == "__main__":

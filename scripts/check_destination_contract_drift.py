@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import argparse
-import difflib
 import re
 import sys
 from pathlib import Path
@@ -15,10 +14,18 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 # Import after PYTHONPATH adjustment when running script directly from repo root.
+from scripts.drift_check_utils import (  # noqa: E402
+    emit_cli_report,
+    load_text_document,
+    render_text_diff,
+)
+
 from codex_autorunner.core.destinations import parse_destination_config  # noqa: E402
 from codex_autorunner.integrations.docker.profile_contracts import (  # noqa: E402
     FULL_DEV_PROFILE_CONTRACT,
@@ -240,8 +247,7 @@ def _canonicalize_contract(contract: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _destinations_doc_issues(destinations_doc: Path) -> List[str]:
-    text = destinations_doc.read_text(encoding="utf-8")
+def _destinations_doc_issues(text: str) -> List[str]:
     missing = [
         snippet for snippet in REQUIRED_DESTINATIONS_DOC_SNIPPETS if snippet not in text
     ]
@@ -265,17 +271,19 @@ def run_check(
         issues.extend(parser_issues)
         return issues
 
-    if not destinations_doc.exists():
-        issues.append(f"missing destinations doc: {destinations_doc}")
-        return issues
-    if not schema_doc.exists():
-        issues.append(f"missing schema doc: {schema_doc}")
+    try:
+        destinations_text = load_text_document(
+            destinations_doc, label="Destinations doc"
+        )
+        schema_text = load_text_document(schema_doc, label="Schema doc")
+    except FileNotFoundError as exc:
+        issues.append(str(exc))
         return issues
 
-    issues.extend(_destinations_doc_issues(destinations_doc))
+    issues.extend(_destinations_doc_issues(destinations_text))
 
     try:
-        docs_contract = _extract_contract_yaml(schema_doc.read_text(encoding="utf-8"))
+        docs_contract = _extract_contract_yaml(schema_text)
     except Exception as exc:
         issues.append(f"failed to parse docs contract block: {exc}")
         return issues
@@ -283,16 +291,11 @@ def run_check(
     expected = _canonicalize_contract(_code_contract())
     actual = _canonicalize_contract(docs_contract)
     if expected != actual:
-        expected_yaml = yaml.safe_dump(expected, sort_keys=True).splitlines()
-        actual_yaml = yaml.safe_dump(actual, sort_keys=True).splitlines()
-        diff = "\n".join(
-            difflib.unified_diff(
-                expected_yaml,
-                actual_yaml,
-                fromfile="code_contract",
-                tofile="docs_contract",
-                lineterm="",
-            )
+        diff = render_text_diff(
+            yaml.safe_dump(expected, sort_keys=True),
+            yaml.safe_dump(actual, sort_keys=True),
+            fromfile="code_contract",
+            tofile="docs_contract",
         )
         issues.append("destination contract drift detected between code and docs")
         if diff:
@@ -320,14 +323,13 @@ def main(argv: List[str] | None = None) -> int:
         destinations_doc=args.destinations_doc,
         schema_doc=args.schema_doc,
     )
-    if issues:
-        print("Destination contract drift check failed:")
-        for item in issues:
-            print(f"- {item}")
-        return 1
-
-    print("Destination contract drift check passed.")
-    return 0
+    return emit_cli_report(
+        success_message="Destination contract drift check passed.",
+        issues=issues,
+        failure_header="Destination contract drift check failed:",
+        failure_stream=sys.stdout,
+        bullet_prefix="- ",
+    )
 
 
 if __name__ == "__main__":

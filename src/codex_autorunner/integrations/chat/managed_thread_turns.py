@@ -6,12 +6,13 @@ import inspect
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Mapping, Optional
+from typing import Any, Awaitable, Callable, Literal, Mapping, Optional, Protocol
 
 from ...agents.base import (
     harness_progress_event_stream,
     harness_supports_progress_event_stream,
 )
+from ...core.orchestration.models import MessageRequest
 from ...core.orchestration.runtime_thread_events import (
     RuntimeThreadRunEventState,
     normalize_runtime_thread_raw_event,
@@ -44,15 +45,46 @@ from .runtime_thread_errors import resolve_runtime_thread_error_detail
 
 ProgressEventHandler = Callable[[Any], Awaitable[None]]
 RunWithIndicator = Callable[[Callable[[], Awaitable[None]]], Awaitable[None]]
-FinalizeQueuedExecution = Callable[[RuntimeThreadExecution], Awaitable[dict[str, Any]]]
-DeliverQueuedResult = Callable[[dict[str, Any]], Awaitable[None]]
+ManagedThreadStatus = Literal["ok", "error", "interrupted"]
+ManagedThreadLifecycleHook = Callable[[RuntimeThreadExecution], object]
 SpawnTask = Callable[[Awaitable[Any]], asyncio.Task[Any]]
-BeginExecution = Callable[..., Awaitable[RuntimeThreadExecution]]
-BeginNextQueuedExecution = Callable[
-    [Any, str], Awaitable[Optional[RuntimeThreadExecution]]
-]
-ManagedThreadLifecycleHook = Callable[[RuntimeThreadExecution], Any]
 MessagePreviewBuilder = Callable[[str], str]
+
+
+class ManagedThreadExecutionStarter(Protocol):
+    async def __call__(
+        self,
+        orchestration_service: Any,
+        request: MessageRequest,
+        *,
+        client_request_id: Optional[str],
+        sandbox_policy: Optional[Any],
+    ) -> RuntimeThreadExecution: ...
+
+
+class ManagedThreadQueuedExecutionStarter(Protocol):
+    async def __call__(
+        self,
+        orchestration_service: Any,
+        managed_thread_id: str,
+    ) -> Optional[RuntimeThreadExecution]: ...
+
+
+@dataclass(frozen=True)
+class ManagedThreadFinalizationResult:
+    status: ManagedThreadStatus
+    assistant_text: str
+    error: Optional[str]
+    managed_thread_id: str
+    managed_turn_id: str
+    backend_thread_id: Optional[str]
+    token_usage: Optional[dict[str, Any]] = None
+
+
+FinalizeQueuedExecution = Callable[
+    [RuntimeThreadExecution], Awaitable[ManagedThreadFinalizationResult]
+]
+DeliverQueuedResult = Callable[[ManagedThreadFinalizationResult], Awaitable[None]]
 
 _QUEUE_WORKER_FAILURE_ERROR = "Queue worker terminated unexpectedly"
 logger = logging.getLogger(__name__)
@@ -95,7 +127,23 @@ class ManagedThreadSubmissionResult:
 class ManagedThreadExecutionFlowResult:
     started_execution: RuntimeThreadExecution
     queued: bool
-    finalized: Optional[dict[str, Any]] = None
+    finalized: Optional[ManagedThreadFinalizationResult] = None
+
+
+@dataclass(frozen=True)
+class ManagedThreadExecutionHooks:
+    on_execution_started: Optional[ManagedThreadLifecycleHook] = None
+    on_execution_finished: Optional[ManagedThreadLifecycleHook] = None
+    on_progress_event: Optional[ProgressEventHandler] = None
+
+
+@dataclass(frozen=True)
+class ManagedThreadQueueWorkerHooks:
+    deliver_result: DeliverQueuedResult
+    run_with_indicator: Optional[RunWithIndicator] = None
+    execution_hooks: ManagedThreadExecutionHooks = field(
+        default_factory=ManagedThreadExecutionHooks
+    )
 
 
 @dataclass(frozen=True)
@@ -105,6 +153,22 @@ class ManagedThreadCoordinatorHooks:
     on_progress_event: Optional[ProgressEventHandler] = None
     deliver_result: Optional[DeliverQueuedResult] = None
     run_with_indicator: Optional[RunWithIndicator] = None
+
+    def execution_hooks(self) -> ManagedThreadExecutionHooks:
+        return ManagedThreadExecutionHooks(
+            on_execution_started=self.on_execution_started,
+            on_execution_finished=self.on_execution_finished,
+            on_progress_event=self.on_progress_event,
+        )
+
+    def queue_worker_hooks(self) -> ManagedThreadQueueWorkerHooks:
+        if self.deliver_result is None:
+            raise ValueError("Queue-worker hooks require deliver_result")
+        return ManagedThreadQueueWorkerHooks(
+            deliver_result=self.deliver_result,
+            run_with_indicator=self.run_with_indicator,
+            execution_hooks=self.execution_hooks(),
+        )
 
 
 @dataclass(frozen=True)
@@ -200,6 +264,134 @@ def _matching_backend_thread_target(
     return None
 
 
+def _load_managed_thread_binding(
+    orchestration_service: Any,
+    *,
+    request: ManagedThreadTargetRequest,
+) -> Any:
+    if request.existing_binding is not None:
+        return request.existing_binding
+    get_binding = getattr(orchestration_service, "get_binding", None)
+    if not callable(get_binding):
+        return None
+    return get_binding(
+        surface_kind=request.surface_kind,
+        surface_key=request.surface_key,
+    )
+
+
+def _load_bound_thread_target(
+    orchestration_service: Any,
+    *,
+    request: ManagedThreadTargetRequest,
+    binding: Any,
+) -> Any:
+    if request.existing_thread is not None:
+        return request.existing_thread
+    normalized_mode = request.mode.strip().lower()
+    thread_target_id = (
+        binding.thread_target_id
+        if binding is not None
+        and str(getattr(binding, "mode", "") or "").strip().lower() == normalized_mode
+        else None
+    )
+    get_thread_target = getattr(orchestration_service, "get_thread_target", None)
+    if (
+        not callable(get_thread_target)
+        or not isinstance(thread_target_id, str)
+        or not thread_target_id
+    ):
+        return None
+    return get_thread_target(thread_target_id)
+
+
+def _managed_thread_reusable_agent_ids(
+    request: ManagedThreadTargetRequest,
+) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((request.agent, *tuple(request.reusable_agent_ids))))
+
+
+def _thread_matches_reuse_constraints(
+    thread: Any,
+    *,
+    request: ManagedThreadTargetRequest,
+    reusable_agent_ids: tuple[str, ...],
+    canonical_workspace: str,
+) -> bool:
+    return (
+        thread is not None
+        and str(getattr(thread, "agent_id", "") or "").strip() in reusable_agent_ids
+        and (getattr(thread, "agent_profile", None) or None)
+        == (request.agent_profile or None)
+        and str(getattr(thread, "workspace_root", "") or "").strip()
+        == canonical_workspace
+    )
+
+
+def _resume_managed_thread_target(
+    orchestration_service: Any,
+    thread: Any,
+    *,
+    desired_backend_thread_id: Optional[str],
+    current_backend_thread_id: Optional[str],
+    desired_runtime_instance_id: Optional[str],
+) -> Any:
+    resume_kwargs: dict[str, Any] = {}
+    if desired_backend_thread_id is not None or current_backend_thread_id is not None:
+        resume_kwargs["backend_thread_id"] = desired_backend_thread_id
+    resume_kwargs["backend_runtime_instance_id"] = desired_runtime_instance_id
+    return orchestration_service.resume_thread_target(
+        thread.thread_target_id,
+        **resume_kwargs,
+    )
+
+
+def _create_managed_thread_target(
+    orchestration_service: Any,
+    *,
+    request: ManagedThreadTargetRequest,
+    desired_backend_thread_id: Optional[str],
+    desired_runtime_instance_id: Optional[str],
+) -> Any:
+    thread_metadata = dict(request.thread_metadata)
+    if request.agent_profile and "agent_profile" not in thread_metadata:
+        thread_metadata["agent_profile"] = request.agent_profile
+    if desired_runtime_instance_id is not None:
+        thread_metadata.setdefault(
+            "backend_runtime_instance_id",
+            desired_runtime_instance_id,
+        )
+    return orchestration_service.create_thread_target(
+        request.agent,
+        request.workspace_root,
+        repo_id=request.repo_id,
+        resource_kind=request.resource_kind,
+        resource_id=request.resource_id,
+        display_name=request.display_name,
+        backend_thread_id=desired_backend_thread_id,
+        metadata=thread_metadata or None,
+    )
+
+
+def _persist_managed_thread_binding(
+    orchestration_service: Any,
+    *,
+    request: ManagedThreadTargetRequest,
+    thread: Any,
+) -> None:
+    orchestration_service.upsert_binding(
+        surface_kind=request.surface_kind,
+        surface_key=request.surface_key,
+        thread_target_id=thread.thread_target_id,
+        agent_id=request.agent,
+        repo_id=request.repo_id,
+        resource_kind=request.resource_kind,
+        resource_id=request.resource_id,
+        mode=request.mode,
+        metadata=dict(request.binding_metadata),
+    )
+
+
 async def _invoke_lifecycle_hook(
     hook: Optional[ManagedThreadLifecycleHook],
     started: RuntimeThreadExecution,
@@ -211,57 +403,111 @@ async def _invoke_lifecycle_hook(
         await result
 
 
+def _coerce_execution_hooks(
+    hooks: Optional[ManagedThreadExecutionHooks | ManagedThreadCoordinatorHooks],
+) -> ManagedThreadExecutionHooks:
+    if hooks is None:
+        return ManagedThreadExecutionHooks()
+    if isinstance(hooks, ManagedThreadCoordinatorHooks):
+        return hooks.execution_hooks()
+    return hooks
+
+
+def _coerce_queue_worker_hooks(
+    hooks: ManagedThreadQueueWorkerHooks | ManagedThreadCoordinatorHooks,
+) -> ManagedThreadQueueWorkerHooks:
+    if isinstance(hooks, ManagedThreadCoordinatorHooks):
+        return hooks.queue_worker_hooks()
+    return hooks
+
+
+def _build_finalization_result(
+    *,
+    status: ManagedThreadStatus,
+    assistant_text: str,
+    error: Optional[str],
+    managed_thread_id: str,
+    managed_turn_id: str,
+    backend_thread_id: Optional[str],
+    token_usage: Optional[dict[str, Any]],
+) -> ManagedThreadFinalizationResult:
+    return ManagedThreadFinalizationResult(
+        status=status,
+        assistant_text=assistant_text,
+        error=error,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+        backend_thread_id=backend_thread_id,
+        token_usage=token_usage,
+    )
+
+
+def _coerce_managed_thread_status(value: Any) -> ManagedThreadStatus:
+    normalized = str(value or "").strip().lower()
+    if normalized == "ok":
+        return "ok"
+    if normalized == "interrupted":
+        return "interrupted"
+    return "error"
+
+
+def coerce_managed_thread_finalization_result(
+    finalized: Optional[ManagedThreadFinalizationResult | Mapping[str, Any]],
+) -> Optional[ManagedThreadFinalizationResult]:
+    if finalized is None or isinstance(finalized, ManagedThreadFinalizationResult):
+        return finalized
+    token_usage = finalized.get("token_usage")
+    normalized_token_usage = (
+        dict(token_usage) if isinstance(token_usage, Mapping) else None
+    )
+    return ManagedThreadFinalizationResult(
+        status=_coerce_managed_thread_status(finalized.get("status")),
+        assistant_text=str(finalized.get("assistant_text") or ""),
+        error=(
+            str(finalized.get("error") or "").strip() or None
+            if finalized.get("error") is not None
+            else None
+        ),
+        managed_thread_id=str(finalized.get("managed_thread_id") or ""),
+        managed_turn_id=str(finalized.get("managed_turn_id") or ""),
+        backend_thread_id=(
+            str(finalized.get("backend_thread_id") or "").strip() or None
+        ),
+        token_usage=normalized_token_usage,
+    )
+
+
 def resolve_managed_thread_target(
     orchestration_service: Any,
     *,
     request: ManagedThreadTargetRequest,
 ) -> tuple[Any, Optional[Any]]:
-    binding = request.existing_binding
-    thread = request.existing_thread
-    if binding is None:
-        get_binding = getattr(orchestration_service, "get_binding", None)
-        if callable(get_binding):
-            binding = get_binding(
-                surface_kind=request.surface_kind,
-                surface_key=request.surface_key,
-            )
-    normalized_mode = request.mode.strip().lower()
-    if thread is None:
-        thread_target_id = (
-            binding.thread_target_id
-            if binding is not None
-            and str(getattr(binding, "mode", "") or "").strip().lower()
-            == normalized_mode
-            else None
-        )
-        get_thread_target = getattr(orchestration_service, "get_thread_target", None)
-        if (
-            callable(get_thread_target)
-            and isinstance(thread_target_id, str)
-            and thread_target_id
-        ):
-            thread = get_thread_target(thread_target_id)
+    binding = _load_managed_thread_binding(
+        orchestration_service,
+        request=request,
+    )
+    thread = _load_bound_thread_target(
+        orchestration_service,
+        request=request,
+        binding=binding,
+    )
     canonical_workspace = str(request.workspace_root.resolve())
     desired_backend_thread_id = _normalized_optional_text(request.backend_thread_id)
     desired_runtime_instance_id = _normalized_optional_text(
         request.backend_runtime_instance_id
     )
-    reusable_agent_ids = tuple(
-        dict.fromkeys((request.agent, *tuple(request.reusable_agent_ids)))
-    )
+    reusable_agent_ids = _managed_thread_reusable_agent_ids(request)
     current_backend_thread_id = _normalized_optional_text(
         getattr(thread, "backend_thread_id", None)
     )
     current_runtime_instance_id = _normalized_optional_text(
         getattr(thread, "backend_runtime_instance_id", None)
     )
-    reusable_thread = (
-        thread is not None
-        and str(getattr(thread, "agent_id", "") or "").strip() in reusable_agent_ids
-        and (getattr(thread, "agent_profile", None) or None)
-        == (request.agent_profile or None)
-        and str(getattr(thread, "workspace_root", "") or "").strip()
-        == canonical_workspace
+    reusable_thread = _thread_matches_reuse_constraints(
+        thread,
+        request=request,
+        reusable_agent_ids=reusable_agent_ids,
+        canonical_workspace=canonical_workspace,
     )
     if (
         desired_backend_thread_id is not None
@@ -282,7 +528,12 @@ def resolve_managed_thread_target(
             current_runtime_instance_id = _normalized_optional_text(
                 getattr(thread, "backend_runtime_instance_id", None)
             )
-            reusable_thread = True
+            reusable_thread = _thread_matches_reuse_constraints(
+                thread,
+                request=request,
+                reusable_agent_ids=reusable_agent_ids,
+                canonical_workspace=canonical_workspace,
+            )
     should_resume_reusable = reusable_thread and (
         str(getattr(thread, "lifecycle_status", "") or "").strip().lower() != "active"
         or current_backend_thread_id != desired_backend_thread_id
@@ -293,50 +544,28 @@ def resolve_managed_thread_target(
     )
     if should_resume_reusable:
         assert thread is not None
-        resume_kwargs: dict[str, Any] = {}
-        if (
-            desired_backend_thread_id is not None
-            or current_backend_thread_id is not None
-        ):
-            resume_kwargs["backend_thread_id"] = desired_backend_thread_id
-        resume_kwargs["backend_runtime_instance_id"] = desired_runtime_instance_id
-        thread = orchestration_service.resume_thread_target(
-            thread.thread_target_id,
-            **resume_kwargs,
+        thread = _resume_managed_thread_target(
+            orchestration_service,
+            thread,
+            desired_backend_thread_id=desired_backend_thread_id,
+            current_backend_thread_id=current_backend_thread_id,
+            desired_runtime_instance_id=desired_runtime_instance_id,
         )
     elif not reusable_thread:
         if not request.allow_new_thread and desired_backend_thread_id is None:
             return orchestration_service, None
-        thread_metadata = dict(request.thread_metadata)
-        if request.agent_profile and "agent_profile" not in thread_metadata:
-            thread_metadata["agent_profile"] = request.agent_profile
-        if desired_runtime_instance_id is not None:
-            thread_metadata.setdefault(
-                "backend_runtime_instance_id",
-                desired_runtime_instance_id,
-            )
-        thread = orchestration_service.create_thread_target(
-            request.agent,
-            request.workspace_root,
-            repo_id=request.repo_id,
-            resource_kind=request.resource_kind,
-            resource_id=request.resource_id,
-            display_name=request.display_name,
-            backend_thread_id=desired_backend_thread_id,
-            metadata=thread_metadata or None,
+        thread = _create_managed_thread_target(
+            orchestration_service,
+            request=request,
+            desired_backend_thread_id=desired_backend_thread_id,
+            desired_runtime_instance_id=desired_runtime_instance_id,
         )
     if thread is None:
         return orchestration_service, None
-    orchestration_service.upsert_binding(
-        surface_kind=request.surface_kind,
-        surface_key=request.surface_key,
-        thread_target_id=thread.thread_target_id,
-        agent_id=request.agent,
-        repo_id=request.repo_id,
-        resource_kind=request.resource_kind,
-        resource_id=request.resource_id,
-        mode=request.mode,
-        metadata=dict(request.binding_metadata),
+    _persist_managed_thread_binding(
+        orchestration_service,
+        request=request,
+        thread=thread,
     )
     return orchestration_service, thread
 
@@ -353,11 +582,11 @@ class ManagedThreadTurnCoordinator:
 
     async def submit_execution(
         self,
-        request: Any,
+        request: MessageRequest,
         *,
         client_request_id: Optional[str],
         sandbox_policy: Optional[Any],
-        begin_execution: Optional[BeginExecution] = None,
+        begin_execution: Optional[ManagedThreadExecutionStarter] = None,
     ) -> ManagedThreadSubmissionResult:
         return await submit_managed_thread_execution(
             self.orchestration_service,
@@ -371,10 +600,12 @@ class ManagedThreadTurnCoordinator:
         self,
         started: RuntimeThreadExecution,
         *,
-        hooks: Optional[ManagedThreadCoordinatorHooks] = None,
+        hooks: Optional[
+            ManagedThreadExecutionHooks | ManagedThreadCoordinatorHooks
+        ] = None,
         runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
-    ) -> dict[str, Any]:
-        resolved_hooks = hooks or ManagedThreadCoordinatorHooks()
+    ) -> ManagedThreadFinalizationResult:
+        resolved_hooks = _coerce_execution_hooks(hooks)
         turn_preview = self.turn_preview
         if self.preview_builder is not None:
             try:
@@ -412,12 +643,11 @@ class ManagedThreadTurnCoordinator:
         task_map: dict[str, asyncio.Task[Any]],
         managed_thread_id: str,
         spawn_task: SpawnTask,
-        hooks: ManagedThreadCoordinatorHooks,
+        hooks: ManagedThreadQueueWorkerHooks | ManagedThreadCoordinatorHooks,
         poll_interval_seconds: float = 0.1,
-        begin_next_execution: Optional[BeginNextQueuedExecution] = None,
+        begin_next_execution: Optional[ManagedThreadQueuedExecutionStarter] = None,
     ) -> None:
-        if hooks.deliver_result is None:
-            raise ValueError("Queue-worker hooks require deliver_result")
+        resolved_hooks = _coerce_queue_worker_hooks(hooks)
         ensure_managed_thread_queue_worker(
             task_map=task_map,
             managed_thread_id=managed_thread_id,
@@ -425,10 +655,10 @@ class ManagedThreadTurnCoordinator:
             spawn_task=spawn_task,
             finalize_started_execution=lambda started: self.run_started_execution(
                 started,
-                hooks=hooks,
+                hooks=resolved_hooks.execution_hooks,
             ),
-            deliver_result=hooks.deliver_result,
-            run_with_indicator=hooks.run_with_indicator,
+            deliver_result=resolved_hooks.deliver_result,
+            run_with_indicator=resolved_hooks.run_with_indicator,
             poll_interval_seconds=poll_interval_seconds,
             begin_next_execution=begin_next_execution,
         )
@@ -469,12 +699,12 @@ def get_thread_runtime_binding(
 
 async def submit_managed_thread_execution(
     orchestration_service: Any,
-    request: Any,
+    request: MessageRequest,
     *,
     client_request_id: Optional[str],
     sandbox_policy: Optional[Any],
     ensure_queue_worker: Optional[Callable[[], None]] = None,
-    begin_execution: Optional[BeginExecution] = None,
+    begin_execution: Optional[ManagedThreadExecutionStarter] = None,
 ) -> ManagedThreadSubmissionResult:
     begin = begin_execution or begin_runtime_thread_execution
     started_execution = await begin(
@@ -499,7 +729,9 @@ async def complete_managed_thread_execution(
     submission: ManagedThreadSubmissionResult,
     *,
     ensure_queue_worker: Optional[Callable[[], None]] = None,
-    direct_hooks: Optional[ManagedThreadCoordinatorHooks] = None,
+    direct_hooks: Optional[
+        ManagedThreadExecutionHooks | ManagedThreadCoordinatorHooks
+    ] = None,
     runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
 ) -> ManagedThreadExecutionFlowResult:
     if submission.queued:
@@ -533,7 +765,7 @@ def ensure_managed_thread_queue_worker(
     deliver_result: DeliverQueuedResult,
     run_with_indicator: Optional[RunWithIndicator] = None,
     poll_interval_seconds: float = 0.1,
-    begin_next_execution: Optional[BeginNextQueuedExecution] = None,
+    begin_next_execution: Optional[ManagedThreadQueuedExecutionStarter] = None,
 ) -> None:
     existing = task_map.get(managed_thread_id)
     if isinstance(existing, asyncio.Task) and not existing.done():
@@ -546,7 +778,7 @@ def ensure_managed_thread_queue_worker(
         started_execution: RuntimeThreadExecution,
         *,
         error: str,
-    ) -> dict[str, Any]:
+    ) -> ManagedThreadFinalizationResult:
         detail = error.strip() or _QUEUE_WORKER_FAILURE_ERROR
         try:
             orchestration_service.record_execution_result(
@@ -560,32 +792,36 @@ def ensure_managed_thread_queue_worker(
             )
         except KeyError:
             pass
-        return {
-            "status": "error",
-            "assistant_text": "",
-            "error": detail,
-            "managed_thread_id": started_execution.thread.thread_target_id,
-            "managed_turn_id": started_execution.execution.execution_id,
-            "backend_thread_id": getattr(
+        return _build_finalization_result(
+            status="error",
+            assistant_text="",
+            error=detail,
+            managed_thread_id=started_execution.thread.thread_target_id,
+            managed_turn_id=started_execution.execution.execution_id,
+            backend_thread_id=getattr(
                 started_execution.thread,
                 "backend_thread_id",
                 None,
             ),
-            "token_usage": None,
-        }
+            token_usage=None,
+        )
 
     async def _process_started_execution(
         started_execution: RuntimeThreadExecution,
     ) -> None:
-        finalized: Optional[dict[str, Any]] = None
+        finalized: Optional[ManagedThreadFinalizationResult] = None
         try:
             if run_with_indicator is None:
-                finalized = await finalize_started_execution(started_execution)
+                finalized = coerce_managed_thread_finalization_result(
+                    await finalize_started_execution(started_execution)
+                )
             else:
 
                 async def _finalize_work() -> None:
                     nonlocal finalized
-                    finalized = await finalize_started_execution(started_execution)
+                    finalized = coerce_managed_thread_finalization_result(
+                        await finalize_started_execution(started_execution)
+                    )
 
                 await run_with_indicator(_finalize_work)
         except BaseException as exc:
@@ -774,7 +1010,7 @@ async def finalize_managed_thread_execution(
     turn_preview: str,
     runtime_event_state: Optional[RuntimeThreadRunEventState] = None,
     on_progress_event: Optional[ProgressEventHandler] = None,
-) -> dict[str, Any]:
+) -> ManagedThreadFinalizationResult:
     thread_store = PmaThreadStore(state_root)
     transcripts = PmaTranscriptStore(state_root)
     managed_thread_id = started.thread.thread_target_id
@@ -1106,29 +1342,29 @@ async def finalize_managed_thread_execution(
                     timeout_error=errors.timeout_error,
                     interrupted_error=errors.interrupted_error,
                 )
-            return {
-                "status": "error",
-                "assistant_text": "",
-                "error": detail,
-                "managed_thread_id": managed_thread_id,
-                "managed_turn_id": managed_turn_id,
-                "backend_thread_id": resolved_backend_thread_id,
-                "token_usage": event_state.token_usage,
-            }
+            return _build_finalization_result(
+                status="error",
+                assistant_text="",
+                error=detail,
+                managed_thread_id=managed_thread_id,
+                managed_turn_id=managed_turn_id,
+                backend_thread_id=resolved_backend_thread_id,
+                token_usage=event_state.token_usage,
+            )
         thread_store.update_thread_after_turn(
             managed_thread_id,
             last_turn_id=managed_turn_id,
             last_message_preview=turn_preview,
         )
-        return {
-            "status": "ok",
-            "assistant_text": resolved_assistant_text,
-            "error": None,
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "backend_thread_id": resolved_backend_thread_id,
-            "token_usage": event_state.token_usage,
-        }
+        return _build_finalization_result(
+            status="ok",
+            assistant_text=resolved_assistant_text,
+            error=None,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            backend_thread_id=resolved_backend_thread_id,
+            token_usage=event_state.token_usage,
+        )
 
     if outcome.status == "interrupted":
         try:
@@ -1138,15 +1374,15 @@ async def finalize_managed_thread_execution(
             )
         except KeyError:
             pass
-        return {
-            "status": "interrupted",
-            "assistant_text": "",
-            "error": errors.interrupted_error,
-            "managed_thread_id": managed_thread_id,
-            "managed_turn_id": managed_turn_id,
-            "backend_thread_id": resolved_backend_thread_id,
-            "token_usage": event_state.token_usage,
-        }
+        return _build_finalization_result(
+            status="interrupted",
+            assistant_text="",
+            error=errors.interrupted_error,
+            managed_thread_id=managed_thread_id,
+            managed_turn_id=managed_turn_id,
+            backend_thread_id=resolved_backend_thread_id,
+            token_usage=event_state.token_usage,
+        )
 
     detail = resolve_runtime_thread_error_detail(
         outcome_error=outcome.error,
@@ -1167,12 +1403,12 @@ async def finalize_managed_thread_execution(
         )
     except KeyError:
         pass
-    return {
-        "status": "error",
-        "assistant_text": "",
-        "error": detail,
-        "managed_thread_id": managed_thread_id,
-        "managed_turn_id": managed_turn_id,
-        "backend_thread_id": resolved_backend_thread_id,
-        "token_usage": event_state.token_usage,
-    }
+    return _build_finalization_result(
+        status="error",
+        assistant_text="",
+        error=detail,
+        managed_thread_id=managed_thread_id,
+        managed_turn_id=managed_turn_id,
+        backend_thread_id=resolved_backend_thread_id,
+        token_usage=event_state.token_usage,
+    )

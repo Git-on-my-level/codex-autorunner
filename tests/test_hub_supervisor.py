@@ -570,6 +570,16 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
     )
     assert create_resp.status_code == 200
     created = create_resp.json()
+    assert set(created) == {
+        "id",
+        "runtime",
+        "path",
+        "display_name",
+        "enabled",
+        "exists_on_disk",
+        "effective_destination",
+        "resource_kind",
+    }
     assert created["id"] == "zc-main"
     assert created["runtime"] == "zeroclaw"
     assert created["display_name"] == "ZeroClaw Main"
@@ -581,11 +591,34 @@ def test_hub_agent_workspace_crud_routes_support_remove_and_delete(
     list_resp = client.get("/hub/agent-workspaces")
     assert list_resp.status_code == 200
     list_payload = list_resp.json()
+    assert set(list_payload["agent_workspaces"][0]) == {
+        "id",
+        "runtime",
+        "path",
+        "display_name",
+        "enabled",
+        "exists_on_disk",
+        "effective_destination",
+        "resource_kind",
+    }
     assert [item["id"] for item in list_payload["agent_workspaces"]] == ["zc-main"]
 
     detail_resp = client.get("/hub/agent-workspaces/zc-main")
     assert detail_resp.status_code == 200
     detail_payload = detail_resp.json()
+    assert set(detail_payload) == {
+        "id",
+        "runtime",
+        "path",
+        "display_name",
+        "enabled",
+        "exists_on_disk",
+        "effective_destination",
+        "resource_kind",
+        "configured_destination",
+        "source",
+        "issues",
+    }
     assert detail_payload["configured_destination"] is None
     assert detail_payload["source"] == "default"
     assert detail_payload["path"] == ".codex-autorunner/runtimes/zeroclaw/zc-main"

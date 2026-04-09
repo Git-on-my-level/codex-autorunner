@@ -57,7 +57,12 @@ from ..helpers import (
     _set_model_overrides,
     _split_topic_key,
 )
-from ..types import ModelPickerState, ReviewCommitSelectionState, SelectionState
+from ..types import (
+    ModelPickerState,
+    ReviewCommitSelectionState,
+    SelectionState,
+    UpdateConfirmState,
+)
 
 
 class TelegramSelectionHandlers(ChatSelectionHandlers):
@@ -463,7 +468,7 @@ class TelegramSelectionHandlers(ChatSelectionHandlers):
             await self._answer_callback(callback, "Cancelled")
             await self._finalize_selection(key, callback, "Update cancelled.")
             return
-        target = state.get("target") if isinstance(state, dict) else None
+        target = state.target if isinstance(state, UpdateConfirmState) else None
         if isinstance(target, str) and target.strip():
             chat_id, thread_id = _split_topic_key(key)
             await self._start_update(
