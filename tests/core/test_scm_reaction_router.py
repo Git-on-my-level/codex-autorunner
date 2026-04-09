@@ -255,6 +255,7 @@ def test_route_scm_reactions_routes_pr_comment_to_managed_thread() -> None:
         event_id="github:event-comment-thread",
         payload={
             "action": "created",
+            "comment_id": "2844",
             "author_login": "reviewer",
             "author_type": "User",
             "issue_author_login": "pr-author",
@@ -285,6 +286,7 @@ def test_route_scm_reactions_routes_pr_comment_to_notify_without_thread() -> Non
         event_id="github:event-comment-notify",
         payload={
             "action": "created",
+            "comment_id": "2844",
             "author_login": "reviewer",
             "author_type": "User",
             "issue_author_login": "pr-author",
@@ -341,6 +343,7 @@ def test_route_scm_reactions_routes_pull_request_review_comment() -> None:
         event_id="github:event-inline-comment",
         payload={
             "action": "created",
+            "comment_id": "2844",
             "author_login": "reviewer",
             "author_type": "User",
             "issue_author_login": "pr-author",
@@ -354,9 +357,31 @@ def test_route_scm_reactions_routes_pull_request_review_comment() -> None:
         event, binding=_binding(thread_target_id="thread-inline")
     )
 
-    assert len(intents) == 1
+    assert len(intents) == 2
     assert intents[0].reaction_kind == "review_comment"
     assert intents[0].operation_kind == "enqueue_managed_turn"
+    assert intents[1].reaction_kind == "review_comment"
+    assert intents[1].operation_kind == "react_pr_review_comment"
+    assert intents[1].payload == {
+        "comment_id": "2844",
+        "content": "eyes",
+        "correlation_id": "scm:github:event-inline-comment",
+        "repo_slug": "acme/widgets",
+        "repo_id": "repo-1",
+        "binding_id": "binding-1",
+        "scm": {
+            "correlation_id": "scm:github:event-inline-comment",
+            "event_id": "github:event-inline-comment",
+            "provider": "github",
+            "event_type": "pull_request_review_comment",
+            "reaction_kind": "review_comment",
+            "repo_slug": "acme/widgets",
+            "repo_id": "repo-1",
+            "pr_number": 42,
+            "binding_id": "binding-1",
+            "thread_target_id": "thread-inline",
+        },
+    }
 
 
 def test_route_scm_reactions_routes_bot_pull_request_review_comment() -> None:
@@ -365,6 +390,7 @@ def test_route_scm_reactions_routes_bot_pull_request_review_comment() -> None:
         event_id="github:event-inline-bot-comment",
         payload={
             "action": "created",
+            "comment_id": "2845",
             "author_login": "chatgpt-codex-connector[bot]",
             "author_type": "Bot",
             "issue_author_login": "pr-author",
@@ -378,9 +404,36 @@ def test_route_scm_reactions_routes_bot_pull_request_review_comment() -> None:
         event, binding=_binding(thread_target_id="thread-inline-bot")
     )
 
-    assert len(intents) == 1
+    assert len(intents) == 2
     assert intents[0].reaction_kind == "review_comment"
     assert intents[0].operation_kind == "enqueue_managed_turn"
+    assert intents[1].reaction_kind == "review_comment"
+    assert intents[1].operation_kind == "react_pr_review_comment"
+
+
+def test_route_scm_reactions_still_reacts_to_review_comment_without_chat_target() -> (
+    None
+):
+    event = _event(
+        "pull_request_review_comment",
+        event_id="github:event-inline-reaction-only",
+        repo_id=None,
+        payload={
+            "action": "created",
+            "comment_id": "777",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Please handle the reaction side effect centrally.",
+        },
+    )
+
+    intents = route_scm_reactions(event, binding=None)
+
+    assert len(intents) == 1
+    assert intents[0].operation_kind == "react_pr_review_comment"
+    assert intents[0].payload["comment_id"] == "777"
+    assert intents[0].payload["repo_slug"] == "acme/widgets"
 
 
 def test_route_scm_reactions_returns_no_intents_for_irrelevant_events() -> None:

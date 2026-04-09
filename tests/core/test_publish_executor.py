@@ -26,12 +26,16 @@ from codex_autorunner.core.publish_operation_executors import (
 from codex_autorunner.integrations.discord.state import DiscordStateStore
 from codex_autorunner.integrations.github.publisher import (
     build_post_pr_comment_executor,
+    build_react_pr_review_comment_executor,
 )
 from codex_autorunner.integrations.github.service import RepoInfo
 from tests.conftest import write_test_config
 
 _ALLOW_PR_COMMENT_POLICY = {
     "github": {"automation": {"policy": {"post_pr_comment": "allow"}}}
+}
+_ALLOW_REVIEW_COMMENT_REACTION_POLICY = {
+    "github": {"automation": {"policy": {"react_pr_review_comment": "allow"}}}
 }
 
 
@@ -421,6 +425,83 @@ def test_process_now_allows_post_pr_comment_when_policy_allows(
     assert processed[0].state == "succeeded"
     assert processed[0].response == {"delivered": True}
     assert calls == [(created.operation_id, 1, "running")]
+
+
+def test_process_now_allows_pr_review_comment_reaction_when_policy_allows(
+    tmp_path: Path,
+) -> None:
+    store = PublishJournalStore(tmp_path)
+    created, _ = store.create_operation(
+        operation_key="reaction:review-comment-allowed",
+        operation_kind="react_pr_review_comment",
+        payload={
+            "repo_slug": "acme/widgets",
+            "comment_id": "314",
+            "content": "eyes",
+        },
+        next_attempt_at="2026-03-25T00:00:00Z",
+    )
+    service_roots: list[Path] = []
+    calls: list[tuple[str, int, str, int, str]] = []
+
+    class _FakeGitHubService:
+        def repo_info(self) -> RepoInfo:
+            return RepoInfo(
+                name_with_owner="acme/widgets",
+                url="https://github.com/acme/widgets",
+                default_branch="main",
+            )
+
+        def create_issue_comment(
+            self, *, owner: str, repo: str, number: int, body: str, cwd=None
+        ) -> dict[str, object]:
+            raise AssertionError("Issue comment path should not be used")
+
+        def create_pull_request_review_comment_reaction(
+            self,
+            *,
+            owner: str,
+            repo: str,
+            comment_id: int,
+            content: str,
+            cwd=None,
+        ) -> dict[str, object]:
+            calls.append((owner, repo, str(cwd), comment_id, content))
+            return {
+                "id": 88,
+                "content": content,
+                "url": "https://api.github.com/reactions/88",
+            }
+
+    def _factory(repo_root: Path, raw_config=None) -> _FakeGitHubService:
+        _ = raw_config
+        service_roots.append(repo_root)
+        return _FakeGitHubService()
+
+    processor = PublishOperationProcessor(
+        store,
+        executors={
+            "react_pr_review_comment": build_react_pr_review_comment_executor(
+                repo_root=tmp_path,
+                raw_config=_ALLOW_REVIEW_COMMENT_REACTION_POLICY,
+                github_service_factory=_factory,
+            )
+        },
+        now_fn=_QueuedClock("2026-03-25T00:00:00Z"),
+    )
+
+    processed = processor.process_now(limit=10)
+    assert [operation.operation_id for operation in processed] == [created.operation_id]
+    assert processed[0].state == "succeeded"
+    assert processed[0].response == {
+        "repo_slug": "acme/widgets",
+        "comment_id": 314,
+        "content": "eyes",
+        "reaction_id": 88,
+        "url": "https://api.github.com/reactions/88",
+    }
+    assert service_roots == [tmp_path]
+    assert calls == [("acme", "widgets", str(tmp_path), 314, "eyes")]
 
 
 def test_process_now_replays_pending_operation_after_processor_restart(

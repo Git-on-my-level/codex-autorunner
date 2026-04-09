@@ -15,6 +15,7 @@ MUTATION_POLICY_ALLOWED_VALUES: tuple[MutationPolicyValue, ...] = (
 MUTATION_POLICY_ACTION_TYPES: tuple[str, ...] = (
     "enqueue_managed_turn",
     "notify_chat",
+    "react_pr_review_comment",
     "post_pr_comment",
     "add_labels",
     "merge_pr",
@@ -22,6 +23,7 @@ MUTATION_POLICY_ACTION_TYPES: tuple[str, ...] = (
 _MUTATION_POLICY_DEFAULTS: dict[str, MutationPolicyValue] = {
     "enqueue_managed_turn": "allow",
     "notify_chat": "allow",
+    "react_pr_review_comment": "deny",
     "post_pr_comment": "deny",
     "add_labels": "deny",
     "merge_pr": "deny",

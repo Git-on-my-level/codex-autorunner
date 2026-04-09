@@ -22,6 +22,16 @@ class GitHubCommentPublisher(Protocol):
         cwd: Optional[Path] = None,
     ) -> dict[str, Any]: ...
 
+    def create_pull_request_review_comment_reaction(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        comment_id: int,
+        content: str,
+        cwd: Optional[Path] = None,
+    ) -> dict[str, Any]: ...
+
 
 GitHubServiceFactory = Callable[
     [Path, Optional[dict[str, Any]]], GitHubCommentPublisher
@@ -102,6 +112,49 @@ def publish_pr_comment(
     }
 
 
+def publish_pr_review_comment_reaction(
+    payload: dict[str, Any],
+    *,
+    service: GitHubCommentPublisher,
+    cwd: Optional[Path] = None,
+) -> dict[str, Any]:
+    repo_slug = _require_text(
+        payload.get("repo_slug") or payload.get("repository"),
+        field_name="repo_slug",
+    )
+    content = _normalize_optional_text(payload.get("content")) or "eyes"
+    raw_comment_id = payload.get("comment_id")
+    if raw_comment_id is None:
+        raise TerminalPublishError("Publish payload is missing 'comment_id'")
+    try:
+        comment_id = int(raw_comment_id)
+    except (TypeError, ValueError) as exc:
+        raise TerminalPublishError(
+            "Publish payload 'comment_id' must be an integer"
+        ) from exc
+    owner, repo = repo_slug.split("/", 1)
+    created = service.create_pull_request_review_comment_reaction(
+        owner=owner,
+        repo=repo,
+        comment_id=comment_id,
+        content=content,
+        cwd=cwd,
+    )
+    reaction_payload = _normalize_payload(created)
+    reaction_id = reaction_payload.get("id")
+    if isinstance(reaction_id, str) and reaction_id.strip().isdigit():
+        reaction_id = int(reaction_id.strip())
+    return {
+        "repo_slug": repo_slug,
+        "comment_id": comment_id,
+        "content": content,
+        "reaction_id": reaction_id,
+        "url": _normalize_optional_text(
+            reaction_payload.get("html_url") or reaction_payload.get("url")
+        ),
+    }
+
+
 def build_post_pr_comment_executor(
     *,
     repo_root: Path,
@@ -126,7 +179,37 @@ def build_post_pr_comment_executor(
     return executor
 
 
+def build_react_pr_review_comment_executor(
+    *,
+    repo_root: Path,
+    raw_config: Optional[dict[str, Any]] = None,
+    github_service_factory: Optional[GitHubServiceFactory] = None,
+) -> PublishActionExecutor:
+    service_factory = github_service_factory or GitHubService
+
+    def executor(operation: PublishOperation) -> dict[str, Any]:
+        payload = _normalize_payload(operation.payload)
+        workspace_override = _normalize_optional_text(payload.get("workspace_root"))
+        operation_repo_root = (
+            Path(workspace_override).resolve() if workspace_override else repo_root
+        )
+        try:
+            service = service_factory(operation_repo_root, raw_config)
+            return publish_pr_review_comment_reaction(
+                payload,
+                service=service,
+                cwd=operation_repo_root,
+            )
+        except GitHubError as exc:
+            raise TerminalPublishError(str(exc)) from exc
+
+    cast(Any, executor).mutation_policy_config = raw_config
+    return executor
+
+
 __all__ = [
+    "build_react_pr_review_comment_executor",
     "build_post_pr_comment_executor",
+    "publish_pr_review_comment_reaction",
     "publish_pr_comment",
 ]

@@ -758,6 +758,128 @@ def test_ingest_event_resolves_previous_fingerprint_and_allows_reemit_after_cond
     assert changed_state.resolved_at is not None
 
 
+def test_ingest_event_tracks_review_comment_operations_in_separate_state_namespaces(
+    tmp_path: Path,
+) -> None:
+    event = ScmEvent(
+        event_id="github:event-inline-comment",
+        provider="github",
+        event_type="pull_request_review_comment",
+        occurred_at="2026-03-26T00:00:00Z",
+        received_at="2026-03-26T00:00:01Z",
+        created_at="2026-03-26T00:00:02Z",
+        repo_slug="acme/widgets",
+        repo_id="repo-1",
+        pr_number=42,
+        delivery_id="delivery-1",
+        payload={
+            "action": "created",
+            "comment_id": "2844",
+            "author_login": "reviewer",
+            "author_type": "User",
+            "issue_author_login": "pr-author",
+            "body": "Please cover the inline review-comment webhook path too.",
+        },
+        raw_payload=None,
+    )
+    binding = _binding()
+    state_store = _PermissiveReactionStateFake()
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(event),
+        binding_resolver=_BindingResolverFake(binding),
+        reaction_router=route_scm_reactions,
+        reaction_state_store=state_store,
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+
+    result = service.ingest_event(event.event_id)
+
+    assert [operation.operation_kind for operation in result.publish_operations] == [
+        "enqueue_managed_turn",
+        "react_pr_review_comment",
+    ]
+    assert state_store.should_calls == [
+        (
+            "binding-1",
+            "review_comment:enqueue_managed_turn",
+            "review_comment:github:event-inline-comment:enqueue_managed_turn",
+        ),
+        (
+            "binding-1",
+            "review_comment:react_pr_review_comment",
+            "review_comment:github:event-inline-comment:react_pr_review_comment",
+        ),
+    ]
+    tracking_payloads = [
+        operation.payload["scm_reaction"] for operation in result.publish_operations
+    ]
+    assert [payload["reaction_kind"] for payload in tracking_payloads] == [
+        "review_comment",
+        "review_comment",
+    ]
+    assert [payload["reaction_state_kind"] for payload in tracking_payloads] == [
+        "review_comment:enqueue_managed_turn",
+        "review_comment:react_pr_review_comment",
+    ]
+
+
+def test_handle_processed_operations_uses_reaction_state_kind_tracking_key(
+    tmp_path: Path,
+) -> None:
+    state_store = ScmReactionStateStore(tmp_path)
+    state_store.mark_reaction_emitted(
+        binding_id="binding-1",
+        reaction_kind="review_comment:react_pr_review_comment",
+        fingerprint="fp-inline",
+        event_id="github:event-inline-comment",
+        operation_key="scm:key-inline",
+    )
+    service = ScmAutomationService(
+        tmp_path,
+        event_store=_EventStoreFake(),
+        binding_resolver=_BindingResolverFake(None),
+        reaction_router=_ReactionRouterFake([]),
+        reaction_state_store=state_store,
+        journal=_JournalFake(),
+        publish_processor=_ProcessorFake(processed=[]),
+    )
+    failed = PublishOperation(
+        **{
+            **_operation(
+                operation_id="op-inline",
+                operation_key="scm:key-inline",
+                operation_kind="react_pr_review_comment",
+                state="failed",
+            ).to_dict(),
+            "payload": {
+                "scm_reaction": {
+                    "binding_id": "binding-1",
+                    "reaction_kind": "review_comment",
+                    "reaction_state_kind": "review_comment:react_pr_review_comment",
+                    "fingerprint": "fp-inline",
+                    "event_id": "github:event-inline-comment",
+                    "operation_kind": "react_pr_review_comment",
+                }
+            },
+            "last_error_text": "RuntimeError: delivery failed",
+        }
+    )
+
+    escalations = service._handle_processed_operations([failed])
+
+    assert escalations == []
+    stored = state_store.get_reaction_state(
+        binding_id="binding-1",
+        reaction_kind="review_comment:react_pr_review_comment",
+        fingerprint="fp-inline",
+    )
+    assert stored is not None
+    assert stored.state == "delivery_failed"
+    assert stored.delivery_failure_count == 1
+
+
 def test_process_now_escalates_after_repeated_publish_failures_and_marks_recovery(
     tmp_path: Path,
 ) -> None:

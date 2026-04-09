@@ -32,6 +32,9 @@ from .broker import GitHubCliBroker
 from .polling import GitHubScmPollingService
 
 logger = logging.getLogger(__name__)
+_ALLOWED_REACTION_CONTENTS = frozenset(
+    {"+1", "-1", "laugh", "confused", "heart", "hooray", "rocket", "eyes"}
+)
 
 
 class GitHubError(Exception):
@@ -890,8 +893,9 @@ class GitHubService:
             "repository(owner:$owner,name:$repo){"
             "pullRequest(number:$number){"
             "reviewThreads(first:50){"
-            "nodes{id isResolved comments(first:20){nodes{id url authorAssociation "
-            "body path line createdAt updatedAt author{__typename login}}}}"
+            "nodes{id isResolved comments(first:20){nodes{id databaseId url "
+            "authorAssociation body path line createdAt updatedAt "
+            "author{__typename login}}}}"
             "}"
             "}"
             "}"
@@ -951,7 +955,7 @@ class GitHubService:
                             key: value
                             for key, value in {
                                 "comment_id": _normalize_optional_identifier_text(
-                                    comment.get("id")
+                                    comment.get("databaseId") or comment.get("id")
                                 ),
                                 "html_url": _normalize_optional_text(
                                     comment.get("url")
@@ -991,6 +995,45 @@ class GitHubService:
                 }
             )
         return threads
+
+    def create_pull_request_review_comment_reaction(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        comment_id: int,
+        content: str,
+        cwd: Optional[Path] = None,
+    ) -> dict[str, Any]:
+        normalized_content = _normalize_optional_text(content)
+        if normalized_content not in _ALLOWED_REACTION_CONTENTS:
+            raise GitHubError(
+                f"Unsupported reaction content '{content}'",
+                status_code=400,
+            )
+        proc = self._gh(
+            [
+                "api",
+                "--method",
+                "POST",
+                f"repos/{owner}/{repo}/pulls/comments/{int(comment_id)}/reactions",
+                "-H",
+                "Accept: application/vnd.github+json",
+                "-f",
+                f"content={normalized_content}",
+            ],
+            cwd=cwd or self.repo_root,
+            check=True,
+            timeout_seconds=30,
+        )
+        try:
+            payload = json.loads(proc.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise GitHubError(
+                "Unable to parse gh reaction output",
+                status_code=500,
+            ) from exc
+        return payload if isinstance(payload, dict) else {}
 
     def pr_checks(
         self, *, number: int, cwd: Optional[Path] = None
