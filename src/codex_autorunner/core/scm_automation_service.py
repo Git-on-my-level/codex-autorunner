@@ -181,6 +181,28 @@ def _compact_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _reaction_state_kind(*, reaction_kind: str, operation_kind: str) -> str:
+    if reaction_kind != "review_comment":
+        return reaction_kind
+    return f"{reaction_kind}:{operation_kind}"
+
+
+def _tracking_reaction_state_kind(tracking: Mapping[str, Any]) -> Optional[str]:
+    state_kind = _normalize_text(tracking.get("reaction_state_kind"))
+    if state_kind is not None:
+        return state_kind
+    reaction_kind = _normalize_text(tracking.get("reaction_kind"))
+    operation_kind = _normalize_text(tracking.get("operation_kind"))
+    if reaction_kind is None:
+        return None
+    if operation_kind is None or reaction_kind != "review_comment":
+        return reaction_kind
+    return _reaction_state_kind(
+        reaction_kind=reaction_kind,
+        operation_kind=operation_kind,
+    )
+
+
 def _stable_escalation_operation_key(
     *,
     binding_id: str,
@@ -413,6 +435,7 @@ class ScmAutomationService:
             )
             binding_id: Optional[str] = None
             fingerprint: Optional[str] = None
+            reaction_state_kind: Optional[str] = None
             tracking: dict[str, Any] = {}
             if binding is not None and intent.binding_id is not None:
                 binding_id = intent.binding_id
@@ -420,6 +443,10 @@ class ScmAutomationService:
                     event,
                     binding=binding,
                     intent=intent,
+                )
+                reaction_state_kind = _reaction_state_kind(
+                    reaction_kind=intent.reaction_kind,
+                    operation_kind=intent.operation_kind,
                 )
                 tracking = _compact_mapping(
                     {
@@ -432,6 +459,7 @@ class ScmAutomationService:
                         "pr_number": binding.pr_number,
                         "provider": event.provider,
                         "reaction_kind": intent.reaction_kind,
+                        "reaction_state_kind": reaction_state_kind,
                         "repo_id": binding.repo_id or event.repo_id,
                         "repo_slug": binding.repo_slug or event.repo_slug,
                         "thread_target_id": binding.thread_target_id,
@@ -439,19 +467,19 @@ class ScmAutomationService:
                 )
                 self._reaction_state_store.resolve_other_active_reactions(
                     binding_id=binding_id,
-                    reaction_kind=intent.reaction_kind,
+                    reaction_kind=reaction_state_kind,
                     keep_fingerprint=fingerprint,
                     event_id=intent.event_id or event.event_id,
                     metadata=tracking,
                 )
                 existing = self._reaction_state_store.get_reaction_state(
                     binding_id=binding_id,
-                    reaction_kind=intent.reaction_kind,
+                    reaction_kind=reaction_state_kind,
                     fingerprint=fingerprint,
                 )
                 if not self._reaction_state_store.should_emit_reaction(
                     binding_id=binding_id,
-                    reaction_kind=intent.reaction_kind,
+                    reaction_kind=reaction_state_kind,
                     fingerprint=fingerprint,
                 ):
                     existing_attempt_count = int(
@@ -468,7 +496,7 @@ class ScmAutomationService:
                     ):
                         escalation_operation = self._create_escalation_operation(
                             binding_id=binding_id,
-                            reaction_kind=intent.reaction_kind,
+                            reaction_kind=reaction_state_kind,
                             fingerprint=fingerprint,
                             tracking=tracking,
                             message=_duplicate_escalation_message(
@@ -487,7 +515,7 @@ class ScmAutomationService:
                     ):
                         self._reaction_state_store.mark_reaction_suppressed(
                             binding_id=binding_id,
-                            reaction_kind=intent.reaction_kind,
+                            reaction_kind=reaction_state_kind,
                             fingerprint=fingerprint,
                             event_id=intent.event_id or event.event_id,
                             metadata=tracking,
@@ -516,10 +544,14 @@ class ScmAutomationService:
                 operation=operation,
                 payload={"deduped": deduped},
             )
-            if fingerprint is not None and binding_id is not None:
+            if (
+                fingerprint is not None
+                and binding_id is not None
+                and reaction_state_kind is not None
+            ):
                 self._reaction_state_store.mark_reaction_emitted(
                     binding_id=binding_id,
-                    reaction_kind=intent.reaction_kind,
+                    reaction_kind=reaction_state_kind,
                     fingerprint=fingerprint,
                     event_id=intent.event_id or event.event_id,
                     operation_key=intent.operation_key,
@@ -627,16 +659,16 @@ class ScmAutomationService:
         for operation in operations:
             tracking = _tracking_from_payload(operation.payload)
             binding_id = _normalize_text(tracking.get("binding_id"))
-            reaction_kind = _normalize_text(tracking.get("reaction_kind"))
+            reaction_state_kind = _tracking_reaction_state_kind(tracking)
             fingerprint = _normalize_text(tracking.get("fingerprint"))
-            if binding_id is None or reaction_kind is None or fingerprint is None:
+            if binding_id is None or reaction_state_kind is None or fingerprint is None:
                 continue
             event_id = _normalize_text(tracking.get("event_id"))
             try:
                 if operation.state == "succeeded":
                     self._reaction_state_store.mark_reaction_delivery_succeeded(
                         binding_id=binding_id,
-                        reaction_kind=reaction_kind,
+                        reaction_kind=reaction_state_kind,
                         fingerprint=fingerprint,
                         event_id=event_id,
                         operation_key=operation.operation_key,
@@ -647,7 +679,7 @@ class ScmAutomationService:
                     continue
                 failed_state = self._reaction_state_store.mark_reaction_delivery_failed(
                     binding_id=binding_id,
-                    reaction_kind=reaction_kind,
+                    reaction_kind=reaction_state_kind,
                     fingerprint=fingerprint,
                     event_id=event_id,
                     error_text=operation.last_error_text,
@@ -674,7 +706,7 @@ class ScmAutomationService:
                 continue
             escalation_operation = self._create_escalation_operation(
                 binding_id=binding_id,
-                reaction_kind=reaction_kind,
+                reaction_kind=reaction_state_kind,
                 fingerprint=fingerprint,
                 tracking=tracking,
                 message=_failure_escalation_message(
