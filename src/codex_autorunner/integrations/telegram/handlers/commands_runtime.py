@@ -1931,6 +1931,9 @@ class TelegramCommandHandlers(
         has_managed_thread_runtime = getattr(
             self._config, "root", None
         ) is not None and callable(getattr(self, "_spawn_task", None))
+        managed_thread_mode = (
+            "pma" if bool(getattr(record, "pma_enabled", False)) else "repo"
+        )
         if not has_managed_thread_runtime:
             try:
                 client = await self._client_for_workspace(workspace_path)
@@ -1998,7 +2001,7 @@ class TelegramCommandHandlers(
                     _get_telegram_thread_binding(
                         self,
                         surface_key=key,
-                        mode="repo",
+                        mode=managed_thread_mode,
                     )
                 )
                 agent = self._effective_runtime_agent(record)
@@ -2026,11 +2029,11 @@ class TelegramCommandHandlers(
                         and record.resource_id.strip()
                         else None
                     ),
-                    mode="repo",
+                    mode=managed_thread_mode,
                     display_name=f"telegram:{key}",
                     binding_metadata={
                         "topic_key": key,
-                        "pma_enabled": False,
+                        "pma_enabled": bool(getattr(record, "pma_enabled", False)),
                         "surface_key": key,
                     },
                     thread_metadata=(
@@ -2062,10 +2065,10 @@ class TelegramCommandHandlers(
                         and record.resource_id.strip()
                         else None
                     ),
-                    mode="repo",
+                    mode=managed_thread_mode,
                     metadata={
                         "topic_key": key,
-                        "pma_enabled": False,
+                        "pma_enabled": bool(getattr(record, "pma_enabled", False)),
                         "surface_key": key,
                     },
                     backend_thread_id=new_thread_id,
@@ -2128,7 +2131,7 @@ class TelegramCommandHandlers(
                 _get_telegram_thread_binding(
                     self,
                     surface_key=key,
-                    mode="repo",
+                    mode=managed_thread_mode,
                 )
             )
             agent = self._effective_runtime_agent(record)
@@ -2156,11 +2159,11 @@ class TelegramCommandHandlers(
                     and record.resource_id.strip()
                     else None
                 ),
-                mode="repo",
+                mode=managed_thread_mode,
                 display_name=f"telegram:{key}",
                 binding_metadata={
                     "topic_key": key,
-                    "pma_enabled": False,
+                    "pma_enabled": bool(getattr(record, "pma_enabled", False)),
                     "surface_key": key,
                 },
                 thread_metadata=(

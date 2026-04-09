@@ -5689,6 +5689,187 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("has_managed_thread_runtime", [False, True])
+async def test_apply_compact_summary_preserves_pma_mode_for_replacement_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    has_managed_thread_runtime: bool,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    record = TelegramTopicRecord(
+        agent="codex",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        active_thread_id="backend-old",
+        pma_enabled=True,
+    )
+    binding_mode_calls: list[str] = []
+    replace_calls: list[tuple[str, bool]] = []
+    bind_calls: list[tuple[str, bool, Optional[str]]] = []
+    compact_seed_calls: list[tuple[str, str]] = []
+    apply_thread_result_flags: list[bool] = []
+
+    class _RouterStub:
+        async def update_topic(
+            self, _chat_id: int, _thread_id: Optional[int], apply
+        ) -> TelegramTopicRecord:
+            apply(record)
+            return record
+
+    class _ClientStub:
+        async def thread_start(self, _workspace_path: str, **_kwargs: Any) -> Any:
+            return {"id": "backend-pma-new"}
+
+    class _CompactHandler(TelegramCommandHandlers):
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+            self._router = _RouterStub()
+            self._config = SimpleNamespace(
+                root=tmp_path,
+                defaults=SimpleNamespace(policies_for_mode=lambda _mode: (None, None)),
+            )
+            self._spawn_task = (
+                (lambda coro: None) if has_managed_thread_runtime else None
+            )
+
+        def _resolve_workspace_path(
+            self, _record: TelegramTopicRecord, allow_pma: bool = False
+        ) -> tuple[Optional[str], Optional[str]]:
+            _ = allow_pma
+            return str(workspace), None
+
+        async def _resolve_topic_key(
+            self, _chat_id: int, _thread_id: Optional[int]
+        ) -> str:
+            return "123:root"
+
+        async def _client_for_workspace(self, _workspace_path: str) -> Any:
+            return _ClientStub()
+
+        async def _require_thread_workspace(
+            self,
+            _message: TelegramMessage,
+            _workspace_path: str,
+            _thread: Any,
+            *,
+            action: str,
+        ) -> bool:
+            _ = action
+            return True
+
+        async def _apply_thread_result(
+            self,
+            _chat_id: int,
+            _thread_id: Optional[int],
+            _thread: Any,
+            *,
+            active_thread_id: Optional[str] = None,
+            sync_binding: bool = True,
+        ) -> TelegramTopicRecord:
+            apply_thread_result_flags.append(sync_binding)
+            record.active_thread_id = active_thread_id
+            return record
+
+    async def _fake_replace_surface_thread(
+        _orchestration_service: Any,
+        **kwargs: Any,
+    ) -> Any:
+        replace_calls.append(
+            (
+                str(kwargs["mode"]),
+                bool((kwargs.get("binding_metadata") or {}).get("pma_enabled")),
+            )
+        )
+        return SimpleNamespace(
+            replacement_thread=SimpleNamespace(thread_target_id="managed-new")
+        )
+
+    def _fake_bind_surface_thread(
+        _orchestration_service: Any,
+        **kwargs: Any,
+    ) -> Any:
+        bind_calls.append(
+            (
+                str(kwargs["mode"]),
+                bool((kwargs.get("metadata") or {}).get("pma_enabled")),
+                kwargs.get("backend_thread_id"),
+            )
+        )
+        return SimpleNamespace(thread_target_id="managed-new")
+
+    def _fake_set_thread_compact_seed(
+        self, managed_thread_id: str, compact_seed: Optional[str], **_kwargs: Any
+    ) -> None:
+        compact_seed_calls.append((managed_thread_id, str(compact_seed or "")))
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (binding_mode_calls.append(str(kwargs["mode"])) or True)
+        and (
+            SimpleNamespace(),
+            SimpleNamespace(thread_target_id="managed-old", mode="pma"),
+            SimpleNamespace(
+                thread_target_id="managed-old",
+                agent_id="codex",
+                workspace_root=str(workspace),
+                lifecycle_status="active",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.managed_thread_lifecycle.replace_surface_thread",
+        _fake_replace_surface_thread,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.integrations.chat.managed_thread_lifecycle.bind_surface_thread",
+        _fake_bind_surface_thread,
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store.PmaThreadStore.set_thread_compact_seed",
+        _fake_set_thread_compact_seed,
+    )
+
+    handler = _CompactHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=123,
+        thread_id=None,
+        from_user_id=456,
+        text="/compact",
+        date=None,
+        is_topic_message=False,
+    )
+
+    success, error = await handler._apply_compact_summary(
+        message,
+        record,
+        "summary text",
+    )
+
+    assert success is True
+    assert error is None
+    assert binding_mode_calls == ["pma"]
+    assert replace_calls == [("pma", True)]
+    assert compact_seed_calls == [("managed-new", "summary text")]
+    if has_managed_thread_runtime:
+        assert bind_calls == []
+        assert apply_thread_result_flags == []
+        assert record.active_thread_id is None
+        assert record.pending_compact_seed_thread_id == "managed-new"
+    else:
+        assert bind_calls == [("pma", True, "backend-pma-new")]
+        assert apply_thread_result_flags == [False]
+        assert record.active_thread_id == "backend-pma-new"
+        assert record.pending_compact_seed_thread_id == "backend-pma-new"
+    assert "summary text" in (record.pending_compact_seed or "")
+
+
+@pytest.mark.anyio
 async def test_repo_managed_thread_turn_matches_pending_compact_seed_by_managed_thread_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
