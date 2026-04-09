@@ -4,7 +4,7 @@ from typing import Any, Mapping, Optional, Sequence, cast
 
 from .flows.models import format_flow_duration
 from .managed_thread_status import derive_managed_thread_operator_status
-from .pma_context import (
+from .pma_context_shared import (
     PMA_MAX_AUTOMATION_ITEMS,
     PMA_MAX_LIFECYCLE_EVENTS,
     PMA_MAX_MESSAGES,
