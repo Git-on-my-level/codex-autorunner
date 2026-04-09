@@ -802,6 +802,56 @@ async def handle_car_archive(
         )
         return
 
+    binding = await service._store.get_binding(channel_id=channel_id)
+    if binding is not None:
+        pma_enabled = bool(binding.get("pma_enabled", False))
+        agent, agent_profile = service._resolve_agent_state(binding)
+        try:
+            await service._reset_discord_thread_binding(
+                channel_id=channel_id,
+                workspace_root=workspace_root,
+                agent=agent,
+                agent_profile=agent_profile,
+                repo_id=(
+                    str(binding.get("repo_id")).strip()
+                    if isinstance(binding.get("repo_id"), str)
+                    and str(binding.get("repo_id")).strip()
+                    else None
+                ),
+                resource_kind=(
+                    str(binding.get("resource_kind")).strip()
+                    if isinstance(binding.get("resource_kind"), str)
+                    and str(binding.get("resource_kind")).strip()
+                    else None
+                ),
+                resource_id=(
+                    str(binding.get("resource_id")).strip()
+                    if isinstance(binding.get("resource_id"), str)
+                    and str(binding.get("resource_id")).strip()
+                    else None
+                ),
+                pma_enabled=pma_enabled,
+            )
+            await service._store.clear_pending_compact_seed(channel_id=channel_id)
+        except (RuntimeError, OSError, ValueError, TypeError) as exc:
+            log_event(
+                service._logger,
+                logging.WARNING,
+                "discord.archive_state.refresh_binding_failed",
+                channel_id=channel_id,
+                workspace_root=str(workspace_root),
+                exc=exc,
+            )
+            await service._send_or_respond_ephemeral(
+                interaction_id=interaction_id,
+                interaction_token=interaction_token,
+                deferred=deferred,
+                text=format_discord_message(
+                    "Archive completed, but preparing a fresh managed thread failed."
+                ),
+            )
+            return
+
     await service._send_or_respond_ephemeral(
         interaction_id=interaction_id,
         interaction_token=interaction_token,

@@ -148,6 +148,11 @@ from ...integrations.chat.forwarding import compose_forwarded_message_text
 from ...integrations.chat.handlers.approvals import (
     normalize_backend_approval_request,
 )
+from ...integrations.chat.managed_thread_lifecycle import (
+    bind_surface_thread,
+    replace_surface_thread,
+    resolve_surface_thread_binding,
+)
 from ...integrations.chat.media import (
     audio_content_type_for_input,
     audio_extension_for_input,
@@ -1901,21 +1906,13 @@ class DiscordBotService:
         mode: Optional[str] = None,
     ) -> tuple[Any, Any, Any]:
         orchestration_service = self._discord_thread_service()
-        binding = orchestration_service.get_binding(
+        resolved = resolve_surface_thread_binding(
+            orchestration_service,
             surface_kind="discord",
             surface_key=channel_id,
+            mode=mode,
         )
-        normalized_mode = (
-            mode.strip().lower() if isinstance(mode, str) and mode.strip() else None
-        )
-        if binding is None:
-            return orchestration_service, None, None
-        if normalized_mode is not None:
-            binding_mode = str(getattr(binding, "mode", "") or "").strip().lower()
-            if binding_mode != normalized_mode:
-                return orchestration_service, binding, None
-        thread = orchestration_service.get_thread_target(binding.thread_target_id)
-        return orchestration_service, binding, thread
+        return orchestration_service, resolved.binding, resolved.thread
 
     def _format_discord_thread_picker_label(
         self,
@@ -1940,13 +1937,15 @@ class DiscordBotService:
         pma_enabled: bool,
     ) -> tuple[bool, str]:
         mode = "pma" if pma_enabled else "repo"
-        orchestration_service, _binding, current_thread = (
+        orchestration_service, binding, current_thread = (
             self._get_discord_thread_binding(
                 channel_id=channel_id,
                 mode=mode,
             )
         )
-        had_previous = current_thread is not None
+        previous_thread_id = (
+            str(getattr(current_thread, "thread_target_id", "") or "").strip() or None
+        )
         if current_thread is not None:
             from .message_turns import clear_discord_turn_progress_reuse
 
@@ -1958,9 +1957,37 @@ class DiscordBotService:
                 mode=mode,
                 thread_target_id=current_thread.thread_target_id,
             )
-            stop_outcome = await orchestration_service.stop_thread(
-                current_thread.thread_target_id
+            clear_discord_turn_progress_reuse(
+                self,
+                thread_target_id=current_thread.thread_target_id,
             )
+        owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
+            workspace_root,
+            repo_id=repo_id,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+        )
+        thread_metadata: Optional[dict[str, Any]] = (
+            {"agent_profile": agent_profile} if agent_profile else None
+        )
+        replacement = await replace_surface_thread(
+            orchestration_service,
+            surface_kind="discord",
+            surface_key=channel_id,
+            workspace_root=workspace_root,
+            agent_id=agent,
+            repo_id=normalized_repo_id,
+            resource_kind=owner_kind,
+            resource_id=owner_id,
+            mode=mode,
+            display_name=f"discord:{channel_id}",
+            binding_metadata={"channel_id": channel_id, "pma_enabled": pma_enabled},
+            thread_metadata=thread_metadata,
+            binding=binding,
+            thread=current_thread,
+        )
+        stop_outcome = replacement.stop_outcome
+        if previous_thread_id and stop_outcome is not None:
             interrupted_active = bool(
                 getattr(stop_outcome, "interrupted_active", False)
             )
@@ -1975,7 +2002,7 @@ class DiscordBotService:
                 "discord.thread.reset.stop_completed",
                 channel_id=channel_id,
                 mode=mode,
-                thread_target_id=current_thread.thread_target_id,
+                thread_target_id=previous_thread_id,
                 interrupted_active=interrupted_active,
                 recovered_lost_backend=recovered_lost_backend,
                 cancelled_queued=cancelled_queued,
@@ -1999,43 +2026,12 @@ class DiscordBotService:
                     logging.INFO,
                     "discord.thread.recovered_lost_backend",
                     channel_id=channel_id,
-                    thread_target_id=current_thread.thread_target_id,
+                    thread_target_id=previous_thread_id,
                 )
-            clear_discord_turn_progress_reuse(
-                self,
-                thread_target_id=current_thread.thread_target_id,
-            )
-            orchestration_service.archive_thread_target(current_thread.thread_target_id)
-        owner_kind, owner_id, normalized_repo_id = self._resource_owner_for_workspace(
-            workspace_root,
-            repo_id=repo_id,
-            resource_kind=resource_kind,
-            resource_id=resource_id,
+        return (
+            replacement.had_previous,
+            replacement.replacement_thread.thread_target_id,
         )
-        thread_metadata: Optional[dict[str, Any]] = (
-            {"agent_profile": agent_profile} if agent_profile else None
-        )
-        replacement = orchestration_service.create_thread_target(
-            agent,
-            workspace_root,
-            repo_id=normalized_repo_id,
-            resource_kind=owner_kind,
-            resource_id=owner_id,
-            display_name=f"discord:{channel_id}",
-            metadata=thread_metadata,
-        )
-        orchestration_service.upsert_binding(
-            surface_kind="discord",
-            surface_key=channel_id,
-            thread_target_id=replacement.thread_target_id,
-            agent_id=agent,
-            repo_id=normalized_repo_id,
-            resource_kind=owner_kind,
-            resource_id=owner_id,
-            mode=mode,
-            metadata={"channel_id": channel_id, "pma_enabled": pma_enabled},
-        )
-        return had_previous, replacement.thread_target_id
 
     def _attach_discord_thread_binding(
         self,
@@ -2058,7 +2054,8 @@ class DiscordBotService:
             resource_kind=resource_kind,
             resource_id=resource_id,
         )
-        return orchestration_service.upsert_binding(
+        return bind_surface_thread(
+            orchestration_service,
             surface_kind="discord",
             surface_key=channel_id,
             thread_target_id=thread_target_id,

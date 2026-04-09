@@ -4704,6 +4704,19 @@ async def test_archive_uses_shared_fresh_start_and_resets_topic(
             )
         ),
     )
+    reset_calls: list[dict[str, object]] = []
+
+    async def _fake_reset_telegram_thread_binding(
+        *_args: object, **kwargs: object
+    ) -> tuple[bool, str]:
+        reset_calls.append(dict(kwargs))
+        return True, "thread-fresh"
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_reset_telegram_thread_binding",
+        _fake_reset_telegram_thread_binding,
+    )
 
     await handler._handle_archive(
         TelegramMessage(
@@ -4721,6 +4734,8 @@ async def test_archive_uses_shared_fresh_start_and_resets_topic(
     assert calls
     assert calls[0]["hub_root"] == hub_root
     assert calls[0]["worktree_repo_id"] == "repo"
+    assert reset_calls
+    assert reset_calls[0]["mode"] == "repo"
     assert record.active_thread_id is None
     assert record.thread_ids == []
     assert record.thread_summaries == {}
@@ -5407,6 +5422,332 @@ async def test_reset_telegram_thread_binding_archives_after_lost_backend_recover
         ("create", "codex"),
         ("bind", "thread-2"),
     ]
+
+
+@pytest.mark.anyio
+async def test_resume_thread_by_id_rebinds_managed_thread_before_topic_mirror_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = Path("/tmp/telegram-resume-managed-thread").resolve()
+    record = TelegramTopicRecord(
+        agent="codex",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+    )
+    resolve_calls: list[dict[str, Any]] = []
+
+    class _RouterStub:
+        async def get_topic(self, _key: str) -> TelegramTopicRecord:
+            return record
+
+        async def update_topic(
+            self, _chat_id: int, _thread_id: Optional[int], apply
+        ) -> TelegramTopicRecord:
+            apply(record)
+            return record
+
+    class _StoreStub:
+        async def update_topic(self, _key: str, apply) -> TelegramTopicRecord:
+            apply(record)
+            return record
+
+    class _ClientStub:
+        async def thread_resume(self, thread_id: str) -> dict[str, Any]:
+            return {
+                "thread_id": thread_id,
+                "agent": "codex",
+                "cwd": str(workspace),
+                "path": str(workspace),
+                "thread": {
+                    "id": thread_id,
+                    "path": str(workspace),
+                    "agent": "codex",
+                },
+            }
+
+    class _ResumeHandler(WorkspaceCommands):
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+            self._router = _RouterStub()
+            self._store = _StoreStub()
+            self._resume_options: dict[str, SelectionState] = {}
+            self._config = SimpleNamespace(
+                root=workspace,
+                defaults=SimpleNamespace(policies_for_mode=lambda _mode: (None, None)),
+            )
+            self._managed_thread_rebound = False
+            self.apply_sync_flags: list[bool] = []
+            self.sent: list[str] = []
+
+        async def _resolve_topic_key(
+            self, _chat_id: int, _thread_id: Optional[int]
+        ) -> str:
+            return "123:root"
+
+        async def _client_for_workspace(self, _workspace_path: str) -> _ClientStub:
+            return _ClientStub()
+
+        async def _refresh_workspace_id(
+            self, _key: str, _record: TelegramTopicRecord
+        ) -> Optional[str]:
+            return None
+
+        async def _find_thread_conflict(
+            self, _thread_id: str, *, key: str
+        ) -> Optional[str]:
+            _ = key
+            return None
+
+        async def _finalize_selection(
+            self, _key: str, _callback: object, text: str
+        ) -> None:
+            self.sent.append(text)
+
+        async def _apply_thread_result(
+            self,
+            chat_id: int,
+            thread_id: Optional[int],
+            result: Any,
+            *,
+            active_thread_id: Optional[str] = None,
+            overwrite_defaults: bool = False,
+            sync_binding: bool = True,
+        ) -> TelegramTopicRecord:
+            _ = chat_id, thread_id, result, overwrite_defaults
+            assert self._managed_thread_rebound is True
+            self.apply_sync_flags.append(sync_binding)
+            record.active_thread_id = active_thread_id
+            if active_thread_id:
+                record.thread_ids = [active_thread_id]
+            return record
+
+    async def _fake_resolve_telegram_managed_thread(
+        _handlers: Any, **kwargs: Any
+    ) -> tuple[Any, Any]:
+        resolve_calls.append(kwargs)
+        handler._managed_thread_rebound = True
+        return object(), SimpleNamespace(thread_target_id="managed-thread-2")
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_resolve_telegram_managed_thread",
+        _fake_resolve_telegram_managed_thread,
+    )
+
+    handler = _ResumeHandler()
+    await handler._resume_thread_by_id("123:root", "backend-thread-2")
+
+    assert resolve_calls == [
+        {
+            "surface_key": "123:root",
+            "workspace_root": workspace,
+            "agent": "codex",
+            "agent_profile": None,
+            "repo_id": "repo-1",
+            "resource_kind": "repo",
+            "resource_id": "repo-1",
+            "mode": "repo",
+            "pma_enabled": False,
+            "backend_thread_id": "backend-thread-2",
+            "allow_new_thread": True,
+        }
+    ]
+    assert handler.apply_sync_flags == [False]
+    assert record.active_thread_id == "backend-thread-2"
+    assert record.thread_ids == ["backend-thread-2"]
+
+
+@pytest.mark.anyio
+async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    record = TelegramTopicRecord(
+        agent="codex",
+        workspace_path=str(workspace),
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+        active_thread_id="backend-old",
+    )
+    lifecycle_calls: list[tuple[str, Any, Any]] = []
+    compact_seed_calls: list[tuple[str, str]] = []
+
+    class _RouterStub:
+        async def update_topic(
+            self, _chat_id: int, _thread_id: Optional[int], apply
+        ) -> TelegramTopicRecord:
+            apply(record)
+            return record
+
+    class _ClientStub:
+        async def thread_start(self, cwd: str, *, agent: str, **_kwargs: Any) -> dict:
+            assert cwd == str(workspace)
+            assert agent == "codex"
+            return {
+                "thread_id": "backend-new",
+                "agent": "codex",
+                "cwd": str(workspace),
+                "path": str(workspace),
+                "thread": {
+                    "id": "backend-new",
+                    "path": str(workspace),
+                    "agent": "codex",
+                },
+            }
+
+    class _ThreadService:
+        async def stop_thread(self, thread_target_id: str) -> Any:
+            lifecycle_calls.append(("stop", thread_target_id, None))
+            return SimpleNamespace(recovered_lost_backend=False)
+
+        def archive_thread_target(self, thread_target_id: str) -> None:
+            lifecycle_calls.append(("archive", thread_target_id, None))
+
+        def create_thread_target(
+            self, agent: str, workspace_root: Path, **kwargs: Any
+        ) -> Any:
+            lifecycle_calls.append(("create", agent, kwargs.get("backend_thread_id")))
+            assert workspace_root == workspace
+            return SimpleNamespace(
+                thread_target_id="managed-new",
+                agent_id=agent,
+                workspace_root=str(workspace_root),
+                backend_thread_id=kwargs.get("backend_thread_id"),
+                lifecycle_status="active",
+            )
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            lifecycle_calls.append(
+                ("resume", thread_target_id, kwargs.get("backend_thread_id"))
+            )
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                agent_id="codex",
+                workspace_root=str(workspace),
+                backend_thread_id=kwargs.get("backend_thread_id"),
+                lifecycle_status="active",
+            )
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            lifecycle_calls.append(
+                ("bind", kwargs["thread_target_id"], kwargs.get("mode"))
+            )
+
+    class _CompactHandler(TelegramCommandHandlers):
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+            self._router = _RouterStub()
+            self._config = SimpleNamespace(
+                root=tmp_path,
+                defaults=SimpleNamespace(policies_for_mode=lambda _mode: (None, None)),
+            )
+            self.sync_binding_flags: list[bool] = []
+
+        def _resolve_workspace_path(
+            self, _record: TelegramTopicRecord, allow_pma: bool = False
+        ) -> tuple[Optional[str], Optional[str]]:
+            _ = allow_pma
+            return str(workspace), None
+
+        async def _client_for_workspace(self, _workspace_path: str) -> _ClientStub:
+            return _ClientStub()
+
+        async def _require_thread_workspace(
+            self,
+            _message: TelegramMessage,
+            _expected_workspace: Optional[str],
+            _result: Any,
+            *,
+            action: str,
+        ) -> bool:
+            _ = action
+            return True
+
+        async def _resolve_topic_key(
+            self, _chat_id: int, _thread_id: Optional[int]
+        ) -> str:
+            return "123:root"
+
+        async def _apply_thread_result(
+            self,
+            chat_id: int,
+            thread_id: Optional[int],
+            result: Any,
+            *,
+            active_thread_id: Optional[str] = None,
+            overwrite_defaults: bool = False,
+            sync_binding: bool = True,
+        ) -> TelegramTopicRecord:
+            _ = chat_id, thread_id, result, overwrite_defaults
+            assert lifecycle_calls == [
+                ("stop", "managed-old", None),
+                ("archive", "managed-old", None),
+                ("create", "codex", None),
+                ("bind", "managed-new", "repo"),
+                ("resume", "managed-new", "backend-new"),
+                ("bind", "managed-new", "repo"),
+            ]
+            self.sync_binding_flags.append(sync_binding)
+            record.active_thread_id = active_thread_id
+            if active_thread_id:
+                record.thread_ids = [active_thread_id]
+            return record
+
+    def _fake_set_thread_compact_seed(
+        self, managed_thread_id: str, compact_seed: Optional[str], **_kwargs: Any
+    ) -> None:
+        compact_seed_calls.append((managed_thread_id, str(compact_seed or "")))
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_get_telegram_thread_binding",
+        lambda *args, **kwargs: (
+            _ThreadService(),
+            SimpleNamespace(thread_target_id="managed-old", mode="repo"),
+            SimpleNamespace(
+                thread_target_id="managed-old",
+                agent_id="codex",
+                workspace_root=str(workspace),
+                lifecycle_status="active",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "codex_autorunner.core.pma_thread_store.PmaThreadStore.set_thread_compact_seed",
+        _fake_set_thread_compact_seed,
+    )
+
+    handler = _CompactHandler()
+    message = TelegramMessage(
+        update_id=1,
+        message_id=2,
+        chat_id=123,
+        thread_id=None,
+        from_user_id=456,
+        text="/compact",
+        date=None,
+        is_topic_message=False,
+    )
+
+    success, error = await handler._apply_compact_summary(
+        message,
+        record,
+        "summary text",
+    )
+
+    assert success is True
+    assert error is None
+    assert handler.sync_binding_flags == [False]
+    assert compact_seed_calls == [("managed-new", "summary text")]
+    assert record.active_thread_id == "backend-new"
+    assert record.thread_ids == ["backend-new"]
+    assert record.pending_compact_seed_thread_id == "backend-new"
+    assert "summary text" in (record.pending_compact_seed or "")
 
 
 @pytest.mark.anyio

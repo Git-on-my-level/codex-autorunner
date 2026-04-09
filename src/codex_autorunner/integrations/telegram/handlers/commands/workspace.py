@@ -67,6 +67,7 @@ from ...constants import (
 )
 from ...helpers import (
     _approval_age_seconds,
+    _clear_thread_mirror,
     _coerce_thread_list,
     _extract_first_user_preview,
     _extract_thread_id,
@@ -552,6 +553,7 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
         *,
         active_thread_id: Optional[str] = None,
         overwrite_defaults: bool = False,
+        sync_binding: bool = True,
     ) -> "TelegramTopicRecord":
         info = _extract_thread_info(result)
         if active_thread_id is None:
@@ -630,7 +632,8 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
 
         updated = await self._router.update_topic(chat_id, thread_id, apply)
         if (
-            updated is not None
+            sync_binding
+            and updated is not None
             and not bool(getattr(updated, "pma_enabled", False))
             and isinstance(active_thread_id, str)
             and active_thread_id
@@ -1223,6 +1226,13 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             reply_to=message.message_id,
                         )
                         return
+                    update_topic = getattr(self._router, "update_topic", None)
+                    if callable(update_topic):
+                        await update_topic(
+                            message.chat_id,
+                            message.thread_id,
+                            _clear_thread_mirror,
+                        )
             await self._send_message(
                 message.chat_id,
                 "\n".join(
@@ -1477,6 +1487,13 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                             reply_to=message.message_id,
                         )
                         return
+                    update_topic = getattr(self._router, "update_topic", None)
+                    if callable(update_topic):
+                        await update_topic(
+                            message.chat_id,
+                            message.thread_id,
+                            _clear_thread_mirror,
+                        )
             await self._send_message(
                 message.chat_id,
                 "\n".join(
@@ -2107,15 +2124,59 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
             )
             return
 
-        def apply(topic_record: "TelegramTopicRecord") -> None:
-            topic_record.active_thread_id = None
-            topic_record.thread_ids = []
-            topic_record.thread_summaries = {}
-            topic_record.rollout_path = None
-            topic_record.pending_compact_seed = None
-            topic_record.pending_compact_seed_thread_id = None
+        if getattr(self, "_hub_root", None) is not None and record is not None:
+            from .execution import _reset_telegram_thread_binding
 
-        await self._router.update_topic(message.chat_id, message.thread_id, apply)
+            try:
+                await _reset_telegram_thread_binding(
+                    self,
+                    surface_key=key,
+                    workspace_root=workspace_root,
+                    agent=self._effective_runtime_agent(record),
+                    agent_profile=self._effective_agent_profile(record),
+                    repo_id=(
+                        record.repo_id.strip()
+                        if isinstance(record.repo_id, str) and record.repo_id.strip()
+                        else None
+                    ),
+                    resource_kind=(
+                        record.resource_kind.strip()
+                        if isinstance(record.resource_kind, str)
+                        and record.resource_kind.strip()
+                        else None
+                    ),
+                    resource_id=(
+                        record.resource_id.strip()
+                        if isinstance(record.resource_id, str)
+                        and record.resource_id.strip()
+                        else None
+                    ),
+                    mode="repo",
+                    pma_enabled=False,
+                )
+            except (OSError, RuntimeError, ValueError) as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.archive.managed_thread_reset_failed",
+                    chat_id=message.chat_id,
+                    thread_id=message.thread_id,
+                    workspace_path=str(workspace_root),
+                    exc=exc,
+                )
+                await self._send_message(
+                    message.chat_id,
+                    "Archive completed, but preparing a fresh managed thread failed.",
+                    thread_id=message.thread_id,
+                    reply_to=message.message_id,
+                )
+                return
+
+        await self._router.update_topic(
+            message.chat_id,
+            message.thread_id,
+            _clear_thread_mirror,
+        )
         await self._send_message(
             message.chat_id,
             "\n".join(
@@ -3051,12 +3112,81 @@ class WorkspaceCommands(TelegramCommandSupportMixin):
                 conflict_topic=conflict_key,
             )
             return
+        sync_binding = True
+        if (
+            getattr(self, "_hub_root", None) is not None
+            or getattr(self._config, "root", None) is not None
+        ):
+            try:
+                from .execution import _resolve_telegram_managed_thread
+
+                _orchestration_service, managed_thread = (
+                    await _resolve_telegram_managed_thread(
+                        self,
+                        surface_key=key,
+                        workspace_root=workspace_root,
+                        agent=self._effective_runtime_agent(record),
+                        agent_profile=self._effective_agent_profile(record),
+                        repo_id=(
+                            record.repo_id.strip()
+                            if isinstance(record.repo_id, str)
+                            and record.repo_id.strip()
+                            else None
+                        ),
+                        resource_kind=(
+                            record.resource_kind.strip()
+                            if isinstance(record.resource_kind, str)
+                            and record.resource_kind.strip()
+                            else None
+                        ),
+                        resource_id=(
+                            record.resource_id.strip()
+                            if isinstance(record.resource_id, str)
+                            and record.resource_id.strip()
+                            else None
+                        ),
+                        mode="repo",
+                        pma_enabled=False,
+                        backend_thread_id=thread_id,
+                        allow_new_thread=True,
+                    )
+                )
+                if managed_thread is None:
+                    raise RuntimeError("managed thread resolution returned no thread")
+                sync_binding = False
+            except (
+                RuntimeError,
+                OSError,
+                ValueError,
+                TypeError,
+                ConnectionError,
+            ) as exc:
+                log_event(
+                    self._logger,
+                    logging.WARNING,
+                    "telegram.resume.binding_failed",
+                    topic_key=key,
+                    thread_id=thread_id,
+                    exc=exc,
+                )
+                await _answer_once("Resume failed")
+                await self._finalize_selection(
+                    key,
+                    callback,
+                    _with_conversation_id(
+                        "Failed to rebind the managed thread; check logs for details.",
+                        chat_id=chat_id,
+                        thread_id=thread_id_val,
+                    ),
+                )
+                return
         updated_record = await self._apply_thread_result(
             chat_id,
             thread_id_val,
             result,
             active_thread_id=thread_id,
             overwrite_defaults=True,
+            sync_binding=sync_binding,
         )
         await _answer_once("Resumed thread")
         message = _format_resume_summary(

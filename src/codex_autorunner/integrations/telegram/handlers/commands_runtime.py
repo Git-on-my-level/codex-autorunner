@@ -1975,8 +1975,115 @@ class TelegramCommandHandlers(
             thread_id=message.thread_id,
             codex_thread_id=new_thread_id,
         )
+        key = await self._resolve_topic_key(message.chat_id, message.thread_id)
+        try:
+            from ....core.pma_thread_store import PmaThreadStore
+            from ...chat.managed_thread_lifecycle import (
+                bind_surface_thread,
+                replace_surface_thread,
+            )
+            from .commands.execution import _get_telegram_thread_binding
+
+            orchestration_service, binding, current_thread = (
+                _get_telegram_thread_binding(
+                    self,
+                    surface_key=key,
+                    mode="repo",
+                )
+            )
+            agent = self._effective_runtime_agent(record)
+            agent_profile = self._effective_agent_profile(record)
+            replacement = await replace_surface_thread(
+                orchestration_service,
+                surface_kind="telegram",
+                surface_key=key,
+                workspace_root=Path(workspace_path),
+                agent_id=agent,
+                repo_id=(
+                    record.repo_id.strip()
+                    if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                resource_kind=(
+                    record.resource_kind.strip()
+                    if isinstance(record.resource_kind, str)
+                    and record.resource_kind.strip()
+                    else None
+                ),
+                resource_id=(
+                    record.resource_id.strip()
+                    if isinstance(record.resource_id, str)
+                    and record.resource_id.strip()
+                    else None
+                ),
+                mode="repo",
+                display_name=f"telegram:{key}",
+                binding_metadata={
+                    "topic_key": key,
+                    "pma_enabled": False,
+                    "surface_key": key,
+                },
+                thread_metadata=(
+                    {"agent_profile": agent_profile} if agent_profile else None
+                ),
+                binding=binding,
+                thread=current_thread,
+            )
+            replacement_thread = bind_surface_thread(
+                orchestration_service,
+                surface_kind="telegram",
+                surface_key=key,
+                thread_target_id=replacement.replacement_thread.thread_target_id,
+                agent_id=agent,
+                repo_id=(
+                    record.repo_id.strip()
+                    if isinstance(record.repo_id, str) and record.repo_id.strip()
+                    else None
+                ),
+                resource_kind=(
+                    record.resource_kind.strip()
+                    if isinstance(record.resource_kind, str)
+                    and record.resource_kind.strip()
+                    else None
+                ),
+                resource_id=(
+                    record.resource_id.strip()
+                    if isinstance(record.resource_id, str)
+                    and record.resource_id.strip()
+                    else None
+                ),
+                mode="repo",
+                metadata={
+                    "topic_key": key,
+                    "pma_enabled": False,
+                    "surface_key": key,
+                },
+                backend_thread_id=new_thread_id,
+                thread=replacement.replacement_thread,
+            )
+            config_root = getattr(self._config, "root", None)
+            if config_root is not None:
+                PmaThreadStore(config_root).set_thread_compact_seed(
+                    replacement_thread.thread_target_id,
+                    summary_text,
+                )
+        except (RuntimeError, OSError, ValueError, TypeError, ConnectionError) as exc:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "telegram.compact.lifecycle_failed",
+                chat_id=message.chat_id,
+                thread_id=message.thread_id,
+                codex_thread_id=new_thread_id,
+                exc=exc,
+            )
+            return False, "Failed to prepare a fresh managed thread."
         record = await self._apply_thread_result(
-            message.chat_id, message.thread_id, thread, active_thread_id=new_thread_id
+            message.chat_id,
+            message.thread_id,
+            thread,
+            active_thread_id=new_thread_id,
+            sync_binding=False,
         )
         seed_text = self._build_compact_seed_prompt(summary_text)
         record = await self._router.update_topic(

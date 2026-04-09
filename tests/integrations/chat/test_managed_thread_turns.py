@@ -373,3 +373,109 @@ def test_resolve_managed_thread_target_resumes_matching_binding(tmp_path: Path) 
             "metadata": {"topic_key": "telegram:-1001:101"},
         }
     ]
+
+
+def test_resolve_managed_thread_target_reuses_backend_matched_thread(
+    tmp_path: Path,
+) -> None:
+    canonical_workspace = str(tmp_path.resolve())
+    binding = SimpleNamespace(thread_target_id="thread-current", mode="repo")
+    current_thread = SimpleNamespace(
+        thread_target_id="thread-current",
+        agent_id="codex",
+        agent_profile=None,
+        workspace_root=canonical_workspace,
+        lifecycle_status="active",
+        backend_thread_id="backend-current",
+    )
+    archived_thread = SimpleNamespace(
+        thread_target_id="thread-archived",
+        agent_id="codex",
+        agent_profile=None,
+        workspace_root=canonical_workspace,
+        lifecycle_status="archived",
+        backend_thread_id="backend-resume",
+        repo_id="repo-1",
+        resource_kind="repo",
+        resource_id="repo-1",
+    )
+    resume_calls: list[tuple[str, dict[str, Any]]] = []
+    upserts: list[dict[str, Any]] = []
+
+    class _Service:
+        def get_binding(self, *, surface_kind: str, surface_key: str) -> Any:
+            _ = surface_kind, surface_key
+            return binding
+
+        def get_thread_target(self, thread_target_id: str) -> Any:
+            assert thread_target_id == "thread-current"
+            return current_thread
+
+        def list_thread_targets(self, **kwargs: Any) -> list[Any]:
+            assert kwargs == {
+                "agent_id": "codex",
+                "repo_id": "repo-1",
+                "resource_kind": "repo",
+                "resource_id": "repo-1",
+                "limit": 500,
+            }
+            return [archived_thread]
+
+        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
+            resume_calls.append((thread_target_id, kwargs))
+            return SimpleNamespace(
+                thread_target_id=thread_target_id,
+                agent_id="codex",
+                agent_profile=None,
+                workspace_root=canonical_workspace,
+                lifecycle_status="active",
+                backend_thread_id=kwargs.get("backend_thread_id"),
+                backend_runtime_instance_id=kwargs.get("backend_runtime_instance_id"),
+            )
+
+        def create_thread_target(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("create_thread_target should not be called")
+
+        def upsert_binding(self, **kwargs: Any) -> None:
+            upserts.append(kwargs)
+
+    _, resolved_thread = managed_thread_turns_module.resolve_managed_thread_target(
+        _Service(),
+        request=managed_thread_turns_module.ManagedThreadTargetRequest(
+            surface_kind="telegram",
+            surface_key="telegram:-1001:101",
+            mode="repo",
+            agent="codex",
+            workspace_root=tmp_path,
+            display_name="telegram:surface",
+            repo_id="repo-1",
+            resource_kind="repo",
+            resource_id="repo-1",
+            backend_thread_id="backend-resume",
+            binding_metadata={"topic_key": "telegram:-1001:101"},
+        ),
+    )
+
+    assert resolved_thread is not None
+    assert resume_calls == [
+        (
+            "thread-archived",
+            {
+                "backend_thread_id": "backend-resume",
+                "backend_runtime_instance_id": None,
+            },
+        )
+    ]
+    assert upserts == [
+        {
+            "surface_kind": "telegram",
+            "surface_key": "telegram:-1001:101",
+            "thread_target_id": "thread-archived",
+            "agent_id": "codex",
+            "repo_id": "repo-1",
+            "resource_kind": "repo",
+            "resource_id": "repo-1",
+            "mode": "repo",
+            "metadata": {"topic_key": "telegram:-1001:101"},
+        }
+    ]

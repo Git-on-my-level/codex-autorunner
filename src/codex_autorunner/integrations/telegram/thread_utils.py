@@ -180,6 +180,14 @@ def _clear_pending_compact_seed(record: "TelegramTopicRecord") -> None:
     record.pending_compact_seed_thread_id = None
 
 
+def _clear_thread_mirror(record: "TelegramTopicRecord") -> None:
+    record.active_thread_id = None
+    record.thread_ids = []
+    record.thread_summaries = {}
+    record.rollout_path = None
+    _clear_pending_compact_seed(record)
+
+
 def _format_conversation_id(chat_id: int, thread_id: Optional[int]) -> str:
     return topic_key(chat_id, thread_id)
 

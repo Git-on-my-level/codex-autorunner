@@ -180,8 +180,9 @@ class _HermesHandler(TelegramCommandHandlers):
         *,
         active_thread_id: Optional[str] = None,
         overwrite_defaults: bool = False,
+        sync_binding: bool = True,
     ) -> TelegramTopicRecord:
-        _ = overwrite_defaults
+        _ = overwrite_defaults, sync_binding
         resolved_thread_id = active_thread_id or result.get("thread_id")
 
         def apply(record: TelegramTopicRecord) -> None:

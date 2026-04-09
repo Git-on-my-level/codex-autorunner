@@ -132,6 +132,70 @@ def _normalized_optional_text(value: Any) -> Optional[str]:
     return normalized or None
 
 
+def _matching_backend_thread_target(
+    orchestration_service: Any,
+    *,
+    request: ManagedThreadTargetRequest,
+    reusable_agent_ids: tuple[str, ...],
+    canonical_workspace: str,
+    backend_thread_id: str,
+) -> Optional[Any]:
+    list_thread_targets = getattr(orchestration_service, "list_thread_targets", None)
+    if not callable(list_thread_targets):
+        return None
+    list_kwargs: dict[str, Any] = {"limit": 500}
+    if len(reusable_agent_ids) == 1:
+        list_kwargs["agent_id"] = reusable_agent_ids[0]
+    if request.repo_id is not None:
+        list_kwargs["repo_id"] = request.repo_id
+    if request.resource_kind is not None:
+        list_kwargs["resource_kind"] = request.resource_kind
+    if request.resource_id is not None:
+        list_kwargs["resource_id"] = request.resource_id
+    try:
+        candidates = list_thread_targets(**list_kwargs)
+    except TypeError:
+        candidates = list_thread_targets(limit=list_kwargs["limit"])
+    for candidate in candidates or ():
+        if candidate is None:
+            continue
+        if (
+            str(getattr(candidate, "agent_id", "") or "").strip()
+            not in reusable_agent_ids
+        ):
+            continue
+        if (getattr(candidate, "agent_profile", None) or None) != (
+            request.agent_profile or None
+        ):
+            continue
+        if (
+            str(getattr(candidate, "workspace_root", "") or "").strip()
+            != canonical_workspace
+        ):
+            continue
+        if request.repo_id is not None and (
+            _normalized_optional_text(getattr(candidate, "repo_id", None))
+            != _normalized_optional_text(request.repo_id)
+        ):
+            continue
+        if request.resource_kind is not None and (
+            _normalized_optional_text(getattr(candidate, "resource_kind", None))
+            != _normalized_optional_text(request.resource_kind)
+        ):
+            continue
+        if request.resource_id is not None and (
+            _normalized_optional_text(getattr(candidate, "resource_id", None))
+            != _normalized_optional_text(request.resource_id)
+        ):
+            continue
+        if _normalized_optional_text(getattr(candidate, "backend_thread_id", None)) != (
+            backend_thread_id
+        ):
+            continue
+        return candidate
+    return None
+
+
 def _bind_queued_execution_runner(
     process_started_execution: Callable[[RuntimeThreadExecution], Awaitable[None]],
     started_execution: RuntimeThreadExecution,
@@ -205,6 +269,26 @@ def resolve_managed_thread_target(
         and str(getattr(thread, "workspace_root", "") or "").strip()
         == canonical_workspace
     )
+    if (
+        desired_backend_thread_id is not None
+        and current_backend_thread_id != desired_backend_thread_id
+    ):
+        matched_thread = _matching_backend_thread_target(
+            orchestration_service,
+            request=request,
+            reusable_agent_ids=reusable_agent_ids,
+            canonical_workspace=canonical_workspace,
+            backend_thread_id=desired_backend_thread_id,
+        )
+        if matched_thread is not None:
+            thread = matched_thread
+            current_backend_thread_id = _normalized_optional_text(
+                getattr(thread, "backend_thread_id", None)
+            )
+            current_runtime_instance_id = _normalized_optional_text(
+                getattr(thread, "backend_runtime_instance_id", None)
+            )
+            reusable_thread = True
     should_resume_reusable = reusable_thread and (
         str(getattr(thread, "lifecycle_status", "") or "").strip().lower() != "active"
         or current_backend_thread_id != desired_backend_thread_id

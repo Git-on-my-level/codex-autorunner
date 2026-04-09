@@ -102,6 +102,7 @@ from .shell_utils import (  # noqa: F401
 from .state import TelegramTopicRecord
 from .thread_utils import (  # noqa: F401
     _clear_pending_compact_seed,
+    _clear_thread_mirror,
     _coerce_id,
     _consume_raw_token,
     _extract_first_bold_span,

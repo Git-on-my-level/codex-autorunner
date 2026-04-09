@@ -429,6 +429,26 @@ async def test_car_archive_uses_shared_fresh_start_helper(
 
     service._require_bound_workspace = _fake_require_bound_workspace  # type: ignore[assignment]
 
+    async def _fake_get_binding(*, channel_id: str) -> dict[str, Any]:
+        assert channel_id == "channel-1"
+        return {
+            "workspace_path": str(workspace),
+            "repo_id": "repo-1",
+            "resource_kind": "repo",
+            "resource_id": "repo-1",
+            "agent": "codex",
+            "pma_enabled": False,
+        }
+
+    service._store.get_binding = _fake_get_binding  # type: ignore[assignment]
+    reset_calls: list[dict[str, Any]] = []
+
+    async def _fake_reset_discord_thread_binding(**kwargs: Any) -> tuple[bool, str]:
+        reset_calls.append(kwargs)
+        return True, "thread-fresh"
+
+    service._reset_discord_thread_binding = _fake_reset_discord_thread_binding  # type: ignore[assignment]
+
     monkeypatch.setattr(
         "codex_autorunner.core.archive.resolve_workspace_archive_target",
         lambda workspace_root, **_kwargs: type(
@@ -470,6 +490,8 @@ async def test_car_archive_uses_shared_fresh_start_helper(
     assert calls
     assert calls[0]["hub_root"] == tmp_path
     assert calls[0]["worktree_repo_root"] == workspace
+    assert reset_calls
+    assert reset_calls[0]["workspace_root"] == workspace
     assert rest.interaction_responses[0]["payload"]["type"] == 5
     assert len(rest.followup_messages) == 1
     content = rest.followup_messages[0]["payload"]["content"]
