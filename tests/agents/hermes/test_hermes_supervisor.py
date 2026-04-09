@@ -14,6 +14,7 @@ from codex_autorunner.agents.acp.errors import (
 from codex_autorunner.agents.hermes.supervisor import (
     HermesSupervisor,
     HermesSupervisorError,
+    build_hermes_supervisor_from_config,
     hermes_runtime_preflight,
 )
 
@@ -28,6 +29,26 @@ class _HermesPreflightConfig:
     def agent_binary(self, agent_id: str) -> str:
         assert agent_id == "hermes"
         return "hermes"
+
+
+class _HermesAliasConfig:
+    def agent_binary(self, agent_id: str, *, profile: str | None = None) -> str:
+        assert profile is None
+        if agent_id == "hermes":
+            return "hermes"
+        if agent_id == "hermes-m4-pma":
+            return "hermes-m4-pma"
+        raise AssertionError(f"unexpected agent_id: {agent_id}")
+
+
+class _HermesCustomAliasConfig:
+    def agent_binary(self, agent_id: str, *, profile: str | None = None) -> str:
+        assert profile is None
+        if agent_id == "hermes":
+            return "hermes"
+        if agent_id == "hermes-special":
+            return "/opt/hermes/special-launcher"
+        raise AssertionError(f"unexpected agent_id: {agent_id}")
 
 
 async def _collect_events(
@@ -127,6 +148,105 @@ def test_hermes_runtime_preflight_accepts_plain_acp_help(
     assert result.launch_mode is None
     assert result.version == "hermes 1.2.3"
     assert "Hermes-native durable sessions" in result.message
+
+
+def test_build_hermes_supervisor_prefers_base_binary_for_alias_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeHermesSupervisor:
+        def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
+            observed["command"] = list(command)
+            observed["kwargs"] = dict(kwargs)
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.hermes.supervisor.HermesSupervisor",
+        _FakeHermesSupervisor,
+    )
+
+    supervisor = build_hermes_supervisor_from_config(
+        _HermesAliasConfig(),
+        agent_id="hermes-m4-pma",
+    )
+
+    assert supervisor is not None
+    assert observed["command"] == [
+        "hermes",
+        "-p",
+        "hermes-m4-pma",
+        "acp",
+    ]
+
+
+def test_hermes_runtime_preflight_prefers_base_binary_for_alias_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.hermes.supervisor.resolve_executable",
+        lambda _name: "/usr/bin/hermes",
+    )
+
+    def fake_run(cmd, capture_output, text, timeout):  # type: ignore[no-untyped-def]
+        observed_commands.append(list(cmd))
+        if cmd == ["hermes", "--version"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout="hermes 1.2.3\n",
+                stderr="",
+            )
+        if cmd == ["hermes", "-p", "hermes-m4-pma", "acp", "--help"]:
+            return subprocess.CompletedProcess(
+                cmd,
+                0,
+                stdout="",
+                stderr="Usage: hermes acp [OPTIONS]\n  Start the ACP server.\n",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = hermes_runtime_preflight(
+        _HermesAliasConfig(),
+        agent_id="hermes-m4-pma",
+    )
+
+    assert observed_commands == [
+        ["hermes", "--version"],
+        ["hermes", "-p", "hermes-m4-pma", "acp", "--help"],
+    ]
+    assert result.status == "ready"
+    assert result.version == "hermes 1.2.3"
+
+
+def test_build_hermes_supervisor_preserves_custom_alias_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class _FakeHermesSupervisor:
+        def __init__(self, command, **kwargs):  # type: ignore[no-untyped-def]
+            observed["command"] = list(command)
+            observed["kwargs"] = dict(kwargs)
+
+    monkeypatch.setattr(
+        "codex_autorunner.agents.hermes.supervisor.HermesSupervisor",
+        _FakeHermesSupervisor,
+    )
+
+    supervisor = build_hermes_supervisor_from_config(
+        _HermesCustomAliasConfig(),
+        agent_id="hermes-special",
+    )
+
+    assert supervisor is not None
+    assert observed["command"] == [
+        "/opt/hermes/special-launcher",
+        "acp",
+    ]
 
 
 @pytest.mark.slow

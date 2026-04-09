@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
+from os.path import basename
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Mapping, Optional, Sequence
 
@@ -567,6 +568,61 @@ def _workspace_key(workspace_root: Path) -> str:
     return str(canonical_workspace_root(workspace_root))
 
 
+def _configured_hermes_binary(
+    config: RepoConfig | HubConfig,
+    *,
+    agent_id: str,
+    profile: Optional[str] = None,
+) -> Optional[str]:
+    try:
+        try:
+            return config.agent_binary(agent_id, profile=profile).strip()
+        except TypeError as exc:
+            if "profile" not in str(exc):
+                raise
+            return config.agent_binary(agent_id).strip()
+    except (
+        KeyError,
+        AttributeError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ):  # intentional: config lookup may raise various errors
+        return None
+
+
+def _resolve_hermes_launch(
+    config: RepoConfig | HubConfig,
+    *,
+    agent_id: str,
+    profile: Optional[str] = None,
+) -> tuple[list[str], str]:
+    normalized_agent_id = str(agent_id or "").strip().lower() or HERMES_RUNTIME_ID
+    normalized_profile = _normalize_optional_text(profile)
+    configured_binary = _configured_hermes_binary(
+        config,
+        agent_id=normalized_agent_id,
+        profile=normalized_profile,
+    )
+    configured_name = basename(configured_binary) if configured_binary else ""
+    if (
+        normalized_agent_id != HERMES_RUNTIME_ID
+        and normalized_profile is None
+        and configured_name == normalized_agent_id
+    ):
+        base_binary = _configured_hermes_binary(config, agent_id=HERMES_RUNTIME_ID)
+        if base_binary:
+            return [
+                base_binary,
+                "-p",
+                normalized_agent_id,
+                HERMES_ACP_COMMAND,
+            ], base_binary
+    if configured_binary:
+        return [configured_binary, HERMES_ACP_COMMAND], configured_binary
+    raise KeyError(normalized_agent_id)
+
+
 def build_hermes_supervisor_from_config(
     config: RepoConfig | HubConfig,
     *,
@@ -577,12 +633,11 @@ def build_hermes_supervisor_from_config(
     logger: Optional[logging.Logger] = None,
 ) -> Optional[HermesSupervisor]:
     try:
-        try:
-            binary = config.agent_binary(agent_id, profile=profile).strip()
-        except TypeError as exc:
-            if "profile" not in str(exc):
-                raise
-            binary = config.agent_binary(agent_id).strip()
+        command, _binary = _resolve_hermes_launch(
+            config,
+            agent_id=agent_id,
+            profile=profile,
+        )
     except (
         KeyError,
         AttributeError,
@@ -591,10 +646,8 @@ def build_hermes_supervisor_from_config(
         RuntimeError,
     ):  # intentional: config lookup may raise various errors
         return None
-    if not binary:
-        return None
     return HermesSupervisor(
-        [binary, HERMES_ACP_COMMAND],
+        command,
         approval_handler=approval_handler,
         default_approval_decision=default_approval_decision,
         logger=logger,
@@ -610,19 +663,12 @@ def hermes_binary_available(
     if config is None:
         return False
     try:
-        try:
-            binary = config.agent_binary(agent_id, profile=profile).strip()
-        except TypeError as exc:
-            if "profile" not in str(exc):
-                raise
-            binary = config.agent_binary(agent_id).strip()
-    except (
-        KeyError,
-        AttributeError,
-        ValueError,
-        TypeError,
-        RuntimeError,
-    ):  # intentional: config lookup may raise various errors
+        _command, binary = _resolve_hermes_launch(
+            config,
+            agent_id=agent_id,
+            profile=profile,
+        )
+    except (KeyError, AttributeError, ValueError, TypeError, RuntimeError):
         return False
     if not binary:
         return False
@@ -652,15 +698,11 @@ def hermes_runtime_preflight(
             fix=f"Set {binary_key} in the repo or hub config.",
         )
     try:
-        try:
-            binary = config.agent_binary(
-                normalized_agent_id,
-                profile=normalized_profile or None,
-            ).strip()
-        except TypeError as exc:
-            if "profile" not in str(exc):
-                raise
-            binary = config.agent_binary(normalized_agent_id).strip()
+        command, binary = _resolve_hermes_launch(
+            config,
+            agent_id=normalized_agent_id,
+            profile=normalized_profile or None,
+        )
     except (
         KeyError,
         AttributeError,
@@ -709,7 +751,7 @@ def hermes_runtime_preflight(
         version = None
     try:
         result = subprocess.run(
-            [binary, HERMES_ACP_COMMAND, "--help"],
+            [*command, "--help"],
             capture_output=True,
             text=True,
             timeout=10,
