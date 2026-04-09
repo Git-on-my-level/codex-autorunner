@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 from pathlib import Path
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
@@ -290,8 +291,15 @@ def test_cleanup_filebox_uses_repo_retention_policy(monkeypatch, repo: Path) -> 
     assert "outbox: kept=8 pruned=2" in result.stdout
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ConfigError("missing config"),
+        ValueError("broken config"),
+    ],
+)
 def test_doctor_processes_skips_opencode_lifecycle_when_repo_config_missing(
-    monkeypatch, repo: Path
+    monkeypatch, repo: Path, failure: Exception
 ) -> None:
     from codex_autorunner.surfaces.cli.commands import doctor as doctor_cmd
 
@@ -304,7 +312,7 @@ def test_doctor_processes_skips_opencode_lifecycle_when_repo_config_missing(
     monkeypatch.setattr(
         doctor_cmd,
         "summarize_opencode_lifecycle",
-        lambda _repo: (_ for _ in ()).throw(ConfigError("missing config")),
+        lambda _repo: (_ for _ in ()).throw(failure),
     )
 
     result = runner.invoke(

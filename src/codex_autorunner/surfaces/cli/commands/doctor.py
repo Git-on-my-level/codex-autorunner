@@ -455,7 +455,12 @@ def register_doctor_commands(
         if repo_root is not None:
             try:
                 opencode_lifecycle = summarize_opencode_lifecycle(repo_root)
-            except ConfigError:
+            except (ConfigError, OSError, ValueError, TypeError) as exc:
+                logger.debug(
+                    "Skipping OpenCode lifecycle summary for %s: %s",
+                    repo_root,
+                    exc,
+                )
                 opencode_lifecycle = {}
 
         if json_output:
