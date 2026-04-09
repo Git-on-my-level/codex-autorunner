@@ -414,6 +414,77 @@ class HubDestinationSetRequest(Payload):
         return normalized
 
 
+class HubAgentWorkspaceSummaryResponse(ResponseModel):
+    id: str
+    runtime: str
+    path: str
+    display_name: str
+    enabled: bool
+    exists_on_disk: bool
+    effective_destination: Dict[str, Any]
+    resource_kind: str
+
+
+class HubAgentWorkspaceResponse(HubAgentWorkspaceSummaryResponse):
+    configured_destination: Optional[Dict[str, Any]] = None
+    source: Optional[str] = None
+    issues: List[str] = Field(default_factory=list)
+
+
+class HubAgentWorkspaceListResponse(ResponseModel):
+    agent_workspaces: List[HubAgentWorkspaceSummaryResponse]
+
+
+class HubAgentWorkspaceMutationResponse(ResponseModel):
+    status: str
+    workspace_id: str
+    delete_dir: bool
+
+
+class HubDispatchPayload(ResponseModel):
+    mode: str
+    title: Optional[str] = None
+    body: str
+    extra: Dict[str, Any] = Field(default_factory=dict)
+    is_handoff: bool = False
+
+
+class HubLatestDispatchResponse(ResponseModel):
+    seq: int
+    dir: str
+    dispatch: Optional[HubDispatchPayload] = None
+    errors: List[str] = Field(default_factory=list)
+    files: List[str] = Field(default_factory=list)
+    turn_summary_seq: Optional[int] = None
+    turn_summary: Optional[HubDispatchPayload] = None
+
+
+class HubMessageSnapshotResponse(ResponseModel):
+    generated_at: str
+    items: Optional[List[Dict[str, Any]]] = None
+    pma_threads: Optional[List[Dict[str, Any]]] = None
+    pma_files_detail: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    automation: Optional[Dict[str, Any]] = None
+    action_queue: Optional[List[Dict[str, Any]]] = None
+
+
+class HubMessagesFreshnessResponse(ResponseModel):
+    schema_version: int
+    generated_at: str
+    stale_threshold_seconds: int
+    sections: Dict[str, Any]
+
+
+class HubMessagesResponse(ResponseModel):
+    generated_at: str
+    items: Optional[List[Dict[str, Any]]] = None
+    freshness: Optional[HubMessagesFreshnessResponse] = None
+    pma_threads: Optional[List[Dict[str, Any]]] = None
+    pma_files_detail: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    automation: Optional[Dict[str, Any]] = None
+    action_queue: Optional[List[Dict[str, Any]]] = None
+
+
 class SessionStopRequest(Payload):
     session_id: Optional[str] = None
     repo_path: Optional[str] = None

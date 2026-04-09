@@ -106,3 +106,31 @@ def test_gather_hub_message_snapshot_keeps_other_sections_on_supervisor_error(
 
     assert snapshot["items"] == []
     assert snapshot["pma_threads"][0]["name"] == "snapshot-thread"
+
+
+def test_gather_hub_message_snapshot_only_serializes_requested_sections(
+    tmp_path,
+) -> None:
+    hub_root = Path(tmp_path)
+    repo_root = hub_root / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    PmaThreadStore(hub_root).create_thread(
+        "codex",
+        repo_root,
+        repo_id="repo",
+        name="requested-only-thread",
+    )
+    context = SimpleNamespace(
+        supervisor=SimpleNamespace(
+            list_repos=lambda: (_ for _ in ()).throw(RuntimeError)
+        ),
+        config=SimpleNamespace(root=hub_root),
+    )
+
+    snapshot = hub_gather_service.gather_hub_message_snapshot(  # type: ignore[arg-type]
+        context,
+        sections={"pma_threads"},
+    )
+
+    assert set(snapshot) == {"generated_at", "pma_threads"}
+    assert snapshot["pma_threads"][0]["name"] == "requested-only-thread"
