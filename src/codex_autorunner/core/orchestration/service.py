@@ -157,32 +157,7 @@ def _resolve_thread_runtime_binding(
 
 
 def _execution_record_from_store_row(record: Mapping[str, Any]) -> ExecutionRecord:
-    return ExecutionRecord(
-        execution_id=str(record.get("managed_turn_id") or ""),
-        target_id=str(record.get("managed_thread_id") or ""),
-        target_kind="thread",
-        request_kind=_normalize_request_kind(record.get("request_kind")),
-        status=str(record.get("status") or ""),
-        backend_id=(
-            str(record["backend_turn_id"])
-            if record.get("backend_turn_id") is not None
-            else None
-        ),
-        started_at=(
-            str(record["started_at"]) if record.get("started_at") is not None else None
-        ),
-        finished_at=(
-            str(record["finished_at"])
-            if record.get("finished_at") is not None
-            else None
-        ),
-        error=str(record["error"]) if record.get("error") is not None else None,
-        output_text=(
-            str(record["assistant_text"])
-            if record.get("assistant_text") is not None
-            else None
-        ),
-    )
+    return ExecutionRecord.from_mapping(record)
 
 
 class PmaThreadExecutionStore(ThreadExecutionStore):

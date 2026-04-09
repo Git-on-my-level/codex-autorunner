@@ -2,24 +2,17 @@ from __future__ import annotations
 
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
 from .config import load_hub_config
-from .freshness import parse_iso_datetime, resolve_stale_threshold_seconds
-from .git_utils import git_branch
-from .locks import file_lock
+from .freshness import resolve_stale_threshold_seconds
 from .managed_thread_status import (
     ManagedThreadStatusReason,
     ManagedThreadStatusSnapshot,
     backfill_managed_thread_status,
     build_managed_thread_status_snapshot,
     transition_managed_thread_status,
-)
-from .orchestration.legacy_backfill_gate import (
-    backfill_legacy_thread_state,
-    ensure_legacy_orchestration_backfill,
 )
 from .orchestration.models import normalize_resource_owner_fields
 from .orchestration.runtime_bindings import (
@@ -28,13 +21,39 @@ from .orchestration.runtime_bindings import (
     get_runtime_thread_binding,
     set_runtime_thread_binding,
 )
-from .orchestration.sqlite import open_orchestration_sqlite
-from .pma_thread_mirror import legacy_mirror_enabled, sync_legacy_mirror
-from .text_utils import _json_dumps, _json_loads_object
+from .pma_thread_store_bootstrap import (
+    PMA_THREADS_DB_FILENAME,
+    PmaThreadStoreBootstrap,
+    default_pma_threads_db_path,
+    pma_threads_db_lock,
+    pma_threads_db_lock_path,
+)
+from .pma_thread_store_lifecycle import PmaThreadStoreLifecycle, thread_queue_lane_id
+from .pma_thread_store_rows import (
+    PmaExecutionRecord,
+    PmaThreadRecord,
+)
+from .pma_thread_store_rows import (
+    coerce_text as _coerce_text,
+)
+from .pma_thread_store_rows import (
+    enrich_thread_metadata_for_workspace as _enrich_thread_metadata_for_workspace,
+)
+from .pma_thread_store_rows import (
+    normalize_request_kind as _normalize_request_kind,
+)
+from .pma_thread_store_rows import (
+    row_to_dict as _row_to_dict,
+)
+from .pma_thread_store_rows import (
+    sanitize_thread_metadata as _sanitize_thread_metadata,
+)
+from .pma_thread_store_rows import (
+    workspace_head_branch as _workspace_head_branch,
+)
+from .text_utils import _json_dumps
 from .time_utils import now_iso
 
-PMA_THREADS_DB_FILENAME = "threads.sqlite3"
-_STALE_RUNNING_RECOVERY_ERROR = "stale_running_execution_recovered"
 _BACKEND_RUNTIME_INSTANCE_ID_KEY = "backend_runtime_instance_id"
 
 
@@ -58,24 +77,6 @@ class ManagedThreadNotActiveError(RuntimeError):
         self.status = status
 
 
-def default_pma_threads_db_path(hub_root: Path) -> Path:
-    return hub_root / ".codex-autorunner" / "pma" / PMA_THREADS_DB_FILENAME
-
-
-def pma_threads_db_lock_path(db_path: Path) -> Path:
-    return db_path.with_suffix(db_path.suffix + ".lock")
-
-
-@contextmanager
-def pma_threads_db_lock(db_path: Path) -> Iterator[None]:
-    with file_lock(pma_threads_db_lock_path(db_path)):
-        yield
-
-
-def _row_to_dict(row: Any) -> dict[str, Any]:
-    return {key: row[key] for key in row.keys()}
-
-
 def _table_columns(conn: Any, table_name: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     columns: set[str] = set()
@@ -84,47 +85,6 @@ def _table_columns(conn: Any, table_name: str) -> set[str]:
         if isinstance(name, str) and name:
             columns.add(name)
     return columns
-
-
-def _coerce_text(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    return text or None
-
-
-def _normalize_request_kind(value: Any) -> str:
-    normalized = (_coerce_text(value) or "").lower()
-    if normalized == "review":
-        return "review"
-    return "message"
-
-
-def _sanitize_thread_metadata(metadata: Optional[dict[str, Any]]) -> dict[str, Any]:
-    payload = dict(metadata or {})
-    payload.pop(_BACKEND_RUNTIME_INSTANCE_ID_KEY, None)
-    return payload
-
-
-def _workspace_head_branch(workspace_root: Path) -> Optional[str]:
-    return _coerce_text(git_branch(workspace_root))
-
-
-def _enrich_thread_metadata_for_workspace(
-    metadata: Optional[dict[str, Any]],
-    *,
-    workspace_root: Path,
-) -> dict[str, Any]:
-    payload = _sanitize_thread_metadata(metadata)
-    if _coerce_text(payload.get("head_branch")) is None:
-        head_branch = _workspace_head_branch(workspace_root)
-        if head_branch is not None:
-            payload["head_branch"] = head_branch
-    return payload
-
-
-def _thread_queue_lane_id(managed_thread_id: str) -> str:
-    return f"thread:{managed_thread_id}"
 
 
 def _resolve_stale_running_threshold_seconds(
@@ -158,24 +118,6 @@ def _latest_turn_for_thread(
     if row is None:
         return None
     return _row_to_dict(row)
-
-
-def _normalize_thread_record(row: Any) -> dict[str, Any]:
-    record = _row_to_dict(row)
-    lifecycle_status = _coerce_text(record.get("status")) or "active"
-    snapshot = ManagedThreadStatusSnapshot.from_mapping(record)
-    record["status"] = lifecycle_status
-    record["lifecycle_status"] = lifecycle_status
-    record["normalized_status"] = snapshot.status
-    record["status_reason_code"] = snapshot.reason_code
-    record["status_reason"] = snapshot.reason_code
-    record["status_updated_at"] = snapshot.changed_at
-    record["status_changed_at"] = snapshot.changed_at
-    record["status_terminal"] = bool(snapshot.terminal)
-    record["status_turn_id"] = snapshot.turn_id
-    if "metadata_json" in record and "metadata" not in record:
-        record["metadata"] = _json_loads_object(record.get("metadata_json"))
-    return record
 
 
 def _ensure_schema(conn: Any) -> None:
@@ -400,6 +342,19 @@ class PmaThreadStore:
                 hub_root, override=stale_running_threshold_seconds
             )
         )
+        self._bootstrap = PmaThreadStoreBootstrap(
+            hub_root=self._hub_root,
+            db_path=self._path,
+            durable=self._durable,
+            thread_row_to_record=self._thread_row_to_record,
+            execution_row_to_record=self._execution_row_to_record,
+            ensure_legacy_schema=_ensure_schema,
+        )
+        self._lifecycle = PmaThreadStoreLifecycle(
+            stale_running_threshold_seconds=self._stale_running_threshold_seconds,
+            execution_row_to_record=self._execution_row_to_record,
+            transition_thread_status=self._transition_thread_status,
+        )
         self._initialize()
 
     @property
@@ -410,91 +365,21 @@ class PmaThreadStore:
     def hub_root(self) -> Path:
         return self._hub_root
 
-    def _run_legacy_mirror(self, conn: Any) -> None:
-        if not legacy_mirror_enabled():
-            return
-        sync_legacy_mirror(
-            hub_root=self._hub_root,
-            legacy_db_path=self._path,
-            durable=self._durable,
-            orchestration_conn=conn,
-            thread_row_to_record=self._thread_row_to_record,
-            execution_row_to_record=self._execution_row_to_record,
-            ensure_legacy_schema=_ensure_schema,
-        )
-
     def _initialize(self) -> None:
-        with pma_threads_db_lock(self._path):
-            ensure_legacy_orchestration_backfill(
-                self._hub_root,
-                durable=self._durable,
-            )
-            with open_orchestration_sqlite(
-                self._hub_root,
-                durable=self._durable,
-            ) as conn:
-                backfill_legacy_thread_state(self._hub_root, conn)
-                self._run_legacy_mirror(conn)
+        self._bootstrap.initialize()
 
     @contextmanager
     def _read_conn(self) -> Iterator[Any]:
-        ensure_legacy_orchestration_backfill(
-            self._hub_root,
-            durable=self._durable,
-        )
-        with open_orchestration_sqlite(
-            self._hub_root,
-            durable=self._durable,
-        ) as conn:
+        with self._bootstrap.read_conn() as conn:
             yield conn
 
     @contextmanager
     def _write_conn(self) -> Iterator[Any]:
-        with pma_threads_db_lock(self._path):
-            ensure_legacy_orchestration_backfill(
-                self._hub_root,
-                durable=self._durable,
-            )
-            with open_orchestration_sqlite(
-                self._hub_root,
-                durable=self._durable,
-            ) as conn:
-                yield conn
-                self._run_legacy_mirror(conn)
+        with self._bootstrap.write_conn() as conn:
+            yield conn
 
     def _thread_row_to_record(self, row: Any) -> dict[str, Any]:
-        metadata = (
-            _json_loads_object(row["metadata_json"])
-            if "metadata_json" in row.keys()
-            else {}
-        )
-        resource_kind, resource_id, repo_id = normalize_resource_owner_fields(
-            resource_kind=row["resource_kind"],
-            resource_id=row["resource_id"],
-            repo_id=row["repo_id"],
-        )
-        record = {
-            "managed_thread_id": row["thread_target_id"],
-            "agent": row["agent_id"],
-            "repo_id": repo_id,
-            "resource_kind": resource_kind,
-            "resource_id": resource_id,
-            "workspace_root": row["workspace_root"],
-            "name": row["display_name"],
-            "status": row["lifecycle_status"] or "active",
-            "normalized_status": row["runtime_status"] or "idle",
-            "status_reason_code": row["status_reason"],
-            "status_updated_at": row["status_updated_at"] or row["updated_at"],
-            "status_terminal": int(row["status_terminal"] or 0),
-            "status_turn_id": row["status_turn_id"],
-            "last_turn_id": row["last_execution_id"],
-            "last_message_preview": row["last_message_preview"],
-            "compact_seed": row["compact_seed"],
-            "metadata": metadata,
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
-        return _normalize_thread_record(record)
+        return PmaThreadRecord.from_orchestration_row(row).to_dict()
 
     def get_thread_runtime_binding(
         self, managed_thread_id: str
@@ -503,22 +388,7 @@ class PmaThreadStore:
 
     @staticmethod
     def _execution_row_to_record(row: Any) -> dict[str, Any]:
-        return {
-            "managed_turn_id": row["execution_id"],
-            "managed_thread_id": row["thread_target_id"],
-            "client_turn_id": row["client_request_id"],
-            "request_kind": _normalize_request_kind(row["request_kind"]),
-            "backend_turn_id": row["backend_turn_id"],
-            "prompt": row["prompt_text"],
-            "status": row["status"],
-            "assistant_text": row["assistant_text"],
-            "transcript_turn_id": row["transcript_mirror_id"],
-            "model": row["model_id"],
-            "reasoning": row["reasoning_level"],
-            "error": row["error_text"],
-            "started_at": row["started_at"],
-            "finished_at": row["finished_at"],
-        }
+        return PmaExecutionRecord.from_orchestration_row(row).to_dict()
 
     def _fetch_thread(
         self, conn: Any, managed_thread_id: str
@@ -581,80 +451,6 @@ class PmaThreadStore:
             )
         return self._fetch_thread(conn, managed_thread_id)
 
-    def _find_stale_running_turn_ids(
-        self,
-        conn: Any,
-        managed_thread_id: str,
-        *,
-        include_status_turn_age_recovery: bool = True,
-    ) -> list[str]:
-        running_rows = conn.execute(
-            """
-            SELECT
-                execution_id,
-                started_at,
-                created_at,
-                (
-                    SELECT MAX(ep.timestamp)
-                      FROM orch_event_projections AS ep
-                     WHERE ep.execution_id = orch_thread_executions.execution_id
-                ) AS last_event_at
-              FROM orch_thread_executions
-             WHERE thread_target_id = ?
-               AND status = 'running'
-             ORDER BY created_at ASC, execution_id ASC
-            """,
-            (managed_thread_id,),
-        ).fetchall()
-        if not running_rows:
-            return []
-
-        thread_row = conn.execute(
-            """
-            SELECT runtime_status, status_turn_id
-              FROM orch_thread_targets
-             WHERE thread_target_id = ?
-            """,
-            (managed_thread_id,),
-        ).fetchone()
-        runtime_status = (
-            str(thread_row["runtime_status"]).strip().lower()
-            if thread_row is not None and thread_row["runtime_status"] is not None
-            else ""
-        )
-        status_turn_id = (
-            str(thread_row["status_turn_id"]).strip()
-            if thread_row is not None and thread_row["status_turn_id"] is not None
-            else ""
-        )
-
-        # If thread state says terminal while a running execution exists, the
-        # execution record is inconsistent and should be recovered.
-        if runtime_status in {"completed", "failed", "interrupted"}:
-            return [str(row["execution_id"]) for row in running_rows]
-
-        stale_execution_ids: list[str] = []
-        now_dt = datetime.now(timezone.utc)
-        for row in running_rows:
-            execution_id = str(row["execution_id"])
-            if status_turn_id and status_turn_id != execution_id:
-                stale_execution_ids.append(execution_id)
-                continue
-            if not include_status_turn_age_recovery and status_turn_id == execution_id:
-                continue
-
-            last_activity_at = (
-                parse_iso_datetime(row["last_event_at"])
-                or parse_iso_datetime(row["started_at"])
-                or parse_iso_datetime(row["created_at"])
-            )
-            if last_activity_at is None:
-                continue
-            age_seconds = max(0, int((now_dt - last_activity_at).total_seconds()))
-            if age_seconds > self._stale_running_threshold_seconds:
-                stale_execution_ids.append(execution_id)
-        return stale_execution_ids
-
     def _recover_stale_running_turns(
         self,
         conn: Any,
@@ -662,52 +458,11 @@ class PmaThreadStore:
         *,
         include_status_turn_age_recovery: bool = True,
     ) -> int:
-        stale_execution_ids = self._find_stale_running_turn_ids(
+        return self._lifecycle.recover_stale_running_turns(
             conn,
             managed_thread_id,
             include_status_turn_age_recovery=include_status_turn_age_recovery,
         )
-        if not stale_execution_ids:
-            return 0
-        recovered_at = now_iso()
-        placeholders = ",".join("?" for _ in stale_execution_ids)
-        with conn:
-            conn.execute(
-                f"""
-                UPDATE orch_thread_executions
-                   SET status = 'interrupted',
-                       error_text = COALESCE(error_text, ?),
-                       finished_at = ?
-                 WHERE execution_id IN ({placeholders})
-                   AND status = 'running'
-                """,
-                (
-                    _STALE_RUNNING_RECOVERY_ERROR,
-                    recovered_at,
-                    *stale_execution_ids,
-                ),
-            )
-            conn.execute(
-                f"""
-                UPDATE orch_queue_items
-                   SET state = 'failed',
-                       completed_at = ?,
-                       updated_at = ?,
-                       error_text = COALESCE(error_text, ?),
-                       result_json = ?
-                 WHERE source_kind = 'thread_execution'
-                   AND source_key IN ({placeholders})
-                   AND state = 'running'
-                """,
-                (
-                    recovered_at,
-                    recovered_at,
-                    _STALE_RUNNING_RECOVERY_ERROR,
-                    _json_dumps({"status": "interrupted"}),
-                    *stale_execution_ids,
-                ),
-            )
-        return len(stale_execution_ids)
 
     def create_thread(
         self,
@@ -1209,7 +964,7 @@ class PmaThreadStore:
                         """,
                         (
                             queue_item_id,
-                            _thread_queue_lane_id(managed_thread_id),
+                            thread_queue_lane_id(managed_thread_id),
                             "thread_execution",
                             managed_turn_id,
                             client_turn_id or managed_turn_id,
@@ -1532,7 +1287,7 @@ class PmaThreadStore:
                 """,
                 (
                     managed_thread_id,
-                    _thread_queue_lane_id(managed_thread_id),
+                    thread_queue_lane_id(managed_thread_id),
                     limit,
                 ),
             ).fetchall()
@@ -1541,53 +1296,12 @@ class PmaThreadStore:
     def list_pending_turn_queue_items(
         self, managed_thread_id: str, *, limit: int = 200
     ) -> list[dict[str, Any]]:
-        if limit <= 0:
-            return []
         with self._read_conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    q.queue_item_id,
-                    q.state,
-                    q.visible_at,
-                    q.created_at,
-                    e.execution_id,
-                    e.request_kind,
-                    e.prompt_text,
-                    e.model_id,
-                    e.reasoning_level,
-                    e.client_request_id
-                  FROM orch_queue_items AS q
-                  JOIN orch_thread_executions AS e
-                    ON e.execution_id = q.source_key
-                 WHERE q.source_kind = 'thread_execution'
-                   AND q.lane_id = ?
-                   AND e.thread_target_id = ?
-                   AND q.state IN ('pending', 'queued', 'waiting')
-                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
-                 LIMIT ?
-                """,
-                (
-                    _thread_queue_lane_id(managed_thread_id),
-                    managed_thread_id,
-                    limit,
-                ),
-            ).fetchall()
-        return [
-            {
-                "queue_item_id": str(row["queue_item_id"]),
-                "state": str(row["state"]),
-                "visible_at": row["visible_at"],
-                "enqueued_at": row["created_at"],
-                "managed_turn_id": str(row["execution_id"]),
-                "request_kind": _normalize_request_kind(row["request_kind"]),
-                "prompt": str(row["prompt_text"] or ""),
-                "model": row["model_id"],
-                "reasoning": row["reasoning_level"],
-                "client_turn_id": row["client_request_id"],
-            }
-            for row in rows
-        ]
+            return self._lifecycle.list_pending_turn_queue_items(
+                conn,
+                managed_thread_id,
+                limit=limit,
+            )
 
     def get_queue_depth(self, managed_thread_id: str) -> int:
         with self._read_conn() as conn:
@@ -1599,7 +1313,7 @@ class PmaThreadStore:
                    AND lane_id = ?
                    AND state IN ('pending', 'queued', 'waiting')
                 """,
-                (_thread_queue_lane_id(managed_thread_id),),
+                (thread_queue_lane_id(managed_thread_id),),
             ).fetchone()
         return int((row["queue_depth"] if row is not None else 0) or 0)
 
@@ -1665,161 +1379,14 @@ class PmaThreadStore:
         ]
 
     def cancel_queued_turns(self, managed_thread_id: str) -> int:
-        cancelled_at = now_iso()
         with self._write_conn() as conn:
-            rows = conn.execute(
-                """
-                SELECT e.execution_id
-                  FROM orch_queue_items AS q
-                  JOIN orch_thread_executions AS e
-                    ON e.execution_id = q.source_key
-                 WHERE q.source_kind = 'thread_execution'
-                   AND q.lane_id = ?
-                   AND e.thread_target_id = ?
-                   AND e.status = 'queued'
-                   AND q.state IN ('pending', 'queued', 'waiting')
-                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
-                """,
-                (
-                    _thread_queue_lane_id(managed_thread_id),
-                    managed_thread_id,
-                ),
-            ).fetchall()
-            execution_ids = [str(row["execution_id"]) for row in rows]
-            if not execution_ids:
-                return 0
-            placeholders = ",".join("?" for _ in execution_ids)
-            with conn:
-                conn.execute(
-                    f"""
-                    UPDATE orch_thread_executions
-                       SET status = 'interrupted',
-                           error_text = COALESCE(error_text, 'interrupted'),
-                           finished_at = ?
-                     WHERE execution_id IN ({placeholders})
-                       AND status = 'queued'
-                    """,
-                    (cancelled_at, *execution_ids),
-                )
-                conn.execute(
-                    f"""
-                    UPDATE orch_queue_items
-                       SET state = 'failed',
-                           completed_at = ?,
-                           updated_at = ?,
-                           error_text = COALESCE(error_text, 'interrupted'),
-                           result_json = ?
-                     WHERE source_kind = 'thread_execution'
-                       AND lane_id = ?
-                       AND source_key IN ({placeholders})
-                       AND state IN ('pending', 'queued', 'waiting')
-                    """,
-                    (
-                        cancelled_at,
-                        cancelled_at,
-                        _json_dumps({"status": "interrupted"}),
-                        _thread_queue_lane_id(managed_thread_id),
-                        *execution_ids,
-                    ),
-                )
-        return len(execution_ids)
+            return self._lifecycle.cancel_queued_turns(conn, managed_thread_id)
 
     def claim_next_queued_turn(
         self, managed_thread_id: str
     ) -> Optional[tuple[dict[str, Any], dict[str, Any]]]:
-        claimed_at = now_iso()
         with self._write_conn() as conn:
-            self._recover_stale_running_turns(conn, managed_thread_id)
-            running = conn.execute(
-                """
-                SELECT 1
-                  FROM orch_thread_executions
-                 WHERE thread_target_id = ?
-                   AND status = 'running'
-                 LIMIT 1
-                """,
-                (managed_thread_id,),
-            ).fetchone()
-            if running is not None:
-                return None
-            row = conn.execute(
-                """
-                SELECT
-                    q.queue_item_id,
-                    q.payload_json,
-                    e.execution_id
-                  FROM orch_queue_items AS q
-                  JOIN orch_thread_executions AS e
-                    ON e.execution_id = q.source_key
-                 WHERE q.source_kind = 'thread_execution'
-                   AND q.lane_id = ?
-                   AND e.thread_target_id = ?
-                   AND e.status = 'queued'
-                   AND q.state IN ('pending', 'queued', 'waiting')
-                 ORDER BY COALESCE(q.visible_at, q.created_at) ASC, q.rowid ASC
-                 LIMIT 1
-                """,
-                (
-                    _thread_queue_lane_id(managed_thread_id),
-                    managed_thread_id,
-                ),
-            ).fetchone()
-            if row is None:
-                return None
-            with conn:
-                cursor = conn.execute(
-                    """
-                    UPDATE orch_queue_items
-                       SET state = 'running',
-                           claimed_at = ?,
-                           updated_at = ?
-                     WHERE queue_item_id = ?
-                       AND state IN ('pending', 'queued', 'waiting')
-                    """,
-                    (claimed_at, claimed_at, str(row["queue_item_id"])),
-                )
-                if cursor.rowcount == 0:
-                    return None
-                conn.execute(
-                    """
-                    UPDATE orch_thread_executions
-                       SET status = 'running',
-                           started_at = ?
-                     WHERE execution_id = ?
-                       AND status = 'queued'
-                    """,
-                    (claimed_at, str(row["execution_id"])),
-                )
-                conn.execute(
-                    """
-                    UPDATE orch_thread_targets
-                       SET last_execution_id = ?,
-                           updated_at = ?
-                     WHERE thread_target_id = ?
-                    """,
-                    (str(row["execution_id"]), claimed_at, managed_thread_id),
-                )
-            self._transition_thread_status(
-                conn,
-                managed_thread_id,
-                reason=ManagedThreadStatusReason.TURN_STARTED,
-                changed_at=claimed_at,
-                turn_id=str(row["execution_id"]),
-            )
-            execution_row = conn.execute(
-                """
-                SELECT *
-                  FROM orch_thread_executions
-                 WHERE execution_id = ?
-                """,
-                (str(row["execution_id"]),),
-            ).fetchone()
-        if execution_row is None:
-            return None
-        return (
-            self._execution_row_to_record(execution_row),
-            _json_loads_object(row["payload_json"]),
-        )
+            return self._lifecycle.claim_next_queued_turn(conn, managed_thread_id)
 
     def append_action(
         self,

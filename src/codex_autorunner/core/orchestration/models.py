@@ -25,6 +25,13 @@ BusyThreadPolicy = Literal["queue", "interrupt", "reject"]
 OrchestrationTableRole = Literal["authoritative", "mirror", "projection", "ops"]
 
 
+def _normalize_message_request_kind(value: Any) -> MessageRequestKind:
+    normalized = _normalize_optional_text(value)
+    if normalized == "review":
+        return "review"
+    return "message"
+
+
 def normalize_resource_owner_fields(
     *,
     resource_kind: Any = None,
@@ -230,6 +237,37 @@ class ExecutionRecord:
     finished_at: Optional[str] = None
     error: Optional[str] = None
     output_text: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "ExecutionRecord":
+        execution_id = _normalize_optional_text(
+            data.get("managed_turn_id") or data.get("execution_id")
+        )
+        target_id = _normalize_optional_text(
+            data.get("managed_thread_id")
+            or data.get("thread_target_id")
+            or data.get("target_id")
+        )
+        if execution_id is None or target_id is None:
+            raise ValueError(
+                "ExecutionRecord requires execution_id/managed_turn_id and target_id/managed_thread_id"
+            )
+        return cls(
+            execution_id=execution_id,
+            target_id=target_id,
+            target_kind="thread",
+            status=_normalize_optional_text(data.get("status")) or "",
+            request_kind=_normalize_message_request_kind(data.get("request_kind")),
+            backend_id=_normalize_optional_text(
+                data.get("backend_id") or data.get("backend_turn_id")
+            ),
+            started_at=_normalize_optional_text(data.get("started_at")),
+            finished_at=_normalize_optional_text(data.get("finished_at")),
+            error=_normalize_optional_text(data.get("error")),
+            output_text=_normalize_optional_text(
+                data.get("output_text") or data.get("assistant_text")
+            ),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
