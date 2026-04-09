@@ -763,6 +763,9 @@ async def _run_telegram_managed_thread_turn(
     )
     pending_seed = None
     compact_active_candidates: list[str] = []
+    managed_thread_id = str(getattr(thread, "thread_target_id", "") or "").strip()
+    if managed_thread_id:
+        compact_active_candidates.append(managed_thread_id)
     backend_from_thread = str(thread.backend_thread_id or "").strip()
     if backend_from_thread:
         compact_active_candidates.append(backend_from_thread)

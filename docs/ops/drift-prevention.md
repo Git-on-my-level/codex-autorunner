@@ -15,8 +15,9 @@ make test-managed-thread-cutover
 ```
 
 This covers runtime-thread event contract, hub supervisor wiring, PMA
-lifecycle, Telegram/Discord routing, and unified error sanitization. Use this
-for quick regression checks after changes to the shared managed-thread path.
+lifecycle, Telegram/Discord routing, orchestration ingress guardrails, and
+unified error sanitization. Use this for quick regression checks after changes
+to the shared managed-thread path.
 
 ## Cross-Surface Chat Contract Checks
 

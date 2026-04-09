@@ -92,6 +92,7 @@ test-managed-thread-cutover:
 		tests/test_hub_supervisor.py \
 		tests/test_pma_managed_threads_lifecycle.py \
 		tests/test_pma_managed_threads_turns.py \
+		tests/integrations/chat/test_orchestration_guardrails.py \
 		tests/test_telegram_pma_routing.py \
 		tests/test_telegram_bot_integration.py \
 		tests/test_telegram_turn_queue.py \

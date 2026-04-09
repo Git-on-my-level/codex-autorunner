@@ -5583,22 +5583,6 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
             apply(record)
             return record
 
-    class _ClientStub:
-        async def thread_start(self, cwd: str, *, agent: str, **_kwargs: Any) -> dict:
-            assert cwd == str(workspace)
-            assert agent == "codex"
-            return {
-                "thread_id": "backend-new",
-                "agent": "codex",
-                "cwd": str(workspace),
-                "path": str(workspace),
-                "thread": {
-                    "id": "backend-new",
-                    "path": str(workspace),
-                    "agent": "codex",
-                },
-            }
-
     class _ThreadService:
         async def stop_thread(self, thread_target_id: str) -> Any:
             lifecycle_calls.append(("stop", thread_target_id, None))
@@ -5620,18 +5604,6 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
                 lifecycle_status="active",
             )
 
-        def resume_thread_target(self, thread_target_id: str, **kwargs: Any) -> Any:
-            lifecycle_calls.append(
-                ("resume", thread_target_id, kwargs.get("backend_thread_id"))
-            )
-            return SimpleNamespace(
-                thread_target_id=thread_target_id,
-                agent_id="codex",
-                workspace_root=str(workspace),
-                backend_thread_id=kwargs.get("backend_thread_id"),
-                lifecycle_status="active",
-            )
-
         def upsert_binding(self, **kwargs: Any) -> None:
             lifecycle_calls.append(
                 ("bind", kwargs["thread_target_id"], kwargs.get("mode"))
@@ -5646,6 +5618,7 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
                 defaults=SimpleNamespace(policies_for_mode=lambda _mode: (None, None)),
             )
             self.sync_binding_flags: list[bool] = []
+            self._spawn_task = lambda coro: None
 
         def _resolve_workspace_path(
             self, _record: TelegramTopicRecord, allow_pma: bool = False
@@ -5653,49 +5626,10 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
             _ = allow_pma
             return str(workspace), None
 
-        async def _client_for_workspace(self, _workspace_path: str) -> _ClientStub:
-            return _ClientStub()
-
-        async def _require_thread_workspace(
-            self,
-            _message: TelegramMessage,
-            _expected_workspace: Optional[str],
-            _result: Any,
-            *,
-            action: str,
-        ) -> bool:
-            _ = action
-            return True
-
         async def _resolve_topic_key(
             self, _chat_id: int, _thread_id: Optional[int]
         ) -> str:
             return "123:root"
-
-        async def _apply_thread_result(
-            self,
-            chat_id: int,
-            thread_id: Optional[int],
-            result: Any,
-            *,
-            active_thread_id: Optional[str] = None,
-            overwrite_defaults: bool = False,
-            sync_binding: bool = True,
-        ) -> TelegramTopicRecord:
-            _ = chat_id, thread_id, result, overwrite_defaults
-            assert lifecycle_calls == [
-                ("stop", "managed-old", None),
-                ("archive", "managed-old", None),
-                ("create", "codex", None),
-                ("bind", "managed-new", "repo"),
-                ("resume", "managed-new", "backend-new"),
-                ("bind", "managed-new", "repo"),
-            ]
-            self.sync_binding_flags.append(sync_binding)
-            record.active_thread_id = active_thread_id
-            if active_thread_id:
-                record.thread_ids = [active_thread_id]
-            return record
 
     def _fake_set_thread_compact_seed(
         self, managed_thread_id: str, compact_seed: Optional[str], **_kwargs: Any
@@ -5741,12 +5675,138 @@ async def test_apply_compact_summary_uses_shared_lifecycle_before_topic_mirror_u
 
     assert success is True
     assert error is None
-    assert handler.sync_binding_flags == [False]
+    assert lifecycle_calls == [
+        ("stop", "managed-old", None),
+        ("archive", "managed-old", None),
+        ("create", "codex", None),
+        ("bind", "managed-new", "repo"),
+    ]
     assert compact_seed_calls == [("managed-new", "summary text")]
-    assert record.active_thread_id == "backend-new"
-    assert record.thread_ids == ["backend-new"]
-    assert record.pending_compact_seed_thread_id == "backend-new"
+    assert handler.sync_binding_flags == []
+    assert record.active_thread_id is None
+    assert record.pending_compact_seed_thread_id == "managed-new"
     assert "summary text" in (record.pending_compact_seed or "")
+
+
+@pytest.mark.anyio
+async def test_repo_managed_thread_turn_matches_pending_compact_seed_by_managed_thread_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input_items: list[dict[str, Any]] | None = None
+
+    class _Coordinator:
+        async def submit_execution(
+            self,
+            request: Any,
+            *,
+            client_request_id: Optional[str],
+            sandbox_policy: Optional[Any],
+            begin_execution: Any = None,
+        ) -> Any:
+            nonlocal captured_input_items
+            _ = client_request_id, sandbox_policy, begin_execution
+            captured_input_items = request.input_items
+            started_execution = SimpleNamespace(
+                thread=SimpleNamespace(
+                    thread_target_id="managed-new",
+                    backend_thread_id=None,
+                ),
+                execution=SimpleNamespace(status="queued"),
+            )
+            return SimpleNamespace(started_execution=started_execution, queued=True)
+
+    class _Handler:
+        def __init__(self) -> None:
+            self._logger = logging.getLogger("test")
+            self._router = SimpleNamespace(update_topic=_update_topic)
+
+        async def _prepare_turn_placeholder(
+            self,
+            _message: TelegramMessage,
+            *,
+            placeholder_id: Optional[int],
+            send_placeholder: bool,
+            queued: bool,
+        ) -> Optional[int]:
+            _ = send_placeholder, queued
+            return placeholder_id
+
+        def _effective_agent_profile(
+            self, _record: TelegramTopicRecord
+        ) -> Optional[str]:
+            return None
+
+        def _effective_runtime_agent(self, _record: TelegramTopicRecord) -> str:
+            return "codex"
+
+    async def _update_topic(
+        _chat_id: int, _thread_id: Optional[int], apply: Any
+    ) -> TelegramTopicRecord:
+        apply(record)
+        return record
+
+    async def _fake_resolve_managed_thread(*_args: Any, **_kwargs: Any) -> Any:
+        return object(), SimpleNamespace(
+            thread_target_id="managed-new",
+            backend_thread_id=None,
+        )
+
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_resolve_telegram_managed_thread",
+        _fake_resolve_managed_thread,
+    )
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_build_telegram_managed_thread_coordinator",
+        lambda *_args, **_kwargs: _Coordinator(),
+    )
+    monkeypatch.setattr(
+        execution_commands_module,
+        "_ensure_telegram_managed_thread_queue_worker",
+        lambda *_args, **_kwargs: None,
+    )
+
+    handler = _Handler()
+    record = TelegramTopicRecord(
+        workspace_path="/tmp/workspace",
+        pending_compact_seed="summary seed",
+        pending_compact_seed_thread_id="managed-new",
+    )
+    result = await execution_commands_module._run_telegram_managed_thread_turn(
+        handler,
+        message=TelegramMessage(
+            update_id=1,
+            message_id=2,
+            chat_id=123,
+            thread_id=456,
+            from_user_id=789,
+            text="hello",
+            date=None,
+            is_topic_message=True,
+        ),
+        runtime=SimpleNamespace(),
+        record=record,
+        topic_key="123:456",
+        prompt_text="hello",
+        input_items=[{"type": "text", "text": "original"}],
+        send_placeholder=False,
+        send_failure_response=False,
+        transcript_message_id=None,
+        transcript_text=None,
+        placeholder_id=99,
+        mode="repo",
+        pma_enabled=False,
+        execution_prompt="runtime prompt",
+    )
+
+    assert isinstance(result, execution_commands_module._TurnRunResult)
+    assert result.response == "Queued (waiting for available worker...)"
+    assert captured_input_items is not None
+    assert captured_input_items[0] == {"type": "text", "text": "summary seed"}
+    assert captured_input_items[1] == {"type": "text", "text": "runtime prompt"}
+    assert record.pending_compact_seed is None
+    assert record.pending_compact_seed_thread_id is None
 
 
 @pytest.mark.anyio

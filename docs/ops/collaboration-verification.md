@@ -41,6 +41,8 @@ Or run the collaboration-specific subset:
 ```
 
 This is the default verification command for collaboration tickets.
+It also runs the orchestration-ingress guardrails that catch transport-owned
+ordinary-turn shortcuts in the Telegram and Discord entrypoints.
 
 ## What this covers
 
