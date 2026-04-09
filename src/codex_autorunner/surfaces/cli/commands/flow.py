@@ -51,6 +51,18 @@ from ....tickets.frontmatter import generate_ticket_id
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class FlowCommandExports:
+    PreflightCheck: type[Any]
+    PreflightReport: type[Any]
+    ticket_flow_start: Callable[..., Any]
+    ticket_flow_preflight: Callable[..., Any]
+    _ticket_flow_preflight: Callable[..., Any]
+    ticket_flow_preflight_report: Callable[..., Any]
+    ticket_flow_print_preflight_report: Callable[[Any], None]
+    ticket_flow_resumable_run: Callable[..., Any]
+
+
 def _build_force_attestation(
     force_attestation: Optional[str], *, target_scope: str
 ) -> Optional[dict[str, str]]:
@@ -83,7 +95,7 @@ def register_flow_commands(
     parse_duration: Callable[[str], object],
     cleanup_stale_flow_runs: Callable[..., int],
     archive_flow_run_artifacts: Callable[..., dict],
-) -> dict[str, Callable[..., None]]:
+) -> FlowCommandExports:
     """Register flow-oriented subcommands and return command callables for reuse."""
 
     def _normalize_flow_run_id(run_id: Optional[str]) -> Optional[str]:
@@ -1471,13 +1483,13 @@ You are the first ticket in a new ticket_flow run.
         finally:
             store.close()
 
-    return {
-        "PreflightCheck": PreflightCheck,  # type: ignore[dict-item]
-        "PreflightReport": PreflightReport,  # type: ignore[dict-item]
-        "ticket_flow_start": ticket_flow_start,
-        "ticket_flow_preflight": ticket_flow_preflight,
-        "_ticket_flow_preflight": _ticket_flow_preflight,  # type: ignore[dict-item]
-        "ticket_flow_preflight_report": ticket_flow_preflight_report,  # type: ignore[dict-item]
-        "ticket_flow_print_preflight_report": _print_preflight_report,
-        "ticket_flow_resumable_run": _resumable_run,  # type: ignore[dict-item]
-    }
+    return FlowCommandExports(
+        PreflightCheck=PreflightCheck,
+        PreflightReport=PreflightReport,
+        ticket_flow_start=ticket_flow_start,
+        ticket_flow_preflight=ticket_flow_preflight,
+        _ticket_flow_preflight=_ticket_flow_preflight,
+        ticket_flow_preflight_report=ticket_flow_preflight_report,
+        ticket_flow_print_preflight_report=_print_preflight_report,
+        ticket_flow_resumable_run=_resumable_run,
+    )

@@ -4,6 +4,7 @@ import json
 import logging
 import sys
 from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -335,10 +336,13 @@ def _file_lifecycle_box_choices_text() -> str:
 
 
 def _format_tail_event_line(event: dict[str, Any]) -> str:
-    event_type = str(event.get("event_type") or "event")
-    event_id = event.get("event_id")
-    summary = str(event.get("summary") or "")
-    timestamp = str(event.get("received_at") or "")
+    parsed_event = _PmaTailEvent.from_dict(event)
+    if parsed_event is None:
+        return ""
+    event_type = parsed_event.event_type
+    event_id = parsed_event.event_id
+    summary = parsed_event.summary
+    timestamp = parsed_event.received_at
     ts_out = timestamp
     if timestamp:
         try:
@@ -362,81 +366,470 @@ def _format_received_at_label(value: Any) -> str:
     return dt.strftime("%H:%M:%S")
 
 
+def _coerce_optional_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+@dataclass(frozen=True)
+class _PmaTailEvent:
+    event_type: str
+    summary: str
+    received_at: str
+    event_id: Optional[int] = None
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Optional["_PmaTailEvent"]:
+        if not isinstance(data, dict):
+            return None
+        event_id = data.get("event_id")
+        normalized_event_id = event_id if isinstance(event_id, int) else None
+        return cls(
+            event_type=str(data.get("event_type") or "event"),
+            summary=str(data.get("summary") or ""),
+            received_at=str(data.get("received_at") or ""),
+            event_id=normalized_event_id,
+        )
+
+
+@dataclass(frozen=True)
+class _PmaLastToolSnapshot:
+    name: str
+    status: str
+    in_flight: bool
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Optional["_PmaLastToolSnapshot"]:
+        if not isinstance(data, dict):
+            return None
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return None
+        return cls(
+            name=name,
+            status=str(data.get("status") or "-"),
+            in_flight=bool(data.get("in_flight")),
+        )
+
+    def render_line(self) -> str:
+        return (
+            "last_tool="
+            + self.name
+            + " status="
+            + self.status
+            + " in_flight="
+            + ("yes" if self.in_flight else "no")
+        )
+
+
+@dataclass(frozen=True)
+class _PmaActiveTurnDiagnostics:
+    request_kind: str
+    model: str
+    reasoning: str
+    stalled: bool
+    stream_available: bool
+    prompt_preview: str
+    last_event_type: str
+    last_event_summary: str
+    last_event_at: Any
+    backend_thread_id: str
+    backend_turn_id: str
+    stall_reason: str
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Optional["_PmaActiveTurnDiagnostics"]:
+        if not isinstance(data, dict):
+            return None
+        return cls(
+            request_kind=str(data.get("request_kind") or "-"),
+            model=str(data.get("model") or "-"),
+            reasoning=str(data.get("reasoning") or "-"),
+            stalled=bool(data.get("stalled")),
+            stream_available=bool(data.get("stream_available")),
+            prompt_preview=str(data.get("prompt_preview") or "").strip(),
+            last_event_type=str(data.get("last_event_type") or "").strip(),
+            last_event_summary=str(data.get("last_event_summary") or "").strip(),
+            last_event_at=data.get("last_event_at"),
+            backend_thread_id=str(data.get("backend_thread_id") or "").strip(),
+            backend_turn_id=str(data.get("backend_turn_id") or "").strip(),
+            stall_reason=str(data.get("stall_reason") or "").strip(),
+        )
+
+    def render_lines(self) -> list[str]:
+        lines = [
+            "active_turn: "
+            f"kind={self.request_kind} model={self.model} reasoning={self.reasoning} "
+            f"stream={'yes' if self.stream_available else 'no'} "
+            f"stalled={'yes' if self.stalled else 'no'}"
+        ]
+        if self.prompt_preview:
+            lines.append(f"prompt: {self.prompt_preview}")
+        if self.last_event_type or self.last_event_summary:
+            lines.append(
+                "last_event: "
+                + (self.last_event_type or "-")
+                + " @"
+                + _format_received_at_label(self.last_event_at)
+                + (f" {self.last_event_summary}" if self.last_event_summary else "")
+            )
+        if self.backend_thread_id or self.backend_turn_id:
+            lines.append(
+                "backend: "
+                f"thread={self.backend_thread_id or '-'} "
+                f"turn={self.backend_turn_id or '-'}"
+            )
+        if self.stall_reason:
+            lines.append(f"stall_reason: {self.stall_reason}")
+        return lines
+
+
+@dataclass(frozen=True)
+class _PmaTailSnapshot:
+    managed_turn_id: str
+    turn_status: str
+    activity: str
+    phase: str
+    elapsed_seconds: Optional[int]
+    idle_seconds: Optional[int]
+    guidance: str
+    diagnostics: Optional[_PmaActiveTurnDiagnostics]
+    last_tool: Optional[_PmaLastToolSnapshot]
+    lifecycle_events: tuple[str, ...]
+    events: tuple[_PmaTailEvent, ...]
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "_PmaTailSnapshot":
+        payload = data if isinstance(data, dict) else {}
+        lifecycle = payload.get("lifecycle_events")
+        raw_events = payload.get("events")
+        return cls(
+            managed_turn_id=str(payload.get("managed_turn_id") or "-"),
+            turn_status=str(payload.get("turn_status") or "none"),
+            activity=str(payload.get("activity") or "idle"),
+            phase=str(payload.get("phase") or "-"),
+            elapsed_seconds=_coerce_optional_int(payload.get("elapsed_seconds")),
+            idle_seconds=_coerce_optional_int(payload.get("idle_seconds")),
+            guidance=str(payload.get("guidance") or "").strip(),
+            diagnostics=_PmaActiveTurnDiagnostics.from_dict(
+                payload.get("active_turn_diagnostics")
+            ),
+            last_tool=_PmaLastToolSnapshot.from_dict(payload.get("last_tool")),
+            lifecycle_events=tuple(
+                str(item) for item in (lifecycle if isinstance(lifecycle, list) else [])
+            ),
+            events=tuple(
+                event
+                for item in (raw_events if isinstance(raw_events, list) else [])
+                if (event := _PmaTailEvent.from_dict(item)) is not None
+            ),
+        )
+
+    def render_lines(self) -> list[str]:
+        lines = [
+            "turn="
+            + self.managed_turn_id
+            + " status="
+            + self.turn_status
+            + " activity="
+            + self.activity
+            + " phase="
+            + self.phase
+            + " elapsed="
+            + _format_seconds(self.elapsed_seconds)
+            + " idle="
+            + _format_seconds(self.idle_seconds)
+        ]
+        if self.guidance:
+            lines.append(f"guidance: {self.guidance}")
+        if self.diagnostics is not None:
+            lines.extend(self.diagnostics.render_lines())
+        if self.last_tool is not None:
+            lines.append(self.last_tool.render_line())
+        if self.lifecycle_events:
+            lines.append("lifecycle: " + ", ".join(self.lifecycle_events))
+        if not self.events:
+            lines.append("No tail events.")
+            if self.turn_status == "running" and self.idle_seconds is not None:
+                idle_seconds = int(self.idle_seconds or 0)
+                if idle_seconds >= 30:
+                    lines.append(f"No events for {idle_seconds}s (possibly stalled).")
+            return lines
+        lines.extend(_format_tail_event_line(event.__dict__) for event in self.events)
+        return [line for line in lines if line]
+
+
+@dataclass(frozen=True)
+class _PmaQueuedTurnSnapshot:
+    managed_turn_id: str
+    enqueued_at: str
+    prompt_preview: str
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Optional["_PmaQueuedTurnSnapshot"]:
+        if not isinstance(data, dict):
+            return None
+        return cls(
+            managed_turn_id=str(data.get("managed_turn_id") or "-"),
+            enqueued_at=str(data.get("enqueued_at") or "-"),
+            prompt_preview=str(data.get("prompt_preview") or "")[:80],
+        )
+
+    def render_line(self) -> str:
+        return (
+            "queued_turn="
+            + self.managed_turn_id
+            + " enqueued="
+            + self.enqueued_at
+            + " prompt="
+            + self.prompt_preview
+        )
+
+
+@dataclass(frozen=True)
+class _PmaThreadStatusSnapshot:
+    managed_thread_id: str
+    agent: str
+    owner_label: str
+    operator_status: str
+    last_turn_outcome: str
+    is_alive: bool
+    status_reason: str
+    managed_turn_id: str
+    turn_state: str
+    activity: str
+    phase: str
+    elapsed_seconds: Optional[int]
+    idle_seconds: Optional[int]
+    guidance: str
+    diagnostics: Optional[_PmaActiveTurnDiagnostics]
+    last_tool: Optional[_PmaLastToolSnapshot]
+    recent_progress: tuple[_PmaTailEvent, ...]
+    latest_output_excerpt: str
+    queue_depth: int
+    queued_turns: tuple[_PmaQueuedTurnSnapshot, ...]
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "_PmaThreadStatusSnapshot":
+        from ...core.managed_thread_status import derive_managed_thread_operator_status
+
+        payload = data if isinstance(data, dict) else {}
+        raw_thread = payload.get("thread")
+        thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
+        raw_turn = payload.get("turn")
+        turn: dict[str, Any] = raw_turn if isinstance(raw_turn, dict) else {}
+        raw_thread_status = str(payload.get("status") or thread.get("status") or "-")
+        queue_depth_raw = payload.get("queue_depth")
+        recent_progress = payload.get("recent_progress")
+        queued_turns = payload.get("queued_turns")
+        return cls(
+            managed_thread_id=str(payload.get("managed_thread_id") or ""),
+            agent=str(thread.get("agent") or "-"),
+            owner_label=_format_resource_owner_label(thread),
+            operator_status=derive_managed_thread_operator_status(
+                normalized_status=raw_thread_status,
+                lifecycle_status=str(thread.get("lifecycle_status") or "-"),
+            ),
+            last_turn_outcome=(
+                raw_thread_status
+                if raw_thread_status in {"completed", "interrupted", "failed"}
+                else "-"
+            ),
+            is_alive=bool(payload.get("is_alive")),
+            status_reason=str(
+                payload.get("status_reason") or thread.get("status_reason") or "-"
+            ),
+            managed_turn_id=str(turn.get("managed_turn_id") or "-"),
+            turn_state=str(turn.get("status") or "-"),
+            activity=str(turn.get("activity") or "-"),
+            phase=str(turn.get("phase") or "-"),
+            elapsed_seconds=_coerce_optional_int(turn.get("elapsed_seconds")),
+            idle_seconds=_coerce_optional_int(turn.get("idle_seconds")),
+            guidance=str(turn.get("guidance") or "").strip(),
+            diagnostics=_PmaActiveTurnDiagnostics.from_dict(
+                payload.get("active_turn_diagnostics")
+            ),
+            last_tool=_PmaLastToolSnapshot.from_dict(turn.get("last_tool")),
+            recent_progress=tuple(
+                event
+                for item in (
+                    recent_progress if isinstance(recent_progress, list) else []
+                )
+                if (event := _PmaTailEvent.from_dict(item)) is not None
+            ),
+            latest_output_excerpt=str(
+                payload.get("latest_output_excerpt") or ""
+            ).strip(),
+            queue_depth=_coerce_optional_int(queue_depth_raw) or 0,
+            queued_turns=tuple(
+                turn_item
+                for item in (queued_turns if isinstance(queued_turns, list) else [])
+                if (turn_item := _PmaQueuedTurnSnapshot.from_dict(item)) is not None
+            ),
+        )
+
+    def render_lines(self) -> list[str]:
+        lines = [
+            " ".join(
+                [
+                    f"id={self.managed_thread_id}",
+                    f"agent={self.agent}",
+                    self.owner_label,
+                    f"status={self.operator_status}",
+                    f"last_turn={self.last_turn_outcome}",
+                    f"alive={'yes' if self.is_alive else 'no'}",
+                ]
+            ),
+            f"reason={self.status_reason}",
+            "turn="
+            + self.managed_turn_id
+            + " status="
+            + self.turn_state
+            + " activity="
+            + self.activity
+            + " phase="
+            + self.phase
+            + " elapsed="
+            + _format_seconds(self.elapsed_seconds)
+            + " idle="
+            + _format_seconds(self.idle_seconds),
+        ]
+        if self.guidance:
+            lines.append(f"guidance: {self.guidance}")
+        if self.diagnostics is not None:
+            lines.extend(self.diagnostics.render_lines())
+        if self.last_tool is not None:
+            lines.append(self.last_tool.render_line())
+        if self.recent_progress:
+            lines.append("recent progress:")
+            lines.extend(
+                _format_tail_event_line(event.__dict__)
+                for event in self.recent_progress
+            )
+        else:
+            lines.append("No recent progress events.")
+        if self.queue_depth > 0:
+            lines.append(f"queued={self.queue_depth}")
+            lines.extend(item.render_line() for item in self.queued_turns[:5])
+        if self.latest_output_excerpt:
+            lines.append("latest output:")
+            lines.append(self.latest_output_excerpt)
+        return [line for line in lines if line]
+
+
+@dataclass(frozen=True)
+class _ManagedThreadSendRequest:
+    message: str
+    busy_policy: str
+    defer_execution: bool
+    model: Optional[str] = None
+    reasoning: Optional[str] = None
+    notify_on: Optional[str] = None
+    notify_lane: Optional[str] = None
+    notify_once: bool = True
+
+    def to_payload(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "message": self.message,
+            "busy_policy": self.busy_policy,
+            "defer_execution": self.defer_execution,
+        }
+        if self.model:
+            payload["model"] = self.model
+        if self.reasoning:
+            payload["reasoning"] = self.reasoning
+        if self.notify_on:
+            payload["notify_on"] = self.notify_on
+            payload["notify_lane"] = self.notify_lane
+            payload["notify_once"] = self.notify_once
+        return payload
+
+
+@dataclass(frozen=True)
+class _ManagedThreadSendResponse:
+    status_code: int
+    status: str
+    send_state: str
+    execution_state: str
+    managed_turn_id: str
+    active_managed_turn_id: str
+    queue_depth: Optional[int]
+    delivered_message: str
+    assistant_text: str
+    detail: str
+    error: str
+    next_step: str
+
+    @classmethod
+    def from_http(
+        cls, status_code: int, data: Any, *, default_message: str
+    ) -> "_ManagedThreadSendResponse":
+        payload = data if isinstance(data, dict) else {}
+        return cls(
+            status_code=status_code,
+            status=str(payload.get("status") or ""),
+            send_state=str(payload.get("send_state") or "").strip().lower(),
+            execution_state=str(payload.get("execution_state") or "").strip().lower(),
+            managed_turn_id=str(payload.get("managed_turn_id") or ""),
+            active_managed_turn_id=str(
+                payload.get("active_managed_turn_id") or ""
+            ).strip(),
+            queue_depth=_coerce_optional_int(payload.get("queue_depth")),
+            delivered_message=str(payload.get("delivered_message") or default_message),
+            assistant_text=str(payload.get("assistant_text") or ""),
+            detail=str(payload.get("detail") or "").strip(),
+            error=str(payload.get("error") or "").strip(),
+            next_step=str(payload.get("next_step") or "").strip(),
+        )
+
+    @property
+    def is_ok(self) -> bool:
+        return self.status_code < 400 and self.status == "ok"
+
+    def error_detail(self) -> str:
+        return self.detail or self.error or "Managed thread send failed"
+
+    def accepted_line(self) -> str:
+        line = (
+            f"send_state={self.send_state or 'accepted'} "
+            f"managed_turn_id={self.managed_turn_id}"
+        )
+        if self.active_managed_turn_id:
+            line += f" active_managed_turn_id={self.active_managed_turn_id}"
+        if self.queue_depth is not None:
+            line += f" queue_depth={self.queue_depth}"
+        return line
+
+    def completion_line(self) -> str:
+        return (
+            f"send_state={self.send_state or 'accepted'} "
+            f"managed_turn_id={self.managed_turn_id} "
+            f"execution_state={self.execution_state or 'completed'}"
+        ).strip()
+
+
 def _render_active_turn_diagnostics(data: dict[str, Any]) -> None:
-    request_kind = str(data.get("request_kind") or "-")
-    model = str(data.get("model") or "-")
-    reasoning = str(data.get("reasoning") or "-")
-    stalled = "yes" if bool(data.get("stalled")) else "no"
-    stream = "yes" if bool(data.get("stream_available")) else "no"
-    typer.echo(
-        "active_turn: "
-        f"kind={request_kind} model={model} reasoning={reasoning} "
-        f"stream={stream} stalled={stalled}"
-    )
-    prompt_preview = str(data.get("prompt_preview") or "").strip()
-    if prompt_preview:
-        typer.echo(f"prompt: {prompt_preview}")
-    last_event_type = str(data.get("last_event_type") or "").strip()
-    last_event_summary = str(data.get("last_event_summary") or "").strip()
-    if last_event_type or last_event_summary:
-        typer.echo(
-            "last_event: "
-            + (last_event_type or "-")
-            + " @"
-            + _format_received_at_label(data.get("last_event_at"))
-            + (f" {last_event_summary}" if last_event_summary else "")
-        )
-    backend_thread_id = str(data.get("backend_thread_id") or "").strip()
-    backend_turn_id = str(data.get("backend_turn_id") or "").strip()
-    if backend_thread_id or backend_turn_id:
-        typer.echo(
-            f"backend: thread={backend_thread_id or '-'} turn={backend_turn_id or '-'}"
-        )
-    stall_reason = str(data.get("stall_reason") or "").strip()
-    if stall_reason:
-        typer.echo(f"stall_reason: {stall_reason}")
+    diagnostics = _PmaActiveTurnDiagnostics.from_dict(data)
+    if diagnostics is None:
+        return
+    for line in diagnostics.render_lines():
+        typer.echo(line)
 
 
 def _render_tail_snapshot(snapshot: dict[str, Any]) -> None:
-    managed_turn_id = snapshot.get("managed_turn_id") or "-"
-    status = snapshot.get("turn_status") or "none"
-    activity = snapshot.get("activity") or "idle"
-    phase = snapshot.get("phase") or "-"
-    elapsed = _format_seconds(snapshot.get("elapsed_seconds"))
-    idle = _format_seconds(snapshot.get("idle_seconds"))
-    typer.echo(
-        f"turn={managed_turn_id} status={status} activity={activity} phase={phase} elapsed={elapsed} idle={idle}"
-    )
-    guidance = str(snapshot.get("guidance") or "").strip()
-    if guidance:
-        typer.echo(f"guidance: {guidance}")
-    diagnostics = snapshot.get("active_turn_diagnostics")
-    if isinstance(diagnostics, dict):
-        _render_active_turn_diagnostics(diagnostics)
-    last_tool = snapshot.get("last_tool")
-    if isinstance(last_tool, dict) and str(last_tool.get("name") or "").strip():
-        typer.echo(
-            "last_tool="
-            + str(last_tool.get("name") or "")
-            + " status="
-            + str(last_tool.get("status") or "-")
-            + " in_flight="
-            + ("yes" if bool(last_tool.get("in_flight")) else "no")
-        )
-    lifecycle = snapshot.get("lifecycle_events")
-    if isinstance(lifecycle, list) and lifecycle:
-        typer.echo("lifecycle: " + ", ".join(str(item) for item in lifecycle))
-    events = snapshot.get("events")
-    if not isinstance(events, list) or not events:
-        typer.echo("No tail events.")
-        if status == "running" and snapshot.get("idle_seconds") is not None:
-            idle_seconds = int(snapshot.get("idle_seconds") or 0)
-            if idle_seconds >= 30:
-                typer.echo(f"No events for {idle_seconds}s (possibly stalled).")
-        return
-    for event in events:
-        if isinstance(event, dict):
-            typer.echo(_format_tail_event_line(event))
+    parsed_snapshot = _PmaTailSnapshot.from_dict(snapshot)
+    for line in parsed_snapshot.render_lines():
+        typer.echo(line)
 
 
 def _normalize_notify_on(value: Optional[str]) -> Optional[str]:
@@ -718,94 +1111,9 @@ def _record_thread_compact_audit(
 
 
 def _render_thread_status_snapshot(data: dict[str, Any]) -> None:
-    from ...core.managed_thread_status import derive_managed_thread_operator_status
-
-    raw_thread = data.get("thread")
-    thread: dict[str, Any] = raw_thread if isinstance(raw_thread, dict) else {}
-    raw_turn = data.get("turn")
-    turn: dict[str, Any] = raw_turn if isinstance(raw_turn, dict) else {}
-    managed_thread_id = str(data.get("managed_thread_id") or "")
-    agent = str(thread.get("agent") or "-")
-    owner = _format_resource_owner_label(thread)
-    raw_thread_status = str(data.get("status") or thread.get("status") or "-")
-    lifecycle_state = str(thread.get("lifecycle_status") or "-")
-    operator_status = derive_managed_thread_operator_status(
-        normalized_status=raw_thread_status,
-        lifecycle_status=lifecycle_state,
-    )
-    last_turn_outcome = (
-        raw_thread_status
-        if raw_thread_status in {"completed", "interrupted", "failed"}
-        else "-"
-    )
-    status_reason = str(data.get("status_reason") or thread.get("status_reason") or "-")
-    managed_turn_id = str(turn.get("managed_turn_id") or "-")
-    turn_state = str(turn.get("status") or "-")
-    activity = str(turn.get("activity") or "-")
-    phase = str(turn.get("phase") or "-")
-    elapsed = _format_seconds(turn.get("elapsed_seconds"))
-    idle = _format_seconds(turn.get("idle_seconds"))
-    alive = "yes" if bool(data.get("is_alive")) else "no"
-    typer.echo(
-        " ".join(
-            [
-                f"id={managed_thread_id}",
-                f"agent={agent}",
-                owner,
-                f"status={operator_status}",
-                f"last_turn={last_turn_outcome}",
-                f"alive={alive}",
-            ]
-        )
-    )
-    typer.echo(f"reason={status_reason}")
-    typer.echo(
-        f"turn={managed_turn_id} status={turn_state} activity={activity} phase={phase} elapsed={elapsed} idle={idle}"
-    )
-    guidance = str(turn.get("guidance") or "").strip()
-    if guidance:
-        typer.echo(f"guidance: {guidance}")
-    diagnostics = data.get("active_turn_diagnostics")
-    if isinstance(diagnostics, dict):
-        _render_active_turn_diagnostics(diagnostics)
-    last_tool = turn.get("last_tool")
-    if isinstance(last_tool, dict) and str(last_tool.get("name") or "").strip():
-        typer.echo(
-            "last_tool="
-            + str(last_tool.get("name") or "")
-            + " status="
-            + str(last_tool.get("status") or "-")
-            + " in_flight="
-            + ("yes" if bool(last_tool.get("in_flight")) else "no")
-        )
-    progress = data.get("recent_progress")
-    if isinstance(progress, list) and progress:
-        typer.echo("recent progress:")
-        for event in progress:
-            if isinstance(event, dict):
-                typer.echo(_format_tail_event_line(event))
-    else:
-        typer.echo("No recent progress events.")
-    excerpt = str(data.get("latest_output_excerpt") or "").strip()
-    queue_depth = int(data.get("queue_depth") or 0)
-    if queue_depth > 0:
-        typer.echo(f"queued={queue_depth}")
-        queued_turns = data.get("queued_turns")
-        if isinstance(queued_turns, list):
-            for item in queued_turns[:5]:
-                if not isinstance(item, dict):
-                    continue
-                typer.echo(
-                    "queued_turn="
-                    + str(item.get("managed_turn_id") or "-")
-                    + " enqueued="
-                    + str(item.get("enqueued_at") or "-")
-                    + " prompt="
-                    + str(item.get("prompt_preview") or "")[:80]
-                )
-    if excerpt:
-        typer.echo("latest output:")
-        typer.echo(excerpt)
+    snapshot = _PmaThreadStatusSnapshot.from_dict(data)
+    for line in snapshot.render_lines():
+        typer.echo(line)
 
 
 def _render_compacted_active_context(
@@ -1737,19 +2045,16 @@ def pma_thread_send(
     normalized_if_busy = (if_busy or "").strip().lower() or "queue"
     if normalized_if_busy not in {"queue", "interrupt", "reject"}:
         raise typer.BadParameter("if-busy must be queue, interrupt, or reject")
-    payload: dict[str, Any] = {
-        "message": message_body,
-        "busy_policy": normalized_if_busy,
-        "defer_execution": should_defer,
-    }
-    if model:
-        payload["model"] = model
-    if reasoning:
-        payload["reasoning"] = reasoning
-    if normalized_notify_on:
-        payload["notify_on"] = normalized_notify_on
-        payload["notify_lane"] = notify_lane
-        payload["notify_once"] = notify_once
+    request_payload = _ManagedThreadSendRequest(
+        message=message_body,
+        busy_policy=normalized_if_busy,
+        defer_execution=should_defer,
+        model=model,
+        reasoning=reasoning,
+        notify_on=normalized_notify_on,
+        notify_lane=notify_lane,
+        notify_once=notify_once,
+    )
 
     hub_root = _resolve_hub_path(path)
     try:
@@ -1757,7 +2062,7 @@ def pma_thread_send(
         status_code, data = _request_json_with_status(
             "POST",
             _build_pma_url(config, f"/threads/{managed_thread_id}/messages"),
-            payload,
+            request_payload.to_payload(),
             token_env=config.server_auth_token_env,
             timeout=15.0,
         )
@@ -1765,22 +2070,23 @@ def pma_thread_send(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from None
 
-    send_state = str(data.get("send_state") or "").strip().lower()
-    status = (data.get("status") if isinstance(data, dict) else "") or ""
-    if status_code >= 400 or status != "ok":
+    response = _ManagedThreadSendResponse.from_http(
+        status_code, data, default_message=message_body
+    )
+    if not response.is_ok:
         if output_json:
             typer.echo(json.dumps(data, indent=2))
         else:
-            detail = str(
-                data.get("detail") or data.get("error") or "Managed thread send failed"
-            )
-            next_step = str(data.get("next_step") or "").strip()
-            if send_state:
-                typer.echo(f"send_state={send_state} error={detail}", err=True)
+            detail = response.error_detail()
+            if response.send_state:
+                typer.echo(
+                    f"send_state={response.send_state} error={detail}",
+                    err=True,
+                )
             else:
                 typer.echo(detail, err=True)
-            if next_step:
-                typer.echo(f"next: {next_step}", err=True)
+            if response.next_step:
+                typer.echo(f"next: {response.next_step}", err=True)
         raise typer.Exit(code=1) from None
 
     if output_json:
@@ -1797,21 +2103,11 @@ def pma_thread_send(
             )
         return
 
-    delivered_message = str(data.get("delivered_message") or message_body)
-    execution_state = str(data.get("execution_state") or "").strip().lower()
-    if execution_state == "queued" or (should_defer and execution_state == "running"):
-        line = (
-            f"send_state={send_state or 'accepted'} "
-            f"managed_turn_id={data.get('managed_turn_id') or ''}"
-        )
-        active_turn_id = str(data.get("active_managed_turn_id") or "").strip()
-        queue_depth = data.get("queue_depth")
-        if active_turn_id:
-            line += f" active_managed_turn_id={active_turn_id}"
-        if queue_depth is not None:
-            line += f" queue_depth={queue_depth}"
-        typer.echo(line)
-        _echo_delivered_message(delivered_message)
+    if response.execution_state == "queued" or (
+        should_defer and response.execution_state == "running"
+    ):
+        typer.echo(response.accepted_line())
+        _echo_delivered_message(response.delivered_message)
         if watch:
             pma_thread_tail(
                 managed_thread_id=managed_thread_id,
@@ -1837,17 +2133,11 @@ def pma_thread_send(
                 typer.echo(excerpt)
         return
 
-    line = (
-        f"send_state={send_state or 'accepted'} "
-        f"managed_turn_id={data.get('managed_turn_id') or ''} "
-        f"execution_state={execution_state or 'completed'}"
-    )
-    typer.echo(line.strip())
-    _echo_delivered_message(delivered_message)
-    assistant_text = str(data.get("assistant_text") or "")
-    if assistant_text:
+    typer.echo(response.completion_line())
+    _echo_delivered_message(response.delivered_message)
+    if response.assistant_text:
         typer.echo("\nassistant:")
-        typer.echo(assistant_text)
+        typer.echo(response.assistant_text)
 
 
 @thread_app.command("turns")
