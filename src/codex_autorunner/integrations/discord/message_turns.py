@@ -88,6 +88,7 @@ from ..chat.turn_metrics import (
     compose_turn_response_with_footer,
 )
 from .components import build_cancel_turn_button, build_cancel_turn_custom_id
+from .errors import DiscordTransientError
 from .rendering import (
     chunk_discord_message,
     format_discord_message,
@@ -402,7 +403,7 @@ async def _acknowledge_discord_progress_reuse(
                 "components": [],
             },
         )
-    except (RuntimeError, ConnectionError, OSError):
+    except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         return False
     return True
 
@@ -1661,7 +1662,7 @@ async def _run_discord_orchestrated_turn_for_message(
                 message_id=progress_message_id,
                 payload=payload,
             )
-        except (RuntimeError, ConnectionError, OSError):
+        except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
             _logger.debug(
                 "Discord progress edit failed for message=%s",
                 progress_message_id,
@@ -1761,7 +1762,7 @@ async def _run_discord_orchestrated_turn_for_message(
                 progress_rendered = initial_content
                 progress_last_updated = time.monotonic()
                 progress_heartbeat_task = asyncio.create_task(_progress_heartbeat())
-    except (RuntimeError, ConnectionError, OSError):
+    except (DiscordTransientError, RuntimeError, ConnectionError, OSError):
         service._logger.warning(
             "Discord progress placeholder send failed for channel=%s",
             channel_id,
